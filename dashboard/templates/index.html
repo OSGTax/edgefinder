@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EdgeFinder Dashboard</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --border: #2a2d3a;
+            --text: #e1e4eb;
+            --muted: #8b8fa3;
+            --green: #22c55e;
+            --red: #ef4444;
+            --blue: #3b82f6;
+            --yellow: #eab308;
+            --purple: #a855f7;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+        }
+        .header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 20px; font-weight: 600; }
+        .header .status { font-size: 13px; color: var(--muted); }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        .stat-card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card .value { font-size: 24px; font-weight: 700; margin-top: 4px; }
+        .stat-card .value.positive { color: var(--green); }
+        .stat-card .value.negative { color: var(--red); }
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 24px;
+            overflow: hidden;
+        }
+        .panel-header {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .panel-body { padding: 0; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th {
+            text-align: left;
+            padding: 10px 14px;
+            color: var(--muted);
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        tr:hover td { background: rgba(255,255,255,0.02); }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        .badge-buy { background: rgba(34,197,94,0.15); color: var(--green); }
+        .badge-sell { background: rgba(239,68,68,0.15); color: var(--red); }
+        .badge-day { background: rgba(59,130,246,0.15); color: var(--blue); }
+        .badge-swing { background: rgba(168,85,247,0.15); color: var(--purple); }
+        .score-bar {
+            display: inline-block;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--border);
+            width: 60px;
+            position: relative;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        .score-bar .fill {
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            border-radius: 3px;
+        }
+        .tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--muted);
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .empty { padding: 40px; text-align: center; color: var(--muted); }
+        .chart-area {
+            padding: 20px;
+            height: 200px;
+            display: flex;
+            align-items: flex-end;
+            gap: 2px;
+        }
+        .chart-bar {
+            flex: 1;
+            background: var(--blue);
+            border-radius: 2px 2px 0 0;
+            min-width: 3px;
+            position: relative;
+        }
+        .chart-bar:hover { opacity: 0.8; }
+        .refresh-btn {
+            background: var(--blue);
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .refresh-btn:hover { opacity: 0.9; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>EdgeFinder</h1>
+        <div>
+            <span class="status" id="last-updated">Loading...</span>
+            <button class="refresh-btn" onclick="loadAll()">Refresh</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Stats Cards -->
+        <div class="grid" id="stats-grid">
+            <div class="stat-card"><div class="label">Account Value</div><div class="value" id="stat-value">--</div></div>
+            <div class="stat-card"><div class="label">Total P&L</div><div class="value" id="stat-pnl">--</div></div>
+            <div class="stat-card"><div class="label">Win Rate</div><div class="value" id="stat-winrate">--</div></div>
+            <div class="stat-card"><div class="label">Avg R-Multiple</div><div class="value" id="stat-r">--</div></div>
+            <div class="stat-card"><div class="label">Profit Factor</div><div class="value" id="stat-pf">--</div></div>
+            <div class="stat-card"><div class="label">Total Trades</div><div class="value" id="stat-trades">--</div></div>
+        </div>
+
+        <!-- Equity Curve -->
+        <div class="panel">
+            <div class="panel-header">Equity Curve</div>
+            <div class="panel-body">
+                <div class="chart-area" id="equity-chart">
+                    <div class="empty" style="width:100%">No snapshots yet</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <div class="tab active" data-tab="watchlist">Watchlist</div>
+            <div class="tab" data-tab="signals">Signals</div>
+            <div class="tab" data-tab="trades">Trades</div>
+            <div class="tab" data-tab="skipped">Skipped</div>
+        </div>
+
+        <!-- Watchlist -->
+        <div class="tab-content active" id="tab-watchlist">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Active Watchlist</span>
+                    <span class="status" id="watchlist-count">0 stocks</span>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>#</th><th>Ticker</th><th>Company</th><th>Sector</th>
+                                <th>Price</th><th>Composite</th><th>Lynch</th><th>Burry</th>
+                                <th>Category</th><th>PEG</th><th>FCF Yield</th>
+                            </tr>
+                        </thead>
+                        <tbody id="watchlist-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Signals -->
+        <div class="tab-content" id="tab-signals">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Recent Signals</span>
+                    <span class="status" id="signals-count">0 signals</span>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th><th>Ticker</th><th>Type</th><th>Trade</th>
+                                <th>Confidence</th><th>Traded</th><th>Reason Skipped</th>
+                            </tr>
+                        </thead>
+                        <tbody id="signals-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trades -->
+        <div class="tab-content" id="tab-trades">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Trade Log</span>
+                    <span class="status" id="trades-count">0 trades</span>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Exit Time</th><th>Ticker</th><th>Type</th>
+                                <th>Entry</th><th>Exit</th><th>Shares</th>
+                                <th>P&L</th><th>R</th><th>Exit Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Skipped -->
+        <div class="tab-content" id="tab-skipped">
+            <div class="panel">
+                <div class="panel-header">
+                    <span>Skipped Signals</span>
+                    <span class="status" id="skipped-count">0 signals</span>
+                </div>
+                <div class="panel-body">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th><th>Ticker</th><th>Type</th><th>Trade</th>
+                                <th>Confidence</th><th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="skipped-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+// Tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+    });
+});
+
+function fmt(n, decimals = 2) { return n != null ? Number(n).toFixed(decimals) : '--'; }
+function fmtPct(n) { return n != null ? (n * 100).toFixed(1) + '%' : '--'; }
+function fmtMoney(n) { return n != null ? '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '--'; }
+function fmtDate(iso) {
+    if (!iso) return '--';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' ' +
+           d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'});
+}
+function scoreColor(score) {
+    if (score >= 70) return 'var(--green)';
+    if (score >= 50) return 'var(--yellow)';
+    return 'var(--red)';
+}
+function scoreBar(score) {
+    const pct = Math.min(100, Math.max(0, score || 0));
+    return `<span class="score-bar"><span class="fill" style="width:${pct}%;background:${scoreColor(score)}"></span></span>${fmt(score, 1)}`;
+}
+function pnlClass(val) { return val > 0 ? 'positive' : val < 0 ? 'negative' : ''; }
+function badge(text, type) { return `<span class="badge badge-${type}">${text}</span>`; }
+
+async function fetchJSON(url) {
+    try {
+        const res = await fetch(url);
+        return await res.json();
+    } catch (e) {
+        console.error('Fetch error:', url, e);
+        return null;
+    }
+}
+
+async function loadStats() {
+    const [stats, account] = await Promise.all([
+        fetchJSON('/api/trades/stats'),
+        fetchJSON('/api/account'),
+    ]);
+    if (account) {
+        const el = document.getElementById('stat-value');
+        el.textContent = fmtMoney(account.total_value);
+        el.className = 'value';
+    }
+    if (stats) {
+        const pnl = document.getElementById('stat-pnl');
+        pnl.textContent = (stats.total_pnl >= 0 ? '+' : '') + fmtMoney(stats.total_pnl);
+        pnl.className = 'value ' + pnlClass(stats.total_pnl);
+
+        const wr = document.getElementById('stat-winrate');
+        wr.textContent = stats.total_trades > 0 ? (stats.win_rate * 100).toFixed(1) + '%' : '--';
+        wr.className = 'value ' + (stats.win_rate >= 0.5 ? 'positive' : stats.total_trades > 0 ? 'negative' : '');
+
+        const r = document.getElementById('stat-r');
+        r.textContent = stats.total_trades > 0 ? fmt(stats.avg_r_multiple) + 'R' : '--';
+        r.className = 'value ' + pnlClass(stats.avg_r_multiple);
+
+        const pf = document.getElementById('stat-pf');
+        pf.textContent = stats.total_trades > 0 ? fmt(stats.profit_factor) : '--';
+
+        document.getElementById('stat-trades').textContent = stats.total_trades;
+    }
+}
+
+async function loadWatchlist() {
+    const data = await fetchJSON('/api/watchlist');
+    if (!data) return;
+    document.getElementById('watchlist-count').textContent = data.count + ' stocks';
+    const body = document.getElementById('watchlist-body');
+    if (data.count === 0) {
+        body.innerHTML = '<tr><td colspan="11" class="empty">No watchlist data. Run the scanner first.</td></tr>';
+        return;
+    }
+    body.innerHTML = data.watchlist.map((s, i) => `<tr>
+        <td>${i + 1}</td>
+        <td><strong>${s.ticker}</strong></td>
+        <td>${s.company_name || ''}</td>
+        <td>${s.sector || ''}</td>
+        <td>${fmtMoney(s.price)}</td>
+        <td>${scoreBar(s.composite_score)}</td>
+        <td>${scoreBar(s.lynch_score)}</td>
+        <td>${scoreBar(s.burry_score)}</td>
+        <td>${s.lynch_category || ''}</td>
+        <td>${fmt(s.peg_ratio)}</td>
+        <td>${s.fcf_yield != null ? fmtPct(s.fcf_yield) : '--'}</td>
+    </tr>`).join('');
+}
+
+async function loadSignals() {
+    const data = await fetchJSON('/api/signals?limit=100');
+    if (!data) return;
+    document.getElementById('signals-count').textContent = data.count + ' signals';
+    const body = document.getElementById('signals-body');
+    if (data.count === 0) {
+        body.innerHTML = '<tr><td colspan="7" class="empty">No signals yet.</td></tr>';
+        return;
+    }
+    body.innerHTML = data.signals.map(s => `<tr>
+        <td>${fmtDate(s.timestamp)}</td>
+        <td><strong>${s.ticker}</strong></td>
+        <td>${badge(s.signal_type, s.signal_type === 'BUY' ? 'buy' : 'sell')}</td>
+        <td>${badge(s.trade_type, s.trade_type === 'DAY' ? 'day' : 'swing')}</td>
+        <td>${fmt(s.confidence, 1)}</td>
+        <td>${s.was_traded ? 'Yes' : 'No'}</td>
+        <td style="color:var(--muted)">${s.reason_skipped || ''}</td>
+    </tr>`).join('');
+}
+
+async function loadTrades() {
+    const data = await fetchJSON('/api/trades?limit=100');
+    if (!data) return;
+    document.getElementById('trades-count').textContent = data.count + ' trades';
+    const body = document.getElementById('trades-body');
+    if (data.count === 0) {
+        body.innerHTML = '<tr><td colspan="9" class="empty">No trades yet.</td></tr>';
+        return;
+    }
+    body.innerHTML = data.trades.map(t => `<tr>
+        <td>${fmtDate(t.exit_time)}</td>
+        <td><strong>${t.ticker}</strong></td>
+        <td>${badge(t.trade_type, t.trade_type === 'DAY' ? 'day' : 'swing')}</td>
+        <td>${fmtMoney(t.entry_price)}</td>
+        <td>${fmtMoney(t.exit_price)}</td>
+        <td>${t.shares}</td>
+        <td class="${pnlClass(t.pnl_dollars)}">${t.pnl_dollars >= 0 ? '+' : ''}${fmtMoney(t.pnl_dollars)}</td>
+        <td class="${pnlClass(t.r_multiple)}">${fmt(t.r_multiple)}R</td>
+        <td>${t.exit_reason}</td>
+    </tr>`).join('');
+}
+
+async function loadSkipped() {
+    const data = await fetchJSON('/api/skipped-signals?limit=100');
+    if (!data) return;
+    document.getElementById('skipped-count').textContent = data.count + ' signals';
+    const body = document.getElementById('skipped-body');
+    if (data.count === 0) {
+        body.innerHTML = '<tr><td colspan="6" class="empty">No skipped signals.</td></tr>';
+        return;
+    }
+    body.innerHTML = data.signals.map(s => `<tr>
+        <td>${fmtDate(s.timestamp)}</td>
+        <td><strong>${s.ticker}</strong></td>
+        <td>${badge(s.signal_type, s.signal_type === 'BUY' ? 'buy' : 'sell')}</td>
+        <td>${badge(s.trade_type, s.trade_type === 'DAY' ? 'day' : 'swing')}</td>
+        <td>${fmt(s.confidence, 1)}</td>
+        <td style="color:var(--muted)">${s.reason_skipped || ''}</td>
+    </tr>`).join('');
+}
+
+async function loadEquityCurve() {
+    const data = await fetchJSON('/api/equity-curve');
+    if (!data || data.count === 0) return;
+    const chart = document.getElementById('equity-chart');
+    const values = data.snapshots.map(s => s.total_value);
+    const min = Math.min(...values) * 0.95;
+    const max = Math.max(...values) * 1.05;
+    const range = max - min || 1;
+    chart.innerHTML = values.map((v, i) => {
+        const h = Math.max(4, ((v - min) / range) * 180);
+        const color = v >= values[0] ? 'var(--green)' : 'var(--red)';
+        const date = data.snapshots[i].date || '';
+        return `<div class="chart-bar" style="height:${h}px;background:${color}" title="${date}: ${fmtMoney(v)}"></div>`;
+    }).join('');
+}
+
+async function loadAll() {
+    document.getElementById('last-updated').textContent = 'Updating...';
+    await Promise.all([loadStats(), loadWatchlist(), loadSignals(), loadTrades(), loadSkipped(), loadEquityCurve()]);
+    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+loadAll();
+</script>
+</body>
+</html>
