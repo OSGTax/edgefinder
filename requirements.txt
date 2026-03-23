@@ -7,7 +7,7 @@ pandas>=2.0.0
 numpy>=1.24.0
 
 # Technical Analysis
-pandas_ta @ git+https://github.com/twopirllc/pandas-ta.git@development
+pandas_ta>=0.3.14b0
 
 # Sentiment Analysis
 vaderSentiment>=3.3.2
