@@ -103,6 +103,54 @@ async def get_scheduler_info():
     return get_scheduler_status()
 
 
+# ── MANUAL SCANNER ──────────────────────────────────────────
+
+import threading
+
+_scan_status = {"running": False, "last_result": None, "last_error": None}
+
+
+def _run_scan_background():
+    """Run the scanner in a background thread."""
+    from modules.scanner import run_scan
+    try:
+        tickers = sorted(set(settings.SCANNER_DEFAULT_TICKERS))
+        results = run_scan(tickers=tickers, save_to_db=True)
+        _scan_status["last_result"] = f"{len(results)} stocks on watchlist"
+        _scan_status["last_error"] = None
+        logger.info(f"Manual scan complete: {len(results)} stocks")
+    except Exception as e:
+        _scan_status["last_result"] = None
+        _scan_status["last_error"] = str(e)
+        logger.error(f"Manual scan failed: {e}")
+    finally:
+        _scan_status["running"] = False
+
+
+@app.post("/api/scanner/run")
+async def run_scanner_manually():
+    """Trigger a manual scanner run."""
+    if _scan_status["running"]:
+        return {"status": "already_running", "message": "Scanner is already running"}
+
+    _scan_status["running"] = True
+    _scan_status["last_result"] = None
+    _scan_status["last_error"] = None
+    thread = threading.Thread(target=_run_scan_background, daemon=True)
+    thread.start()
+    return {"status": "started", "message": "Scanner started in background"}
+
+
+@app.get("/api/scanner/status")
+async def get_scanner_status():
+    """Get the status of a manual scanner run."""
+    return {
+        "running": _scan_status["running"],
+        "last_result": _scan_status["last_result"],
+        "last_error": _scan_status["last_error"],
+    }
+
+
 @app.get("/api/watchlist")
 async def get_watchlist(
     limit: int = Query(default=100, ge=1, le=500),
