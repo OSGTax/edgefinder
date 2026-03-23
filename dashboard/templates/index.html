@@ -734,7 +734,10 @@ async function runScanner() {
     _scanPollTimer = setInterval(async () => {
         const st = await fetchJSON('/api/scanner/status');
         if (!st) return;
-        if (!st.running) {
+        if (st.running) {
+            status.textContent = st.last_result || 'Scanner running...';
+            status.style.color = 'var(--yellow)';
+        } else {
             clearInterval(_scanPollTimer);
             _scanPollTimer = null;
             btn.disabled = false;
@@ -747,7 +750,7 @@ async function runScanner() {
                 status.style.color = 'var(--green)';
                 loadWatchlist();
             }
-            setTimeout(() => { status.textContent = ''; }, 10000);
+            setTimeout(() => { status.textContent = ''; }, 15000);
         }
     }, 3000);
 }

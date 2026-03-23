@@ -111,13 +111,36 @@ _scan_status = {"running": False, "last_result": None, "last_error": None}
 
 def _run_scan_background():
     """Run the scanner in a background thread."""
-    from modules.scanner import run_scan
+    from modules.scanner import run_scan, fetch_batch, passes_prescreen, score_stock
     try:
         tickers = sorted(set(settings.SCANNER_DEFAULT_TICKERS))
-        results = run_scan(tickers=tickers, save_to_db=True)
-        _scan_status["last_result"] = f"{len(results)} stocks on watchlist"
+        _scan_status["last_result"] = f"Scanning {len(tickers)} tickers..."
+
+        # Run with detailed tracking
+        all_data = fetch_batch(tickers)
+        fetched = len(all_data)
+        screened = [d for d in all_data if passes_prescreen(d)]
+        passed = len(screened)
+        scored = [score_stock(d) for d in screened]
+        watchlist = [
+            s for s in scored
+            if s.composite_score >= settings.WATCHLIST_MIN_COMPOSITE_SCORE
+        ]
+
+        # Save to DB
+        if watchlist:
+            from modules.scanner import _save_watchlist
+            _save_watchlist(watchlist)
+
+        detail = (
+            f"{len(watchlist)} on watchlist "
+            f"(fetched {fetched}/{len(tickers)}, "
+            f"passed prescreen {passed}, "
+            f"scored above {settings.WATCHLIST_MIN_COMPOSITE_SCORE}: {len(watchlist)})"
+        )
+        _scan_status["last_result"] = detail
         _scan_status["last_error"] = None
-        logger.info(f"Manual scan complete: {len(results)} stocks")
+        logger.info(f"Manual scan complete: {detail}")
     except Exception as e:
         _scan_status["last_result"] = None
         _scan_status["last_error"] = str(e)
