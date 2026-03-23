@@ -20,6 +20,7 @@ Run: uvicorn dashboard.app:app --host 0.0.0.0 --port 8000
 """
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -104,8 +105,6 @@ async def get_scheduler_info():
 
 
 # ── MANUAL SCANNER ──────────────────────────────────────────
-
-import threading
 
 _scan_status = {"running": False, "last_result": None, "last_error": None}
 
