@@ -252,12 +252,16 @@ def job_signal_check() -> None:
                 )
                 continue
 
+            # Fetch real current price (signal.price may be stale daily close)
+            real_price = _fetch_current_price(ticker)
+            entry_price = real_price if real_price else signal.price
+
             # Execute trade
             position = _trader.execute_signal(
                 ticker=ticker,
                 signal_type=signal.signal_type,
                 trade_type=signal.trade_type,
-                entry_price=signal.price,
+                entry_price=entry_price,
                 confidence=adjusted_confidence,
                 sector=info.get("sector", ""),
                 fundamental_score=info.get("composite_score", 0),
@@ -358,7 +362,9 @@ def job_close_day_trades() -> None:
             try:
                 price = _fetch_current_price(position.ticker)
                 if price is None:
-                    price = position.entry_price  # Fallback to entry if price unavailable
+                    # Use last monitored price, not entry (more honest)
+                    price = position.last_known_price or position.high_water_mark or position.entry_price
+                    logger.warning(f"{position.ticker}: Using last known price ${price:.2f} (live fetch failed)")
 
                 result = _trader.close_position(
                     position.trade_id, price, exit_reason="END_OF_DAY"

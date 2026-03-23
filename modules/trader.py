@@ -49,6 +49,7 @@ class Position:
     confidence_score: float = 0.0
     trailing_stop: Optional[float] = None
     high_water_mark: float = 0.0  # Highest price since entry (for trailing)
+    last_known_price: float = 0.0  # Updated every monitoring cycle
 
     @property
     def cost_basis(self) -> float:
@@ -457,6 +458,9 @@ class PaperTrader:
         position = self.account.positions.get(trade_id)
         if not position:
             return None
+
+        # Track last known price for honest EOD closes
+        position.last_known_price = current_price
 
         # Update high water mark
         if current_price > position.high_water_mark:
