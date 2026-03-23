@@ -29,8 +29,10 @@ def setup_db():
 @pytest.fixture
 def client(setup_db):
     """FastAPI test client."""
-    from dashboard.app import app
-    return TestClient(app)
+    from dashboard import app as app_module
+    # Prevent background scan in tests
+    app_module._scan_status["complete"] = True
+    return TestClient(app_module.app)
 
 
 def _seed_watchlist():

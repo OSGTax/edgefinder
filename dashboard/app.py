@@ -18,6 +18,8 @@ Run: uvicorn dashboard.app:app --host 0.0.0.0 --port 8000
 """
 
 import logging
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -37,22 +39,79 @@ from modules.journal import TradeJournal
 
 logger = logging.getLogger(__name__)
 
+# Static files / templates
+DASHBOARD_DIR = Path(__file__).parent
+TEMPLATES_DIR = DASHBOARD_DIR / "templates"
+
+# Journal instance for stats
+_journal = TradeJournal()
+
+# Track background scan
+_scan_status = {"running": False, "complete": False, "count": 0}
+
+
+def _background_scan():
+    """Run initial scan in background thread so it doesn't block startup."""
+    _scan_status["running"] = True
+    try:
+        session = get_session()
+        try:
+            active_count = session.query(WatchlistStock).filter(
+                WatchlistStock.is_active == True  # noqa: E712
+            ).count()
+        finally:
+            session.close()
+
+        if active_count > 0:
+            logger.info(f"Watchlist already has {active_count} stocks — skipping scan")
+            _scan_status["count"] = active_count
+            _scan_status["complete"] = True
+            _scan_status["running"] = False
+            return
+
+        logger.info("No watchlist data — running background scan...")
+        from modules.scanner import run_scan
+        tickers = [
+            "PYPL", "SNAP", "PLTR", "ROKU", "SQ", "PATH", "BILL",
+            "CFLT", "MDB", "DDOG", "NET", "ZS", "CRWD", "DUOL",
+            "DOCS", "HIMS", "APP", "TOST",
+            "ON", "SWKS", "QRVO", "MRVL", "SMCI", "ENPH", "SEDG", "FSLR",
+            "ETSY", "W", "CHWY", "CELH", "ELF", "RVLV", "DECK",
+            "CAVA", "BROS", "SHAK", "LULU",
+            "DVN", "MRO", "OVV", "CTRA", "FANG",
+            "CLF", "AA", "X", "NUE", "STLD", "AXON",
+            "DAL", "UAL", "LUV", "JBLU", "UBER", "LYFT",
+            "MGM", "WYNN", "CZR", "DKNG",
+            "SOFI", "COIN", "HOOD",
+            "ABNB", "DASH", "RKLB", "IONQ", "RIVN", "PFE",
+        ]
+        tickers = sorted(set(tickers))
+        results = run_scan(tickers=tickers, save_to_db=True)
+        _scan_status["count"] = len(results)
+        logger.info(f"Background scan complete: {len(results)} stocks")
+    except Exception as e:
+        logger.error(f"Background scan failed: {e}")
+    finally:
+        _scan_status["running"] = False
+        _scan_status["complete"] = True
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: init DB and kick off background scan."""
+    init_db()
+    thread = threading.Thread(target=_background_scan, daemon=True)
+    thread.start()
+    yield
+
+
 # Initialize app
 app = FastAPI(
     title="EdgeFinder Dashboard",
     description="Paper trading system dashboard",
     version="1.0.0",
+    lifespan=lifespan,
 )
-
-# Ensure database exists
-init_db()
-
-# Journal instance for stats
-_journal = TradeJournal()
-
-# Static files / templates
-DASHBOARD_DIR = Path(__file__).parent
-TEMPLATES_DIR = DASHBOARD_DIR / "templates"
 
 
 # ── ROUTES ───────────────────────────────────────────────────
@@ -72,7 +131,11 @@ async def dashboard_home():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "ok", "service": "edgefinder-dashboard"}
+    return {
+        "status": "ok",
+        "service": "edgefinder-dashboard",
+        "scan_status": _scan_status,
+    }
 
 
 @app.get("/api/watchlist")
