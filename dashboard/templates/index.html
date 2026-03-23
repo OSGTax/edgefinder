@@ -79,7 +79,11 @@
             letter-spacing: 0.5px;
             border-bottom: 1px solid var(--border);
             white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
         }
+        th:hover { color: var(--text); }
+        th .sort-arrow { font-size: 10px; margin-left: 4px; }
         td {
             padding: 10px 14px;
             border-bottom: 1px solid var(--border);
@@ -461,6 +465,45 @@ async function loadAll() {
     await Promise.all([loadStats(), loadWatchlist(), loadSignals(), loadTrades(), loadSkipped(), loadEquityCurve()]);
     document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
+
+// Table sorting — click any column header to sort
+document.addEventListener('click', function(e) {
+    const th = e.target.closest('th');
+    if (!th) return;
+    const table = th.closest('table');
+    if (!table) return;
+    const tbody = table.querySelector('tbody');
+    if (!tbody || !tbody.rows.length) return;
+
+    const idx = Array.from(th.parentNode.children).indexOf(th);
+    const rows = Array.from(tbody.rows);
+    const currentDir = th.dataset.sortDir || 'none';
+    const newDir = currentDir === 'asc' ? 'desc' : 'asc';
+
+    // Reset all headers in this table
+    th.parentNode.querySelectorAll('th').forEach(h => {
+        h.dataset.sortDir = 'none';
+        const arrow = h.querySelector('.sort-arrow');
+        if (arrow) arrow.remove();
+    });
+
+    th.dataset.sortDir = newDir;
+    th.insertAdjacentHTML('beforeend', `<span class="sort-arrow">${newDir === 'asc' ? '\u25B2' : '\u25BC'}</span>`);
+
+    rows.sort((a, b) => {
+        let aVal = a.cells[idx]?.textContent.trim() || '';
+        let bVal = b.cells[idx]?.textContent.trim() || '';
+        // Strip $ and % and commas for numeric sort
+        const aNum = parseFloat(aVal.replace(/[$,%+R]/g, '').replace(/,/g, ''));
+        const bNum = parseFloat(bVal.replace(/[$,%+R]/g, '').replace(/,/g, ''));
+        if (!isNaN(aNum) && !isNaN(bNum)) {
+            return newDir === 'asc' ? aNum - bNum : bNum - aNum;
+        }
+        return newDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    });
+
+    rows.forEach(row => tbody.appendChild(row));
+});
 
 loadAll();
 </script>

@@ -8,4 +8,4 @@ services:
     healthCheckPath: /api/health
     envVars:
       - key: PYTHON_VERSION
-        value: "3.11.6"
+        value: "3.12.3"
