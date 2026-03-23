@@ -220,6 +220,7 @@
             position: relative;
         }
         .chart-bar:hover { opacity: 0.8; }
+        .header-btns { display: flex; gap: 8px; align-items: center; }
         .refresh-btn {
             background: var(--blue);
             color: white;
@@ -230,12 +231,27 @@
             cursor: pointer;
         }
         .refresh-btn:hover { opacity: 0.9; }
+        .scan-btn {
+            background: var(--green);
+            color: white;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .scan-btn:hover { opacity: 0.9; }
+        .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .scan-status { font-size: 11px; color: var(--muted); }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>EdgeFinder</h1>
-        <div>
+        <div class="header-btns">
+            <span class="scan-status" id="scan-status"></span>
+            <button class="scan-btn" id="scan-btn" onclick="runScanner()">Run Scanner</button>
             <span class="status" id="last-updated">Loading...</span>
             <button class="refresh-btn" onclick="loadAll()">Refresh</button>
         </div>
@@ -697,6 +713,43 @@ async function deleteSuggestion(id) {
     if (!confirm('Delete this suggestion?')) return;
     await fetch('/api/suggestions/' + id, {method: 'DELETE'});
     loadSuggestions();
+}
+
+let _scanPollTimer = null;
+async function runScanner() {
+    const btn = document.getElementById('scan-btn');
+    const status = document.getElementById('scan-status');
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+    status.textContent = 'Scanner starting...';
+    status.style.color = 'var(--yellow)';
+
+    const res = await fetch('/api/scanner/run', {method: 'POST'});
+    const data = await res.json();
+    if (data.status === 'already_running') {
+        status.textContent = 'Already running...';
+    }
+    // Poll for completion
+    if (_scanPollTimer) clearInterval(_scanPollTimer);
+    _scanPollTimer = setInterval(async () => {
+        const st = await fetchJSON('/api/scanner/status');
+        if (!st) return;
+        if (!st.running) {
+            clearInterval(_scanPollTimer);
+            _scanPollTimer = null;
+            btn.disabled = false;
+            btn.textContent = 'Run Scanner';
+            if (st.last_error) {
+                status.textContent = 'Scan failed: ' + st.last_error;
+                status.style.color = 'var(--red)';
+            } else {
+                status.textContent = st.last_result || 'Scan complete';
+                status.style.color = 'var(--green)';
+                loadWatchlist();
+            }
+            setTimeout(() => { status.textContent = ''; }, 10000);
+        }
+    }, 3000);
 }
 
 async function loadAll() {
