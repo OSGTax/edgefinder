@@ -149,6 +149,41 @@ SIGNAL_CHECK_INTERVAL_MINUTES = 15     # During market hours
 MARKET_OPEN_ET = "09:30"
 MARKET_CLOSE_ET = "16:00"
 DAY_TRADE_CUTOFF_ET = "15:50"          # Close day trades by 3:50 PM
+EXTENDED_HOURS_START_ET = "07:00"      # Pre-market monitoring start
+EXTENDED_HOURS_END_ET = "18:00"        # Post-market monitoring end
+POSITION_MONITOR_INTERVAL_MINUTES = 5  # Price check frequency
+ACCOUNT_SNAPSHOT_TIME = "16:05"        # Daily snapshot after close
+
+# ============================================================
+# DEFAULT TICKER UNIVERSE (used when Wikipedia S&P lists are unavailable)
+# ============================================================
+SCANNER_DEFAULT_TICKERS = [
+    # Tech / Software
+    "PYPL", "SNAP", "PLTR", "ROKU", "SQ", "PATH", "BILL",
+    "CFLT", "MDB", "DDOG", "NET", "ZS", "CRWD", "DUOL",
+    "DOCS", "HIMS", "APP", "TOST",
+    # Semiconductors
+    "ON", "SWKS", "QRVO", "MRVL", "SMCI", "ENPH", "SEDG", "FSLR",
+    # Consumer
+    "ETSY", "W", "CHWY", "CELH", "ELF", "RVLV", "DECK",
+    "CAVA", "BROS", "SHAK", "LULU",
+    # Energy
+    "DVN", "MRO", "OVV", "CTRA", "FANG",
+    # Materials / Industrials
+    "CLF", "AA", "X", "NUE", "STLD", "AXON",
+    # Transport
+    "DAL", "UAL", "LUV", "JBLU", "UBER", "LYFT",
+    # Gaming / Entertainment
+    "MGM", "WYNN", "CZR", "DKNG",
+    # Fintech
+    "SOFI", "COIN", "HOOD",
+    # Travel / Delivery
+    "ABNB", "DASH",
+    # Space / Quantum / EV
+    "RKLB", "IONQ", "RIVN",
+    # Pharma
+    "PFE",
+]
 
 # ============================================================
 # DATABASE

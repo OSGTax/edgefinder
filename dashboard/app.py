@@ -2,6 +2,7 @@
 EdgeFinder Dashboard — FastAPI Backend
 =======================================
 REST API for the EdgeFinder paper trading dashboard.
+Includes automated scheduler for continuous market-hours operation.
 
 Endpoints:
     GET  /                      → Dashboard UI (serves index.html)
@@ -12,20 +13,19 @@ Endpoints:
     GET  /api/equity-curve       → Account snapshots for charting
     GET  /api/account            → Current account state
     GET  /api/skipped-signals    → Signals that were not traded
+    GET  /api/scheduler          → Scheduler status, jobs, open positions
     GET  /api/health             → Health check
 
 Run: uvicorn dashboard.app:app --host 0.0.0.0 --port 8000
 """
 
 import logging
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, Query
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 
 from config import settings
 from modules.database import init_db, get_session
@@ -46,63 +46,18 @@ TEMPLATES_DIR = DASHBOARD_DIR / "templates"
 # Journal instance for stats
 _journal = TradeJournal()
 
-# Track background scan
-_scan_status = {"running": False, "complete": False, "count": 0}
-
-
-def _background_scan():
-    """Run initial scan in background thread so it doesn't block startup."""
-    _scan_status["running"] = True
-    try:
-        session = get_session()
-        try:
-            active_count = session.query(WatchlistStock).filter(
-                WatchlistStock.is_active == True  # noqa: E712
-            ).count()
-        finally:
-            session.close()
-
-        if active_count > 0:
-            logger.info(f"Watchlist already has {active_count} stocks — skipping scan")
-            _scan_status["count"] = active_count
-            _scan_status["complete"] = True
-            _scan_status["running"] = False
-            return
-
-        logger.info("No watchlist data — running background scan...")
-        from modules.scanner import run_scan
-        tickers = [
-            "PYPL", "SNAP", "PLTR", "ROKU", "SQ", "PATH", "BILL",
-            "CFLT", "MDB", "DDOG", "NET", "ZS", "CRWD", "DUOL",
-            "DOCS", "HIMS", "APP", "TOST",
-            "ON", "SWKS", "QRVO", "MRVL", "SMCI", "ENPH", "SEDG", "FSLR",
-            "ETSY", "W", "CHWY", "CELH", "ELF", "RVLV", "DECK",
-            "CAVA", "BROS", "SHAK", "LULU",
-            "DVN", "MRO", "OVV", "CTRA", "FANG",
-            "CLF", "AA", "X", "NUE", "STLD", "AXON",
-            "DAL", "UAL", "LUV", "JBLU", "UBER", "LYFT",
-            "MGM", "WYNN", "CZR", "DKNG",
-            "SOFI", "COIN", "HOOD",
-            "ABNB", "DASH", "RKLB", "IONQ", "RIVN", "PFE",
-        ]
-        tickers = sorted(set(tickers))
-        results = run_scan(tickers=tickers, save_to_db=True)
-        _scan_status["count"] = len(results)
-        logger.info(f"Background scan complete: {len(results)} stocks")
-    except Exception as e:
-        logger.error(f"Background scan failed: {e}")
-    finally:
-        _scan_status["running"] = False
-        _scan_status["complete"] = True
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init DB and kick off background scan."""
+    """Startup: init DB and start scheduler."""
     init_db()
-    thread = threading.Thread(target=_background_scan, daemon=True)
-    thread.start()
+
+    from modules.scheduler import start_scheduler, stop_scheduler
+    start_scheduler()
+
     yield
+
+    stop_scheduler()
 
 
 # Initialize app
@@ -131,11 +86,20 @@ async def dashboard_home():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
+    from modules.scheduler import get_scheduler_status
+    status = get_scheduler_status()
     return {
         "status": "ok",
         "service": "edgefinder-dashboard",
-        "scan_status": _scan_status,
+        "scheduler_running": status["running"],
     }
+
+
+@app.get("/api/scheduler")
+async def get_scheduler_info():
+    """Return scheduler status, next job run times, and open positions."""
+    from modules.scheduler import get_scheduler_status
+    return get_scheduler_status()
 
 
 @app.get("/api/watchlist")

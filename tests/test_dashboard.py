@@ -29,10 +29,12 @@ def setup_db():
 @pytest.fixture
 def client(setup_db):
     """FastAPI test client."""
-    from dashboard import app as app_module
-    # Prevent background scan in tests
-    app_module._scan_status["complete"] = True
-    return TestClient(app_module.app)
+    from unittest.mock import patch
+    # Prevent scheduler from starting in tests
+    with patch("modules.scheduler.start_scheduler"), \
+         patch("modules.scheduler.stop_scheduler"):
+        from dashboard.app import app
+        return TestClient(app)
 
 
 def _seed_watchlist():
