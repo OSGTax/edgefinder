@@ -19,9 +19,11 @@ Endpoints:
 Run: uvicorn dashboard.app:app --host 0.0.0.0 --port 8000
 """
 
+import json
 import logging
 import threading
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -44,15 +46,85 @@ logger = logging.getLogger(__name__)
 # Static files / templates
 DASHBOARD_DIR = Path(__file__).parent
 TEMPLATES_DIR = DASHBOARD_DIR / "templates"
+PROJECT_ROOT = DASHBOARD_DIR.parent
+SUGGESTIONS_JSON = PROJECT_ROOT / "data" / "suggestions.json"
 
 # Journal instance for stats
 _journal = TradeJournal()
 
 
+# ── SUGGESTIONS PERSISTENCE ─────────────────────────────────
+
+def _seed_suggestions_from_json():
+    """Load suggestions from seed JSON into SQLite (survives deploys)."""
+    if not SUGGESTIONS_JSON.exists():
+        return
+    try:
+        with open(SUGGESTIONS_JSON) as f:
+            seeds = json.load(f)
+        if not seeds:
+            return
+
+        session = get_session()
+        existing_titles = {
+            s.title for s in session.query(Suggestion.title).all()
+        }
+        added = 0
+        for s in seeds:
+            if s["title"] not in existing_titles:
+                session.add(Suggestion(
+                    category=s.get("category", "other"),
+                    title=s["title"],
+                    description=s.get("description", ""),
+                    status=s.get("status", "new"),
+                    created_at=datetime.fromisoformat(s["created_at"]) if s.get("created_at") else datetime.utcnow(),
+                ))
+                added += 1
+        if added:
+            session.commit()
+            logger.info(f"Seeded {added} suggestions from JSON")
+        session.close()
+    except Exception as e:
+        logger.error(f"Failed to seed suggestions: {e}")
+
+
+def _export_suggestions_json():
+    """Write all suggestions from DB back to the JSON seed file."""
+    try:
+        session = get_session()
+        rows = session.query(Suggestion).order_by(Suggestion.id).all()
+        data = [
+            {
+                "id": s.id,
+                "category": s.category,
+                "title": s.title,
+                "description": s.description,
+                "status": s.status,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in rows
+        ]
+        session.close()
+
+        # Only write if we're not on Render (repo is read-only there)
+        try:
+            with open(SUGGESTIONS_JSON, "w") as f:
+                json.dump(data, f, indent=2)
+                f.write("\n")
+        except OSError:
+            pass  # Read-only filesystem (Render), that's fine
+
+        return data
+    except Exception as e:
+        logger.error(f"Failed to export suggestions: {e}")
+        return []
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: init DB and start scheduler."""
+    """Startup: init DB, seed suggestions, start scheduler."""
     init_db()
+    _seed_suggestions_from_json()
 
     from modules.scheduler import start_scheduler, stop_scheduler
     start_scheduler()
@@ -420,6 +492,7 @@ async def create_suggestion(payload: dict):
         )
         session.add(suggestion)
         session.commit()
+        _export_suggestions_json()
         return {
             "status": "ok",
             "id": suggestion.id,
@@ -439,6 +512,14 @@ async def delete_suggestion(suggestion_id: int):
             return {"error": "Not found"}, 404
         session.delete(row)
         session.commit()
+        _export_suggestions_json()
         return {"status": "ok", "message": "Suggestion deleted"}
     finally:
         session.close()
+
+
+@app.get("/api/suggestions/export")
+async def export_suggestions():
+    """Export all suggestions as JSON (for committing to repo)."""
+    data = _export_suggestions_json()
+    return {"count": len(data), "suggestions": data}
