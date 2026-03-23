@@ -1,0 +1,36 @@
+# EdgeFinder Dependencies
+# Install: pip install -r requirements.txt
+
+# Core
+yfinance>=0.2.31
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Technical Analysis
+pandas-ta>=0.3.14b
+
+# Sentiment Analysis
+vaderSentiment>=3.3.2
+feedparser>=6.0.10
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Web Framework (Dashboard - Phase 5)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+jinja2>=3.1.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+
+# Utilities
+python-dotenv>=1.0.0
+rich>=13.0.0
