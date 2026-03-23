@@ -138,6 +138,18 @@ class AccountSnapshot(Base):
     drawdown_pct = Column(Float)
 
 
+class Suggestion(Base):
+    """User-submitted suggestion for system improvements."""
+    __tablename__ = "suggestions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category = Column(String(50), nullable=False)   # feature, strategy, bug, other
+    title = Column(String(200), nullable=False)
+    description = Column(Text)
+    status = Column(String(20), default="new")      # new, reviewing, implemented, declined
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 # ── DATABASE ENGINE ──────────────────────────────────────────
 
 _engine = None

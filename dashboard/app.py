@@ -34,6 +34,7 @@ from modules.database import (
     Trade as TradeRecord,
     Signal as SignalRecord,
     AccountSnapshot,
+    Suggestion,
 )
 from modules.journal import TradeJournal
 
@@ -298,3 +299,76 @@ async def get_skipped_signals(
         "count": len(signals),
         "signals": signals,
     }
+
+
+@app.get("/api/suggestions")
+async def list_suggestions(
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Get all submitted suggestions."""
+    session = get_session()
+    try:
+        rows = session.query(Suggestion).order_by(
+            Suggestion.created_at.desc()
+        ).limit(limit).all()
+
+        return {
+            "count": len(rows),
+            "suggestions": [
+                {
+                    "id": s.id,
+                    "category": s.category,
+                    "title": s.title,
+                    "description": s.description,
+                    "status": s.status,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                }
+                for s in rows
+            ],
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/suggestions")
+async def create_suggestion(payload: dict):
+    """Submit a new suggestion."""
+    title = (payload.get("title") or "").strip()
+    if not title:
+        return {"error": "Title is required"}, 400
+
+    category = payload.get("category", "other").strip().lower()
+    if category not in ("feature", "strategy", "bug", "other"):
+        category = "other"
+
+    session = get_session()
+    try:
+        suggestion = Suggestion(
+            category=category,
+            title=title,
+            description=(payload.get("description") or "").strip(),
+        )
+        session.add(suggestion)
+        session.commit()
+        return {
+            "status": "ok",
+            "id": suggestion.id,
+            "message": "Suggestion submitted",
+        }
+    finally:
+        session.close()
+
+
+@app.delete("/api/suggestions/{suggestion_id}")
+async def delete_suggestion(suggestion_id: int):
+    """Delete a suggestion."""
+    session = get_session()
+    try:
+        row = session.query(Suggestion).filter(Suggestion.id == suggestion_id).first()
+        if not row:
+            return {"error": "Not found"}, 404
+        session.delete(row)
+        session.commit()
+        return {"status": "ok", "message": "Suggestion deleted"}
+    finally:
+        session.close()
