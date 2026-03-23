@@ -18,6 +18,9 @@ requests>=2.31.0
 # Database
 sqlalchemy>=2.0.0
 
+# HTML Parsing (for Wikipedia ticker lists)
+lxml>=4.9.0
+
 # Web Framework (Dashboard - Phase 5)
 fastapi>=0.104.0
 uvicorn>=0.24.0

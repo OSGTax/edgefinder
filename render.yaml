@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: edgefinder
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scripts/render_start.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.6"
+    plan: free
+    healthCheckPath: /api/health
