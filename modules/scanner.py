@@ -591,15 +591,47 @@ def run_scan(
 
 # ── DATABASE PERSISTENCE ─────────────────────────────────────
 
+def _build_notes(s: ScoredStock) -> str:
+    """Build human-readable scoring breakdown for a watchlist entry."""
+    parts = [f"Category: {s.lynch_category}"]
+    lb = s.score_breakdown.get("lynch", {})
+    bb = s.score_breakdown.get("burry", {})
+
+    lynch_parts = []
+    for key, label in [("peg", "PEG"), ("earnings_growth", "EarningsGr"),
+                        ("debt_to_equity", "D/E"), ("revenue_growth", "RevGr"),
+                        ("institutional", "Inst")]:
+        if lb.get(key) is not None:
+            lynch_parts.append(f"{label}={lb[key]:.0f}")
+    if lynch_parts:
+        parts.append(f"Lynch({s.lynch_score:.0f}): {', '.join(lynch_parts)}")
+
+    burry_parts = []
+    for key, label in [("fcf_yield", "FCF"), ("price_to_tangible_book", "P/TB"),
+                        ("ev_to_ebitda", "EV/EBITDA"), ("current_ratio", "CurRatio"),
+                        ("short_interest", "Short")]:
+        if bb.get(key) is not None:
+            burry_parts.append(f"{label}={bb[key]:.0f}")
+    if burry_parts:
+        parts.append(f"Burry({s.burry_score:.0f}): {', '.join(burry_parts)}")
+
+    return " | ".join(parts)
+
+
 def _save_watchlist(watchlist: list[ScoredStock]):
     """Save watchlist to database, deactivating old entries."""
     try:
         session = get_session()
 
-        # Deactivate previous watchlist
+        # Deactivate previous watchlist (but keep manually added ones)
+        from sqlalchemy import or_
         session.query(WatchlistStock).filter(
-            WatchlistStock.is_active == True  # noqa: E712
-        ).update({"is_active": False})
+            WatchlistStock.is_active == True,  # noqa: E712
+            or_(
+                WatchlistStock.notes == None,  # noqa: E711
+                ~WatchlistStock.notes.like("MANUAL%"),
+            ),
+        ).update({"is_active": False}, synchronize_session="fetch")
 
         # Insert new watchlist
         for s in watchlist:
@@ -626,6 +658,7 @@ def _save_watchlist(watchlist: list[ScoredStock]):
                 composite_score=s.composite_score,
                 scan_date=datetime.utcnow(),
                 is_active=True,
+                notes=_build_notes(s),
             )
             session.add(entry)
 

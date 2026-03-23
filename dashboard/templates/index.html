@@ -359,6 +359,16 @@
 
         <!-- Watchlist -->
         <div class="tab-content" id="tab-watchlist">
+            <div class="panel" style="margin-bottom:16px">
+                <div class="panel-header">Add Ticker Manually</div>
+                <div style="padding:16px;display:flex;gap:10px;align-items:center">
+                    <input type="text" id="add-ticker-input" placeholder="Enter ticker (e.g. AAPL)"
+                        onkeydown="if(event.key==='Enter')addTicker()"
+                        style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:8px 12px;font-size:13px;width:160px;text-transform:uppercase">
+                    <button class="scan-btn" id="add-ticker-btn" onclick="addTicker()">Add &amp; Analyze</button>
+                    <span id="add-ticker-msg" style="font-size:13px;color:var(--muted)"></span>
+                </div>
+            </div>
             <div class="panel">
                 <div class="panel-header">
                     <span>Active Watchlist</span>
@@ -370,7 +380,7 @@
                             <tr>
                                 <th>#</th><th>Ticker</th><th>Company</th><th>Sector</th>
                                 <th>Price</th><th>Composite</th><th>Lynch</th><th>Burry</th>
-                                <th>Category</th><th>PEG</th><th>FCF Yield</th>
+                                <th>Category</th><th>PEG</th><th>FCF Yield</th><th>Reason</th>
                             </tr>
                         </thead>
                         <tbody id="watchlist-body"></tbody>
@@ -565,12 +575,15 @@ async function loadWatchlist() {
     document.getElementById('watchlist-count').textContent = data.count + ' stocks';
     const body = document.getElementById('watchlist-body');
     if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="11" class="empty">No watchlist data. Run the scanner first.</td></tr>';
+        body.innerHTML = '<tr><td colspan="12" class="empty">No watchlist data. Run the scanner or add a ticker manually.</td></tr>';
         return;
     }
-    body.innerHTML = data.watchlist.map((s, i) => `<tr>
+    body.innerHTML = data.watchlist.map((s, i) => {
+        const isManual = s.notes && s.notes.startsWith('MANUAL');
+        const tagHtml = isManual ? '<span class="badge badge-swing" style="margin-right:4px">MANUAL</span>' : '';
+        return `<tr>
         <td>${i + 1}</td>
-        <td><strong>${s.ticker}</strong></td>
+        <td><strong>${tagHtml}${s.ticker}</strong></td>
         <td>${s.company_name || ''}</td>
         <td>${s.sector || ''}</td>
         <td>${fmtMoney(s.price)}</td>
@@ -580,7 +593,47 @@ async function loadWatchlist() {
         <td>${s.lynch_category || ''}</td>
         <td>${fmt(s.peg_ratio)}</td>
         <td>${s.fcf_yield != null ? fmtPct(s.fcf_yield) : '--'}</td>
-    </tr>`).join('');
+        <td style="white-space:normal;max-width:300px;font-size:11px;color:var(--muted)">${escHtml(s.notes || '')}</td>
+    </tr>`;
+    }).join('');
+}
+
+async function addTicker() {
+    const input = document.getElementById('add-ticker-input');
+    const btn = document.getElementById('add-ticker-btn');
+    const msg = document.getElementById('add-ticker-msg');
+    const ticker = input.value.trim().toUpperCase();
+
+    if (!ticker) { msg.textContent = 'Enter a ticker symbol'; msg.style.color = 'var(--red)'; return; }
+
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+    msg.textContent = `Fetching data for ${ticker}...`;
+    msg.style.color = 'var(--yellow)';
+
+    try {
+        const res = await fetch('/api/watchlist/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ticker}),
+        });
+        const data = await res.json();
+        if (data.error) {
+            msg.textContent = data.error;
+            msg.style.color = 'var(--red)';
+        } else {
+            msg.textContent = `${ticker} added! Composite: ${data.composite_score.toFixed(1)} (Lynch: ${data.lynch_score.toFixed(1)}, Burry: ${data.burry_score.toFixed(1)})`;
+            msg.style.color = 'var(--green)';
+            input.value = '';
+            loadWatchlist();
+        }
+    } catch (e) {
+        msg.textContent = 'Error adding ticker';
+        msg.style.color = 'var(--red)';
+    }
+    btn.disabled = false;
+    btn.textContent = 'Add & Analyze';
+    setTimeout(() => { msg.textContent = ''; }, 15000);
 }
 
 async function loadSignals() {
