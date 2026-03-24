@@ -252,58 +252,28 @@ async def add_ticker_to_watchlist(payload: dict):
     Fetches fundamental data, scores it, and adds regardless of score.
     Includes detailed reasoning for why it scored the way it did.
     """
+    import time
     from modules.scanner import fetch_fundamental_data, score_stock
 
     ticker = (payload.get("ticker") or "").strip().upper()
     if not ticker:
         return {"error": "Ticker is required"}
 
-    # Fetch fundamental data
+    # Fetch fundamental data (retry once — yfinance is flaky)
     data = fetch_fundamental_data(ticker)
     if not data:
-        return {"error": f"Could not fetch data for {ticker}. Check the ticker symbol."}
+        time.sleep(1)
+        data = fetch_fundamental_data(ticker)
+    if not data:
+        return {"error": f"Could not fetch data for {ticker}. yfinance may be unavailable — try again in a minute."}
 
     # Score it
     scored = score_stock(data)
     breakdown = scored.score_breakdown
 
-    # Build human-readable reasoning
-    reasons = []
-    reasons.append(f"Category: {scored.lynch_category}")
-
-    # Lynch breakdown
-    lynch_parts = []
-    lb = breakdown.get("lynch", {})
-    if lb.get("peg") is not None:
-        lynch_parts.append(f"PEG={lb['peg']:.0f}")
-    if lb.get("earnings_growth") is not None:
-        lynch_parts.append(f"EarningsGr={lb['earnings_growth']:.0f}")
-    if lb.get("debt_to_equity") is not None:
-        lynch_parts.append(f"D/E={lb['debt_to_equity']:.0f}")
-    if lb.get("revenue_growth") is not None:
-        lynch_parts.append(f"RevGr={lb['revenue_growth']:.0f}")
-    if lb.get("institutional") is not None:
-        lynch_parts.append(f"Inst={lb['institutional']:.0f}")
-    if lynch_parts:
-        reasons.append(f"Lynch({scored.lynch_score:.0f}): {', '.join(lynch_parts)}")
-
-    # Burry breakdown
-    burry_parts = []
-    bb = breakdown.get("burry", {})
-    if bb.get("fcf_yield") is not None:
-        burry_parts.append(f"FCF={bb['fcf_yield']:.0f}")
-    if bb.get("price_to_tangible_book") is not None:
-        burry_parts.append(f"P/TB={bb['price_to_tangible_book']:.0f}")
-    if bb.get("ev_to_ebitda") is not None:
-        burry_parts.append(f"EV/EBITDA={bb['ev_to_ebitda']:.0f}")
-    if bb.get("current_ratio") is not None:
-        burry_parts.append(f"CurRatio={bb['current_ratio']:.0f}")
-    if bb.get("short_interest") is not None:
-        burry_parts.append(f"Short={bb['short_interest']:.0f}")
-    if burry_parts:
-        reasons.append(f"Burry({scored.burry_score:.0f}): {', '.join(burry_parts)}")
-
-    notes = "MANUAL | " + " | ".join(reasons)
+    # Build plain English reasoning using actual data values
+    from modules.scanner import _build_notes
+    notes = "MANUAL | " + _build_notes(scored)
 
     # Save to DB (regardless of composite score)
     session = get_session()

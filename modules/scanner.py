@@ -129,7 +129,7 @@ def fetch_fundamental_data(ticker: str) -> Optional[FundamentalData]:
         info = stock.info
 
         if not info or info.get("regularMarketPrice") is None:
-            logger.debug(f"{ticker}: No data available")
+            logger.warning(f"{ticker}: No data available (got {len(info) if info else 0} fields)")
             return None
 
         data = FundamentalData(ticker=ticker)
@@ -179,7 +179,7 @@ def fetch_fundamental_data(ticker: str) -> Optional[FundamentalData]:
         return data
 
     except Exception as e:
-        logger.debug(f"{ticker}: Fetch error — {e}")
+        logger.warning(f"{ticker}: Fetch error — {e}")
         return None
 
 
@@ -592,30 +592,40 @@ def run_scan(
 # ── DATABASE PERSISTENCE ─────────────────────────────────────
 
 def _build_notes(s: ScoredStock) -> str:
-    """Build human-readable scoring breakdown for a watchlist entry."""
-    parts = [f"Category: {s.lynch_category}"]
-    lb = s.score_breakdown.get("lynch", {})
-    bb = s.score_breakdown.get("burry", {})
+    """Build plain English scoring summary using actual data values."""
+    parts = []
+    d = s.data
 
-    lynch_parts = []
-    for key, label in [("peg", "PEG"), ("earnings_growth", "EarningsGr"),
-                        ("debt_to_equity", "D/E"), ("revenue_growth", "RevGr"),
-                        ("institutional", "Inst")]:
-        if lb.get(key) is not None:
-            lynch_parts.append(f"{label}={lb[key]:.0f}")
-    if lynch_parts:
-        parts.append(f"Lynch({s.lynch_score:.0f}): {', '.join(lynch_parts)}")
+    # Category in plain English
+    cat_names = {
+        "fast_grower": "Fast grower", "stalwart": "Stalwart",
+        "turnaround": "Turnaround", "asset_play": "Asset play",
+        "cyclical": "Cyclical", "slow_grower": "Slow grower",
+        "unclassified": "Unclassified",
+    }
+    parts.append(cat_names.get(s.lynch_category, s.lynch_category))
 
-    burry_parts = []
-    for key, label in [("fcf_yield", "FCF"), ("price_to_tangible_book", "P/TB"),
-                        ("ev_to_ebitda", "EV/EBITDA"), ("current_ratio", "CurRatio"),
-                        ("short_interest", "Short")]:
-        if bb.get(key) is not None:
-            burry_parts.append(f"{label}={bb[key]:.0f}")
-    if burry_parts:
-        parts.append(f"Burry({s.burry_score:.0f}): {', '.join(burry_parts)}")
+    if d.peg_ratio is not None:
+        qual = "great" if d.peg_ratio <= 1.0 else "ok" if d.peg_ratio <= 1.5 else "high"
+        parts.append(f"PEG {d.peg_ratio:.1f} ({qual})")
+    if d.earnings_growth is not None:
+        parts.append(f"Earnings {d.earnings_growth:+.0%}/yr")
+    if d.revenue_growth is not None:
+        parts.append(f"Revenue {d.revenue_growth:+.0%}/yr")
+    if d.debt_to_equity is not None:
+        qual = "low" if d.debt_to_equity <= 0.5 else "moderate" if d.debt_to_equity <= 1.0 else "high"
+        parts.append(f"D/E {d.debt_to_equity:.1f} ({qual})")
+    if d.fcf_yield is not None:
+        qual = "strong" if d.fcf_yield >= 0.08 else "good" if d.fcf_yield >= 0.05 else "weak"
+        parts.append(f"FCF yield {d.fcf_yield:.1%} ({qual})")
+    if d.ev_to_ebitda is not None:
+        qual = "cheap" if d.ev_to_ebitda <= 8 else "fair" if d.ev_to_ebitda <= 15 else "expensive"
+        parts.append(f"EV/EBITDA {d.ev_to_ebitda:.1f} ({qual})")
+    if d.current_ratio is not None:
+        qual = "healthy" if d.current_ratio >= 1.5 else "ok" if d.current_ratio >= 1.0 else "tight"
+        parts.append(f"Current ratio {d.current_ratio:.1f} ({qual})")
 
-    return " | ".join(parts)
+    return ". ".join(parts) + "."
 
 
 def _save_watchlist(watchlist: list[ScoredStock]):
