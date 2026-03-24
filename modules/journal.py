@@ -101,6 +101,7 @@ class TradeJournal:
             result: The TradeResult from closing a position.
             position: The original Position (for context fields).
         """
+        session = None
         try:
             session = get_session()
             record = TradeRecord(
@@ -126,6 +127,17 @@ class TradeJournal:
                 confidence_score=position.confidence_score if position else None,
             )
             session.add(record)
+
+            # Link corresponding signal record to this trade
+            matching_signal = session.query(SignalRecord).filter(
+                SignalRecord.ticker == result.ticker,
+                SignalRecord.was_traded == False,  # noqa: E712
+            ).order_by(SignalRecord.timestamp.desc()).first()
+
+            if matching_signal:
+                matching_signal.was_traded = True
+                matching_signal.trade_id = result.trade_id
+
             session.commit()
             logger.info(
                 f"Journal: {result.ticker} | {result.exit_reason} | "
@@ -133,9 +145,11 @@ class TradeJournal:
             )
         except Exception as e:
             logger.error(f"Failed to log trade: {e}")
-            session.rollback()
+            if session:
+                session.rollback()
         finally:
-            session.close()
+            if session:
+                session.close()
 
     def log_skipped_signal(
         self,
@@ -157,6 +171,7 @@ class TradeJournal:
             reason: Why the signal was skipped.
             indicators: Which indicators fired.
         """
+        session = None
         try:
             session = get_session()
             record = SignalRecord(
@@ -174,9 +189,11 @@ class TradeJournal:
             logger.info(f"Journal: Skipped {ticker} {signal_type} — {reason}")
         except Exception as e:
             logger.error(f"Failed to log skipped signal: {e}")
-            session.rollback()
+            if session:
+                session.rollback()
         finally:
-            session.close()
+            if session:
+                session.close()
 
     # ── QUERYING ─────────────────────────────────────────────
 
@@ -213,21 +230,21 @@ class TradeJournal:
                 entries.append(JournalEntry(
                     trade_id=r.trade_id,
                     ticker=r.ticker,
-                    direction=r.direction or "LONG",
-                    trade_type=r.trade_type or "DAY",
-                    entry_price=r.entry_price or 0,
-                    exit_price=r.exit_price or 0,
-                    shares=r.shares or 0,
-                    pnl_dollars=r.pnl_dollars or 0,
-                    pnl_percent=r.pnl_percent or 0,
-                    r_multiple=r.r_multiple or 0,
-                    exit_reason=r.exit_reason or "",
+                    direction=r.direction if r.direction is not None else "LONG",
+                    trade_type=r.trade_type if r.trade_type is not None else "DAY",
+                    entry_price=r.entry_price if r.entry_price is not None else 0,
+                    exit_price=r.exit_price if r.exit_price is not None else 0,
+                    shares=r.shares if r.shares is not None else 0,
+                    pnl_dollars=r.pnl_dollars if r.pnl_dollars is not None else 0,
+                    pnl_percent=r.pnl_percent if r.pnl_percent is not None else 0,
+                    r_multiple=r.r_multiple if r.r_multiple is not None else 0,
+                    exit_reason=r.exit_reason if r.exit_reason is not None else "",
                     entry_time=r.entry_time,
                     exit_time=r.exit_time,
-                    fundamental_score=r.fundamental_score or 0,
-                    confidence_score=r.confidence_score or 0,
-                    news_sentiment=r.news_sentiment or 0,
-                    technical_signals=r.technical_signals or {},
+                    fundamental_score=r.fundamental_score if r.fundamental_score is not None else 0,
+                    confidence_score=r.confidence_score if r.confidence_score is not None else 0,
+                    news_sentiment=r.news_sentiment if r.news_sentiment is not None else 0,
+                    technical_signals=r.technical_signals if r.technical_signals is not None else {},
                 ))
             return entries
         except Exception as e:

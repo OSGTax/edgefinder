@@ -139,17 +139,25 @@ def compute_indicators(df: pd.DataFrame, ticker: str = "") -> Optional[Indicator
             signal=settings.SIGNAL_MACD_SIGNAL,
         )
         if macd_df is not None and len(macd_df) >= 2:
-            macd_col = f"MACD_{settings.SIGNAL_MACD_FAST}_{settings.SIGNAL_MACD_SLOW}_{settings.SIGNAL_MACD_SIGNAL}"
-            signal_col = f"MACDs_{settings.SIGNAL_MACD_FAST}_{settings.SIGNAL_MACD_SLOW}_{settings.SIGNAL_MACD_SIGNAL}"
-            hist_col = f"MACDh_{settings.SIGNAL_MACD_FAST}_{settings.SIGNAL_MACD_SLOW}_{settings.SIGNAL_MACD_SIGNAL}"
+            # Dynamically find MACD columns by prefix to handle pandas_ta
+            # naming variations (e.g., MACD_12_26_9, MACDs_12_26_9, MACDh_12_26_9)
+            macd_col = next(
+                (c for c in macd_df.columns if c.startswith("MACD_")), None
+            )
+            signal_col = next(
+                (c for c in macd_df.columns if c.startswith("MACDs_")), None
+            )
+            hist_col = next(
+                (c for c in macd_df.columns if c.startswith("MACDh_")), None
+            )
 
-            if macd_col in macd_df.columns:
+            if macd_col:
                 snap.macd_line = _safe_float(macd_df[macd_col].iloc[-1])
                 snap.prev_macd_line = _safe_float(macd_df[macd_col].iloc[-2])
-            if signal_col in macd_df.columns:
+            if signal_col:
                 snap.macd_signal = _safe_float(macd_df[signal_col].iloc[-1])
                 snap.prev_macd_signal = _safe_float(macd_df[signal_col].iloc[-2])
-            if hist_col in macd_df.columns:
+            if hist_col:
                 snap.macd_histogram = _safe_float(macd_df[hist_col].iloc[-1])
 
         # Volume
@@ -439,6 +447,44 @@ def determine_direction(indicators: list[dict]) -> Optional[str]:
         return None  # Conflicting signals — no trade
 
 
+def _build_signal(
+    snap: IndicatorSnapshot,
+    direction: str,
+    dir_indicators: list[dict],
+    volume_spike: Optional[dict],
+) -> TradeSignal:
+    """Build a TradeSignal from grouped directional indicators.
+
+    Args:
+        snap: The source indicator snapshot.
+        direction: "BUY" or "SELL".
+        dir_indicators: Indicators matching this direction.
+        volume_spike: Volume spike indicator, if detected.
+
+    Returns:
+        A TradeSignal with computed confidence and reason.
+    """
+    has_volume = volume_spike is not None
+    inds_with_volume = dir_indicators + ([volume_spike] if volume_spike else [])
+    confidence = compute_confidence(inds_with_volume, has_volume)
+    trade_type = classify_trade_type(dir_indicators)
+
+    indicator_names = [i["name"] for i in dir_indicators]
+    reason = f"{direction} signal: {', '.join(indicator_names)}"
+    if has_volume:
+        reason += f" (volume {volume_spike['volume_ratio']}x avg)"
+
+    return TradeSignal(
+        ticker=snap.ticker,
+        signal_type=direction,
+        trade_type=trade_type,
+        confidence=round(confidence, 1),
+        indicators={i["name"]: i for i in inds_with_volume},
+        price=snap.current_price or 0.0,
+        reason=reason,
+    )
+
+
 def generate_signals(snap: IndicatorSnapshot) -> list[TradeSignal]:
     """
     Analyze an indicator snapshot and generate trade signals.
@@ -452,7 +498,7 @@ def generate_signals(snap: IndicatorSnapshot) -> list[TradeSignal]:
     if snap is None:
         return []
 
-    # Run all detectors
+    # Run all detectors with error isolation
     all_indicators = []
     for detector in [
         detect_ema_crossover_day,
@@ -461,9 +507,14 @@ def generate_signals(snap: IndicatorSnapshot) -> list[TradeSignal]:
         detect_macd_crossover,
         detect_volume_spike,
     ]:
-        result = detector(snap)
-        if result is not None:
-            all_indicators.append(result)
+        try:
+            result = detector(snap)
+            if result is not None:
+                all_indicators.append(result)
+        except Exception as e:
+            logger.warning(
+                f"{snap.ticker}: Detector {detector.__name__} failed — {e}"
+            )
 
     if not all_indicators:
         return []
@@ -485,49 +536,12 @@ def generate_signals(snap: IndicatorSnapshot) -> list[TradeSignal]:
     sell_indicators = [i for i in directional if i["direction"] == "SELL"]
 
     signals = []
-    has_volume = volume_spike is not None
 
-    # Generate BUY signal if we have buy indicators
     if buy_indicators:
-        inds_with_volume = buy_indicators + ([volume_spike] if volume_spike else [])
-        confidence = compute_confidence(inds_with_volume, has_volume)
-        trade_type = classify_trade_type(buy_indicators)
+        signals.append(_build_signal(snap, "BUY", buy_indicators, volume_spike))
 
-        indicator_names = [i["name"] for i in buy_indicators]
-        reason = f"BUY signal: {', '.join(indicator_names)}"
-        if has_volume:
-            reason += f" (volume {volume_spike['volume_ratio']}x avg)"
-
-        signals.append(TradeSignal(
-            ticker=snap.ticker,
-            signal_type="BUY",
-            trade_type=trade_type,
-            confidence=round(confidence, 1),
-            indicators={i["name"]: i for i in inds_with_volume},
-            price=snap.current_price or 0.0,
-            reason=reason,
-        ))
-
-    # Generate SELL signal if we have sell indicators
     if sell_indicators:
-        inds_with_volume = sell_indicators + ([volume_spike] if volume_spike else [])
-        confidence = compute_confidence(inds_with_volume, has_volume)
-        trade_type = classify_trade_type(sell_indicators)
-
-        indicator_names = [i["name"] for i in sell_indicators]
-        reason = f"SELL signal: {', '.join(indicator_names)}"
-        if has_volume:
-            reason += f" (volume {volume_spike['volume_ratio']}x avg)"
-
-        signals.append(TradeSignal(
-            ticker=snap.ticker,
-            signal_type="SELL",
-            trade_type=trade_type,
-            confidence=round(confidence, 1),
-            indicators={i["name"]: i for i in inds_with_volume},
-            price=snap.current_price or 0.0,
-            reason=reason,
-        ))
+        signals.append(_build_signal(snap, "SELL", sell_indicators, volume_spike))
 
     return signals
 
@@ -652,6 +666,7 @@ def _save_signals(
     if not signals:
         return
 
+    session = None
     try:
         session = get_session()
         for sig in signals:
@@ -670,9 +685,11 @@ def _save_signals(
         logger.info(f"Saved {len(signals)} signals to database")
     except Exception as e:
         logger.error(f"Failed to save signals: {e}")
-        session.rollback()
+        if session:
+            session.rollback()
     finally:
-        session.close()
+        if session:
+            session.close()
 
 
 # ── UTILITIES ────────────────────────────────────────────────

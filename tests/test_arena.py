@@ -160,13 +160,14 @@ class TestVirtualAccount:
     def test_win_rate(self):
         acc = VirtualAccount("test", starting_capital=50000)
         # Open and close 3 trades: 2 wins, 1 loss
+        tickers = ["AAPL", "MSFT", "GOOG"]
         for i, (exit_p, reason) in enumerate([
             (110.0, "TARGET_HIT"),
             (95.0, "STOP_HIT"),
             (105.0, "TARGET_HIT"),
         ]):
             pos = Position(
-                trade_id=f"T{i}", ticker="AAPL", direction="LONG",
+                trade_id=f"T{i}", ticker=tickers[i], direction="LONG",
                 trade_type="DAY", entry_price=100.0, shares=10,
                 stop_loss=95.0, target=110.0,
             )
@@ -270,6 +271,166 @@ class TestVirtualAccount:
         acc.update_position_price("T1", 107.0)
         assert acc.positions["T1"].last_known_price == 107.0
         assert acc.positions["T1"].high_water_mark == 107.0
+
+    def test_revenge_cooldown_blocks_same_ticker(self):
+        """After a stop-out, the same ticker is blocked for REVENGE_TRADE_COOLDOWN_MINUTES."""
+        acc = VirtualAccount("test", starting_capital=50000)
+        pos = Position(
+            trade_id="T1", ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        acc.open_position(pos)
+        acc.close_position("T1", exit_price=95.0, exit_reason="STOP_HIT")
+
+        # Immediately try to open same ticker — should be blocked
+        pos2 = Position(
+            trade_id="T2", ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        assert acc.open_position(pos2) is False
+        assert "AAPL" in acc._last_stop_out
+
+    def test_revenge_cooldown_allows_different_ticker(self):
+        """Revenge cooldown on one ticker doesn't block other tickers."""
+        acc = VirtualAccount("test", starting_capital=50000)
+        pos = Position(
+            trade_id="T1", ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        acc.open_position(pos)
+        acc.close_position("T1", exit_price=95.0, exit_reason="STOP_HIT")
+
+        # Different ticker should still work
+        pos2 = Position(
+            trade_id="T2", ticker="MSFT", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        assert acc.open_position(pos2) is True
+
+    def test_revenge_cooldown_tracks_trailing_stop(self):
+        """Trailing stop hits should also trigger revenge cooldown."""
+        acc = VirtualAccount("test", starting_capital=50000)
+        pos = Position(
+            trade_id="T1", ticker="GOOG", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        acc.open_position(pos)
+        acc.close_position("T1", exit_price=98.0, exit_reason="TRAILING_STOP_HIT")
+
+        assert "GOOG" in acc._last_stop_out
+
+    def test_target_hit_no_cooldown(self):
+        """Target hits should NOT trigger revenge cooldown."""
+        acc = VirtualAccount("test", starting_capital=50000)
+        pos = Position(
+            trade_id="T1", ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        acc.open_position(pos)
+        acc.close_position("T1", exit_price=110.0, exit_reason="TARGET_HIT")
+
+        # Same ticker should work immediately after target hit
+        pos2 = Position(
+            trade_id="T2", ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        assert acc.open_position(pos2) is True
+
+    def test_sector_concentration_limit(self):
+        """Cannot exceed MAX_SAME_SECTOR_POSITIONS in one sector."""
+        acc = VirtualAccount("test", starting_capital=100000, max_positions=10)
+        for i in range(settings.MAX_SAME_SECTOR_POSITIONS):
+            pos = Position(
+                trade_id=f"T{i}", ticker=f"TECH{i}", direction="LONG",
+                trade_type="DAY", entry_price=10.0, shares=1,
+                stop_loss=9.0, target=11.0, sector="Technology",
+            )
+            assert acc.open_position(pos) is True
+
+        # Next same-sector position should be blocked
+        pos_extra = Position(
+            trade_id="TX", ticker="TECHX", direction="LONG",
+            trade_type="DAY", entry_price=10.0, shares=1,
+            stop_loss=9.0, target=11.0, sector="Technology",
+        )
+        assert acc.open_position(pos_extra) is False
+
+    def test_sector_concentration_different_sector_allowed(self):
+        """Different sector positions are not blocked by concentration limit."""
+        acc = VirtualAccount("test", starting_capital=100000, max_positions=10)
+        for i in range(settings.MAX_SAME_SECTOR_POSITIONS):
+            pos = Position(
+                trade_id=f"T{i}", ticker=f"TECH{i}", direction="LONG",
+                trade_type="DAY", entry_price=10.0, shares=1,
+                stop_loss=9.0, target=11.0, sector="Technology",
+            )
+            acc.open_position(pos)
+
+        # Different sector should work
+        pos_energy = Position(
+            trade_id="TE", ticker="XOM", direction="LONG",
+            trade_type="DAY", entry_price=10.0, shares=1,
+            stop_loss=9.0, target=11.0, sector="Energy",
+        )
+        assert acc.open_position(pos_energy) is True
+
+    def test_sector_tracking_cleanup_on_close(self):
+        """Sector tracking is cleaned up when positions are closed."""
+        acc = VirtualAccount("test", starting_capital=100000, max_positions=10)
+        for i in range(settings.MAX_SAME_SECTOR_POSITIONS):
+            pos = Position(
+                trade_id=f"T{i}", ticker=f"TECH{i}", direction="LONG",
+                trade_type="DAY", entry_price=10.0, shares=1,
+                stop_loss=9.0, target=11.0, sector="Technology",
+            )
+            acc.open_position(pos)
+
+        # Close one position
+        acc.close_position("T0", exit_price=11.0, exit_reason="TARGET_HIT")
+
+        # Now should be able to open another in same sector
+        pos_new = Position(
+            trade_id="TN", ticker="TECHN", direction="LONG",
+            trade_type="DAY", entry_price=10.0, shares=1,
+            stop_loss=9.0, target=11.0, sector="Technology",
+        )
+        assert acc.open_position(pos_new) is True
+
+    def test_duplicate_ticker_blocked(self):
+        """Cannot open two positions for the same ticker."""
+        acc = VirtualAccount("test", starting_capital=50000)
+        pos1 = Position(
+            trade_id="T1", ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        acc.open_position(pos1)
+
+        pos2 = Position(
+            trade_id="T2", ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=95.0, target=110.0,
+        )
+        assert acc.open_position(pos2) is False
+
+    def test_can_open_position_returns_tuple(self):
+        """can_open_position returns (bool, reason) tuple."""
+        acc = VirtualAccount("test", starting_capital=10000)
+        allowed, reason = acc.can_open_position(ticker="AAPL")
+        assert allowed is True
+        assert reason == "OK"
+
+        acc.is_paused = True
+        allowed, reason = acc.can_open_position(ticker="AAPL")
+        assert allowed is False
+        assert "paused" in reason.lower()
 
 
 # ── EXECUTOR TESTS ───────────────────────────────────────────

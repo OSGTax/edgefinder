@@ -8,7 +8,7 @@ and P&L tracking. No interference between strategies.
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from config import settings
@@ -99,6 +99,12 @@ class VirtualAccount:
         # Day trade tracking (PDT compliance)
         self._day_trades: list[datetime] = []
 
+        # Revenge trade cooldown: track last stop-out per ticker
+        self._last_stop_out: dict[str, datetime] = {}
+
+        # Sector tracking for concentration limits
+        self._position_sectors: dict[str, str] = {}  # trade_id -> sector
+
     # ── ACCOUNT STATE ────────────────────────────────────────
 
     @property
@@ -148,13 +154,43 @@ class VirtualAccount:
 
     # ── POSITION MANAGEMENT ──────────────────────────────────
 
-    def can_open_position(self) -> bool:
-        """Check if account can open a new position."""
+    def can_open_position(
+        self, ticker: str = "", sector: str = ""
+    ) -> tuple[bool, str]:
+        """Check if account can open a new position.
+
+        Returns:
+            Tuple of (allowed, reason). For backward compatibility,
+            bool(result) works because tuple is truthy when first element is True.
+        """
         if self.is_paused:
-            return False
+            return False, f"Strategy paused: {self.pause_reason}"
         if self.open_position_count >= self.max_positions:
-            return False
-        return True
+            return False, f"Max positions reached ({self.max_positions})"
+
+        # Already holding this ticker
+        if ticker:
+            for p in self.positions.values():
+                if p.ticker == ticker:
+                    return False, f"Already holding {ticker}"
+
+        # Revenge trade cooldown
+        if ticker and ticker in self._last_stop_out:
+            cooldown = timedelta(minutes=settings.REVENGE_TRADE_COOLDOWN_MINUTES)
+            elapsed = datetime.now(timezone.utc) - self._last_stop_out[ticker]
+            if elapsed < cooldown:
+                remaining = int((cooldown - elapsed).total_seconds() // 60)
+                return False, f"Revenge cooldown on {ticker} ({remaining}m remaining)"
+
+        # Sector concentration
+        if sector:
+            sector_count = sum(
+                1 for s in self._position_sectors.values() if s == sector
+            )
+            if sector_count >= settings.MAX_SAME_SECTOR_POSITIONS:
+                return False, f"Sector concentration limit for {sector} ({sector_count}/{settings.MAX_SAME_SECTOR_POSITIONS})"
+
+        return True, "OK"
 
     def max_position_dollars(self) -> float:
         """Maximum dollar amount for next position based on risk rules."""
@@ -193,11 +229,12 @@ class VirtualAccount:
         Returns:
             True if position opened, False if rejected.
         """
-        if not self.can_open_position():
+        allowed, reason = self.can_open_position(
+            ticker=position.ticker, sector=position.sector
+        )
+        if not allowed:
             logger.warning(
-                f"[{self.strategy_name}] Cannot open position: "
-                f"paused={self.is_paused}, "
-                f"positions={self.open_position_count}/{self.max_positions}"
+                f"[{self.strategy_name}] Cannot open {position.ticker}: {reason}"
             )
             return False
 
@@ -213,6 +250,8 @@ class VirtualAccount:
         position.high_water_mark = position.entry_price
         position.last_known_price = position.entry_price
         self.positions[position.trade_id] = position
+        if position.sector:
+            self._position_sectors[position.trade_id] = position.sector
         logger.info(
             f"[{self.strategy_name}] Opened {position.direction} "
             f"{position.shares} {position.ticker} @ ${position.entry_price:.2f}"
@@ -237,6 +276,7 @@ class VirtualAccount:
             return None
 
         position = self.positions.pop(trade_id)
+        self._position_sectors.pop(trade_id, None)
         adjusted_exit = exit_price - slippage if position.direction == "LONG" else exit_price + slippage
 
         pnl_dollars = (adjusted_exit - position.entry_price) * position.shares
@@ -277,6 +317,10 @@ class VirtualAccount:
         # Track day trades for PDT
         if position.trade_type == "DAY":
             self._day_trades.append(now)
+
+        # Track stop-outs for revenge trade cooldown
+        if exit_reason in ("STOP_HIT", "TRAILING_STOP_HIT"):
+            self._last_stop_out[position.ticker] = now
 
         # Update peak equity
         equity = self.total_equity

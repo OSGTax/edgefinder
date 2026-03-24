@@ -178,19 +178,17 @@ class PaperTrader:
         if sector and self.account.sector_count(sector) >= settings.MAX_SAME_SECTOR_POSITIONS:
             return False, f"Max sector concentration reached for {sector}"
 
-        # Daily loss limit
+        # Daily loss limit (use total_value to account for unrealized losses)
         self._reset_pnl_trackers()
-        if self.account.cash < settings.STARTING_CAPITAL:
+        if self.account.daily_pnl < 0:
             daily_loss_pct = abs(self.account.daily_pnl) / settings.STARTING_CAPITAL
-            if (self.account.daily_pnl < 0 and
-                    daily_loss_pct >= settings.DAILY_LOSS_LIMIT_PCT):
+            if daily_loss_pct >= settings.DAILY_LOSS_LIMIT_PCT:
                 return False, f"Daily loss limit hit ({daily_loss_pct:.1%})"
 
         # Weekly loss limit
-        if self.account.cash < settings.STARTING_CAPITAL:
+        if self.account.weekly_pnl < 0:
             weekly_loss_pct = abs(self.account.weekly_pnl) / settings.STARTING_CAPITAL
-            if (self.account.weekly_pnl < 0 and
-                    weekly_loss_pct >= settings.WEEKLY_LOSS_LIMIT_PCT):
+            if weekly_loss_pct >= settings.WEEKLY_LOSS_LIMIT_PCT:
                 return False, f"Weekly loss limit hit ({weekly_loss_pct:.1%})"
 
         # Drawdown circuit breaker
@@ -598,44 +596,22 @@ class PaperTrader:
             self.account.weekly_pnl_reset_date = week_start
 
     # ── DATABASE PERSISTENCE ─────────────────────────────────
+    # NOTE: Trade persistence is handled by the TradeJournal (journal.py).
+    # These methods are kept for backward compatibility but delegate to the
+    # journal to avoid duplicate writes.
 
     def save_trade(self, result: TradeResult, position: Optional[Position] = None) -> None:
-        """Save a completed trade to the database."""
-        try:
-            session = get_session()
-            record = TradeRecord(
-                trade_id=result.trade_id,
-                ticker=result.ticker,
-                direction=result.direction,
-                trade_type=result.trade_type,
-                entry_price=result.entry_price,
-                exit_price=result.exit_price,
-                shares=result.shares,
-                stop_loss=result.stop_loss,
-                target=result.target,
-                entry_time=result.entry_time,
-                exit_time=result.exit_time,
-                status="CLOSED",
-                pnl_dollars=result.pnl_dollars,
-                pnl_percent=result.pnl_percent,
-                r_multiple=result.r_multiple,
-                exit_reason=result.exit_reason,
-                fundamental_score=position.fundamental_score if position else None,
-                technical_signals=position.technical_signals if position else None,
-                news_sentiment=position.news_sentiment if position else None,
-                confidence_score=position.confidence_score if position else None,
-            )
-            session.add(record)
-            session.commit()
-            logger.info(f"Saved trade {result.trade_id[:8]} to database")
-        except Exception as e:
-            logger.error(f"Failed to save trade: {e}")
-            session.rollback()
-        finally:
-            session.close()
+        """Save a completed trade to the database.
+
+        Delegates to TradeJournal.log_trade() to maintain a single source of truth.
+        """
+        from modules.journal import TradeJournal
+        journal = TradeJournal()
+        journal.log_trade(result, position)
 
     def save_account_snapshot(self) -> None:
         """Save current account state as a daily snapshot."""
+        session = None
         try:
             session = get_session()
             snapshot = AccountSnapshot(
@@ -657,6 +633,8 @@ class PaperTrader:
             )
         except Exception as e:
             logger.error(f"Failed to save account snapshot: {e}")
-            session.rollback()
+            if session:
+                session.rollback()
         finally:
-            session.close()
+            if session:
+                session.close()
