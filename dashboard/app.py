@@ -387,6 +387,67 @@ async def get_watchlist(
         session.close()
 
 
+@app.get("/api/fundamentals")
+async def get_fundamentals(
+    sector: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default="composite_score"),
+    limit: int = Query(default=500, ge=1, le=1000),
+):
+    """Get all fundamental data for browsing. Returns every field in the watchlist table."""
+    session = get_session()
+    try:
+        query = session.query(WatchlistStock).filter(
+            WatchlistStock.is_active == True  # noqa: E712
+        )
+        if sector:
+            query = query.filter(WatchlistStock.sector == sector)
+
+        # Dynamic sort — fall back to composite_score if column doesn't exist
+        sort_col = getattr(WatchlistStock, sort_by, WatchlistStock.composite_score)
+        query = query.order_by(sort_col.desc())
+
+        stocks = query.limit(limit).all()
+
+        # Get distinct sectors for filter dropdown
+        sectors_query = session.query(WatchlistStock.sector).filter(
+            WatchlistStock.is_active == True  # noqa: E712
+        ).distinct().all()
+        sectors = sorted([s[0] for s in sectors_query if s[0]])
+
+        return {
+            "count": len(stocks),
+            "sectors": sectors,
+            "stocks": [
+                {
+                    "ticker": s.ticker,
+                    "company_name": s.company_name,
+                    "sector": s.sector,
+                    "industry": s.industry,
+                    "market_cap": s.market_cap,
+                    "price": s.price,
+                    "composite_score": s.composite_score,
+                    "lynch_score": s.lynch_score,
+                    "burry_score": s.burry_score,
+                    "lynch_category": s.lynch_category,
+                    "peg_ratio": s.peg_ratio,
+                    "earnings_growth": s.earnings_growth,
+                    "revenue_growth": s.revenue_growth,
+                    "debt_to_equity": s.debt_to_equity,
+                    "institutional_pct": s.institutional_pct,
+                    "fcf_yield": s.fcf_yield,
+                    "price_to_tangible_book": s.price_to_tangible_book,
+                    "short_interest": s.short_interest,
+                    "ev_to_ebitda": s.ev_to_ebitda,
+                    "current_ratio": s.current_ratio,
+                    "scan_date": to_eastern(s.scan_date),
+                }
+                for s in stocks
+            ],
+        }
+    finally:
+        session.close()
+
+
 @app.get("/api/signals")
 async def get_signals(
     ticker: Optional[str] = Query(default=None),
