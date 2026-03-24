@@ -9,6 +9,7 @@ Runs nightly after market close (4:30 PM ET).
 
 import logging
 import math
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
@@ -117,76 +118,89 @@ def get_ticker_universe() -> list[str]:
 
 # ── DATA FETCHING ────────────────────────────────────────────
 
-def fetch_fundamental_data(ticker: str) -> Optional[FundamentalData]:
+def fetch_fundamental_data(ticker: str, max_retries: int = 3) -> Optional[FundamentalData]:
     """
     Fetch fundamental data for a single ticker from yfinance.
 
     yfinance is unreliable — fields can be None, NaN, missing, or wrong.
-    This function handles all of that gracefully.
+    Retries with exponential backoff on rate limiting or transient failures.
     """
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
+    delays = [2, 5, 10]
 
-        if not info or info.get("regularMarketPrice") is None:
-            logger.warning(f"{ticker}: No data available (got {len(info) if info else 0} fields)")
+    for attempt in range(max_retries):
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+
+            if not info or info.get("regularMarketPrice") is None:
+                if attempt < max_retries - 1:
+                    delay = delays[attempt]
+                    logger.info(f"{ticker}: No data (attempt {attempt + 1}), retrying in {delay}s...")
+                    time.sleep(delay)
+                    continue
+                logger.warning(f"{ticker}: No data after {max_retries} attempts")
+                return None
+
+            data = FundamentalData(ticker=ticker)
+
+            # Basic info
+            data.company_name = info.get("longName", info.get("shortName", ticker))
+            data.sector = info.get("sector", "Unknown")
+            data.industry = info.get("industry", "Unknown")
+            data.market_cap = _safe_float(info.get("marketCap"))
+            data.price = _safe_float(
+                info.get("regularMarketPrice",
+                info.get("currentPrice",
+                info.get("previousClose", 0)))
+            )
+            data.avg_volume = _safe_float(info.get("averageVolume"))
+
+            # Lynch fields
+            data.peg_ratio = _safe_float(info.get("pegRatio"))
+            data.earnings_growth = _safe_float(info.get("earningsGrowth"))
+            data.earnings_quarterly_growth = _safe_float(info.get("earningsQuarterlyGrowth"))
+            data.debt_to_equity = _safe_float(info.get("debtToEquity"))
+            if data.debt_to_equity and data.debt_to_equity > 10:
+                data.debt_to_equity = data.debt_to_equity / 100  # yfinance sometimes returns as %
+            data.revenue_growth = _safe_float(info.get("revenueGrowth"))
+            data.institutional_pct = _safe_float(
+                info.get("heldPercentInstitutions",
+                info.get("institutionsPercentHeld"))
+            )
+
+            # Burry fields
+            data.free_cashflow = _safe_float(info.get("freeCashflow"))
+            if data.free_cashflow and data.market_cap and data.market_cap > 0:
+                data.fcf_yield = data.free_cashflow / data.market_cap
+            data.ev_to_ebitda = _safe_float(info.get("enterpriseToEbitda"))
+            data.current_ratio = _safe_float(info.get("currentRatio"))
+            data.short_interest = _safe_float(info.get("shortPercentOfFloat"))
+
+            # Tangible book value
+            book_value_per_share = _safe_float(info.get("bookValue"))
+            if book_value_per_share and data.price and data.price > 0:
+                pb_ratio = data.price / book_value_per_share if book_value_per_share > 0 else None
+                data.price_to_tangible_book = pb_ratio
+
+            return data
+
+        except Exception as e:
+            err_str = str(e)
+            if ("Too Many Requests" in err_str or "Rate" in err_str) and attempt < max_retries - 1:
+                delay = delays[attempt]
+                logger.info(f"{ticker}: Rate limited, retrying in {delay}s...")
+                time.sleep(delay)
+                continue
+            logger.warning(f"{ticker}: Fetch error — {e}")
             return None
 
-        data = FundamentalData(ticker=ticker)
-
-        # Basic info
-        data.company_name = info.get("longName", info.get("shortName", ticker))
-        data.sector = info.get("sector", "Unknown")
-        data.industry = info.get("industry", "Unknown")
-        data.market_cap = _safe_float(info.get("marketCap"))
-        data.price = _safe_float(
-            info.get("regularMarketPrice",
-            info.get("currentPrice",
-            info.get("previousClose", 0)))
-        )
-        data.avg_volume = _safe_float(info.get("averageVolume"))
-
-        # Lynch fields
-        data.peg_ratio = _safe_float(info.get("pegRatio"))
-        data.earnings_growth = _safe_float(info.get("earningsGrowth"))
-        data.earnings_quarterly_growth = _safe_float(info.get("earningsQuarterlyGrowth"))
-        data.debt_to_equity = _safe_float(info.get("debtToEquity"))
-        if data.debt_to_equity and data.debt_to_equity > 10:
-            data.debt_to_equity = data.debt_to_equity / 100  # yfinance sometimes returns as %
-        data.revenue_growth = _safe_float(info.get("revenueGrowth"))
-        data.institutional_pct = _safe_float(
-            info.get("heldPercentInstitutions",
-            info.get("institutionsPercentHeld"))
-        )
-
-        # Burry fields
-        data.free_cashflow = _safe_float(info.get("freeCashflow"))
-        if data.free_cashflow and data.market_cap and data.market_cap > 0:
-            data.fcf_yield = data.free_cashflow / data.market_cap
-        data.ev_to_ebitda = _safe_float(info.get("enterpriseToEbitda"))
-        data.current_ratio = _safe_float(info.get("currentRatio"))
-        data.short_interest = _safe_float(info.get("shortPercentOfFloat"))
-
-        # Tangible book value
-        book_value_per_share = _safe_float(info.get("bookValue"))
-        if book_value_per_share and data.price and data.price > 0:
-            # Approximate: P/B adjusted for intangibles
-            pb_ratio = data.price / book_value_per_share if book_value_per_share > 0 else None
-            # yfinance doesn't always give intangible assets directly,
-            # so we use P/B as a proxy for P/Tangible Book
-            data.price_to_tangible_book = pb_ratio
-
-        return data
-
-    except Exception as e:
-        logger.warning(f"{ticker}: Fetch error — {e}")
-        return None
+    return None
 
 
-def fetch_batch(tickers: list[str], batch_size: int = 50) -> list[FundamentalData]:
+def fetch_batch(tickers: list[str], batch_size: int = 20) -> list[FundamentalData]:
     """
     Fetch fundamental data for a list of tickers.
-    Processes in batches to avoid overwhelming yfinance.
+    Processes in batches with delays to avoid Yahoo Finance rate limiting.
     """
     results = []
     total = len(tickers)
@@ -200,6 +214,12 @@ def fetch_batch(tickers: list[str], batch_size: int = 50) -> list[FundamentalDat
             data = fetch_fundamental_data(ticker)
             if data:
                 results.append(data)
+            time.sleep(1)  # 1s between tickers to avoid rate limiting
+
+        # Pause between batches
+        if i + batch_size < total:
+            logger.info(f"Batch pause — {len(results)} fetched so far...")
+            time.sleep(5)
 
     logger.info(f"Successfully fetched {len(results)}/{total} tickers")
     return results
