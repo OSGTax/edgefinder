@@ -576,7 +576,7 @@ async def get_skipped_signals(
                     "confidence": s.confidence,
                     "indicators": s.indicators,
                     "reason_skipped": s.reason_skipped,
-                    "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                    "timestamp": (s.timestamp.isoformat() + "Z") if s.timestamp else None,
                 }
                 for s in signals
             ],
@@ -624,7 +624,10 @@ def _format_arena_trade(t) -> dict:
         "explanation": explanation,
         "strategy_metadata": meta,
         "status": t.status,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "signal_timestamp": (t.signal_timestamp.isoformat() + "Z") if t.signal_timestamp else None,
+        "execution_timestamp": (t.execution_timestamp.isoformat() + "Z") if t.execution_timestamp else None,
+        "exit_timestamp": (t.exit_timestamp.isoformat() + "Z") if t.exit_timestamp else None,
+        "created_at": (t.created_at.isoformat() + "Z") if t.created_at else None,
     }
 
 
@@ -824,7 +827,7 @@ async def get_arena_strategy(strategy_name: str):
                 "unrealized_pnl_pct": round(pos.unrealized_pnl_pct, 2),
                 "r_multiple": round(pos.r_multiple, 2),
                 "confidence": pos.confidence,
-                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                "entry_time": (pos.entry_time.isoformat() + "Z") if pos.entry_time else None,
                 "slippage_applied": pos.slippage_applied,
                 "metadata": pos.metadata,
             }
@@ -898,7 +901,7 @@ async def get_arena_snapshots(
         for s in snaps:
             result.append({
                 "strategy_name": s.strategy_name,
-                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                "timestamp": (s.timestamp.isoformat() + "Z") if s.timestamp else None,
                 "total_equity": s.total_equity,
                 "cash": s.cash,
                 "drawdown_pct": s.drawdown_pct,

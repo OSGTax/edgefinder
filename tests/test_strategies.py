@@ -31,6 +31,10 @@ class DummyStrategy(BaseStrategy):
     def version(self) -> str:
         return "1.0.0"
 
+    @property
+    def preferred_signals(self) -> set[str]:
+        return {"ema_crossover_day", "rsi_oversold"}
+
     def init(self) -> None:
         self.initialized = True
         self.trades_received = []
