@@ -1,7 +1,7 @@
 # EdgeFinder Dependencies
 # Install: pip install -r requirements.txt
 
-# Core
+# Core Data
 yfinance>=0.2.31
 curl_cffi>=0.7.0
 pandas>=2.0.0
@@ -18,11 +18,12 @@ requests>=2.31.0
 
 # Database
 sqlalchemy>=2.0.0
+alembic>=1.13.0
 
 # HTML Parsing (for Wikipedia ticker lists)
 lxml>=4.9.0
 
-# Web Framework (Dashboard - Phase 5)
+# Web Framework (Dashboard)
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 gunicorn>=21.2.0
