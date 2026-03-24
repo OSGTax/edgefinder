@@ -613,8 +613,9 @@ function fmtMoney(n) { return n != null ? '$' + Number(n).toLocaleString('en-US'
 function fmtDate(iso) {
     if (!iso) return '--';
     const d = new Date(iso);
-    return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'}) + ' ' +
-           d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit'});
+    const tz = 'America/New_York';
+    return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric', timeZone: tz}) + ' ' +
+           d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', timeZone: tz});
 }
 function scoreColor(score) {
     if (score >= 70) return 'var(--green)';
@@ -721,7 +722,7 @@ async function loadFundamentals() {
 
     const body = document.getElementById('fundamentals-body');
     if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="22" class="empty">No fundamental data. Run the scanner first.</td></tr>';
+        body.innerHTML = '<tr><td colspan="22" class="empty">No fundamental data yet. Click <strong>Run Scanner</strong> in the top bar to populate the watchlist, then refresh.</td></tr>';
         return;
     }
 
@@ -984,7 +985,7 @@ async function runScanner() {
 async function loadAll() {
     document.getElementById('last-updated').textContent = 'Updating...';
     await Promise.all([loadStats(), loadArena(), loadWatchlist(), loadFundamentals(), loadSignals(), loadTrades(), loadEquityCurve(), loadSuggestions()]);
-    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'}) + ' ET';
 }
 
 // Table sorting — click any column header to sort
@@ -1040,7 +1041,7 @@ async function loadArena() {
         // Stats cards with diagnostics
         const statsEl = document.getElementById('arena-stats');
         const ds = status.data_source || 'unknown';
-        const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString() : 'never';
+        const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'}) : 'never';
 
         // Data source health dots
         let sourceDots = '';
