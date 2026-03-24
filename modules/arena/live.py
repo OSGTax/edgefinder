@@ -21,6 +21,7 @@ from modules.database import (
     ArenaSnapshot,
     get_session,
 )
+from modules.utils import to_eastern, compute_trade_hash
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +264,7 @@ def arena_signal_check() -> list[dict]:
         for trade in executed:
             _save_arena_trade(trade)
 
-        _arena_status["last_signal_check"] = datetime.now(timezone.utc).isoformat()
+        _arena_status["last_signal_check"] = to_eastern(datetime.now(timezone.utc))
 
         if executed:
             logger.info(f"ARENA: {len(executed)} trades executed")
@@ -312,7 +313,7 @@ def arena_position_monitor() -> list[dict]:
         for trade in closed:
             _update_arena_trade_closed(trade)
 
-        _arena_status["last_position_monitor"] = datetime.now(timezone.utc).isoformat()
+        _arena_status["last_position_monitor"] = to_eastern(datetime.now(timezone.utc))
 
         if closed:
             logger.info(f"ARENA: {len(closed)} positions closed")
@@ -396,7 +397,7 @@ def arena_nightly_scan() -> None:
             run_scan(tickers=None, save_to_db=True)
 
         _refresh_watchlists()
-        _arena_status["last_scan"] = datetime.now(timezone.utc).isoformat()
+        _arena_status["last_scan"] = to_eastern(datetime.now(timezone.utc))
         logger.info("ARENA: Nightly scan complete, watchlists refreshed")
 
     except Exception as e:
@@ -407,9 +408,21 @@ def arena_nightly_scan() -> None:
 # ── DB PERSISTENCE ───────────────────────────────────────────
 
 def _save_arena_trade(trade: dict) -> None:
-    """Persist an arena trade execution to the database."""
+    """Persist an arena trade execution to the database with integrity hash."""
     try:
         session = get_session()
+
+        # Get the previous trade's hash for chain linking
+        prev_trade = session.query(ArenaTradeLog).filter(
+            ArenaTradeLog.integrity_hash != None  # noqa: E711
+        ).order_by(ArenaTradeLog.sequence_num.desc()).first()
+
+        prev_hash = prev_trade.integrity_hash if prev_trade else ""
+        next_seq = (prev_trade.sequence_num + 1) if prev_trade and prev_trade.sequence_num else 1
+
+        # Compute integrity hash
+        integrity_hash = compute_trade_hash(trade, prev_hash)
+
         record = ArenaTradeLog(
             trade_id=trade.get("trade_id"),
             strategy_name=trade.get("strategy_name"),
@@ -434,9 +447,16 @@ def _save_arena_trade(trade: dict) -> None:
             position_overlap=trade.get("position_overlap", 0),
             status="OPEN",
             extra_data=trade.get("metadata"),
+            sequence_num=next_seq,
+            integrity_hash=integrity_hash,
         )
         session.add(record)
         session.commit()
+        logger.info(
+            f"Trade saved: {trade.get('ticker')} @ "
+            f"{to_eastern(trade.get('execution_timestamp'))} ET "
+            f"(chain #{next_seq}, hash={integrity_hash[:12]}...)"
+        )
     except Exception as e:
         logger.error(f"Failed to save arena trade: {e}")
     finally:

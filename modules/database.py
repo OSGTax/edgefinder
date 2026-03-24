@@ -219,6 +219,10 @@ class ArenaTradeLog(Base):
     extra_data = Column(JSON)                     # Strategy-specific context
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Tamper-proof hash chain — each trade's hash includes the previous hash
+    sequence_num = Column(Integer, index=True)    # Ordering for chain verification
+    integrity_hash = Column(String(64))           # SHA-256 hex digest
+
 
 class ArenaSnapshot(Base):
     """Per-strategy equity snapshot for arena comparison."""

@@ -23,7 +23,7 @@ import json
 import logging
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -37,8 +37,10 @@ from modules.database import (
     Trade as TradeRecord,
     Signal as SignalRecord,
     AccountSnapshot,
+    ArenaTradeLog,
     Suggestion,
 )
+from modules.utils import to_eastern, verify_hash_chain
 logger = logging.getLogger(__name__)
 
 # Static files / templates
@@ -95,7 +97,7 @@ def _export_suggestions_json():
                 "title": s.title,
                 "description": s.description,
                 "status": s.status,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "created_at": to_eastern(s.created_at),
             }
             for s in rows
         ]
@@ -320,7 +322,7 @@ async def add_ticker_to_watchlist(payload: dict):
             current_ratio=data.current_ratio,
             burry_score=scored.burry_score,
             composite_score=scored.composite_score,
-            scan_date=datetime.utcnow(),
+            scan_date=datetime.now(timezone.utc),
             is_active=True,
             notes=notes,
         )
@@ -375,7 +377,7 @@ async def get_watchlist(
                     "fcf_yield": s.fcf_yield,
                     "ev_to_ebitda": s.ev_to_ebitda,
                     "current_ratio": s.current_ratio,
-                    "scan_date": s.scan_date.isoformat() if s.scan_date else None,
+                    "scan_date": to_eastern(s.scan_date),
                     "notes": s.notes,
                 }
                 for s in stocks
@@ -413,7 +415,7 @@ async def get_signals(
                     "was_traded": r.was_traded,
                     "trade_id": r.trade_id,
                     "reason_skipped": r.reason_skipped,
-                    "timestamp": r.timestamp.isoformat() if r.timestamp else None,
+                    "timestamp": to_eastern(r.timestamp),
                 }
                 for r in records
             ],
@@ -491,6 +493,49 @@ async def get_trade_stats(
         session.close()
 
 
+@app.get("/api/trades/verify")
+async def verify_trade_integrity():
+    """Verify the integrity of the trade audit chain.
+
+    Walks the hash chain from first to last trade and checks that
+    each trade's integrity_hash matches a recomputed hash. If any
+    record has been inserted, edited, deleted, or reordered, the
+    chain will break and this endpoint reports where.
+    """
+    session = get_session()
+    try:
+        records = session.query(ArenaTradeLog).filter(
+            ArenaTradeLog.integrity_hash != None  # noqa: E711
+        ).order_by(ArenaTradeLog.sequence_num.asc()).all()
+
+        if not records:
+            return {
+                "valid": True,
+                "total_trades": 0,
+                "first_break_at": None,
+                "message": "No trades with integrity hashes found.",
+            }
+
+        trades = [
+            {
+                "trade_id": r.trade_id,
+                "ticker": r.ticker,
+                "action": r.action,
+                "execution_price": r.execution_price,
+                "shares": r.shares,
+                "execution_timestamp": r.execution_timestamp,
+                "strategy_name": r.strategy_name,
+                "integrity_hash": r.integrity_hash,
+                "sequence_num": r.sequence_num,
+            }
+            for r in records
+        ]
+
+        return verify_hash_chain(trades)
+    finally:
+        session.close()
+
+
 @app.get("/api/equity-curve")
 async def get_equity_curve(
     strategy: Optional[str] = Query(default=None),
@@ -509,7 +554,7 @@ async def get_equity_curve(
             "snapshots": [
                 {
                     "strategy_name": s.strategy_name,
-                    "date": s.timestamp.isoformat() if s.timestamp else None,
+                    "date": to_eastern(s.timestamp),
                     "total_value": s.total_equity,
                     "cash": s.cash,
                     "drawdown_pct": s.drawdown_pct,
@@ -533,7 +578,7 @@ async def get_account():
             total_cash = sum(a.cash for a in engine.accounts.values())
             total_positions = sum(a.open_position_count for a in engine.accounts.values())
             return {
-                "date": datetime.now().isoformat(),
+                "date": to_eastern(datetime.now(timezone.utc)),
                 "cash": round(total_cash, 2),
                 "positions_value": round(total_equity - total_cash, 2),
                 "total_value": round(total_equity, 2),
@@ -576,7 +621,7 @@ async def get_skipped_signals(
                     "confidence": s.confidence,
                     "indicators": s.indicators,
                     "reason_skipped": s.reason_skipped,
-                    "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                    "timestamp": to_eastern(s.timestamp),
                 }
                 for s in signals
             ],
@@ -624,7 +669,7 @@ def _format_arena_trade(t) -> dict:
         "explanation": explanation,
         "strategy_metadata": meta,
         "status": t.status,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "created_at": to_eastern(t.created_at),
     }
 
 
@@ -705,7 +750,7 @@ async def list_suggestions(
                     "title": s.title,
                     "description": s.description,
                     "status": s.status,
-                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "created_at": to_eastern(s.created_at),
                 }
                 for s in rows
             ],
@@ -824,7 +869,7 @@ async def get_arena_strategy(strategy_name: str):
                 "unrealized_pnl_pct": round(pos.unrealized_pnl_pct, 2),
                 "r_multiple": round(pos.r_multiple, 2),
                 "confidence": pos.confidence,
-                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                "entry_time": to_eastern(pos.entry_time),
                 "slippage_applied": pos.slippage_applied,
                 "metadata": pos.metadata,
             }
@@ -898,7 +943,7 @@ async def get_arena_snapshots(
         for s in snaps:
             result.append({
                 "strategy_name": s.strategy_name,
-                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                "timestamp": to_eastern(s.timestamp),
                 "total_equity": s.total_equity,
                 "cash": s.cash,
                 "drawdown_pct": s.drawdown_pct,
