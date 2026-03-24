@@ -74,13 +74,39 @@ def get_ticker_universe() -> list[str]:
     """
     Get the universe of US-listed stock tickers to scan.
 
-    Uses a curated approach: pulls S&P 500, S&P 400 (mid-cap),
-    and S&P 600 (small-cap) components via Wikipedia/yfinance.
-    This gives ~1,500 quality tickers instead of scraping 8,000+
-    with most being untradeable junk.
+    Priority:
+    1. FMP stock screener (~8,000 tickers in one API call)
+    2. Wikipedia S&P 500 + 400 + 600 (~1,500 tickers)
+    3. Hardcoded fallback list (67 tickers)
     """
     tickers = set()
 
+    # Try FMP screener first — broadest coverage in a single API call
+    try:
+        from services.fmp_client import FMPClient
+        fmp_key = getattr(settings, "FMP_API_KEY", "") or ""
+        if fmp_key:
+            fmp = FMPClient(fmp_key)
+            for exchange in ["NYSE", "NASDAQ", "AMEX"]:
+                results = fmp.get_stock_screener(
+                    market_cap_min=300_000_000,   # $300M+
+                    volume_min=500_000,            # 500K avg volume
+                    price_min=5.0,
+                    price_max=500.0,
+                    exchange=exchange,
+                    limit=5000,
+                )
+                if results:
+                    symbols = [r["symbol"] for r in results if r.get("symbol")]
+                    tickers.update(symbols)
+                    logger.info(f"FMP screener: {len(symbols)} tickers from {exchange}")
+            if tickers:
+                logger.info(f"FMP universe: {len(tickers)} total tickers")
+                return sorted(tickers)
+    except Exception as e:
+        logger.warning(f"FMP screener unavailable: {e}")
+
+    # Fallback: Wikipedia S&P lists (~1,500 tickers)
     # S&P 500
     try:
         sp500 = pd.read_html(
@@ -112,8 +138,13 @@ def get_ticker_universe() -> list[str]:
     except Exception as e:
         logger.warning(f"Failed to load S&P 600 list: {e}")
 
-    logger.info(f"Total unique tickers in universe: {len(tickers)}")
-    return sorted(tickers)
+    if tickers:
+        logger.info(f"Wikipedia universe: {len(tickers)} total tickers")
+        return sorted(tickers)
+
+    # Last resort: hardcoded fallback
+    logger.warning("Using hardcoded fallback ticker list")
+    return sorted(set(settings.SCANNER_DEFAULT_TICKERS))
 
 
 # ── DATA FETCHING ────────────────────────────────────────────

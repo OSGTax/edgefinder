@@ -372,9 +372,8 @@ def arena_nightly_scan() -> None:
         return
 
     try:
-        logger.info("ARENA: Nightly scan starting...")
-        tickers = sorted(set(settings.SCANNER_DEFAULT_TICKERS))
-        run_scan(tickers=tickers, save_to_db=True)
+        logger.info("ARENA: Nightly scan starting (full universe)...")
+        run_scan(tickers=None, save_to_db=True)  # None = use get_ticker_universe()
         _refresh_watchlists()
         _arena_status["last_scan"] = datetime.now(timezone.utc).isoformat()
         logger.info("ARENA: Nightly scan complete, watchlists refreshed")
@@ -393,6 +392,7 @@ def _save_arena_trade(trade: dict) -> None:
         record = ArenaTradeLog(
             trade_id=trade.get("trade_id"),
             strategy_name=trade.get("strategy_name"),
+            strategy_version=trade.get("strategy_version"),
             ticker=trade.get("ticker"),
             action=trade.get("action"),
             direction="LONG",

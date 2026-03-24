@@ -165,8 +165,7 @@ def _initial_scan() -> None:
     """Run initial scan on first boot when watchlist is empty."""
     from modules.scanner import run_scan
     try:
-        tickers = sorted(set(settings.SCANNER_DEFAULT_TICKERS))
-        results = run_scan(tickers=tickers, save_to_db=True)
+        results = run_scan(tickers=None, save_to_db=True)  # None = full universe
         logger.info(f"Initial scan complete: {len(results)} stocks on watchlist")
 
         # Refresh arena watchlists after initial scan

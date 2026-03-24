@@ -177,37 +177,31 @@ _scan_status = {"running": False, "last_result": None, "last_error": None}
 
 
 def _run_scan_background():
-    """Run the scanner in a background thread."""
-    from modules.scanner import run_scan, fetch_batch, passes_prescreen, score_stock
+    """Run the scanner in a background thread using full ticker universe."""
+    from modules.scanner import run_scan, get_ticker_universe
     try:
-        tickers = sorted(set(settings.SCANNER_DEFAULT_TICKERS))
+        tickers = get_ticker_universe()
         _scan_status["last_result"] = f"Scanning {len(tickers)} tickers..."
 
-        # Run with detailed tracking
-        all_data = fetch_batch(tickers)
-        fetched = len(all_data)
-        screened = [d for d in all_data if passes_prescreen(d)]
-        passed = len(screened)
-        scored = [score_stock(d) for d in screened]
-        watchlist = [
-            s for s in scored
-            if s.composite_score >= settings.WATCHLIST_MIN_COMPOSITE_SCORE
-        ]
-
-        # Save to DB
-        if watchlist:
-            from modules.scanner import _save_watchlist
-            _save_watchlist(watchlist)
+        watchlist = run_scan(tickers=tickers, save_to_db=True)
 
         detail = (
             f"{len(watchlist)} on watchlist "
-            f"(fetched {fetched}/{len(tickers)}, "
-            f"passed prescreen {passed}, "
+            f"(scanned {len(tickers)} tickers, "
             f"scored above {settings.WATCHLIST_MIN_COMPOSITE_SCORE}: {len(watchlist)})"
         )
         _scan_status["last_result"] = detail
         _scan_status["last_error"] = None
         logger.info(f"Manual scan complete: {detail}")
+
+        # Refresh arena strategy watchlists with new data
+        try:
+            from modules.arena.live import _refresh_watchlists
+            _refresh_watchlists()
+            logger.info("Arena watchlists refreshed after manual scan")
+        except Exception as e:
+            logger.warning(f"Arena watchlist refresh failed: {e}")
+
     except Exception as e:
         _scan_status["last_result"] = None
         _scan_status["last_error"] = str(e)
