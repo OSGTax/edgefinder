@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from sqlalchemy import (
     create_engine, Column, Integer, Float, String, DateTime,
-    Boolean, Text, JSON, event
+    Boolean, Text, JSON, UniqueConstraint, event
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from sqlalchemy.pool import StaticPool
@@ -50,6 +50,7 @@ def _get_database_url(db_path: str | None = None) -> str:
 class WatchlistStock(Base):
     """A stock that passed fundamental screening."""
     __tablename__ = "watchlist"
+    __table_args__ = (UniqueConstraint("ticker", name="uq_watchlist_ticker"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     ticker = Column(String(10), nullable=False, index=True)

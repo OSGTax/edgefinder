@@ -2,11 +2,12 @@
 EdgeFinder Module 1: Fundamental Scanner
 =========================================
 Screens US-listed stocks through Peter Lynch and Michael Burry criteria.
-Produces a ranked watchlist of 50-100 candidates.
+Produces a ranked watchlist of candidates that qualify for any registered strategy.
 
 Runs nightly after market close (4:30 PM ET).
 Rotates through sectors daily so the full universe is covered weekly.
-Watchlist entries persist across scan days (7-day TTL).
+Watchlist entries persist across scan days until a re-scan shows
+no strategy qualifies the stock.
 """
 
 import logging
@@ -577,6 +578,62 @@ def score_stock(data: FundamentalData) -> ScoredStock:
     )
 
 
+# ── STRATEGY QUALIFICATION ──────────────────────────────────
+
+def _scored_stock_to_dict(s: ScoredStock) -> dict:
+    """Convert a ScoredStock to the dict format strategies expect."""
+    return {
+        "ticker": s.data.ticker,
+        "company_name": s.data.company_name,
+        "sector": s.data.sector,
+        "industry": s.data.industry,
+        "market_cap": s.data.market_cap,
+        "price": s.data.price,
+        "lynch_score": s.lynch_score,
+        "burry_score": s.burry_score,
+        "composite_score": s.composite_score,
+        "lynch_category": s.lynch_category,
+        "peg_ratio": s.data.peg_ratio,
+        "earnings_growth": s.data.earnings_growth,
+        "debt_to_equity": s.data.debt_to_equity,
+        "revenue_growth": s.data.revenue_growth,
+        "institutional_pct": s.data.institutional_pct,
+        "fcf_yield": s.data.fcf_yield,
+        "price_to_tangible_book": s.data.price_to_tangible_book,
+        "short_interest": s.data.short_interest,
+        "ev_to_ebitda": s.data.ev_to_ebitda,
+        "current_ratio": s.data.current_ratio,
+    }
+
+
+def _get_strategy_instances() -> list:
+    """Get initialized instances of all registered strategies."""
+    try:
+        from modules.strategies.base import StrategyRegistry
+        return list(StrategyRegistry.create_all().values())
+    except Exception as e:
+        logger.warning(f"Could not load strategies for qualification check: {e}")
+        return []
+
+
+def _any_strategy_qualifies(s: ScoredStock) -> bool:
+    """Return True if any registered strategy qualifies this stock."""
+    strategies = _get_strategy_instances()
+    if not strategies:
+        # Fallback: if no strategies loaded, use composite score threshold
+        return s.composite_score >= settings.WATCHLIST_MIN_COMPOSITE_SCORE
+    stock_data = _scored_stock_to_dict(s)
+    return any(strat.qualifies_stock(stock_data) for strat in strategies)
+
+
+def _any_strategy_qualifies_dict(stock_data: dict) -> bool:
+    """Return True if any registered strategy qualifies this stock dict."""
+    strategies = _get_strategy_instances()
+    if not strategies:
+        return (stock_data.get("composite_score") or 0) >= settings.WATCHLIST_MIN_COMPOSITE_SCORE
+    return any(strat.qualifies_stock(stock_data) for strat in strategies)
+
+
 # ── FULL SCAN PIPELINE ──────────────────────────────────────
 
 def run_scan(
@@ -592,8 +649,9 @@ def run_scan(
     2. Fetch fundamental data for each
     3. Pre-screen (market cap, price, volume filters)
     4. Score each stock (Lynch + Burry)
-    5. Rank by composite score
-    6. Save top candidates to database (appends, doesn't replace other sectors)
+    5. Filter: keep stocks that qualify for any registered strategy
+    6. Upsert qualified stocks to database (one row per ticker)
+    7. Deactivate re-scanned stocks that no longer qualify for any strategy
 
     Args:
         tickers: Explicit list of tickers. If None, uses get_ticker_universe().
@@ -630,19 +688,17 @@ def run_scan(
     scored = [score_stock(d) for d in screened]
     logger.info(f"Scored {len(scored)} stocks")
 
-    # Step 5: Filter and rank
-    watchlist = [
-        s for s in scored
-        if s.composite_score >= settings.WATCHLIST_MIN_COMPOSITE_SCORE
-    ]
+    # Step 5: Filter by strategy qualification and rank
+    watchlist = [s for s in scored if _any_strategy_qualifies(s)]
     watchlist.sort(key=lambda s: s.composite_score, reverse=True)
-    watchlist = watchlist[:settings.WATCHLIST_MAX_SIZE]
     logger.info(f"Watchlist candidates: {len(watchlist)} "
-                f"(min score: {settings.WATCHLIST_MIN_COMPOSITE_SCORE})")
+                f"(qualified by at least one strategy)")
 
-    # Step 6: Save to database
-    if save_to_db and watchlist:
-        _save_watchlist(watchlist)
+    # Step 6: Save to database and deactivate stocks that no longer qualify
+    if save_to_db:
+        if watchlist:
+            _save_watchlist(watchlist)
+        _deactivate_unqualified(scored)
 
     # Summary
     if watchlist:
@@ -704,72 +760,139 @@ def _build_notes(s: ScoredStock) -> str:
 
 def _save_watchlist(watchlist: list[ScoredStock]):
     """
-    Save watchlist to database. Only deactivates tickers being re-scanned,
-    preserving entries from other sector rotations. Entries older than 7 days
-    are deactivated automatically (stale data).
+    Upsert watchlist to database (one row per ticker).
+
+    - If a ticker already exists, update its scores/price/scan_date.
+    - If not, insert a new row.
+    - A stock stays active as long as any registered strategy qualifies it.
+    - Manual entries (notes starting with MANUAL%) are never auto-deactivated.
     """
     try:
         session = get_session()
-
-        # Expire stale entries older than 7 days
         from sqlalchemy import or_
-        cutoff = datetime.utcnow() - timedelta(days=7)
-        stale_count = session.query(WatchlistStock).filter(
+
+        upserted = 0
+        inserted = 0
+
+        for s in watchlist:
+            existing = session.query(WatchlistStock).filter(
+                WatchlistStock.ticker == s.data.ticker,
+            ).first()
+
+            if existing:
+                # Skip manual entries — don't overwrite user-curated data
+                if existing.notes and existing.notes.startswith("MANUAL"):
+                    continue
+                # Upsert: update the existing row with fresh data
+                existing.company_name = s.data.company_name
+                existing.sector = s.data.sector
+                existing.industry = s.data.industry
+                existing.market_cap = s.data.market_cap
+                existing.price = s.data.price
+                existing.peg_ratio = s.data.peg_ratio
+                existing.earnings_growth = s.data.earnings_growth
+                existing.debt_to_equity = s.data.debt_to_equity
+                existing.revenue_growth = s.data.revenue_growth
+                existing.institutional_pct = s.data.institutional_pct
+                existing.lynch_category = s.lynch_category
+                existing.lynch_score = s.lynch_score
+                existing.fcf_yield = s.data.fcf_yield
+                existing.price_to_tangible_book = s.data.price_to_tangible_book
+                existing.short_interest = s.data.short_interest
+                existing.ev_to_ebitda = s.data.ev_to_ebitda
+                existing.current_ratio = s.data.current_ratio
+                existing.burry_score = s.burry_score
+                existing.composite_score = s.composite_score
+                existing.scan_date = datetime.utcnow()
+                existing.is_active = True
+                existing.notes = _build_notes(s)
+                upserted += 1
+            else:
+                # Insert new row
+                entry = WatchlistStock(
+                    ticker=s.data.ticker,
+                    company_name=s.data.company_name,
+                    sector=s.data.sector,
+                    industry=s.data.industry,
+                    market_cap=s.data.market_cap,
+                    price=s.data.price,
+                    peg_ratio=s.data.peg_ratio,
+                    earnings_growth=s.data.earnings_growth,
+                    debt_to_equity=s.data.debt_to_equity,
+                    revenue_growth=s.data.revenue_growth,
+                    institutional_pct=s.data.institutional_pct,
+                    lynch_category=s.lynch_category,
+                    lynch_score=s.lynch_score,
+                    fcf_yield=s.data.fcf_yield,
+                    price_to_tangible_book=s.data.price_to_tangible_book,
+                    short_interest=s.data.short_interest,
+                    ev_to_ebitda=s.data.ev_to_ebitda,
+                    current_ratio=s.data.current_ratio,
+                    burry_score=s.burry_score,
+                    composite_score=s.composite_score,
+                    scan_date=datetime.utcnow(),
+                    is_active=True,
+                    notes=_build_notes(s),
+                )
+                session.add(entry)
+                inserted += 1
+
+        # Deactivate re-scanned tickers that no longer qualify for ANY strategy.
+        # Only check tickers that were in this scan batch but did NOT make the
+        # watchlist (i.e., they were scored but failed all strategy thresholds).
+        # We need to know ALL scored tickers, not just those that qualified.
+        # This is handled by _deactivate_unqualified() called from run_scan().
+
+        session.commit()
+        logger.info(
+            f"Watchlist saved: {inserted} new, {upserted} updated "
+            f"(one row per ticker)"
+        )
+    except Exception as e:
+        logger.error(f"Failed to save watchlist: {e}")
+        session.rollback()
+    finally:
+        session.close()
+
+
+def _deactivate_unqualified(scored: list[ScoredStock]):
+    """
+    Deactivate watchlist entries for tickers that were re-scanned but no
+    longer qualify for any strategy. Manual entries are never deactivated.
+    """
+    try:
+        session = get_session()
+        from sqlalchemy import or_
+
+        # Build set of all tickers we scored in this scan
+        scanned_tickers = {s.data.ticker for s in scored}
+        # Build set of tickers that qualified (still on the watchlist)
+        qualified_tickers = {
+            s.data.ticker for s in scored if _any_strategy_qualifies(s)
+        }
+        # Tickers that were scanned but didn't qualify
+        failed_tickers = scanned_tickers - qualified_tickers
+
+        if not failed_tickers:
+            return
+
+        deactivated = session.query(WatchlistStock).filter(
             WatchlistStock.is_active == True,  # noqa: E712
-            WatchlistStock.scan_date < cutoff,
+            WatchlistStock.ticker.in_(list(failed_tickers)),
             or_(
                 WatchlistStock.notes == None,  # noqa: E711
                 ~WatchlistStock.notes.like("MANUAL%"),
             ),
         ).update({"is_active": False}, synchronize_session="fetch")
-        if stale_count:
-            logger.info(f"Expired {stale_count} watchlist entries older than 7 days")
-
-        # Deactivate only tickers we're about to re-scan (not the whole list)
-        scanned_tickers = [s.data.ticker for s in watchlist]
-        if scanned_tickers:
-            session.query(WatchlistStock).filter(
-                WatchlistStock.is_active == True,  # noqa: E712
-                WatchlistStock.ticker.in_(scanned_tickers),
-                or_(
-                    WatchlistStock.notes == None,  # noqa: E711
-                    ~WatchlistStock.notes.like("MANUAL%"),
-                ),
-            ).update({"is_active": False}, synchronize_session="fetch")
-
-        # Insert new watchlist entries
-        for s in watchlist:
-            entry = WatchlistStock(
-                ticker=s.data.ticker,
-                company_name=s.data.company_name,
-                sector=s.data.sector,
-                industry=s.data.industry,
-                market_cap=s.data.market_cap,
-                price=s.data.price,
-                peg_ratio=s.data.peg_ratio,
-                earnings_growth=s.data.earnings_growth,
-                debt_to_equity=s.data.debt_to_equity,
-                revenue_growth=s.data.revenue_growth,
-                institutional_pct=s.data.institutional_pct,
-                lynch_category=s.lynch_category,
-                lynch_score=s.lynch_score,
-                fcf_yield=s.data.fcf_yield,
-                price_to_tangible_book=s.data.price_to_tangible_book,
-                short_interest=s.data.short_interest,
-                ev_to_ebitda=s.data.ev_to_ebitda,
-                current_ratio=s.data.current_ratio,
-                burry_score=s.burry_score,
-                composite_score=s.composite_score,
-                scan_date=datetime.utcnow(),
-                is_active=True,
-                notes=_build_notes(s),
-            )
-            session.add(entry)
 
         session.commit()
-        logger.info(f"Saved {len(watchlist)} stocks to watchlist (persistent across sectors)")
+        if deactivated:
+            logger.info(
+                f"Deactivated {deactivated} stocks that no longer "
+                f"qualify for any strategy"
+            )
     except Exception as e:
-        logger.error(f"Failed to save watchlist: {e}")
+        logger.error(f"Failed to deactivate unqualified stocks: {e}")
         session.rollback()
     finally:
         session.close()
