@@ -171,5 +171,91 @@ Any time the human needs to do something, mark it clearly:
 - Max risk per trade: 2% ($50)
 - Max open positions: 5
 - PDT limit: 3 day trades / 5 rolling business days
-- Composite score threshold: 60/100 to make watchlist
-- Lynch weight: 50%, Burry weight: 50%
+- Watchlist gate: strategy-driven (each strategy's `qualifies_stock()` decides)
+- Composite score: still computed for display/sorting (Lynch 50% + Burry 50%)
+- Fallback threshold: composite >= 60 (only used if no strategies are loaded)
+
+## Strategy Plugin Guide
+When someone says "I want to create a trading strategy" or "I'm building a strategy plugin,"
+use this section to guide them through the process.
+
+### Available Data
+The scanner collects and stores the following fundamental data for every stock that passes
+basic pre-screening (market cap, price, volume). Your strategy can use any of these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ticker` | str | Stock symbol (e.g., "AAPL") |
+| `company_name` | str | Company name |
+| `sector` | str | GICS sector (e.g., "Technology") |
+| `industry` | str | Industry classification |
+| `market_cap` | float | Market capitalization in dollars |
+| `price` | float | Current stock price |
+| `peg_ratio` | float | Price/Earnings-to-Growth ratio |
+| `earnings_growth` | float | Annual earnings growth rate (0.25 = 25%) |
+| `debt_to_equity` | float | Debt-to-equity ratio |
+| `revenue_growth` | float | Annual revenue growth rate |
+| `institutional_pct` | float | Institutional ownership percentage (0.45 = 45%) |
+| `lynch_score` | float | Peter Lynch composite score (0-100) |
+| `lynch_category` | str | Lynch classification: fast_grower, stalwart, turnaround, asset_play, cyclical, slow_grower |
+| `fcf_yield` | float | Free cash flow yield (0.08 = 8%) |
+| `price_to_tangible_book` | float | Price to tangible book value |
+| `short_interest` | float | Short interest as percentage of float |
+| `ev_to_ebitda` | float | Enterprise Value / EBITDA |
+| `current_ratio` | float | Current assets / Current liabilities |
+| `burry_score` | float | Michael Burry composite score (0-100) |
+| `composite_score` | float | Weighted average of Lynch + Burry scores |
+
+### How to Build a Strategy Plugin
+1. Create a file: `modules/strategies/my_strategy.py`
+2. Subclass `BaseStrategy` from `modules/strategies/base.py`
+3. Register with `@StrategyRegistry.register("my_strategy")`
+
+### Required Methods
+```python
+from modules.strategies.base import BaseStrategy, StrategyRegistry, Signal, TradeNotification
+
+@StrategyRegistry.register("my_strategy")
+class MyStrategy(BaseStrategy):
+    @property
+    def name(self) -> str:
+        return "my_strategy"
+
+    @property
+    def version(self) -> str:
+        return "1.0.0"
+
+    def init(self) -> None:
+        """Setup before trading begins."""
+        pass
+
+    def qualifies_stock(self, stock_data: dict) -> bool:
+        """Return True if this strategy wants the stock on its watchlist.
+        The scanner uses this to decide which stocks stay active.
+        stock_data contains all fields from the Available Data table above."""
+        return stock_data.get("revenue_growth", 0) >= 0.20  # example
+
+    def generate_signals(self, bars: dict[str, pd.DataFrame]) -> list[Signal]:
+        """Generate trading signals from OHLCV data.
+        bars: dict of ticker -> DataFrame with Open, High, Low, Close, Volume columns."""
+        return []
+
+    def on_trade_executed(self, notification: TradeNotification) -> None:
+        """Called after a trade is opened or closed."""
+        pass
+```
+
+### Optional Methods
+- `set_watchlist(scored_stocks: list[dict])` — receive pre-scored stocks from the scanner
+- `get_watchlist() -> list[str]` — return tickers this strategy wants data for
+- `on_market_regime_change(regime: MarketRegime)` — react to bull/bear/sideways changes
+- `on_strategy_pause(reason: str)` — handle auto-pause due to drawdown
+
+### Post-Build Checklist
+- [ ] Strategy file in `modules/strategies/`
+- [ ] Registered via `@StrategyRegistry.register()` decorator
+- [ ] `qualifies_stock()` returns True for stocks your strategy wants
+- [ ] `generate_signals()` returns `Signal` objects with valid stop_loss and target
+- [ ] Tests in `tests/test_<strategy_name>.py`
+- [ ] Run `python -m pytest tests/ -v -m "not integration"` — all pass
+- [ ] Strategy appears in arena when `StrategyRegistry.list_strategies()` is called

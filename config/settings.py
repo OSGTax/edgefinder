@@ -77,8 +77,10 @@ BURRY_CURRENT_RATIO_WEIGHT = 0.15
 # ============================================================
 # COMPOSITE SCORING
 # ============================================================
-WATCHLIST_MIN_COMPOSITE_SCORE = 60   # Out of 100, minimum to make watchlist
-WATCHLIST_MAX_SIZE = 100             # Cap watchlist at this many stocks
+WATCHLIST_MIN_COMPOSITE_SCORE = 60   # Fallback only — used when no strategies are loaded
+# Note: The primary watchlist gate is now strategy-driven.
+# Each strategy's qualifies_stock() determines whether a stock stays active.
+# composite_score is still computed for display/sorting purposes.
 
 # ============================================================
 # SCANNER FILTERS (Pre-screening before scoring)
@@ -189,7 +191,8 @@ SCANNER_DEFAULT_TICKERS = [
 # SECTOR ROTATION — Nightly scan rotates through sectors
 # ============================================================
 # Each day scans a subset of sectors. Over a week, full universe is covered.
-# Watchlist entries persist across days (7-day TTL) so good plays aren't lost.
+# Watchlist entries persist until a re-scan shows the stock no longer qualifies
+# for any registered strategy.
 SCAN_SECTOR_ROTATION = [
     ["Technology", "Communication Services"],             # Monday
     ["Healthcare"],                                       # Tuesday
@@ -197,7 +200,6 @@ SCAN_SECTOR_ROTATION = [
     ["Consumer Cyclical", "Consumer Defensive"],           # Thursday
     ["Industrials", "Energy", "Basic Materials"],          # Friday
 ]
-SCAN_WATCHLIST_TTL_DAYS = 7  # Deactivate watchlist entries older than this
 
 # ============================================================
 # DATA SERVICE — API Sources
