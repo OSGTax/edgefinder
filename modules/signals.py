@@ -187,7 +187,13 @@ def fetch_price_history(
         DataFrame with OHLCV data, or None on failure.
     """
     try:
-        stock = yf.Ticker(ticker)
+        # Use curl_cffi session for server compatibility (Yahoo blocks data center IPs)
+        try:
+            from curl_cffi.requests import Session as CffiSession
+            _sess = CffiSession(impersonate="chrome")
+        except ImportError:
+            _sess = None
+        stock = yf.Ticker(ticker, session=_sess)
         df = stock.history(period=period, interval=interval)
         if df is None or df.empty:
             logger.debug(f"{ticker}: No price history returned")

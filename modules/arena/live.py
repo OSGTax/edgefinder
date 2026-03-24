@@ -164,11 +164,16 @@ def _get_bars(tickers: list[str], days_back: int = 365) -> dict:
                 else:
                     volumes[ticker] = 1_000_000
     else:
-        # Fallback: direct yfinance
+        # Fallback: direct yfinance with curl_cffi for server compatibility
         import yfinance as yf
+        try:
+            from curl_cffi.requests import Session as CffiSession
+            _yf_sess = CffiSession(impersonate="chrome")
+        except ImportError:
+            _yf_sess = None
         for ticker in tickers:
             try:
-                stock = yf.Ticker(ticker)
+                stock = yf.Ticker(ticker, session=_yf_sess)
                 df = stock.history(period="1y", interval="1d")
                 if df is not None and not df.empty:
                     bars[ticker] = df
@@ -191,7 +196,12 @@ def _get_price(ticker: str) -> tuple[Optional[float], str]:
     # Fallback
     try:
         import yfinance as yf
-        t = yf.Ticker(ticker)
+        try:
+            from curl_cffi.requests import Session as CffiSession
+            _sess = CffiSession(impersonate="chrome")
+        except ImportError:
+            _sess = None
+        t = yf.Ticker(ticker, session=_sess)
         price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
         if price and price > 0:
             return round(float(price), 4), "yfinance"

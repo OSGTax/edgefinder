@@ -66,6 +66,16 @@ class DataService:
         # FMP removed — yfinance provides fundamentals (faster, no rate limits)
         self.fmp = None
 
+        # curl_cffi session for yfinance — required on cloud/server environments
+        # where Yahoo blocks standard requests with "Invalid Crumb" errors.
+        self._yf_session = None
+        try:
+            from curl_cffi.requests import Session
+            self._yf_session = Session(impersonate="chrome")
+            logger.info("curl_cffi session initialized for yfinance")
+        except ImportError:
+            logger.info("curl_cffi not available, yfinance will use default requests")
+
         # Track which sources are available
         self._sources = {
             "alpaca": self.alpaca is not None,
@@ -163,7 +173,7 @@ class DataService:
         # 2. yfinance fast_info
         try:
             import yfinance as yf
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(ticker, session=self._yf_session)
             price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
             if price and price > 0:
                 return round(float(price), 4)
@@ -242,7 +252,7 @@ class DataService:
         # 2. yfinance
         try:
             import yfinance as yf
-            info = yf.Ticker(ticker).info
+            info = yf.Ticker(ticker, session=self._yf_session).info
             if info and info.get("marketCap"):
                 data = {
                     "symbol": ticker,
@@ -278,7 +288,7 @@ class DataService:
         # 2. yfinance — single .info call gets everything
         try:
             import yfinance as yf
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(ticker, session=self._yf_session)
             info = t.info
             if not info or not info.get("marketCap"):
                 return None
@@ -392,7 +402,7 @@ class DataService:
             elif interval in ("5m", "15m") and not start:
                 start = (datetime.utcnow() - timedelta(days=60)).strftime("%Y-%m-%d")
 
-            t = yf.Ticker(ticker)
+            t = yf.Ticker(ticker, session=self._yf_session)
             df = t.history(start=start, end=end, interval=interval, auto_adjust=True)
 
             if df is None or df.empty:
