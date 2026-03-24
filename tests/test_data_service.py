@@ -320,7 +320,8 @@ class TestFMPClient:
 class TestDataService:
     """Tests for the unified data service."""
 
-    def test_initializes_without_keys(self):
+    @patch("services.data_service.load_dotenv")
+    def test_initializes_without_keys(self, mock_dotenv):
         """Should initialize gracefully without API keys (yfinance only)."""
         with patch.dict("os.environ", {}, clear=True):
             ds = DataService(cache_path=":memory:")
