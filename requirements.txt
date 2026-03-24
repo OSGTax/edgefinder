@@ -18,10 +18,8 @@ requests>=2.31.0
 
 # Database
 sqlalchemy>=2.0.0
-alembic>=1.13.0
-psycopg2-binary>=2.9.0
 
-# HTML Parsing (for Wikipedia ticker lists)
+# HTML Parsing (for Wikipedia ticker lists via pd.read_html)
 lxml>=4.9.0
 
 # Web Framework (Dashboard)
@@ -35,8 +33,6 @@ apscheduler>=3.10.0
 
 # Testing
 pytest>=7.4.0
-pytest-asyncio>=0.21.0
-pytest-cov>=4.1.0
 
 # Utilities
 python-dotenv>=1.0.0

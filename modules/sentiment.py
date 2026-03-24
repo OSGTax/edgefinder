@@ -20,7 +20,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import feedparser
-import requests
 from bs4 import BeautifulSoup
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 

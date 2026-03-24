@@ -858,19 +858,6 @@ async function loadTrades() {
     }).join('');
 }
 
-async function loadSkipped() {
-    // Skipped tab removed — placeholder for backwards compatibility
-    return;
-    body.innerHTML = data.signals.map(s => `<tr>
-        <td>${fmtDate(s.timestamp)}</td>
-        <td><strong>${s.ticker}</strong></td>
-        <td>${badge(s.signal_type, s.signal_type === 'BUY' ? 'buy' : 'sell')}</td>
-        <td>${badge(s.trade_type, s.trade_type === 'DAY' ? 'day' : 'swing')}</td>
-        <td>${fmt(s.confidence, 1)}</td>
-        <td style="color:var(--muted)">${s.reason_skipped || ''}</td>
-    </tr>`).join('');
-}
-
 async function loadEquityCurve() {
     const data = await fetchJSON('/api/equity-curve');
     if (!data || data.count === 0) return;

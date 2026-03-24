@@ -20,8 +20,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func
-
 from config import settings
 from modules.database import (
     Trade as TradeRecord,
