@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+import pytz
+
 from config import settings
 from modules.strategies.base import Signal, TradeNotification, MarketRegime
 from modules.arena.virtual_account import VirtualAccount, Position
@@ -154,6 +156,34 @@ class Executor:
         """
         now = datetime.now(timezone.utc)
         exec_price = current_price or signal.entry_price
+
+        # ── MARKET HOURS GATE ──────────────────────────────
+        _ET = pytz.timezone("US/Eastern")
+        now_et = now.astimezone(_ET)
+
+        # Reject weekends
+        if now_et.weekday() >= 5:
+            logger.info(
+                f"[{account.strategy_name}] Rejected {signal.ticker}: "
+                f"weekend ({now_et.strftime('%A')})"
+            )
+            return None
+
+        # Parse market hours from settings
+        open_h, open_m = map(int, settings.MARKET_OPEN_ET.split(":"))
+        close_h, close_m = map(int, settings.MARKET_CLOSE_ET.split(":"))
+        market_open = now_et.replace(
+            hour=open_h, minute=open_m, second=0, microsecond=0
+        )
+        market_close = now_et.replace(
+            hour=close_h, minute=close_m, second=0, microsecond=0
+        )
+        if not (market_open <= now_et <= market_close):
+            logger.info(
+                f"[{account.strategy_name}] Rejected {signal.ticker}: "
+                f"outside market hours ({now_et.strftime('%H:%M')} ET)"
+            )
+            return None
 
         # ── PRE-CHECKS ──────────────────────────────────────
         # Extract sector from signal metadata for concentration checks

@@ -730,6 +730,9 @@ def _format_arena_trade(t) -> dict:
         "explanation": explanation,
         "strategy_metadata": meta,
         "status": t.status,
+        "signal_timestamp": to_eastern(t.signal_timestamp),
+        "execution_timestamp": to_eastern(t.execution_timestamp),
+        "exit_timestamp": to_eastern(t.exit_timestamp),
         "created_at": to_eastern(t.created_at),
     }
 

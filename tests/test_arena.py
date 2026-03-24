@@ -34,6 +34,10 @@ class SimpleStrategy(BaseStrategy):
     def version(self) -> str:
         return "1.0.0"
 
+    @property
+    def preferred_signals(self) -> set[str]:
+        return {"ema_crossover_day", "rsi_oversold", "macd_crossover"}
+
     def init(self) -> None:
         self.initialized = True
         self.trades = []
@@ -437,6 +441,18 @@ class TestVirtualAccount:
 
 class TestExecutor:
 
+    @pytest.fixture(autouse=True)
+    def _mock_market_hours(self):
+        """Mock datetime.now() to return a weekday during market hours."""
+        import pytz
+        _ET = pytz.timezone("US/Eastern")
+        # Wednesday at 10:30 AM ET
+        market_time = datetime(2026, 3, 25, 14, 30, 0, tzinfo=timezone.utc)  # 10:30 AM ET
+        with patch("modules.arena.executor.datetime") as mock_dt:
+            mock_dt.now.return_value = market_time
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            yield
+
     def test_slippage_calculation(self):
         ex = Executor(base_slippage=0.001, volume_factor=1.0)
         slippage = ex.calculate_slippage(
@@ -628,6 +644,15 @@ class TestExecutor:
 # ── ARENA ENGINE TESTS ──────────────────────────────────────
 
 class TestArenaEngine:
+
+    @pytest.fixture(autouse=True)
+    def _mock_market_hours(self):
+        """Mock datetime.now() to return a weekday during market hours."""
+        market_time = datetime(2026, 3, 25, 14, 30, 0, tzinfo=timezone.utc)  # Wed 10:30 AM ET
+        with patch("modules.arena.executor.datetime") as mock_dt:
+            mock_dt.now.return_value = market_time
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            yield
 
     def test_add_strategy(self):
         engine = ArenaEngine(starting_capital=10000)

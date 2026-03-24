@@ -488,6 +488,8 @@ class TestStrategyQualification:
             def name(self): return "test_momentum"
             @property
             def version(self): return "0.1"
+            @property
+            def preferred_signals(self): return {"ema_crossover_day", "macd_crossover"}
             def init(self): pass
             def generate_signals(self, bars): return []
             def on_trade_executed(self, n): pass

@@ -99,6 +99,9 @@ def init_arena() -> ArenaEngine:
     # Populate watchlists from existing scan data
     _refresh_watchlists()
 
+    # Restore open positions and account state from database
+    _restore_state()
+
     logger.info(
         f"Arena initialized: {len(_engine.strategies)} strategies, "
         f"${settings.ARENA_STARTING_CAPITAL_PER_STRATEGY} each"
@@ -131,6 +134,87 @@ def _refresh_watchlists() -> None:
     for name, strategy in _engine.strategies.items():
         if hasattr(strategy, "set_watchlist"):
             strategy.set_watchlist(scored)
+
+
+def _restore_state() -> None:
+    """Restore open positions and account state from database after restart.
+
+    On every Render deploy, VirtualAccount instances are created fresh with
+    starting capital. This function loads OPEN trades from ArenaTradeLog back
+    into the in-memory accounts so balances and positions survive restarts.
+    """
+    if _engine is None:
+        return
+
+    session = get_session()
+    try:
+        open_trades = session.query(ArenaTradeLog).filter(
+            ArenaTradeLog.status == "OPEN"
+        ).all()
+
+        restored = 0
+        for trade in open_trades:
+            strategy_name = trade.strategy_name
+            if strategy_name not in _engine.accounts:
+                logger.warning(
+                    f"Restore: strategy '{strategy_name}' not loaded, "
+                    f"skipping trade {trade.trade_id}"
+                )
+                continue
+
+            account = _engine.accounts[strategy_name]
+            position = Position(
+                trade_id=trade.trade_id,
+                ticker=trade.ticker,
+                direction=trade.direction or "LONG",
+                trade_type=trade.trade_type or "SWING",
+                entry_price=trade.execution_price,
+                shares=trade.shares,
+                stop_loss=trade.stop_loss,
+                target=trade.target,
+                entry_time=trade.execution_timestamp,
+                confidence=trade.confidence or 0.5,
+                slippage_applied=trade.slippage or 0.0,
+                metadata=trade.extra_data or {},
+            )
+
+            # Deduct cost from cash and add position
+            cost = position.entry_price * position.shares
+            if cost <= account.cash:
+                account.cash -= cost
+                position.high_water_mark = position.entry_price
+                position.last_known_price = position.entry_price
+                account.positions[position.trade_id] = position
+                restored += 1
+                logger.info(
+                    f"Restored position: {trade.ticker} ({strategy_name}) "
+                    f"{trade.shares}x @ ${trade.execution_price:.2f}"
+                )
+            else:
+                logger.warning(
+                    f"Restore: insufficient cash for {trade.ticker} "
+                    f"in {strategy_name} (need ${cost:.2f}, "
+                    f"have ${account.cash:.2f})"
+                )
+
+        # Restore peak equity from most recent snapshot per strategy
+        for strategy_name, account in _engine.accounts.items():
+            latest_snap = session.query(ArenaSnapshot).filter(
+                ArenaSnapshot.strategy_name == strategy_name
+            ).order_by(ArenaSnapshot.timestamp.desc()).first()
+
+            if latest_snap and latest_snap.peak_equity:
+                account.peak_equity = latest_snap.peak_equity
+
+        logger.info(
+            f"State restored: {restored} open positions "
+            f"across {len(_engine.accounts)} strategies"
+        )
+
+    except Exception as e:
+        logger.error(f"State restoration failed: {e}")
+    finally:
+        session.close()
 
 
 # ── DATA FETCHING ────────────────────────────────────────────

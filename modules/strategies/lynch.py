@@ -54,6 +54,10 @@ class LynchStrategy(BaseStrategy):
     def version(self) -> str:
         return "1.0.0"
 
+    @property
+    def preferred_signals(self) -> set[str]:
+        return {"ema_crossover_day", "ema_crossover_swing", "macd_crossover"}
+
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}  # ticker -> scoring info
@@ -118,6 +122,16 @@ class LynchStrategy(BaseStrategy):
 
             for ts in trade_signals:
                 if ts.signal_type != "BUY":
+                    continue
+
+                # Only act on momentum-based signals matching this strategy
+                signal_names = (
+                    set(ts.indicators.keys())
+                    if isinstance(ts.indicators, dict)
+                    else {ind.get("name") for ind in ts.indicators
+                          if isinstance(ind, dict)}
+                )
+                if not signal_names & self.preferred_signals:
                     continue
 
                 confidence = ts.confidence
