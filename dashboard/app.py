@@ -177,17 +177,21 @@ _scan_status = {"running": False, "last_result": None, "last_error": None}
 
 
 def _run_scan_background():
-    """Run the scanner in a background thread using full ticker universe."""
-    from modules.scanner import run_scan, get_ticker_universe
+    """Run the scanner in a background thread using today's sector rotation."""
+    from modules.scanner import run_scan, get_todays_sectors
     try:
-        tickers = get_ticker_universe()
-        _scan_status["last_result"] = f"Scanning {len(tickers)} tickers..."
+        sectors = get_todays_sectors()
+        if sectors:
+            _scan_status["last_result"] = f"Scanning sectors: {', '.join(sectors)}..."
+        else:
+            _scan_status["last_result"] = "Scanning full universe..."
 
-        watchlist = run_scan(tickers=tickers, save_to_db=True)
+        watchlist = run_scan(sectors=sectors if sectors else None, save_to_db=True)
 
+        sector_info = f"sectors: {', '.join(sectors)}" if sectors else "full universe"
         detail = (
             f"{len(watchlist)} on watchlist "
-            f"(scanned {len(tickers)} tickers, "
+            f"({sector_info}, "
             f"scored above {settings.WATCHLIST_MIN_COMPOSITE_SCORE}: {len(watchlist)})"
         )
         _scan_status["last_result"] = detail

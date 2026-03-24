@@ -5,16 +5,20 @@ Screens US-listed stocks through Peter Lynch and Michael Burry criteria.
 Produces a ranked watchlist of 50-100 candidates.
 
 Runs nightly after market close (4:30 PM ET).
+Rotates through sectors daily so the full universe is covered weekly.
+Watchlist entries persist across scan days (7-day TTL).
 """
 
 import logging
 import math
+import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
+from dotenv import load_dotenv
 
 from config import settings
 from modules.database import WatchlistStock, get_session, init_db
@@ -69,34 +73,96 @@ class ScoredStock:
 
 # ── TICKER UNIVERSE ──────────────────────────────────────────
 
+_data_service = None
+
+
 def _init_data_service():
-    """Lazy-init DataService for scanner use."""
+    """Lazy-init DataService for scanner use. Loads API keys from env."""
+    global _data_service
+    if _data_service is not None:
+        return _data_service
     try:
         from services.data_service import DataService
-        return DataService()
+        _data_service = DataService()
+        return _data_service
     except Exception as e:
         logger.warning(f"DataService unavailable: {e}")
         return None
 
 
-def get_ticker_universe() -> list[str]:
+def _load_env():
+    """Ensure environment variables from secrets.env are loaded."""
+    secrets_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "config", "secrets.env"
+    )
+    if os.path.exists(secrets_path):
+        load_dotenv(secrets_path)
+
+
+def get_todays_sectors() -> list[str]:
+    """
+    Return the sectors to scan today based on the day-of-week rotation.
+    Returns None on weekends (no scan).
+    """
+    weekday = datetime.now().weekday()  # 0=Mon, 4=Fri
+    rotation = settings.SCAN_SECTOR_ROTATION
+    if weekday < len(rotation):
+        return rotation[weekday]
+    return []  # Weekend
+
+
+def get_ticker_universe(sectors: list[str] | None = None) -> list[str]:
     """
     Get the universe of US-listed stock tickers to scan.
 
+    Args:
+        sectors: Optional list of sectors to filter by (e.g. ["Technology"]).
+                 If None, returns full universe (all sectors).
+
     Priority:
-    1. Alpaca Assets API (~8,000+ tradeable equities in one call, free)
-    2. FMP stock screener (3 calls, uses daily quota)
-    3. Wikipedia S&P 500 + 400 + 600 (~1,500 tickers)
-    4. Hardcoded fallback list (67 tickers)
+    1. FMP screener with sector filter (when sectors specified)
+    2. Alpaca Assets API for full universe (when no sector filter)
+    3. FMP screener unfiltered
+    4. Wikipedia S&P lists
+    5. Hardcoded fallback
     """
+    _load_env()
     tickers = set()
 
-    # Try Alpaca Assets API first — free, fast, broadest coverage
+    # When sector-filtering, FMP screener is best (supports sector param)
+    if sectors:
+        try:
+            fmp_key = os.getenv("FMP_API_KEY", "").strip()
+            if fmp_key:
+                from services.fmp_client import FMPClient
+                fmp = FMPClient(fmp_key)
+                for sector in sectors:
+                    for exchange in ["NYSE", "NASDAQ", "AMEX"]:
+                        results = fmp.get_stock_screener(
+                            market_cap_min=300_000_000,
+                            volume_min=500_000,
+                            price_min=5.0,
+                            price_max=500.0,
+                            exchange=exchange,
+                            sector=sector,
+                            limit=3000,
+                        )
+                        if results:
+                            symbols = [r["symbol"] for r in results if r.get("symbol")]
+                            tickers.update(symbols)
+                    logger.info(f"FMP screener: {sector} → {len(tickers)} tickers so far")
+                if tickers:
+                    logger.info(f"Sector scan universe: {len(tickers)} tickers for {sectors}")
+                    return sorted(tickers)
+        except Exception as e:
+            logger.warning(f"FMP sector screener failed: {e}")
+
+    # Full universe: Alpaca Assets API (free, fast, ~8000+)
     try:
-        from services.alpaca_client import AlpacaClient
-        alpaca_key = getattr(settings, "ALPACA_API_KEY", "") or ""
-        alpaca_secret = getattr(settings, "ALPACA_SECRET_KEY", "") or ""
+        alpaca_key = os.getenv("ALPACA_API_KEY", "").strip()
+        alpaca_secret = os.getenv("ALPACA_SECRET_KEY", "").strip()
         if alpaca_key and alpaca_secret:
+            from services.alpaca_client import AlpacaClient
             alpaca = AlpacaClient(alpaca_key, alpaca_secret)
             assets = alpaca.get_tradeable_assets(
                 exchanges=["NYSE", "NASDAQ", "AMEX"]
@@ -108,11 +174,11 @@ def get_ticker_universe() -> list[str]:
     except Exception as e:
         logger.warning(f"Alpaca assets unavailable: {e}")
 
-    # Fallback: FMP screener (costs 3 API calls from daily quota)
+    # Fallback: FMP screener unfiltered
     try:
-        from services.fmp_client import FMPClient
-        fmp_key = getattr(settings, "FMP_API_KEY", "") or ""
+        fmp_key = os.getenv("FMP_API_KEY", "").strip()
         if fmp_key:
+            from services.fmp_client import FMPClient
             fmp = FMPClient(fmp_key)
             for exchange in ["NYSE", "NASDAQ", "AMEX"]:
                 results = fmp.get_stock_screener(
@@ -126,23 +192,20 @@ def get_ticker_universe() -> list[str]:
                 if results:
                     symbols = [r["symbol"] for r in results if r.get("symbol")]
                     tickers.update(symbols)
-                    logger.info(f"FMP screener: {len(symbols)} tickers from {exchange}")
             if tickers:
                 logger.info(f"FMP universe: {len(tickers)} total tickers")
                 return sorted(tickers)
     except Exception as e:
         logger.warning(f"FMP screener unavailable: {e}")
 
-    # Fallback: Wikipedia S&P lists (~1,500 tickers)
+    # Fallback: Wikipedia S&P lists
     try:
         sp500 = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         )[0]
         tickers.update(sp500["Symbol"].str.replace(".", "-", regex=False).tolist())
-        logger.info(f"Loaded {len(sp500)} S&P 500 tickers")
-    except Exception as e:
-        logger.warning(f"Failed to load S&P 500 list: {e}")
-
+    except Exception:
+        pass
     try:
         sp400 = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
@@ -150,7 +213,6 @@ def get_ticker_universe() -> list[str]:
         tickers.update(sp400["Symbol"].str.replace(".", "-", regex=False).tolist())
     except Exception:
         pass
-
     try:
         sp600 = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"
@@ -164,7 +226,7 @@ def get_ticker_universe() -> list[str]:
         logger.info(f"Wikipedia universe: {len(tickers)} total tickers")
         return sorted(tickers)
 
-    # Last resort: hardcoded fallback
+    # Last resort
     logger.warning("Using hardcoded fallback ticker list")
     return sorted(set(settings.SCANNER_DEFAULT_TICKERS))
 
@@ -557,18 +619,25 @@ def score_stock(data: FundamentalData) -> ScoredStock:
 
 def run_scan(
     tickers: list[str] | None = None,
+    sectors: list[str] | None = None,
     save_to_db: bool = True,
     verbose: bool = False,
 ) -> list[ScoredStock]:
     """
     Run the full fundamental scan pipeline.
 
-    1. Get ticker universe (or use provided list)
+    1. Get ticker universe (or use provided list), optionally filtered by sector
     2. Fetch fundamental data for each
     3. Pre-screen (market cap, price, volume filters)
     4. Score each stock (Lynch + Burry)
     5. Rank by composite score
-    6. Save top candidates to database
+    6. Save top candidates to database (appends, doesn't replace other sectors)
+
+    Args:
+        tickers: Explicit list of tickers. If None, uses get_ticker_universe().
+        sectors: Sector filter for universe. E.g. ["Technology", "Healthcare"].
+        save_to_db: Persist results to database.
+        verbose: Print detailed output.
 
     Returns: List of ScoredStock objects, sorted by composite score descending.
     """
@@ -579,8 +648,11 @@ def run_scan(
 
     # Step 1: Get tickers
     if tickers is None:
-        tickers = get_ticker_universe()
-    logger.info(f"Scanning {len(tickers)} tickers")
+        tickers = get_ticker_universe(sectors=sectors)
+    if sectors:
+        logger.info(f"Scanning {len(tickers)} tickers (sectors: {', '.join(sectors)})")
+    else:
+        logger.info(f"Scanning {len(tickers)} tickers (full universe)")
 
     # Step 2: Fetch data
     all_data = fetch_batch(tickers)
@@ -668,21 +740,41 @@ def _build_notes(s: ScoredStock) -> str:
 
 
 def _save_watchlist(watchlist: list[ScoredStock]):
-    """Save watchlist to database, deactivating old entries."""
+    """
+    Save watchlist to database. Only deactivates tickers being re-scanned,
+    preserving entries from other sector rotations. Entries older than 7 days
+    are deactivated automatically (stale data).
+    """
     try:
         session = get_session()
 
-        # Deactivate previous watchlist (but keep manually added ones)
+        # Expire stale entries older than 7 days
         from sqlalchemy import or_
-        session.query(WatchlistStock).filter(
+        cutoff = datetime.utcnow() - timedelta(days=7)
+        stale_count = session.query(WatchlistStock).filter(
             WatchlistStock.is_active == True,  # noqa: E712
+            WatchlistStock.scan_date < cutoff,
             or_(
                 WatchlistStock.notes == None,  # noqa: E711
                 ~WatchlistStock.notes.like("MANUAL%"),
             ),
         ).update({"is_active": False}, synchronize_session="fetch")
+        if stale_count:
+            logger.info(f"Expired {stale_count} watchlist entries older than 7 days")
 
-        # Insert new watchlist
+        # Deactivate only tickers we're about to re-scan (not the whole list)
+        scanned_tickers = [s.data.ticker for s in watchlist]
+        if scanned_tickers:
+            session.query(WatchlistStock).filter(
+                WatchlistStock.is_active == True,  # noqa: E712
+                WatchlistStock.ticker.in_(scanned_tickers),
+                or_(
+                    WatchlistStock.notes == None,  # noqa: E711
+                    ~WatchlistStock.notes.like("MANUAL%"),
+                ),
+            ).update({"is_active": False}, synchronize_session="fetch")
+
+        # Insert new watchlist entries
         for s in watchlist:
             entry = WatchlistStock(
                 ticker=s.data.ticker,
@@ -712,7 +804,7 @@ def _save_watchlist(watchlist: list[ScoredStock]):
             session.add(entry)
 
         session.commit()
-        logger.info(f"Saved {len(watchlist)} stocks to watchlist database")
+        logger.info(f"Saved {len(watchlist)} stocks to watchlist (persistent across sectors)")
     except Exception as e:
         logger.error(f"Failed to save watchlist: {e}")
         session.rollback()

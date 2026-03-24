@@ -323,8 +323,8 @@ class TestDatabasePersistence:
         assert watchlist[0]["ticker"] == "TEST"
         assert watchlist[0]["composite_score"] == 77.5
 
-    def test_new_scan_deactivates_old(self, in_memory_db):
-        """A new scan should deactivate previous watchlist entries."""
+    def test_new_scan_preserves_other_tickers(self, in_memory_db):
+        """Scanning new tickers should preserve entries from other sectors."""
         from modules.scanner import _save_watchlist, ScoredStock
 
         old = ScoredStock(
@@ -337,7 +337,7 @@ class TestDatabasePersistence:
         assert len(get_active_watchlist()) == 1
 
         new = ScoredStock(
-            data=FundamentalData(ticker="NEW", company_name="New Corp", sector="Tech",
+            data=FundamentalData(ticker="NEW", company_name="New Corp", sector="Healthcare",
                                  market_cap=2e9, price=75),
             lynch_score=85, burry_score=80, composite_score=82.5,
             lynch_category="fast_grower",
@@ -345,8 +345,31 @@ class TestDatabasePersistence:
         _save_watchlist([new])
 
         watchlist = get_active_watchlist()
+        assert len(watchlist) == 2  # Both persist (different tickers)
+
+    def test_rescan_same_ticker_replaces(self, in_memory_db):
+        """Re-scanning the same ticker deactivates the old entry."""
+        from modules.scanner import _save_watchlist, ScoredStock
+
+        v1 = ScoredStock(
+            data=FundamentalData(ticker="AAPL", company_name="Apple v1", sector="Tech",
+                                 market_cap=1e12, price=150),
+            lynch_score=70, burry_score=65, composite_score=67.5,
+            lynch_category="stalwart",
+        )
+        _save_watchlist([v1])
+
+        v2 = ScoredStock(
+            data=FundamentalData(ticker="AAPL", company_name="Apple v2", sector="Tech",
+                                 market_cap=1.1e12, price=155),
+            lynch_score=75, burry_score=70, composite_score=72.5,
+            lynch_category="stalwart",
+        )
+        _save_watchlist([v2])
+
+        watchlist = get_active_watchlist()
         assert len(watchlist) == 1
-        assert watchlist[0]["ticker"] == "NEW"
+        assert watchlist[0]["company_name"] == "Apple v2"
 
 
 # ════════════════════════════════════════════════════════════

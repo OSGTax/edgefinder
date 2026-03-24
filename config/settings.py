@@ -186,6 +186,20 @@ SCANNER_DEFAULT_TICKERS = [
 ]
 
 # ============================================================
+# SECTOR ROTATION — Nightly scan rotates through sectors
+# ============================================================
+# Each day scans a subset of sectors. Over a week, full universe is covered.
+# Watchlist entries persist across days (7-day TTL) so good plays aren't lost.
+SCAN_SECTOR_ROTATION = [
+    ["Technology", "Communication Services"],             # Monday
+    ["Healthcare"],                                       # Tuesday
+    ["Financial Services", "Real Estate"],                # Wednesday
+    ["Consumer Cyclical", "Consumer Defensive"],           # Thursday
+    ["Industrials", "Energy", "Basic Materials"],          # Friday
+]
+SCAN_WATCHLIST_TTL_DAYS = 7  # Deactivate watchlist entries older than this
+
+# ============================================================
 # DATA SERVICE — API Sources
 # ============================================================
 # Alpaca: real-time and historical bars (free paper trading account)

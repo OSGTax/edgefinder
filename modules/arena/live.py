@@ -367,13 +367,20 @@ def arena_snapshot() -> list[dict]:
 
 
 def arena_nightly_scan() -> None:
-    """Run nightly fundamental scan and refresh strategy watchlists."""
+    """Run nightly fundamental scan using sector rotation and refresh watchlists."""
     if _engine is None:
         return
 
     try:
-        logger.info("ARENA: Nightly scan starting (full universe)...")
-        run_scan(tickers=None, save_to_db=True)  # None = use get_ticker_universe()
+        from modules.scanner import get_todays_sectors
+        sectors = get_todays_sectors()
+        if sectors:
+            logger.info(f"ARENA: Nightly scan — today's sectors: {sectors}")
+            run_scan(sectors=sectors, save_to_db=True)
+        else:
+            logger.info("ARENA: Weekend — running full universe scan")
+            run_scan(tickers=None, save_to_db=True)
+
         _refresh_watchlists()
         _arena_status["last_scan"] = datetime.now(timezone.utc).isoformat()
         logger.info("ARENA: Nightly scan complete, watchlists refreshed")
