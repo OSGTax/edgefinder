@@ -162,6 +162,26 @@ class BaseStrategy(ABC):
         """
         pass
 
+    def qualifies_stock(self, stock_data: dict) -> bool:
+        """Return True if this strategy is interested in the given stock.
+
+        The scanner calls this on all registered strategies to decide whether
+        a stock stays active in the watchlist. If ANY strategy returns True,
+        the stock remains active.
+
+        Args:
+            stock_data: Dict with fundamental data fields:
+                ticker, company_name, sector, industry, market_cap, price,
+                lynch_score, burry_score, composite_score, lynch_category,
+                peg_ratio, earnings_growth, debt_to_equity, revenue_growth,
+                institutional_pct, fcf_yield, price_to_tangible_book,
+                short_interest, ev_to_ebitda, current_ratio.
+
+        Returns:
+            True if this strategy wants the stock on its watchlist.
+        """
+        return False
+
     def get_watchlist(self) -> list[str]:
         """Return list of tickers this strategy wants data for.
 

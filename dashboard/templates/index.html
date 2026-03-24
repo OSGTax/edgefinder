@@ -283,6 +283,7 @@
             <div class="tab active" data-tab="arena">Arena</div>
             <div class="tab" data-tab="trades">Trades</div>
             <div class="tab" data-tab="watchlist">Watchlist</div>
+            <div class="tab" data-tab="fundamentals">Fundamentals</div>
             <div class="tab" data-tab="signals">Signals</div>
             <div class="tab" data-tab="about">About</div>
             <div class="tab" data-tab="suggestions">Suggestions</div>
@@ -383,6 +384,60 @@
                             </tr>
                         </thead>
                         <tbody id="watchlist-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Fundamentals Browser -->
+        <div class="tab-content" id="tab-fundamentals">
+            <div class="panel" style="margin-bottom:16px">
+                <div class="panel-header">
+                    <span>Fundamentals Browser</span>
+                    <span class="status" id="fundamentals-count">0 stocks</span>
+                </div>
+                <div style="padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                    <label style="font-size:12px;color:var(--muted)">Sector:
+                        <select id="fundamentals-sector" onchange="loadFundamentals()"
+                            style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:4px 8px;font-size:12px;margin-left:4px">
+                            <option value="">All Sectors</option>
+                        </select>
+                    </label>
+                    <label style="font-size:12px;color:var(--muted)">Sort by:
+                        <select id="fundamentals-sort" onchange="loadFundamentals()"
+                            style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:4px 8px;font-size:12px;margin-left:4px">
+                            <option value="composite_score">Composite Score</option>
+                            <option value="lynch_score">Lynch Score</option>
+                            <option value="burry_score">Burry Score</option>
+                            <option value="peg_ratio">PEG Ratio</option>
+                            <option value="earnings_growth">Earnings Growth</option>
+                            <option value="revenue_growth">Revenue Growth</option>
+                            <option value="debt_to_equity">Debt/Equity</option>
+                            <option value="fcf_yield">FCF Yield</option>
+                            <option value="ev_to_ebitda">EV/EBITDA</option>
+                            <option value="current_ratio">Current Ratio</option>
+                            <option value="short_interest">Short Interest</option>
+                            <option value="price_to_tangible_book">P/TBV</option>
+                            <option value="institutional_pct">Institutional %</option>
+                            <option value="market_cap">Market Cap</option>
+                        </select>
+                    </label>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-body" style="overflow-x:auto">
+                    <table style="min-width:1600px">
+                        <thead>
+                            <tr>
+                                <th>#</th><th>Ticker</th><th>Company</th><th>Sector</th><th>Industry</th>
+                                <th>Mkt Cap</th><th>Price</th>
+                                <th>Composite</th><th>Lynch</th><th>Burry</th><th>Category</th>
+                                <th>PEG</th><th>Earn Grth</th><th>Rev Grth</th><th>D/E</th>
+                                <th>Inst %</th><th>FCF Yld</th><th>P/TBV</th><th>Short Int</th>
+                                <th>EV/EBITDA</th><th>Curr Ratio</th><th>Scanned</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fundamentals-body"></tbody>
                     </table>
                 </div>
             </div>
@@ -558,8 +613,9 @@ function fmtMoney(n) { return n != null ? '$' + Number(n).toLocaleString('en-US'
 function fmtDate(iso) {
     if (!iso) return '--';
     const d = new Date(iso);
-    return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric', timeZone: 'America/New_York'}) + ' ' +
-           d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York'}) + ' ET';
+    const tz = 'America/New_York';
+    return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric', timeZone: tz}) + ' ' +
+           d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', timeZone: tz});
 }
 function scoreColor(score) {
     if (score >= 70) return 'var(--green)';
@@ -640,6 +696,78 @@ async function loadWatchlist() {
         <td style="white-space:normal;max-width:300px;font-size:11px;color:var(--muted)">${escHtml(s.notes || '')}</td>
     </tr>`;
     }).join('');
+}
+
+async function loadFundamentals() {
+    const sector = document.getElementById('fundamentals-sector').value;
+    const sortBy = document.getElementById('fundamentals-sort').value;
+    let url = `/api/fundamentals?sort_by=${sortBy}&limit=500`;
+    if (sector) url += `&sector=${encodeURIComponent(sector)}`;
+
+    const data = await fetchJSON(url);
+    if (!data) return;
+    document.getElementById('fundamentals-count').textContent = data.count + ' stocks';
+
+    // Populate sector dropdown (preserve selection)
+    const sel = document.getElementById('fundamentals-sector');
+    const curVal = sel.value;
+    if (sel.options.length <= 1 && data.sectors) {
+        data.sectors.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s; opt.text = s;
+            sel.appendChild(opt);
+        });
+        sel.value = curVal;
+    }
+
+    const body = document.getElementById('fundamentals-body');
+    if (data.count === 0) {
+        body.innerHTML = '<tr><td colspan="22" class="empty">No fundamental data yet. Click <strong>Run Scanner</strong> in the top bar to populate the watchlist, then refresh.</td></tr>';
+        return;
+    }
+
+    function metricCell(val, goodFn) {
+        if (val == null) return '<td style="color:var(--muted)">--</td>';
+        const color = goodFn ? (goodFn(val) ? 'var(--green)' : 'var(--text)') : 'var(--text)';
+        return `<td style="color:${color}">${typeof val === 'number' ? val.toFixed(2) : val}</td>`;
+    }
+    function pctCell(val, goodFn) {
+        if (val == null) return '<td style="color:var(--muted)">--</td>';
+        const color = goodFn ? (goodFn(val) ? 'var(--green)' : val < 0 ? 'var(--red)' : 'var(--text)') : 'var(--text)';
+        return `<td style="color:${color}">${(val * 100).toFixed(1)}%</td>`;
+    }
+    function capFmt(v) {
+        if (!v) return '--';
+        if (v >= 1e12) return '$' + (v/1e12).toFixed(1) + 'T';
+        if (v >= 1e9) return '$' + (v/1e9).toFixed(1) + 'B';
+        if (v >= 1e6) return '$' + (v/1e6).toFixed(0) + 'M';
+        return '$' + v.toLocaleString();
+    }
+
+    body.innerHTML = data.stocks.map((s, i) => `<tr>
+        <td>${i + 1}</td>
+        <td><strong>${s.ticker}</strong></td>
+        <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.company_name || ''}</td>
+        <td>${s.sector || ''}</td>
+        <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.industry || ''}</td>
+        <td>${capFmt(s.market_cap)}</td>
+        <td>${fmtMoney(s.price)}</td>
+        <td>${scoreBar(s.composite_score)}</td>
+        <td>${scoreBar(s.lynch_score)}</td>
+        <td>${scoreBar(s.burry_score)}</td>
+        <td>${s.lynch_category || ''}</td>
+        ${metricCell(s.peg_ratio, v => v > 0 && v <= 1.5)}
+        ${pctCell(s.earnings_growth, v => v >= 0.15)}
+        ${pctCell(s.revenue_growth, v => v >= 0.10)}
+        ${metricCell(s.debt_to_equity, v => v <= 1.0)}
+        ${pctCell(s.institutional_pct, v => v >= 0.20 && v <= 0.70)}
+        ${pctCell(s.fcf_yield, v => v >= 0.05)}
+        ${metricCell(s.price_to_tangible_book, v => v <= 2.0)}
+        ${pctCell(s.short_interest, v => v >= 0.05)}
+        ${metricCell(s.ev_to_ebitda, v => v <= 8.0)}
+        ${metricCell(s.current_ratio, v => v >= 1.5)}
+        <td style="font-size:11px;color:var(--muted)">${s.scan_date ? s.scan_date.split('T')[0] : '--'}</td>
+    </tr>`).join('');
 }
 
 async function addTicker() {
@@ -856,8 +984,8 @@ async function runScanner() {
 
 async function loadAll() {
     document.getElementById('last-updated').textContent = 'Updating...';
-    await Promise.all([loadStats(), loadArena(), loadWatchlist(), loadSignals(), loadTrades(), loadEquityCurve(), loadSuggestions()]);
-    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    await Promise.all([loadStats(), loadArena(), loadWatchlist(), loadFundamentals(), loadSignals(), loadTrades(), loadEquityCurve(), loadSuggestions()]);
+    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'}) + ' ET';
 }
 
 // Table sorting — click any column header to sort
@@ -913,7 +1041,7 @@ async function loadArena() {
         // Stats cards with diagnostics
         const statsEl = document.getElementById('arena-stats');
         const ds = status.data_source || 'unknown';
-        const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString() : 'never';
+        const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'}) : 'never';
 
         // Data source health dots
         let sourceDots = '';

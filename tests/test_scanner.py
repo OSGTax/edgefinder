@@ -298,7 +298,6 @@ class TestDatabasePersistence:
 
     def test_run_scan_with_mock_data(self, in_memory_db):
         """Test the scan pipeline with controlled mock data."""
-        # This tests the scoring + persistence without hitting yfinance
         from modules.scanner import _save_watchlist, ScoredStock
 
         mock_scored = ScoredStock(
@@ -347,8 +346,8 @@ class TestDatabasePersistence:
         watchlist = get_active_watchlist()
         assert len(watchlist) == 2  # Both persist (different tickers)
 
-    def test_rescan_same_ticker_replaces(self, in_memory_db):
-        """Re-scanning the same ticker deactivates the old entry."""
+    def test_upsert_same_ticker_updates_row(self, in_memory_db):
+        """Re-scanning the same ticker should update in place, not duplicate."""
         from modules.scanner import _save_watchlist, ScoredStock
 
         v1 = ScoredStock(
@@ -370,6 +369,147 @@ class TestDatabasePersistence:
         watchlist = get_active_watchlist()
         assert len(watchlist) == 1
         assert watchlist[0]["company_name"] == "Apple v2"
+        assert watchlist[0]["price"] == 155
+
+        # Verify only one row in DB total (not two)
+        session = get_session()
+        total_rows = session.query(WatchlistStock).filter(
+            WatchlistStock.ticker == "AAPL"
+        ).count()
+        session.close()
+        assert total_rows == 1
+
+
+class TestStrategyQualification:
+    """Test strategy-driven watchlist qualification."""
+
+    def test_lynch_only_stock_stays_active(self, in_memory_db):
+        """A stock that only qualifies for Lynch should stay active."""
+        from modules.scanner import _save_watchlist, _deactivate_unqualified, ScoredStock
+
+        # High Lynch score, low Burry score
+        stock = ScoredStock(
+            data=FundamentalData(ticker="LYNCHONLY", company_name="Lynch Fav",
+                                 sector="Tech", market_cap=5e9, price=100),
+            lynch_score=75, burry_score=20, composite_score=47.5,
+            lynch_category="fast_grower",
+        )
+        _save_watchlist([stock])
+
+        watchlist = get_active_watchlist()
+        assert len(watchlist) == 1
+        assert watchlist[0]["ticker"] == "LYNCHONLY"
+
+    def test_burry_only_stock_stays_active(self, in_memory_db):
+        """A stock that only qualifies for Burry should stay active."""
+        from modules.scanner import _save_watchlist, ScoredStock
+
+        # Low Lynch score, high Burry score
+        stock = ScoredStock(
+            data=FundamentalData(ticker="BURRYONLY", company_name="Burry Fav",
+                                 sector="Tech", market_cap=5e9, price=100),
+            lynch_score=20, burry_score=75, composite_score=47.5,
+            lynch_category="slow_grower",
+        )
+        _save_watchlist([stock])
+
+        watchlist = get_active_watchlist()
+        assert len(watchlist) == 1
+        assert watchlist[0]["ticker"] == "BURRYONLY"
+
+    def test_deactivate_stock_no_strategy_qualifies(self, in_memory_db):
+        """A stock that fails all strategies should be deactivated on re-scan."""
+        from modules.scanner import _save_watchlist, _deactivate_unqualified, ScoredStock
+
+        # First save a stock that qualifies
+        good = ScoredStock(
+            data=FundamentalData(ticker="FADE", company_name="Fading Corp",
+                                 sector="Tech", market_cap=5e9, price=100),
+            lynch_score=60, burry_score=55, composite_score=57.5,
+            lynch_category="stalwart",
+        )
+        _save_watchlist([good])
+        assert len(get_active_watchlist()) == 1
+
+        # Re-scan: scores dropped below all strategy thresholds
+        bad = ScoredStock(
+            data=FundamentalData(ticker="FADE", company_name="Fading Corp",
+                                 sector="Tech", market_cap=4e9, price=80),
+            lynch_score=30, burry_score=25, composite_score=27.5,
+            lynch_category="slow_grower",
+        )
+        _deactivate_unqualified([bad])
+
+        watchlist = get_active_watchlist()
+        assert len(watchlist) == 0
+
+    def test_manual_entry_never_deactivated(self, in_memory_db):
+        """Manual entries should survive deactivation sweeps."""
+        from modules.scanner import _deactivate_unqualified, ScoredStock
+
+        # Insert a manual entry directly
+        session = get_session()
+        manual = WatchlistStock(
+            ticker="MANUAL",
+            company_name="Manual Pick",
+            sector="Tech",
+            lynch_score=10,
+            burry_score=10,
+            composite_score=10,
+            is_active=True,
+            notes="MANUAL: Added by user",
+        )
+        session.add(manual)
+        session.commit()
+        session.close()
+
+        # Simulate a re-scan where MANUAL fails all strategies
+        bad = ScoredStock(
+            data=FundamentalData(ticker="MANUAL", company_name="Manual Pick",
+                                 sector="Tech", market_cap=1e9, price=50),
+            lynch_score=10, burry_score=10, composite_score=10,
+            lynch_category="unclassified",
+        )
+        _deactivate_unqualified([bad])
+
+        watchlist = get_active_watchlist()
+        assert len(watchlist) == 1
+        assert watchlist[0]["ticker"] == "MANUAL"
+
+    def test_plugin_strategy_keeps_stock_active(self, in_memory_db):
+        """A third-party strategy plugin should be able to keep stocks active."""
+        from modules.scanner import _any_strategy_qualifies, ScoredStock
+        from modules.strategies.base import BaseStrategy, StrategyRegistry
+
+        # Register a mock plugin strategy
+        @StrategyRegistry.register("test_momentum")
+        class MomentumStrategy(BaseStrategy):
+            @property
+            def name(self): return "test_momentum"
+            @property
+            def version(self): return "0.1"
+            @property
+            def preferred_signals(self): return {"ema_crossover_day", "macd_crossover"}
+            def init(self): pass
+            def generate_signals(self, bars): return []
+            def on_trade_executed(self, n): pass
+            def qualifies_stock(self, stock_data):
+                # This plugin wants stocks with high revenue growth
+                return (stock_data.get("revenue_growth") or 0) >= 0.20
+
+        # Stock that Lynch and Burry would reject, but momentum wants
+        stock = ScoredStock(
+            data=FundamentalData(ticker="MOMO", company_name="Momentum Inc",
+                                 sector="Tech", market_cap=5e9, price=100,
+                                 revenue_growth=0.30),
+            lynch_score=30, burry_score=25, composite_score=27.5,
+            lynch_category="unclassified",
+        )
+
+        assert _any_strategy_qualifies(stock) is True
+
+        # Clean up registry
+        StrategyRegistry._strategies.pop("test_momentum", None)
 
 
 # ════════════════════════════════════════════════════════════
@@ -492,17 +632,18 @@ class TestIntegration:
 # Run: python -m pytest tests/test_scanner.py -v
 #
 # Expected results:
-#   TestPreScreening:        9 tests  — all should PASS
-#   TestLynchScoring:       11 tests  — all should PASS
-#   TestLynchCategories:     7 tests  — all should PASS
-#   TestBurryScoring:       10 tests  — all should PASS
-#   TestCompositeScoring:    7 tests  — all should PASS
-#   TestDatabasePersistence: 3 tests  — all should PASS
-#   TestUtilities:           7 tests  — all should PASS
-#   TestEdgeCases:           6 tests  — all should PASS
-#   TestIntegration:         3 tests  — may skip if no network
+#   TestPreScreening:           9 tests  — all should PASS
+#   TestLynchScoring:          11 tests  — all should PASS
+#   TestLynchCategories:        7 tests  — all should PASS
+#   TestBurryScoring:          10 tests  — all should PASS
+#   TestCompositeScoring:       7 tests  — all should PASS
+#   TestDatabasePersistence:    4 tests  — all should PASS
+#   TestStrategyQualification:  5 tests  — all should PASS
+#   TestUtilities:              7 tests  — all should PASS
+#   TestEdgeCases:              6 tests  — all should PASS
+#   TestIntegration:            3 tests  — may skip if no network
 #
-# TOTAL: 63 tests
+# TOTAL: 69 tests
 #
 # If any test in TestPreScreening, TestLynchScoring, TestBurryScoring,
 # or TestCompositeScoring fails, DO NOT proceed to Module 2.

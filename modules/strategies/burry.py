@@ -91,6 +91,10 @@ class BurryStrategy(BaseStrategy):
             f"(min Burry score: {self._min_burry_score})"
         )
 
+    def qualifies_stock(self, stock_data: dict) -> bool:
+        """A stock qualifies for Burry if its burry_score meets the minimum."""
+        return (stock_data.get("burry_score") or 0) >= self._min_burry_score
+
     def get_watchlist(self) -> list[str]:
         return list(self._watchlist)
 

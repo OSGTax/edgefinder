@@ -86,6 +86,10 @@ class LynchStrategy(BaseStrategy):
             f"(min Lynch score: {self._min_lynch_score})"
         )
 
+    def qualifies_stock(self, stock_data: dict) -> bool:
+        """A stock qualifies for Lynch if its lynch_score meets the minimum."""
+        return (stock_data.get("lynch_score") or 0) >= self._min_lynch_score
+
     def get_watchlist(self) -> list[str]:
         return list(self._watchlist)
 
