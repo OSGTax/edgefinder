@@ -233,6 +233,10 @@ def arena_signal_check() -> list[dict]:
                 all_tickers.update(wl)
 
         if not all_tickers:
+            logger.warning(
+                "ARENA: No watchlist tickers from strategies — "
+                "falling back to default tickers. Run a scanner first."
+            )
             all_tickers = set(settings.SCANNER_DEFAULT_TICKERS[:30])
 
         # Fetch price data via DataService

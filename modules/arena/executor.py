@@ -156,10 +156,15 @@ class Executor:
         exec_price = current_price or signal.entry_price
 
         # ── PRE-CHECKS ──────────────────────────────────────
-        if not account.can_open_position():
+        # Extract sector from signal metadata for concentration checks
+        sector = signal.metadata.get("sector", "") if signal.metadata else ""
+        allowed, reject_reason = account.can_open_position(
+            ticker=signal.ticker, sector=sector
+        )
+        if not allowed:
             logger.info(
                 f"[{account.strategy_name}] Rejected {signal.ticker}: "
-                f"cannot open position"
+                f"{reject_reason}"
             )
             return None
 
