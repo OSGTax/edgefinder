@@ -186,7 +186,31 @@ SCANNER_DEFAULT_TICKERS = [
 ]
 
 # ============================================================
-# DATABASE
+# DATA SERVICE — API Sources
+# ============================================================
+# Alpaca: real-time and historical bars (free paper trading account)
+# Keys loaded from config/secrets.env (ALPACA_API_KEY, ALPACA_SECRET_KEY)
+DATA_SERVICE_ALPACA_ENABLED = True
+
+# FMP (Financial Modeling Prep): fundamentals, ratios, earnings calendar
+# Keys loaded from config/secrets.env (FMP_API_KEY)
+# Free tier: 250 requests/day — cache is critical
+DATA_SERVICE_FMP_ENABLED = True
+
+# yfinance: always-available fallback (no key needed, but rate limited)
+DATA_SERVICE_YFINANCE_FALLBACK = True
+
+# Cache settings
+DATA_CACHE_PATH = "data/cache.db"    # Separate from trade data — safe to delete
+DATA_CACHE_CLEANUP_HOUR = 4          # Run cache cleanup at 4 AM ET
+
+# Volume-aware slippage model (for honest execution)
+SLIPPAGE_BASE_RATE = 0.0005          # 0.05% base slippage
+SLIPPAGE_VOLUME_FACTOR = 1.5         # Multiplier for low-volume stocks
+SLIPPAGE_MIN_AVG_VOLUME = 100_000    # Below this = high slippage penalty
+
+# ============================================================
+# DATABASE — Trade Data (SACRED — never auto-delete)
 # ============================================================
 DATABASE_PATH = "data/edgefinder.db"
 
