@@ -244,6 +244,55 @@ def fetch_fundamental_data(ticker: str, max_retries: int = 3) -> Optional[Fundam
         return None
 
 
+def fetch_fundamental_data_verbose(ticker: str) -> tuple[Optional[FundamentalData], str]:
+    """
+    Like fetch_fundamental_data, but returns (data, error_reason).
+
+    Used by the manual-add endpoint to give the user a specific error message.
+    Returns (FundamentalData, "") on success, or (None, "reason") on failure.
+    """
+    try:
+        ds = _init_data_service()
+        if ds is None:
+            return None, "DataService failed to initialize — check server logs"
+
+        info = ds.get_fundamentals(ticker)
+        if info is None:
+            return None, f"yfinance returned no data for {ticker} — verify the ticker symbol is correct"
+        if not info.get("market_cap"):
+            return None, f"{ticker} has no market cap data — may be delisted, an ETF, or not a US equity"
+
+        data = FundamentalData(ticker=ticker)
+
+        # Basic info
+        data.company_name = info.get("company_name", ticker)
+        data.sector = info.get("sector", "Unknown")
+        data.industry = info.get("industry", "Unknown")
+        data.market_cap = _safe_float(info.get("market_cap"))
+        data.price = _safe_float(info.get("price"))
+        data.avg_volume = _safe_float(info.get("avg_volume"))
+
+        # Lynch fields
+        data.peg_ratio = _safe_float(info.get("peg_ratio"))
+        data.earnings_growth = _safe_float(info.get("earnings_growth"))
+        data.debt_to_equity = _safe_float(info.get("debt_to_equity"))
+        data.revenue_growth = _safe_float(info.get("revenue_growth"))
+        data.institutional_pct = _safe_float(info.get("institutional_pct"))
+
+        # Burry fields
+        data.fcf_yield = _safe_float(info.get("fcf_yield"))
+        data.ev_to_ebitda = _safe_float(info.get("ev_to_ebitda"))
+        data.current_ratio = _safe_float(info.get("current_ratio"))
+        data.short_interest = _safe_float(info.get("short_interest"))
+        data.price_to_tangible_book = _safe_float(info.get("price_to_tangible_book"))
+
+        return data, ""
+
+    except Exception as e:
+        logger.warning(f"{ticker}: Fetch error — {e}")
+        return None, f"Fetch error for {ticker}: {e}"
+
+
 def fetch_batch(tickers: list[str], batch_size: int = 50) -> list[FundamentalData]:
     """
     Fetch fundamental data for a list of tickers via yfinance.
