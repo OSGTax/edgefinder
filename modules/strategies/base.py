@@ -108,6 +108,17 @@ class BaseStrategy(ABC):
         """Strategy version string (e.g., '1.0.0')."""
         ...
 
+    @property
+    @abstractmethod
+    def preferred_signals(self) -> set[str]:
+        """Signal types this strategy acts on.
+
+        Only trades containing at least one of these signal types will be
+        considered.  Valid types: ema_crossover_day, ema_crossover_swing,
+        rsi_oversold, rsi_overbought, macd_crossover, volume_spike.
+        """
+        ...
+
     @abstractmethod
     def init(self) -> None:
         """Setup before any trades. Load models, subscribe to data, etc."""

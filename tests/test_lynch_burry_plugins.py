@@ -204,7 +204,7 @@ class TestLynchStrategy:
         mock_signal.confidence = 20.0  # Below threshold
         mock_signal.price = 100.0
         mock_signal.trade_type = "DAY"
-        mock_signal.indicators = {}
+        mock_signal.indicators = {"ema_crossover_day": {"name": "ema_crossover_day"}}
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -224,7 +224,7 @@ class TestLynchStrategy:
         mock_signal.confidence = 75.0
         mock_signal.price = 150.0
         mock_signal.trade_type = "DAY"
-        mock_signal.indicators = {}
+        mock_signal.indicators = {"ema_crossover_day": {"name": "ema_crossover_day"}}
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -265,7 +265,7 @@ class TestLynchStrategy:
             sig.confidence = 80.0
             sig.price = price
             sig.trade_type = "DAY"
-            sig.indicators = {}
+            sig.indicators = {"ema_crossover_day": {"name": "ema_crossover_day"}}
             sig.reason = ""
             md.return_value = [sig]
 
@@ -313,7 +313,7 @@ class TestBurryStrategy:
         mock_signal.confidence = 70.0
         mock_signal.price = 50.0
         mock_signal.trade_type = "SWING"
-        mock_signal.indicators = {}
+        mock_signal.indicators = {"rsi_oversold": {"name": "rsi_oversold", "rsi": 25}}
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -360,7 +360,7 @@ class TestBurryStrategy:
         mock_signal.confidence = 65.0
         mock_signal.price = 50.0
         mock_signal.trade_type = "DAY"
-        mock_signal.indicators = [{"name": "ema_crossover_day"}]
+        mock_signal.indicators = [{"name": "ema_crossover_swing"}]
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -383,7 +383,7 @@ class TestBurryStrategy:
         mock_signal.confidence = 80.0
         mock_signal.price = price
         mock_signal.trade_type = "SWING"
-        mock_signal.indicators = {}
+        mock_signal.indicators = {"rsi_oversold": {"name": "rsi_oversold", "rsi": 28}}
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -407,7 +407,7 @@ class TestBurryStrategy:
         mock_signal.confidence = 75.0
         mock_signal.price = 50.0
         mock_signal.trade_type = "DAY"
-        mock_signal.indicators = {}
+        mock_signal.indicators = {"rsi_oversold": {"name": "rsi_oversold", "rsi": 25}}
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -454,7 +454,7 @@ class TestSentimentIntegration:
         mock_signal.confidence = 80.0
         mock_signal.price = 150.0
         mock_signal.trade_type = "DAY"
-        mock_signal.indicators = {}
+        mock_signal.indicators = {"ema_crossover_day": {"name": "ema_crossover_day"}}
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -479,7 +479,7 @@ class TestSentimentIntegration:
         mock_signal.confidence = 70.0
         mock_signal.price = 150.0
         mock_signal.trade_type = "DAY"
-        mock_signal.indicators = {}
+        mock_signal.indicators = {"macd_crossover": {"name": "macd_crossover"}}
         mock_signal.reason = ""
         mock_detect.return_value = [mock_signal]
 
@@ -522,17 +522,26 @@ class TestArenaIntegration:
         engine.add_strategy("lynch", lynch)
         engine.add_strategy("burry", burry)
 
-        # Both generate signals
-        for mock_compute, mock_detect in [(lynch_compute, lynch_detect), (burry_compute, burry_detect)]:
-            mock_compute.return_value = MagicMock()
-            sig = MagicMock()
-            sig.signal_type = "BUY"
-            sig.confidence = 75.0
-            sig.price = 100.0
-            sig.trade_type = "DAY"
-            sig.indicators = {}
-            sig.reason = ""
-            mock_detect.return_value = [sig]
+        # Lynch gets a momentum signal, Burry gets a mean-reversion signal
+        lynch_compute.return_value = MagicMock()
+        lynch_sig = MagicMock()
+        lynch_sig.signal_type = "BUY"
+        lynch_sig.confidence = 75.0
+        lynch_sig.price = 100.0
+        lynch_sig.trade_type = "DAY"
+        lynch_sig.indicators = {"ema_crossover_day": {"name": "ema_crossover_day"}}
+        lynch_sig.reason = ""
+        lynch_detect.return_value = [lynch_sig]
+
+        burry_compute.return_value = MagicMock()
+        burry_sig = MagicMock()
+        burry_sig.signal_type = "BUY"
+        burry_sig.confidence = 75.0
+        burry_sig.price = 100.0
+        burry_sig.trade_type = "DAY"
+        burry_sig.indicators = {"rsi_oversold": {"name": "rsi_oversold", "rsi": 25}}
+        burry_sig.reason = ""
+        burry_detect.return_value = [burry_sig]
 
         bars = {"AAPL": make_ohlcv(start_price=100.0)}
         executed = engine.run_signal_check(bars)
@@ -552,3 +561,130 @@ class TestArenaIntegration:
         assert "burry" in instances
         assert instances["lynch"].name == "lynch"
         assert instances["burry"].name == "burry"
+
+
+# ── SIGNAL FILTERING TESTS ─────────────────────────────────
+
+class TestSignalFiltering:
+    """Verify strategies only act on their preferred signal types."""
+
+    def test_lynch_preferred_signals_property(self):
+        cls = StrategyRegistry.get("lynch")
+        s = cls()
+        s.init()
+        ps = s.preferred_signals
+        assert isinstance(ps, set)
+        assert len(ps) > 0
+        assert "ema_crossover_day" in ps
+        assert "macd_crossover" in ps
+
+    def test_burry_preferred_signals_property(self):
+        cls = StrategyRegistry.get("burry")
+        s = cls()
+        s.init()
+        ps = s.preferred_signals
+        assert isinstance(ps, set)
+        assert len(ps) > 0
+        assert "rsi_oversold" in ps
+
+    def test_lynch_and_burry_have_different_preferred_signals(self):
+        lynch = StrategyRegistry.get("lynch")()
+        lynch.init()
+        burry = StrategyRegistry.get("burry")()
+        burry.init()
+        assert lynch.preferred_signals != burry.preferred_signals
+
+    @patch("modules.strategies.lynch.detect_signals")
+    @patch("modules.strategies.lynch.compute_indicators")
+    def test_lynch_skips_rsi_only_signal(self, mock_compute, mock_detect):
+        """Lynch should NOT trade on RSI-only signals (not momentum)."""
+        cls = StrategyRegistry.get("lynch")
+        s = cls()
+        s.init()
+        s._use_sentiment = False
+
+        mock_compute.return_value = MagicMock()
+        mock_signal = MagicMock()
+        mock_signal.signal_type = "BUY"
+        mock_signal.confidence = 80.0
+        mock_signal.price = 100.0
+        mock_signal.trade_type = "DAY"
+        mock_signal.indicators = {"rsi_oversold": {"name": "rsi_oversold", "rsi": 25}}
+        mock_signal.reason = "BUY: RSI oversold"
+        mock_detect.return_value = [mock_signal]
+
+        bars = {"AAPL": make_ohlcv(start_price=100.0)}
+        signals = s.generate_signals(bars)
+        assert len(signals) == 0
+
+    @patch("modules.strategies.burry.detect_signals")
+    @patch("modules.strategies.burry.compute_indicators")
+    def test_burry_skips_ema_day_only_signal(self, mock_compute, mock_detect):
+        """Burry should NOT trade on EMA day crossover only (not value)."""
+        cls = StrategyRegistry.get("burry")
+        s = cls()
+        s.init()
+        s._use_sentiment = False
+
+        mock_compute.return_value = MagicMock()
+        mock_signal = MagicMock()
+        mock_signal.signal_type = "BUY"
+        mock_signal.confidence = 80.0
+        mock_signal.price = 100.0
+        mock_signal.trade_type = "DAY"
+        mock_signal.indicators = {"ema_crossover_day": {"name": "ema_crossover_day"}}
+        mock_signal.reason = "BUY: EMA crossover"
+        mock_detect.return_value = [mock_signal]
+
+        bars = {"AAPL": make_ohlcv(start_price=100.0)}
+        signals = s.generate_signals(bars)
+        assert len(signals) == 0
+
+    @patch("modules.strategies.burry.detect_signals")
+    @patch("modules.strategies.burry.compute_indicators")
+    def test_burry_skips_macd_only_signal(self, mock_compute, mock_detect):
+        """Burry should NOT trade on MACD-only signals."""
+        cls = StrategyRegistry.get("burry")
+        s = cls()
+        s.init()
+        s._use_sentiment = False
+
+        mock_compute.return_value = MagicMock()
+        mock_signal = MagicMock()
+        mock_signal.signal_type = "BUY"
+        mock_signal.confidence = 80.0
+        mock_signal.price = 100.0
+        mock_signal.trade_type = "DAY"
+        mock_signal.indicators = {"macd_crossover": {"name": "macd_crossover"}}
+        mock_signal.reason = "BUY: MACD crossover"
+        mock_detect.return_value = [mock_signal]
+
+        bars = {"AAPL": make_ohlcv(start_price=100.0)}
+        signals = s.generate_signals(bars)
+        assert len(signals) == 0
+
+    @patch("modules.strategies.lynch.detect_signals")
+    @patch("modules.strategies.lynch.compute_indicators")
+    def test_lynch_accepts_mixed_signal_with_momentum(self, mock_compute, mock_detect):
+        """Lynch should trade when signal contains both RSI and EMA (has momentum)."""
+        cls = StrategyRegistry.get("lynch")
+        s = cls()
+        s.init()
+        s._use_sentiment = False
+
+        mock_compute.return_value = MagicMock()
+        mock_signal = MagicMock()
+        mock_signal.signal_type = "BUY"
+        mock_signal.confidence = 80.0
+        mock_signal.price = 100.0
+        mock_signal.trade_type = "DAY"
+        mock_signal.indicators = {
+            "rsi_oversold": {"name": "rsi_oversold", "rsi": 25},
+            "ema_crossover_day": {"name": "ema_crossover_day"},
+        }
+        mock_signal.reason = "BUY: EMA crossover + RSI oversold"
+        mock_detect.return_value = [mock_signal]
+
+        bars = {"AAPL": make_ohlcv(start_price=100.0)}
+        signals = s.generate_signals(bars)
+        assert len(signals) == 1
