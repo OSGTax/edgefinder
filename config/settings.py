@@ -226,3 +226,13 @@ LOG_FORMAT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
 # ============================================================
 DASHBOARD_HOST = "0.0.0.0"
 DASHBOARD_PORT = 8000
+
+# ============================================================
+# ARENA — Multi-Strategy Configuration
+# ============================================================
+ARENA_STARTING_CAPITAL_PER_STRATEGY = 2500.00   # Each strategy gets this much
+ARENA_MAX_POSITIONS_PER_STRATEGY = 5             # Max open positions per strategy
+ARENA_DRAWDOWN_PAUSE_PCT = -15.0                 # Auto-pause at -15% drawdown
+ARENA_SIGNAL_CHECK_INTERVAL_MINUTES = 15         # How often to check signals
+ARENA_POSITION_MONITOR_INTERVAL_MINUTES = 5      # How often to check stops/targets
+ARENA_SNAPSHOT_TIME = "16:05"                     # Daily snapshot after close

@@ -150,6 +150,69 @@ class Suggestion(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+# ── ARENA MODELS (Multi-Strategy) ──────────────────────────
+
+class ArenaTradeLog(Base):
+    """Immutable audit log for arena trades. One entry per execution."""
+    __tablename__ = "arena_trade_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    trade_id = Column(String(36), unique=True, nullable=False, index=True)
+    strategy_name = Column(String(50), nullable=False, index=True)
+    strategy_version = Column(String(20))
+    ticker = Column(String(10), nullable=False, index=True)
+    action = Column(String(5))                    # BUY, SELL
+    direction = Column(String(5))                 # LONG
+    trade_type = Column(String(5))                # DAY, SWING
+
+    signal_price = Column(Float)                  # Price at signal time
+    execution_price = Column(Float)               # Final price after slippage
+    exit_price = Column(Float)                    # Price at close (NULL if open)
+    slippage = Column(Float)
+    shares = Column(Integer)
+    stop_loss = Column(Float)
+    target = Column(Float)
+    confidence = Column(Float)
+
+    signal_timestamp = Column(DateTime)
+    execution_timestamp = Column(DateTime)
+    exit_timestamp = Column(DateTime)
+
+    pnl_dollars = Column(Float)
+    pnl_percent = Column(Float)
+    r_multiple = Column(Float)
+    exit_reason = Column(String(30))
+
+    price_source = Column(String(30))             # alpaca, yfinance, etc.
+    bar_data_at_decision = Column(JSON)           # OHLCV at decision time
+    market_regime = Column(String(20))            # bull, bear, sideways
+    signal_overlap = Column(Integer, default=0)   # Other strategies with same signal
+    position_overlap = Column(Integer, default=0) # Other strategies holding ticker
+
+    status = Column(String(20), default="OPEN")   # OPEN, CLOSED
+    extra_data = Column(JSON)                     # Strategy-specific context
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ArenaSnapshot(Base):
+    """Per-strategy equity snapshot for arena comparison."""
+    __tablename__ = "arena_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    strategy_name = Column(String(50), nullable=False, index=True)
+    timestamp = Column(DateTime, nullable=False)
+    cash = Column(Float)
+    positions_value = Column(Float)
+    total_equity = Column(Float)
+    peak_equity = Column(Float)
+    drawdown_pct = Column(Float)
+    open_positions = Column(Integer)
+    realized_pnl = Column(Float)
+    unrealized_pnl = Column(Float)
+    total_return_pct = Column(Float)
+    is_paused = Column(Boolean, default=False)
+
+
 # ── DATABASE ENGINE ──────────────────────────────────────────
 
 _engine = None

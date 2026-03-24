@@ -602,3 +602,152 @@ async def export_suggestions():
     """Export all suggestions as JSON (for committing to repo)."""
     data = _export_suggestions_json()
     return {"count": len(data), "suggestions": data}
+
+
+# ── ARENA API (Multi-Strategy) ──────────────────────────────
+
+@app.get("/api/arena")
+async def get_arena_status():
+    """Get arena status: strategies, leaderboard, overlap, positions."""
+    try:
+        from modules.arena.live import get_arena_status as _get_status
+        return _get_status()
+    except Exception as e:
+        logger.error(f"Arena status error: {e}")
+        return {"running": False, "error": str(e)}
+
+
+@app.get("/api/arena/leaderboard")
+async def get_arena_leaderboard():
+    """Get strategy performance comparison sorted by return."""
+    try:
+        from modules.arena.live import get_arena_engine
+        engine = get_arena_engine()
+        if engine is None:
+            return {"leaderboard": []}
+        return {"leaderboard": engine.get_leaderboard()}
+    except Exception as e:
+        logger.error(f"Arena leaderboard error: {e}")
+        return {"leaderboard": [], "error": str(e)}
+
+
+@app.get("/api/arena/strategy/{strategy_name}")
+async def get_arena_strategy(strategy_name: str):
+    """Get detailed info for a specific strategy."""
+    try:
+        from modules.arena.live import get_arena_engine
+        engine = get_arena_engine()
+        if engine is None or strategy_name not in engine.accounts:
+            return {"error": f"Strategy '{strategy_name}' not found"}
+        account = engine.accounts[strategy_name]
+        data = account.to_dict()
+        data["audit_log"] = engine.executor.get_audit_log(strategy_name)
+        return data
+    except Exception as e:
+        logger.error(f"Arena strategy error: {e}")
+        return {"error": str(e)}
+
+
+@app.get("/api/arena/trades")
+async def get_arena_trades(
+    strategy: Optional[str] = None,
+    limit: int = Query(default=50, le=500),
+):
+    """Get arena trade history from database."""
+    try:
+        from modules.database import ArenaTradeLog
+        session = get_session()
+        query = session.query(ArenaTradeLog).order_by(
+            ArenaTradeLog.created_at.desc()
+        )
+        if strategy:
+            query = query.filter(ArenaTradeLog.strategy_name == strategy)
+        trades = query.limit(limit).all()
+        result = []
+        for t in trades:
+            result.append({
+                "trade_id": t.trade_id,
+                "strategy_name": t.strategy_name,
+                "ticker": t.ticker,
+                "action": t.action,
+                "trade_type": t.trade_type,
+                "execution_price": t.execution_price,
+                "exit_price": t.exit_price,
+                "shares": t.shares,
+                "stop_loss": t.stop_loss,
+                "target": t.target,
+                "confidence": t.confidence,
+                "pnl_dollars": t.pnl_dollars,
+                "pnl_percent": t.pnl_percent,
+                "r_multiple": t.r_multiple,
+                "exit_reason": t.exit_reason,
+                "price_source": t.price_source,
+                "market_regime": t.market_regime,
+                "signal_overlap": t.signal_overlap,
+                "status": t.status,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            })
+        session.close()
+        return {"trades": result, "count": len(result)}
+    except Exception as e:
+        logger.error(f"Arena trades error: {e}")
+        return {"trades": [], "error": str(e)}
+
+
+@app.get("/api/arena/snapshots")
+async def get_arena_snapshots(
+    strategy: Optional[str] = None,
+    limit: int = Query(default=100, le=1000),
+):
+    """Get arena equity snapshots for charting."""
+    try:
+        from modules.database import ArenaSnapshot
+        session = get_session()
+        query = session.query(ArenaSnapshot).order_by(ArenaSnapshot.timestamp.asc())
+        if strategy:
+            query = query.filter(ArenaSnapshot.strategy_name == strategy)
+        snaps = query.limit(limit).all()
+        result = []
+        for s in snaps:
+            result.append({
+                "strategy_name": s.strategy_name,
+                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                "total_equity": s.total_equity,
+                "cash": s.cash,
+                "drawdown_pct": s.drawdown_pct,
+                "total_return_pct": s.total_return_pct,
+                "open_positions": s.open_positions,
+            })
+        session.close()
+        return {"snapshots": result, "count": len(result)}
+    except Exception as e:
+        logger.error(f"Arena snapshots error: {e}")
+        return {"snapshots": [], "error": str(e)}
+
+
+@app.post("/api/arena/strategy/{strategy_name}/pause")
+async def pause_arena_strategy(strategy_name: str):
+    """Pause a strategy (disable trading)."""
+    try:
+        from modules.arena.live import get_arena_engine
+        engine = get_arena_engine()
+        if engine is None:
+            return {"error": "Arena not running"}
+        engine.disable_strategy(strategy_name)
+        return {"status": "paused", "strategy": strategy_name}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/arena/strategy/{strategy_name}/resume")
+async def resume_arena_strategy(strategy_name: str):
+    """Resume a paused strategy."""
+    try:
+        from modules.arena.live import get_arena_engine
+        engine = get_arena_engine()
+        if engine is None:
+            return {"error": "Arena not running"}
+        engine.enable_strategy(strategy_name)
+        return {"status": "enabled", "strategy": strategy_name}
+    except Exception as e:
+        return {"error": str(e)}

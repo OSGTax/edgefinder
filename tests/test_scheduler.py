@@ -76,9 +76,9 @@ class TestSchedulerCreation:
         assert "account_snapshot" in job_ids
         assert "nightly_scan" in job_ids
 
-    def test_scheduler_has_5_jobs(self):
+    def test_scheduler_has_10_jobs(self):
         scheduler = create_scheduler()
-        assert len(scheduler.get_jobs()) == 5
+        assert len(scheduler.get_jobs()) == 10  # 5 v1 + 5 arena
 
     def test_start_scheduler_is_idempotent(self, in_memory_db):
         with patch("modules.scheduler.get_active_watchlist", return_value=[{"ticker": "X"}]):

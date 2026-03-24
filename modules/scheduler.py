@@ -110,6 +110,55 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
 
+    # ── ARENA JOBS (Multi-Strategy) ─────────────────────────
+    from modules.arena.live import (
+        arena_signal_check,
+        arena_position_monitor,
+        arena_close_day_trades,
+        arena_snapshot,
+        arena_nightly_scan,
+    )
+
+    # Arena signal check: every 15 min, offset by 2 min from v1
+    scheduler.add_job(
+        arena_signal_check,
+        CronTrigger(minute="2,17,32,47", hour="7-17", day_of_week="mon-fri", timezone=ET),
+        id="arena_signal_check",
+        replace_existing=True,
+    )
+
+    # Arena position monitor: every 5 min, offset by 1 min
+    scheduler.add_job(
+        arena_position_monitor,
+        CronTrigger(minute="1,6,11,16,21,26,31,36,41,46,51,56", hour="7-17", day_of_week="mon-fri", timezone=ET),
+        id="arena_position_monitor",
+        replace_existing=True,
+    )
+
+    # Arena close day trades: 3:52 PM ET
+    scheduler.add_job(
+        arena_close_day_trades,
+        CronTrigger(hour=15, minute=52, day_of_week="mon-fri", timezone=ET),
+        id="arena_close_day_trades",
+        replace_existing=True,
+    )
+
+    # Arena snapshot: 4:07 PM ET
+    scheduler.add_job(
+        arena_snapshot,
+        CronTrigger(hour=16, minute=7, day_of_week="mon-fri", timezone=ET),
+        id="arena_snapshot",
+        replace_existing=True,
+    )
+
+    # Arena nightly scan: 4:35 PM ET
+    scheduler.add_job(
+        arena_nightly_scan,
+        CronTrigger(hour=16, minute=35, day_of_week="mon-fri", timezone=ET),
+        id="arena_nightly_scan",
+        replace_existing=True,
+    )
+
     return scheduler
 
 
@@ -138,13 +187,21 @@ def start_scheduler() -> None:
         thread = threading.Thread(target=_initial_scan, daemon=True)
         thread.start()
 
+    # Initialize arena engine
+    try:
+        from modules.arena.live import init_arena
+        init_arena()
+        logger.info("Arena engine initialized with strategy plugins")
+    except Exception as e:
+        logger.error(f"Arena init failed (v1 scheduler still works): {e}")
+
     # Create and start scheduler
     _scheduler = create_scheduler()
     _scheduler.start()
     _status["running"] = True
 
     logger.info("=" * 60)
-    logger.info("EDGEFINDER SCHEDULER STARTED")
+    logger.info("EDGEFINDER SCHEDULER STARTED (v1 + Arena)")
     logger.info(f"Timezone: US/Eastern")
     logger.info(f"Signal check: every {settings.SIGNAL_CHECK_INTERVAL_MINUTES}m, 7AM-6PM")
     logger.info(f"Position monitor: every {settings.POSITION_MONITOR_INTERVAL_MINUTES}m")
