@@ -15,7 +15,6 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
-import yfinance as yf
 
 from config import settings
 from modules.database import WatchlistStock, get_session, init_db
@@ -70,18 +69,46 @@ class ScoredStock:
 
 # ── TICKER UNIVERSE ──────────────────────────────────────────
 
+def _init_data_service():
+    """Lazy-init DataService for scanner use."""
+    try:
+        from services.data_service import DataService
+        return DataService()
+    except Exception as e:
+        logger.warning(f"DataService unavailable: {e}")
+        return None
+
+
 def get_ticker_universe() -> list[str]:
     """
     Get the universe of US-listed stock tickers to scan.
 
     Priority:
-    1. FMP stock screener (~8,000 tickers in one API call)
-    2. Wikipedia S&P 500 + 400 + 600 (~1,500 tickers)
-    3. Hardcoded fallback list (67 tickers)
+    1. Alpaca Assets API (~8,000+ tradeable equities in one call, free)
+    2. FMP stock screener (3 calls, uses daily quota)
+    3. Wikipedia S&P 500 + 400 + 600 (~1,500 tickers)
+    4. Hardcoded fallback list (67 tickers)
     """
     tickers = set()
 
-    # Try FMP screener first — broadest coverage in a single API call
+    # Try Alpaca Assets API first — free, fast, broadest coverage
+    try:
+        from services.alpaca_client import AlpacaClient
+        alpaca_key = getattr(settings, "ALPACA_API_KEY", "") or ""
+        alpaca_secret = getattr(settings, "ALPACA_SECRET_KEY", "") or ""
+        if alpaca_key and alpaca_secret:
+            alpaca = AlpacaClient(alpaca_key, alpaca_secret)
+            assets = alpaca.get_tradeable_assets(
+                exchanges=["NYSE", "NASDAQ", "AMEX"]
+            )
+            if assets:
+                tickers = {a["symbol"] for a in assets}
+                logger.info(f"Alpaca universe: {len(tickers)} tradeable equities")
+                return sorted(tickers)
+    except Exception as e:
+        logger.warning(f"Alpaca assets unavailable: {e}")
+
+    # Fallback: FMP screener (costs 3 API calls from daily quota)
     try:
         from services.fmp_client import FMPClient
         fmp_key = getattr(settings, "FMP_API_KEY", "") or ""
@@ -89,8 +116,8 @@ def get_ticker_universe() -> list[str]:
             fmp = FMPClient(fmp_key)
             for exchange in ["NYSE", "NASDAQ", "AMEX"]:
                 results = fmp.get_stock_screener(
-                    market_cap_min=300_000_000,   # $300M+
-                    volume_min=500_000,            # 500K avg volume
+                    market_cap_min=300_000_000,
+                    volume_min=500_000,
                     price_min=5.0,
                     price_max=500.0,
                     exchange=exchange,
@@ -107,7 +134,6 @@ def get_ticker_universe() -> list[str]:
         logger.warning(f"FMP screener unavailable: {e}")
 
     # Fallback: Wikipedia S&P lists (~1,500 tickers)
-    # S&P 500
     try:
         sp500 = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
@@ -117,26 +143,22 @@ def get_ticker_universe() -> list[str]:
     except Exception as e:
         logger.warning(f"Failed to load S&P 500 list: {e}")
 
-    # S&P 400 Mid Cap
     try:
         sp400 = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
         )[0]
         tickers.update(sp400["Symbol"].str.replace(".", "-", regex=False).tolist())
-        logger.info(f"Loaded {len(sp400)} S&P 400 tickers")
-    except Exception as e:
-        logger.warning(f"Failed to load S&P 400 list: {e}")
+    except Exception:
+        pass
 
-    # S&P 600 Small Cap
     try:
         sp600 = pd.read_html(
             "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"
         )[0]
         col = "Symbol" if "Symbol" in sp600.columns else sp600.columns[0]
         tickers.update(sp600[col].str.replace(".", "-", regex=False).tolist())
-        logger.info(f"Loaded {len(sp600)} S&P 600 tickers")
-    except Exception as e:
-        logger.warning(f"Failed to load S&P 600 list: {e}")
+    except Exception:
+        pass
 
     if tickers:
         logger.info(f"Wikipedia universe: {len(tickers)} total tickers")
@@ -151,106 +173,72 @@ def get_ticker_universe() -> list[str]:
 
 def fetch_fundamental_data(ticker: str, max_retries: int = 3) -> Optional[FundamentalData]:
     """
-    Fetch fundamental data for a single ticker from yfinance.
+    Fetch fundamental data for a single ticker via DataService (FMP).
 
-    yfinance is unreliable — fields can be None, NaN, missing, or wrong.
-    Retries with exponential backoff on rate limiting or transient failures.
+    Uses Cache → FMP pipeline. No yfinance — fast and deterministic.
+    Returns None if FMP has no data for this ticker.
     """
-    delays = [2, 5, 10]
-
-    for attempt in range(max_retries):
-        try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-
-            if not info or info.get("regularMarketPrice") is None:
-                if attempt < max_retries - 1:
-                    delay = delays[attempt]
-                    logger.info(f"{ticker}: No data (attempt {attempt + 1}), retrying in {delay}s...")
-                    time.sleep(delay)
-                    continue
-                logger.warning(f"{ticker}: No data after {max_retries} attempts")
-                return None
-
-            data = FundamentalData(ticker=ticker)
-
-            # Basic info
-            data.company_name = info.get("longName", info.get("shortName", ticker))
-            data.sector = info.get("sector", "Unknown")
-            data.industry = info.get("industry", "Unknown")
-            data.market_cap = _safe_float(info.get("marketCap"))
-            data.price = _safe_float(
-                info.get("regularMarketPrice",
-                info.get("currentPrice",
-                info.get("previousClose", 0)))
-            )
-            data.avg_volume = _safe_float(info.get("averageVolume"))
-
-            # Lynch fields
-            data.peg_ratio = _safe_float(info.get("pegRatio"))
-            data.earnings_growth = _safe_float(info.get("earningsGrowth"))
-            data.earnings_quarterly_growth = _safe_float(info.get("earningsQuarterlyGrowth"))
-            data.debt_to_equity = _safe_float(info.get("debtToEquity"))
-            if data.debt_to_equity and data.debt_to_equity > 10:
-                data.debt_to_equity = data.debt_to_equity / 100  # yfinance sometimes returns as %
-            data.revenue_growth = _safe_float(info.get("revenueGrowth"))
-            data.institutional_pct = _safe_float(
-                info.get("heldPercentInstitutions",
-                info.get("institutionsPercentHeld"))
-            )
-
-            # Burry fields
-            data.free_cashflow = _safe_float(info.get("freeCashflow"))
-            if data.free_cashflow and data.market_cap and data.market_cap > 0:
-                data.fcf_yield = data.free_cashflow / data.market_cap
-            data.ev_to_ebitda = _safe_float(info.get("enterpriseToEbitda"))
-            data.current_ratio = _safe_float(info.get("currentRatio"))
-            data.short_interest = _safe_float(info.get("shortPercentOfFloat"))
-
-            # Tangible book value
-            book_value_per_share = _safe_float(info.get("bookValue"))
-            if book_value_per_share and data.price and data.price > 0:
-                pb_ratio = data.price / book_value_per_share if book_value_per_share > 0 else None
-                data.price_to_tangible_book = pb_ratio
-
-            return data
-
-        except Exception as e:
-            err_str = str(e)
-            if ("Too Many Requests" in err_str or "Rate" in err_str) and attempt < max_retries - 1:
-                delay = delays[attempt]
-                logger.info(f"{ticker}: Rate limited, retrying in {delay}s...")
-                time.sleep(delay)
-                continue
-            logger.warning(f"{ticker}: Fetch error — {e}")
+    try:
+        ds = _init_data_service()
+        if ds is None:
+            logger.warning(f"{ticker}: DataService unavailable")
             return None
 
-    return None
+        info = ds.get_fundamentals(ticker)
+        if not info or not info.get("market_cap"):
+            return None
+
+        data = FundamentalData(ticker=ticker)
+
+        # Basic info
+        data.company_name = info.get("company_name", ticker)
+        data.sector = info.get("sector", "Unknown")
+        data.industry = info.get("industry", "Unknown")
+        data.market_cap = _safe_float(info.get("market_cap"))
+        data.price = _safe_float(info.get("price"))
+        data.avg_volume = _safe_float(info.get("avg_volume"))
+
+        # Lynch fields
+        data.peg_ratio = _safe_float(info.get("peg_ratio"))
+        data.earnings_growth = _safe_float(info.get("earnings_growth"))
+        data.debt_to_equity = _safe_float(info.get("debt_to_equity"))
+        data.revenue_growth = _safe_float(info.get("revenue_growth"))
+        data.institutional_pct = _safe_float(info.get("institutional_pct"))
+
+        # Burry fields
+        data.fcf_yield = _safe_float(info.get("fcf_yield"))
+        data.ev_to_ebitda = _safe_float(info.get("ev_to_ebitda"))
+        data.current_ratio = _safe_float(info.get("current_ratio"))
+        data.short_interest = _safe_float(info.get("short_interest"))
+        data.price_to_tangible_book = _safe_float(info.get("price_to_tangible_book"))
+
+        return data
+
+    except Exception as e:
+        logger.warning(f"{ticker}: Fetch error — {e}")
+        return None
 
 
-def fetch_batch(tickers: list[str], batch_size: int = 20) -> list[FundamentalData]:
+def fetch_batch(tickers: list[str], batch_size: int = 50) -> list[FundamentalData]:
     """
-    Fetch fundamental data for a list of tickers.
-    Processes in batches with delays to avoid Yahoo Finance rate limiting.
+    Fetch fundamental data for a list of tickers via DataService (FMP + cache).
+    No per-ticker delays needed — FMP is fast and results are cached.
     """
     results = []
     total = len(tickers)
 
     for i in range(0, total, batch_size):
         batch = tickers[i:i + batch_size]
-        logger.info(f"Fetching batch {i // batch_size + 1}/{math.ceil(total / batch_size)} "
-                     f"({len(batch)} tickers)")
+        batch_num = i // batch_size + 1
+        total_batches = math.ceil(total / batch_size)
+        logger.info(f"Fetching batch {batch_num}/{total_batches} ({len(batch)} tickers)")
 
         for ticker in batch:
             data = fetch_fundamental_data(ticker)
             if data:
                 results.append(data)
-            time.sleep(1)  # 1s between tickers to avoid rate limiting
 
-        # Pause between batches
-        if i + batch_size < total:
-            logger.info(f"Batch pause — {len(results)} fetched so far...")
-            time.sleep(5)
+        logger.info(f"Progress: {len(results)} fetched so far ({i + len(batch)}/{total})")
 
     logger.info(f"Successfully fetched {len(results)}/{total} tickers")
     return results

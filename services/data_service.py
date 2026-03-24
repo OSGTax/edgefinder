@@ -230,7 +230,7 @@ class DataService:
 
     def get_profile(self, ticker: str, use_cache: bool = True) -> Optional[dict]:
         """
-        Get company profile. Cache → FMP → yfinance.
+        Get company profile. Cache → FMP.
 
         Returns dict with: symbol, companyName, sector, industry, mktCap,
         price, volAvg, description, etc.
@@ -247,12 +247,6 @@ class DataService:
             if data:
                 self.cache.store_fundamental(ticker, "profile", data)
                 return data
-
-        # 3. yfinance fallback
-        data = self._yfinance_profile(ticker)
-        if data:
-            self.cache.store_fundamental(ticker, "profile", data)
-            return data
 
         return None
 
@@ -309,15 +303,6 @@ class DataService:
                     "institutional_pct": None,  # FMP doesn't provide this easily
                     "short_interest": None,  # Need separate endpoint
                 })
-
-        # 3. Fallback to yfinance if FMP didn't fill everything
-        if not result or not result.get("market_cap"):
-            yf_data = self._yfinance_fundamentals(ticker)
-            if yf_data:
-                # Only fill in missing fields
-                for key, value in yf_data.items():
-                    if key not in result or result[key] is None:
-                        result[key] = value
 
         if result:
             self.cache.store_fundamental(ticker, "combined_fundamentals", result)
@@ -423,74 +408,3 @@ class DataService:
             logger.warning(f"yfinance bars failed for {ticker}: {e}")
             return None
 
-    def _yfinance_profile(self, ticker: str) -> Optional[dict]:
-        """Fetch company profile from yfinance as fallback."""
-        try:
-            import yfinance as yf
-            t = yf.Ticker(ticker)
-            info = t.info or {}
-
-            if not info.get("shortName"):
-                return None
-
-            return {
-                "symbol": ticker,
-                "companyName": info.get("shortName"),
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-                "mktCap": info.get("marketCap"),
-                "price": info.get("currentPrice") or info.get("regularMarketPrice"),
-                "volAvg": info.get("averageVolume"),
-                "description": info.get("longBusinessSummary"),
-                "exchange": info.get("exchange"),
-            }
-        except Exception as e:
-            logger.warning(f"yfinance profile failed for {ticker}: {e}")
-            return None
-
-    def _yfinance_fundamentals(self, ticker: str) -> Optional[dict]:
-        """Fetch fundamental data from yfinance as fallback."""
-        try:
-            import yfinance as yf
-            t = yf.Ticker(ticker)
-            info = t.info or {}
-
-            if not info.get("shortName"):
-                return None
-
-            return {
-                "ticker": ticker,
-                "company_name": info.get("shortName"),
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-                "market_cap": info.get("marketCap"),
-                "price": info.get("currentPrice") or info.get("regularMarketPrice"),
-                "avg_volume": info.get("averageVolume"),
-                "exchange": info.get("exchange"),
-                "peg_ratio": info.get("pegRatio"),
-                "earnings_growth": info.get("earningsGrowth"),
-                "debt_to_equity": (
-                    info.get("debtToEquity") / 100.0
-                    if info.get("debtToEquity") is not None
-                    else None
-                ),
-                "revenue_growth": info.get("revenueGrowth"),
-                "institutional_pct": info.get("heldPercentInstitutions"),
-                "short_interest": info.get("shortPercentOfFloat"),
-                "fcf_yield": self._calc_fcf_yield(info),
-                "ev_to_ebitda": info.get("enterpriseToEbitda"),
-                "current_ratio": info.get("currentRatio"),
-                "price_to_tangible_book": info.get("priceToBook"),
-            }
-        except Exception as e:
-            logger.warning(f"yfinance fundamentals failed for {ticker}: {e}")
-            return None
-
-    @staticmethod
-    def _calc_fcf_yield(info: dict) -> Optional[float]:
-        """Calculate FCF yield from yfinance info dict."""
-        fcf = info.get("freeCashflow")
-        mkt_cap = info.get("marketCap")
-        if fcf and mkt_cap and mkt_cap > 0:
-            return round(fcf / mkt_cap, 4)
-        return None

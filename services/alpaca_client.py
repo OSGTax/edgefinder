@@ -268,6 +268,42 @@ class AlpacaClient:
         logger.info(f"Fetched bars for {len(result)}/{len(tickers)} tickers")
         return result
 
+    def get_tradeable_assets(
+        self,
+        exchanges: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """
+        Get all tradeable US equities from Alpaca's Assets API.
+
+        Returns list of dicts with: symbol, name, exchange, status, tradable.
+        Single API call, no pagination needed — returns ~8,000+ assets.
+        """
+        if exchanges is None:
+            exchanges = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS"}
+        else:
+            exchanges = set(e.upper() for e in exchanges)
+
+        data = self._request(
+            "GET",
+            f"{PAPER_BASE_URL}/v2/assets",
+            params={"asset_class": "us_equity", "status": "active"},
+        )
+        if not data:
+            return []
+
+        assets = [
+            {
+                "symbol": a["symbol"],
+                "name": a.get("name", ""),
+                "exchange": a.get("exchange", ""),
+                "tradable": a.get("tradable", False),
+            }
+            for a in data
+            if a.get("tradable") and a.get("exchange", "") in exchanges
+        ]
+        logger.info(f"Alpaca assets: {len(assets)} tradeable equities")
+        return assets
+
     def is_market_open(self) -> bool:
         """Check if the market is currently open."""
         data = self._request("GET", f"{DATA_BASE_URL}/v2/stocks/clock")

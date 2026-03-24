@@ -280,79 +280,77 @@
 
         <!-- Tabs -->
         <div class="tabs">
-            <div class="tab active" data-tab="about">About</div>
+            <div class="tab active" data-tab="arena">Arena</div>
+            <div class="tab" data-tab="trades">Trades</div>
             <div class="tab" data-tab="watchlist">Watchlist</div>
             <div class="tab" data-tab="signals">Signals</div>
-            <div class="tab" data-tab="trades">Trades</div>
-            <div class="tab" data-tab="skipped">Skipped</div>
+            <div class="tab" data-tab="about">About</div>
             <div class="tab" data-tab="suggestions">Suggestions</div>
-            <div class="tab" data-tab="arena" style="color: var(--purple);">⚔ Arena</div>
         </div>
 
         <!-- About -->
-        <div class="tab-content active" id="tab-about">
+        <div class="tab-content" id="tab-about">
             <div class="panel">
                 <div class="panel-header">How EdgeFinder Works</div>
                 <div class="panel-body about-content">
-                    <p>EdgeFinder is a self-improving paper trading system that combines fundamental analysis,
-                    technical signals, and news sentiment filtering to simulate intelligent stock trading.
-                    It starts rule-based and graduates to ML as data accumulates.</p>
+                    <p>EdgeFinder is a multi-strategy paper trading arena that pits different investment philosophies
+                    against each other in real-time. Each strategy gets its own capital, makes independent decisions,
+                    and is tracked on a leaderboard.</p>
 
-                    <h2>The Pipeline</h2>
-                    <p>Every trade decision flows through a multi-layer pipeline. Each layer acts as a filter,
-                    ensuring only high-conviction setups reach execution.</p>
+                    <h2>The Arena</h2>
+                    <p>Two strategies compete head-to-head, each starting with $2,500 in simulated capital:</p>
 
+                    <div class="layer">
+                        <span class="layer-num">L</span>
+                        <span class="layer-title">Lynch Strategy</span>
+                        <div class="layer-desc">Growth at a reasonable price. Favors stocks with low PEG ratios,
+                        strong earnings growth, and manageable debt. Uses tighter stops (5%) and 1.5:1 reward-to-risk.</div>
+                    </div>
+                    <div class="layer">
+                        <span class="layer-num">B</span>
+                        <span class="layer-title">Burry Strategy</span>
+                        <div class="layer-desc">Deep value contrarian. Targets high free cash flow yield,
+                        low price-to-tangible-book, and strong balance sheets. Wider stops (7%) and 2:1 reward-to-risk.
+                        Gets an RSI oversold boost for beaten-down names.</div>
+                    </div>
+
+                    <h2>Data Pipeline</h2>
                     <div class="layer">
                         <span class="layer-num">1</span>
                         <span class="layer-title">Fundamental Scanner</span>
-                        <div class="layer-desc">Runs nightly. Screens ~8,000 stocks using Peter Lynch (growth at a reasonable price)
-                        and Michael Burry (deep value, balance sheet strength) criteria. Produces a watchlist of ~50-100 candidates
-                        scored 0-100. Lynch weight: 50%, Burry weight: 50%.</div>
+                        <div class="layer-desc">Nightly scan of ~8,000+ US equities via Alpaca (universe) and FMP (fundamentals).
+                        Scores each stock using Lynch and Burry criteria (50/50 weight). Top candidates go on the watchlist.</div>
                     </div>
                     <div class="layer">
                         <span class="layer-num">2</span>
-                        <span class="layer-title">Technical Signal Engine</span>
-                        <div class="layer-desc">Monitors watchlist stocks every 15-30 minutes during market hours.
-                        Looks for entry signals using RSI, MACD, EMA crossovers, and volume confirmation.
-                        Generates BUY/SELL signals with a confidence score for both day and swing trade setups.</div>
-                    </div>
-                    <div class="layer">
-                        <span class="layer-num">2.5</span>
-                        <span class="layer-title">News Sentiment Gate</span>
-                        <div class="layer-desc">Go/no-go filter before any trade executes. Uses VADER sentiment analysis
-                        on recent news headlines. Blocks trades with strongly negative sentiment to avoid catching falling knives.</div>
+                        <span class="layer-title">Signal Check (every 15 min)</span>
+                        <div class="layer-desc">Each strategy scans its watchlist for technical entry signals
+                        (RSI, MACD, EMA crossovers, volume spikes). Signals pass through a news sentiment gate
+                        before execution.</div>
                     </div>
                     <div class="layer">
                         <span class="layer-num">3</span>
-                        <span class="layer-title">Paper Trader</span>
-                        <div class="layer-desc">Simulated execution with full risk management. Enforces position sizing
-                        (2% max risk per trade), PDT limits (3 day trades per 5 days), stop losses, trailing stops,
-                        and daily/weekly loss limits. Starting capital: $2,500.</div>
-                    </div>
-                    <div class="layer">
-                        <span class="layer-num">4</span>
-                        <span class="layer-title">Trade Journal</span>
-                        <div class="layer-desc">Logs every trade and every skipped signal with full context &mdash;
-                        why it entered, why it exited, what indicators fired, and what the sentiment was.
-                        This data feeds the optimizer.</div>
-                    </div>
-                    <div class="layer">
-                        <span class="layer-num">5</span>
-                        <span class="layer-title">Strategy Optimizer</span>
-                        <div class="layer-desc">Weekly analysis of trade outcomes. Adjusts parameters (thresholds, weights, timing)
-                        based on what&rsquo;s working and what isn&rsquo;t. Requires 50+ logged trades to be meaningful.</div>
+                        <span class="layer-title">Execution + Risk Management</span>
+                        <div class="layer-desc">Honest executor applies realistic slippage, enforces PDT limits (3 day trades / 5 days),
+                        position sizing (2% max risk), stop losses, trailing stops, and circuit breakers.
+                        Every execution is logged with full audit trail.</div>
                     </div>
 
                     <h2>Scheduler</h2>
-                    <p>The system runs automatically during market hours (9:30 AM &ndash; 4:00 PM ET, Mon-Fri).
-                    The scanner runs at 6:00 AM ET before market open. Signal checking runs every 15 minutes
-                    during trading hours. Account snapshots are taken at market close.</p>
+                    <p>Runs Mon-Fri during extended market hours (7 AM &ndash; 6 PM ET):</p>
+                    <p>Signal check every 15 min &bull; Position monitor every 5 min &bull;
+                    Day trade close at 3:50 PM &bull; Snapshots at 4:05 PM &bull; Nightly scan at 4:30 PM</p>
 
-                    <h2>What You're Seeing</h2>
-                    <p><strong>Watchlist</strong> &mdash; Stocks that passed fundamental screening, ranked by composite score.<br>
+                    <h2>Data Sources</h2>
+                    <p><strong>Alpaca</strong> &mdash; Ticker universe, real-time prices, historical bars.<br>
+                    <strong>FMP</strong> &mdash; Fundamental data (ratios, metrics, profiles). Cached to stay under 250/day limit.<br>
+                    <strong>VADER</strong> &mdash; News sentiment analysis via RSS feeds.</p>
+
+                    <h2>Dashboard Tabs</h2>
+                    <p><strong>Arena</strong> &mdash; Strategy leaderboard, per-strategy positions, trade explanations, and audit trail.<br>
+                    <strong>Trades</strong> &mdash; All executed trades across all strategies in one view.<br>
+                    <strong>Watchlist</strong> &mdash; Stocks that passed fundamental screening, ranked by composite score.<br>
                     <strong>Signals</strong> &mdash; Technical entry/exit signals detected on watchlist stocks.<br>
-                    <strong>Trades</strong> &mdash; Simulated trades that were executed, with P&amp;L tracking.<br>
-                    <strong>Skipped</strong> &mdash; Signals that fired but weren&rsquo;t traded (and why).<br>
                     <strong>Suggestions</strong> &mdash; Submit ideas for new features, strategy changes, or bug reports.</p>
                 </div>
             </div>
@@ -415,16 +413,16 @@
         <div class="tab-content" id="tab-trades">
             <div class="panel">
                 <div class="panel-header">
-                    <span>Trade Log</span>
+                    <span>All Arena Trades</span>
                     <span class="status" id="trades-count">0 trades</span>
                 </div>
                 <div class="panel-body">
                     <table>
                         <thead>
                             <tr>
-                                <th>Exit Time</th><th>Ticker</th><th>Type</th>
+                                <th>Date</th><th>Strategy</th><th>Ticker</th><th>Type</th>
                                 <th>Entry</th><th>Exit</th><th>Shares</th>
-                                <th>P&L</th><th>R</th><th>Exit Reason</th>
+                                <th>P&L</th><th>R</th><th>Exit Reason</th><th>Source</th><th>Status</th>
                             </tr>
                         </thead>
                         <tbody id="trades-body"></tbody>
@@ -433,26 +431,6 @@
             </div>
         </div>
 
-        <!-- Skipped -->
-        <div class="tab-content" id="tab-skipped">
-            <div class="panel">
-                <div class="panel-header">
-                    <span>Skipped Signals</span>
-                    <span class="status" id="skipped-count">0 signals</span>
-                </div>
-                <div class="panel-body">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Time</th><th>Ticker</th><th>Type</th><th>Trade</th>
-                                <th>Confidence</th><th>Reason</th>
-                            </tr>
-                        </thead>
-                        <tbody id="skipped-body"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
         <!-- Suggestions -->
         <div class="tab-content" id="tab-suggestions">
             <div class="panel">
@@ -497,7 +475,7 @@
             </div>
         </div>
         <!-- Arena -->
-        <div class="tab-content" id="tab-arena">
+        <div class="tab-content active" id="tab-arena">
             <!-- Stats Row -->
             <div class="grid" id="arena-stats"></div>
 
@@ -723,36 +701,38 @@ async function loadSignals() {
 }
 
 async function loadTrades() {
-    const data = await fetchJSON('/api/trades?limit=100');
+    const data = await fetchJSON('/api/trades?limit=200');
     if (!data) return;
     document.getElementById('trades-count').textContent = data.count + ' trades';
     const body = document.getElementById('trades-body');
     if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="9" class="empty">No trades yet.</td></tr>';
+        body.innerHTML = '<tr><td colspan="12" class="empty">No trades yet. Arena strategies will execute trades during market hours.</td></tr>';
         return;
     }
-    body.innerHTML = data.trades.map(t => `<tr>
-        <td>${fmtDate(t.exit_time)}</td>
+    body.innerHTML = data.trades.map(t => {
+        const pnl = t.pnl_dollars;
+        const pnlStr = pnl != null ? `${pnl >= 0 ? '+' : ''}${fmtMoney(pnl)}` : '—';
+        const rStr = t.r_multiple != null ? `${fmt(t.r_multiple)}R` : '—';
+        return `<tr>
+        <td>${fmtDate(t.created_at)}</td>
+        <td><strong style="color:var(--blue);">${t.strategy_name || ''}</strong></td>
         <td><strong>${t.ticker}</strong></td>
         <td>${badge(t.trade_type, t.trade_type === 'DAY' ? 'day' : 'swing')}</td>
-        <td>${fmtMoney(t.entry_price)}</td>
-        <td>${fmtMoney(t.exit_price)}</td>
+        <td>${fmtMoney(t.execution_price)}</td>
+        <td>${t.exit_price ? fmtMoney(t.exit_price) : '—'}</td>
         <td>${t.shares}</td>
-        <td class="${pnlClass(t.pnl_dollars)}">${t.pnl_dollars >= 0 ? '+' : ''}${fmtMoney(t.pnl_dollars)}</td>
-        <td class="${pnlClass(t.r_multiple)}">${fmt(t.r_multiple)}R</td>
-        <td>${t.exit_reason}</td>
-    </tr>`).join('');
+        <td class="${pnlClass(pnl)}">${pnlStr}</td>
+        <td class="${pnlClass(t.r_multiple)}">${rStr}</td>
+        <td>${t.exit_reason || '—'}</td>
+        <td style="font-size:11px;color:var(--muted)">${t.price_source || '—'}</td>
+        <td>${t.status === 'OPEN' ? badge('OPEN', 'day') : badge('CLOSED', 'swing')}</td>
+    </tr>`;
+    }).join('');
 }
 
 async function loadSkipped() {
-    const data = await fetchJSON('/api/skipped-signals?limit=100');
-    if (!data) return;
-    document.getElementById('skipped-count').textContent = data.count + ' signals';
-    const body = document.getElementById('skipped-body');
-    if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="6" class="empty">No skipped signals.</td></tr>';
-        return;
-    }
+    // Skipped tab removed — placeholder for backwards compatibility
+    return;
     body.innerHTML = data.signals.map(s => `<tr>
         <td>${fmtDate(s.timestamp)}</td>
         <td><strong>${s.ticker}</strong></td>
@@ -876,7 +856,7 @@ async function runScanner() {
 
 async function loadAll() {
     document.getElementById('last-updated').textContent = 'Updating...';
-    await Promise.all([loadStats(), loadWatchlist(), loadSignals(), loadTrades(), loadSkipped(), loadEquityCurve(), loadSuggestions()]);
+    await Promise.all([loadStats(), loadArena(), loadWatchlist(), loadSignals(), loadTrades(), loadEquityCurve(), loadSuggestions()]);
     document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
 
@@ -1093,7 +1073,7 @@ async function arenaResume(name) {
     loadArena();
 }
 
-document.querySelector('[data-tab="arena"]')?.addEventListener('click', loadArena);
+// Arena loads with loadAll() since it's the default tab
 
 loadAll();
 </script>
