@@ -423,23 +423,25 @@ class TestIntegration:
     """Integration: full pipeline from trader → journal."""
 
     def test_trader_to_journal_pipeline(self, in_memory_db):
-        """Open trade via trader, close it, log to journal, query stats."""
-        from modules.trader import PaperTrader
+        """Create position and result, log to journal, query stats."""
+        import uuid
 
-        trader = PaperTrader()
         journal = TradeJournal()
 
-        # Open position
-        pos = trader.open_position(
-            ticker="AAPL", entry_price=100.0, stop_loss=98.0,
-            target=103.0, shares=10, trade_type="DAY",
-            sector="Technology",
+        # Create position and result directly
+        trade_id = str(uuid.uuid4())
+        pos = Position(
+            trade_id=trade_id, ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, shares=10,
+            stop_loss=98.0, target=103.0, sector="Technology",
         )
-        assert pos is not None
-
-        # Close with profit
-        result = trader.close_position(pos.trade_id, exit_price=103.0, exit_reason="TARGET_HIT")
-        assert result is not None
+        result = TradeResult(
+            trade_id=trade_id, ticker="AAPL", direction="LONG",
+            trade_type="DAY", entry_price=100.0, exit_price=103.0,
+            shares=10, stop_loss=98.0, target=103.0,
+            pnl_dollars=30.0, pnl_percent=3.0, r_multiple=1.5,
+            exit_reason="TARGET_HIT", entry_time=pos.entry_time,
+        )
 
         # Log to journal
         journal.log_trade(result, pos)

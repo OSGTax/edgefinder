@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import desc, func
+from sqlalchemy import desc
 
 from config import settings
 from modules.database import (

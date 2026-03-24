@@ -93,7 +93,6 @@ SCANNER_MAX_PRICE = 500.00                  # No ultra-high-price stocks
 SCANNER_EXCLUDED_SECTORS = [               # Sectors to skip
     "Utilities",                           # Too slow for this system
 ]
-SCANNER_EXCHANGES = ["NYSE", "NASDAQ"]     # US exchanges only
 
 # ============================================================
 # TECHNICAL SIGNAL ENGINE
@@ -150,11 +149,7 @@ SCANNER_RUN_TIME = "16:30"             # 4:30 PM ET (after market close)
 SIGNAL_CHECK_INTERVAL_MINUTES = 15     # During market hours
 MARKET_OPEN_ET = "09:30"
 MARKET_CLOSE_ET = "16:00"
-DAY_TRADE_CUTOFF_ET = "15:50"          # Close day trades by 3:50 PM
-EXTENDED_HOURS_START_ET = "07:00"      # Pre-market monitoring start
-EXTENDED_HOURS_END_ET = "18:00"        # Post-market monitoring end
 POSITION_MONITOR_INTERVAL_MINUTES = 5  # Price check frequency
-ACCOUNT_SNAPSHOT_TIME = "16:05"        # Daily snapshot after close
 
 # ============================================================
 # DEFAULT TICKER UNIVERSE (used when Wikipedia S&P lists are unavailable)
@@ -201,25 +196,6 @@ SCAN_SECTOR_ROTATION = [
     ["Industrials", "Energy", "Basic Materials"],          # Friday
 ]
 
-# ============================================================
-# DATA SERVICE — API Sources
-# ============================================================
-# Alpaca: real-time and historical bars (free paper trading account)
-# Keys loaded from config/secrets.env (ALPACA_API_KEY, ALPACA_SECRET_KEY)
-DATA_SERVICE_ALPACA_ENABLED = True
-
-# FMP (Financial Modeling Prep): fundamentals, ratios, earnings calendar
-# Keys loaded from config/secrets.env (FMP_API_KEY)
-# Free tier: 250 requests/day — cache is critical
-DATA_SERVICE_FMP_ENABLED = True
-
-# yfinance: always-available fallback (no key needed, but rate limited)
-DATA_SERVICE_YFINANCE_FALLBACK = True
-
-# Cache settings
-DATA_CACHE_PATH = "data/cache.db"    # Separate from trade data — safe to delete
-DATA_CACHE_CLEANUP_HOUR = 4          # Run cache cleanup at 4 AM ET
-
 # Volume-aware slippage model (for honest execution)
 SLIPPAGE_BASE_RATE = 0.0005          # 0.05% base slippage
 SLIPPAGE_VOLUME_FACTOR = 1.5         # Multiplier for low-volume stocks
@@ -237,11 +213,6 @@ LOG_LEVEL = "INFO"
 LOG_FILE = "data/edgefinder.log"
 LOG_FORMAT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
 
-# ============================================================
-# DASHBOARD
-# ============================================================
-DASHBOARD_HOST = "0.0.0.0"
-DASHBOARD_PORT = 8000
 
 # ============================================================
 # ARENA — Multi-Strategy Configuration
