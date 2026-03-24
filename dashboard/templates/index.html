@@ -498,49 +498,66 @@
         </div>
         <!-- Arena -->
         <div class="tab-content" id="tab-arena">
+            <!-- Stats Row -->
             <div class="grid" id="arena-stats"></div>
+
+            <!-- Strategy Leaderboard -->
             <div class="panel">
                 <div class="panel-header"><span>Strategy Leaderboard</span></div>
                 <div class="panel-body">
                     <table id="arena-leaderboard">
-                        <thead>
-                            <tr>
-                                <th>Strategy</th>
-                                <th>Version</th>
-                                <th>Equity</th>
-                                <th>Return</th>
-                                <th>Drawdown</th>
-                                <th>Open</th>
-                                <th>Closed</th>
-                                <th>Win Rate</th>
-                                <th>Status</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
+                        <thead><tr>
+                            <th>Strategy</th><th>Version</th><th>Equity</th><th>Return</th>
+                            <th>Drawdown</th><th>Open</th><th>Closed</th><th>Win Rate</th>
+                            <th>Day Trades Left</th><th>Status</th><th>Action</th>
+                        </tr></thead>
                         <tbody></tbody>
                     </table>
                 </div>
             </div>
-            <div class="panel">
-                <div class="panel-header"><span>Arena Trades</span></div>
-                <div class="panel-body">
-                    <table id="arena-trades">
-                        <thead>
-                            <tr>
-                                <th>Strategy</th>
-                                <th>Ticker</th>
-                                <th>Type</th>
-                                <th>Entry</th>
-                                <th>Exit</th>
-                                <th>Shares</th>
-                                <th>P&L</th>
-                                <th>R</th>
-                                <th>Overlap</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody></tbody>
-                    </table>
+
+            <!-- Strategy Selector -->
+            <div style="display:flex;gap:8px;margin-bottom:16px;" id="strategy-selector"></div>
+
+            <!-- Per-Strategy Detail -->
+            <div id="strategy-detail" style="display:none;">
+                <!-- Open Positions -->
+                <div class="panel">
+                    <div class="panel-header"><span id="detail-positions-header">Open Positions</span></div>
+                    <div class="panel-body">
+                        <table id="detail-positions">
+                            <thead><tr>
+                                <th>Ticker</th><th>Type</th><th>Entry</th><th>Current</th>
+                                <th>Unrealized P&L</th><th>R</th><th>Stop</th><th>Target</th>
+                                <th>Trailing</th><th>Confidence</th><th>Time Held</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- Trade Explanations -->
+                <div class="panel">
+                    <div class="panel-header"><span>Trade Explanations (Plain English)</span></div>
+                    <div class="panel-body" id="detail-explanations" style="padding:16px;"></div>
+                </div>
+                <!-- Closed Trades -->
+                <div class="panel">
+                    <div class="panel-header"><span id="detail-trades-header">Recent Trades</span></div>
+                    <div class="panel-body">
+                        <table id="detail-trades">
+                            <thead><tr>
+                                <th>Ticker</th><th>Type</th><th>Entry</th><th>Exit</th>
+                                <th>P&L</th><th>R</th><th>Exit Reason</th><th>Slippage</th>
+                                <th>Source</th><th>Overlap</th>
+                            </tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+                <!-- Audit Trail -->
+                <div class="panel">
+                    <div class="panel-header"><span>Audit Trail (last 10)</span></div>
+                    <div class="panel-body" id="detail-audit" style="padding:16px;font-size:12px;"></div>
                 </div>
             </div>
         </div>
@@ -904,92 +921,166 @@ document.addEventListener('click', function(e) {
 
 // ── Arena Tab ─────────────────────────────────────────────
 
+let _selectedStrategy = null;
+
 async function loadArena() {
     try {
-        const [statusRes, tradesRes] = await Promise.all([
-            fetch('/api/arena'),
-            fetch('/api/arena/trades?limit=50'),
-        ]);
-        const status = await statusRes.json();
-        const tradesData = await tradesRes.json();
+        const status = await (await fetch('/api/arena')).json();
 
         // Stats cards
         const statsEl = document.getElementById('arena-stats');
-        if (status.strategies !== undefined) {
-            statsEl.innerHTML = `
-                <div class="stat-card">
-                    <div class="label">Strategies</div>
-                    <div class="value">${status.enabled || 0} / ${status.strategies || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="label">Open Positions</div>
-                    <div class="value">${status.total_open_positions || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="label">Closed Trades</div>
-                    <div class="value">${status.total_closed_trades || 0}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="label">Market Regime</div>
-                    <div class="value">${status.market_regime || 'unknown'}</div>
-                </div>
-                <div class="stat-card">
-                    <div class="label">Audit Entries</div>
-                    <div class="value">${status.audit_entries || 0}</div>
-                </div>
-            `;
-        }
+        const ds = status.data_source || 'unknown';
+        const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString() : 'never';
+        statsEl.innerHTML = `
+            <div class="stat-card"><div class="label">Strategies</div><div class="value">${status.enabled || 0} / ${status.strategies || 0}</div></div>
+            <div class="stat-card"><div class="label">Open Positions</div><div class="value">${status.total_open_positions || 0}</div></div>
+            <div class="stat-card"><div class="label">Closed Trades</div><div class="value">${status.total_closed_trades || 0}</div></div>
+            <div class="stat-card"><div class="label">Last Signal Check</div><div class="value" style="font-size:14px;">${lastCheck}</div></div>
+            <div class="stat-card"><div class="label">Data Source</div><div class="value" style="font-size:12px;">${ds}</div></div>
+        `;
 
         // Leaderboard
         const lb = status.leaderboard || [];
         const lbBody = document.querySelector('#arena-leaderboard tbody');
         lbBody.innerHTML = lb.map(s => {
             const retClass = s.total_return_pct >= 0 ? 'positive' : 'negative';
-            const ddClass = s.drawdown_pct < -5 ? 'negative' : '';
-            const statusText = s.is_paused ? '⏸ Paused' : (s.enabled ? '✓ Active' : '✗ Off');
+            const statusText = s.is_paused ? 'Paused' : (s.enabled ? 'Active' : 'Off');
             const statusColor = s.is_paused ? 'var(--yellow)' : (s.enabled ? 'var(--green)' : 'var(--muted)');
             const actionBtn = s.is_paused || !s.enabled
-                ? `<button onclick="arenaResume('${s.strategy_name}')" style="background:var(--green);color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">Resume</button>`
-                : `<button onclick="arenaPause('${s.strategy_name}')" style="background:var(--yellow);color:#000;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:11px;">Pause</button>`;
-            return `<tr>
-                <td><strong>${s.strategy_name}</strong></td>
+                ? `<button onclick="arenaResume('${s.strategy_name}')" style="background:var(--green);color:#fff;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;">Resume</button>`
+                : `<button onclick="arenaPause('${s.strategy_name}')" style="background:var(--yellow);color:#000;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;">Pause</button>`;
+            return `<tr style="cursor:pointer;" onclick="selectStrategy('${s.strategy_name}')">
+                <td><strong style="color:var(--blue);">${s.strategy_name}</strong></td>
                 <td>${s.version || ''}</td>
                 <td>$${(s.total_equity || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
                 <td class="${retClass}">${(s.total_return_pct || 0).toFixed(2)}%</td>
-                <td class="${ddClass}">${(s.drawdown_pct || 0).toFixed(2)}%</td>
+                <td>${(s.drawdown_pct || 0).toFixed(2)}%</td>
                 <td>${s.open_positions || 0}</td>
                 <td>${s.closed_trades || 0}</td>
                 <td>${(s.win_rate || 0).toFixed(1)}%</td>
+                <td>${s.day_trades_remaining ?? '—'}</td>
                 <td style="color:${statusColor}">${statusText}</td>
-                <td>${actionBtn}</td>
+                <td onclick="event.stopPropagation();">${actionBtn}</td>
             </tr>`;
-        }).join('') || '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--muted);">Arena not initialized yet — strategies will start on next scheduler cycle</td></tr>';
+        }).join('') || '<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--muted);">Arena not initialized — waiting for first scheduler cycle</td></tr>';
 
-        // Arena trades
-        const trades = tradesData.trades || [];
-        const tBody = document.querySelector('#arena-trades tbody');
+        // Strategy selector buttons
+        const selector = document.getElementById('strategy-selector');
+        selector.innerHTML = lb.map(s =>
+            `<button onclick="selectStrategy('${s.strategy_name}')" style="background:${_selectedStrategy===s.strategy_name?'var(--blue)':'var(--surface)'};color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px;font-weight:${_selectedStrategy===s.strategy_name?'700':'400'};">${s.strategy_name} (${(s.total_return_pct||0).toFixed(1)}%)</button>`
+        ).join('');
+
+        // Load strategy detail if selected
+        if (_selectedStrategy) loadStrategyDetail(_selectedStrategy);
+
+    } catch(e) { console.error('Arena load error:', e); }
+}
+
+async function selectStrategy(name) {
+    _selectedStrategy = name;
+    document.getElementById('strategy-detail').style.display = 'block';
+    loadArena();
+}
+
+async function loadStrategyDetail(name) {
+    try {
+        const [detailRes, tradesRes] = await Promise.all([
+            fetch(`/api/arena/strategy/${name}`),
+            fetch(`/api/arena/trades?strategy=${name}&limit=30`),
+        ]);
+        const detail = await detailRes.json();
+        const tradesData = await tradesRes.json();
+
+        // Open positions
+        const positions = detail.positions || {};
+        const posEntries = Object.values(positions);
+        document.getElementById('detail-positions-header').textContent =
+            `${name} — Open Positions (${posEntries.length})`;
+        const posBody = document.querySelector('#detail-positions tbody');
+        posBody.innerHTML = posEntries.map(p => {
+            const pnlClass = (p.unrealized_pnl||0) >= 0 ? 'positive' : 'negative';
+            const held = p.entry_time ? timeSince(new Date(p.entry_time)) : '—';
+            return `<tr>
+                <td><strong>${p.ticker}</strong></td>
+                <td>${p.trade_type}</td>
+                <td>$${(p.entry_price||0).toFixed(2)}</td>
+                <td>$${(p.last_price||0).toFixed(2)}</td>
+                <td class="${pnlClass}">$${(p.unrealized_pnl||0).toFixed(2)} (${(p.unrealized_pnl_pct||0).toFixed(1)}%)</td>
+                <td>${(p.r_multiple||0).toFixed(2)}R</td>
+                <td>$${(p.stop_loss||0).toFixed(2)}</td>
+                <td>$${(p.target||0).toFixed(2)}</td>
+                <td>${p.trailing_stop ? '$'+p.trailing_stop.toFixed(2) : '—'}</td>
+                <td>${(p.confidence||0).toFixed(0)}%</td>
+                <td>${held}</td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="11" style="text-align:center;padding:16px;color:var(--muted);">No open positions</td></tr>';
+
+        // Trade explanations (for open positions)
+        const explEl = document.getElementById('detail-explanations');
+        if (posEntries.length > 0) {
+            explEl.innerHTML = posEntries.map(p =>
+                `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:8px;font-family:monospace;font-size:12px;white-space:pre-line;line-height:1.6;">${p.explanation || 'No explanation available'}</div>`
+            ).join('');
+        } else {
+            explEl.innerHTML = '<div style="color:var(--muted);padding:8px;">No active trades to explain</div>';
+        }
+
+        // Closed trades
+        const trades = (tradesData.trades || []).filter(t => t.status === 'CLOSED');
+        document.getElementById('detail-trades-header').textContent =
+            `${name} — Closed Trades (${trades.length})`;
+        const tBody = document.querySelector('#detail-trades tbody');
         tBody.innerHTML = trades.map(t => {
             const pnl = t.pnl_dollars;
             const pnlClass = pnl == null ? '' : (pnl >= 0 ? 'positive' : 'negative');
-            const pnlStr = pnl != null ? `$${pnl.toFixed(2)}` : '—';
-            const rStr = t.r_multiple != null ? `${t.r_multiple.toFixed(2)}R` : '—';
             return `<tr>
-                <td>${t.strategy_name || ''}</td>
                 <td><strong>${t.ticker}</strong></td>
-                <td>${t.trade_type || ''}</td>
-                <td>$${(t.execution_price || 0).toFixed(2)}</td>
-                <td>${t.exit_price ? '$' + t.exit_price.toFixed(2) : '—'}</td>
-                <td>${t.shares || 0}</td>
-                <td class="${pnlClass}">${pnlStr}</td>
-                <td>${rStr}</td>
-                <td>${t.signal_overlap || 0}</td>
-                <td>${t.status || ''}</td>
+                <td>${t.trade_type||''}</td>
+                <td>$${(t.execution_price||0).toFixed(2)}</td>
+                <td>${t.exit_price ? '$'+t.exit_price.toFixed(2) : '—'}</td>
+                <td class="${pnlClass}">${pnl!=null ? '$'+pnl.toFixed(2) : '—'}</td>
+                <td>${t.r_multiple!=null ? t.r_multiple.toFixed(2)+'R' : '—'}</td>
+                <td>${t.exit_reason||'—'}</td>
+                <td>${t.slippage ? '$'+t.slippage.toFixed(4) : '—'}</td>
+                <td>${t.price_source||'—'}</td>
+                <td>${t.signal_overlap||0} sig / ${t.position_overlap||0} pos</td>
             </tr>`;
-        }).join('') || '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--muted);">No arena trades yet</td></tr>';
+        }).join('') || '<tr><td colspan="10" style="text-align:center;padding:16px;color:var(--muted);">No closed trades yet</td></tr>';
 
-    } catch(e) {
-        console.error('Arena load error:', e);
-    }
+        // Also show OPEN trades from DB with explanations
+        const openTrades = (tradesData.trades || []).filter(t => t.status === 'OPEN');
+        if (openTrades.length > 0) {
+            const openRows = openTrades.map(t =>
+                `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:8px;font-family:monospace;font-size:12px;white-space:pre-line;line-height:1.6;">${t.explanation || 'No explanation'}</div>`
+            ).join('');
+            if (posEntries.length === 0) {
+                explEl.innerHTML = openRows;
+            }
+        }
+
+        // Audit trail
+        const audit = detail.audit_log || [];
+        const auditEl = document.getElementById('detail-audit');
+        auditEl.innerHTML = audit.slice(-10).reverse().map(a =>
+            `<div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:6px;">
+                <strong>${a.ticker}</strong> ${a.action} ${a.shares}x @ $${(a.execution_price||0).toFixed(2)}
+                <span style="color:var(--muted);margin-left:8px;">signal: $${(a.signal_price||0).toFixed(2)} | slippage: $${(a.slippage||0).toFixed(4)} | source: ${a.price_source||'?'}</span>
+                ${a.bar_data_at_decision ? `<br><span style="color:var(--muted);">Bar: O=${a.bar_data_at_decision.open?.toFixed(2)||'?'} H=${a.bar_data_at_decision.high?.toFixed(2)||'?'} L=${a.bar_data_at_decision.low?.toFixed(2)||'?'} C=${a.bar_data_at_decision.close?.toFixed(2)||'?'} V=${(a.bar_data_at_decision.volume||0).toLocaleString()}</span>` : ''}
+                ${a.market_regime ? `<br><span style="color:var(--muted);">Regime: ${a.market_regime} | Overlap: ${a.signal_overlap||0} signal, ${a.position_overlap||0} position</span>` : ''}
+            </div>`
+        ).join('') || '<div style="color:var(--muted);">No audit entries yet</div>';
+
+    } catch(e) { console.error('Strategy detail error:', e); }
+}
+
+function timeSince(date) {
+    const secs = Math.floor((new Date() - date) / 1000);
+    if (secs < 60) return secs + 's';
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + 'm';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ' + (mins % 60) + 'm';
+    return Math.floor(hrs / 24) + 'd ' + (hrs % 24) + 'h';
 }
 
 async function arenaPause(name) {
@@ -1002,7 +1093,6 @@ async function arenaResume(name) {
     loadArena();
 }
 
-// Load arena when tab is clicked
 document.querySelector('[data-tab="arena"]')?.addEventListener('click', loadArena);
 
 loadAll();

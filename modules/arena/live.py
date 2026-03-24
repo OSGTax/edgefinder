@@ -2,7 +2,7 @@
 EdgeFinder Arena Live Integration
 ===================================
 Hooks the arena engine into the scheduler for live market operation.
-Fetches data via DataService, feeds strategies, executes trades.
+Fetches data via DataService (Alpaca → FMP → yfinance fallback).
 
 Called by the scheduler jobs — does not own the scheduler lifecycle.
 """
@@ -11,14 +11,11 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-import yfinance as yf
-
 from config import settings
 from modules.arena.engine import ArenaEngine
 from modules.arena.virtual_account import Position
 from modules.strategies.base import StrategyRegistry, MarketRegime
-from modules.scanner import get_active_watchlist, run_scan, score_lynch, score_burry
-from modules.signals import fetch_price_history
+from modules.scanner import get_active_watchlist, run_scan
 from modules.database import (
     ArenaTradeLog,
     ArenaSnapshot,
@@ -30,6 +27,7 @@ logger = logging.getLogger(__name__)
 # ── MODULE STATE ─────────────────────────────────────────────
 
 _engine: Optional[ArenaEngine] = None
+_data_service = None  # services.data_service.DataService instance
 _arena_status = {
     "running": False,
     "last_signal_check": None,
@@ -55,6 +53,7 @@ def get_arena_status() -> dict:
         "last_position_monitor": _arena_status["last_position_monitor"],
         "last_scan": _arena_status["last_scan"],
         "recent_errors": _arena_status["errors"][-5:],
+        "data_source": "DataService (Alpaca/FMP/yfinance)",
     })
     return status
 
@@ -65,9 +64,23 @@ def init_arena() -> ArenaEngine:
     """Initialize the arena engine with Lynch and Burry strategies.
 
     Called once at startup. Loads strategies from registry, sets up
-    watchlists from existing scan data.
+    watchlists from existing scan data, and initializes DataService.
     """
-    global _engine
+    global _engine, _data_service
+
+    # Initialize DataService for market data
+    try:
+        from services.data_service import DataService
+        _data_service = DataService()
+        alpaca_ok = _data_service.alpaca is not None
+        fmp_ok = _data_service.fmp is not None
+        logger.info(
+            f"DataService initialized: Alpaca={'yes' if alpaca_ok else 'no'}, "
+            f"FMP={'yes' if fmp_ok else 'no'}, yfinance=fallback"
+        )
+    except Exception as e:
+        logger.warning(f"DataService init failed, will use yfinance fallback: {e}")
+        _data_service = None
 
     # Import strategy modules to trigger registration
     import modules.strategies.lynch  # noqa: F401
@@ -102,7 +115,6 @@ def _refresh_watchlists() -> None:
         logger.info("Arena: No watchlist data yet — strategies will trade all tickers")
         return
 
-    # Build scored stock dicts for each strategy
     scored = []
     for stock in watchlist:
         scored.append({
@@ -115,10 +127,78 @@ def _refresh_watchlists() -> None:
             "price_to_tangible_book": stock.get("price_to_tangible_book"),
         })
 
-    # Set watchlists on each strategy
     for name, strategy in _engine.strategies.items():
         if hasattr(strategy, "set_watchlist"):
             strategy.set_watchlist(scored)
+
+
+# ── DATA FETCHING ────────────────────────────────────────────
+
+def _get_bars(tickers: list[str], days_back: int = 365) -> dict:
+    """Fetch OHLCV bars via DataService with title-case column mapping.
+
+    signals.py compute_indicators() expects: Open, High, Low, Close, Volume.
+    DataService returns lowercase. We rename here.
+    """
+    bars = {}
+    volumes = {}
+
+    if _data_service:
+        # Use DataService (Alpaca → yfinance fallback, with caching)
+        raw_bars = _data_service.get_multi_bars(
+            tickers, timeframe="1Day", days_back=days_back
+        )
+        for ticker, df in raw_bars.items():
+            if df is not None and not df.empty:
+                # Rename to title case for signals.py compatibility
+                col_map = {}
+                for col in df.columns:
+                    if col.lower() in ("open", "high", "low", "close", "volume"):
+                        col_map[col] = col.capitalize()
+                if col_map:
+                    df = df.rename(columns=col_map)
+                bars[ticker] = df
+                if "Volume" in df.columns:
+                    vol = df["Volume"].tail(20).mean()
+                    volumes[ticker] = float(vol) if vol and vol > 0 else 1_000_000
+                else:
+                    volumes[ticker] = 1_000_000
+    else:
+        # Fallback: direct yfinance
+        import yfinance as yf
+        for ticker in tickers:
+            try:
+                stock = yf.Ticker(ticker)
+                df = stock.history(period="1y", interval="1d")
+                if df is not None and not df.empty:
+                    bars[ticker] = df
+                    vol = df["Volume"].tail(20).mean() if "Volume" in df.columns else 1_000_000
+                    volumes[ticker] = float(vol) if vol and vol > 0 else 1_000_000
+            except Exception as e:
+                logger.debug(f"yfinance fallback failed for {ticker}: {e}")
+
+    return bars, volumes
+
+
+def _get_price(ticker: str) -> tuple[Optional[float], str]:
+    """Fetch latest price via DataService. Returns (price, source)."""
+    if _data_service:
+        price = _data_service.get_latest_price(ticker)
+        if price:
+            source = "alpaca" if _data_service.alpaca else "cache"
+            return price, source
+
+    # Fallback
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
+        if price and price > 0:
+            return round(float(price), 4), "yfinance"
+    except Exception as e:
+        logger.debug(f"Price fetch failed for {ticker}: {e}")
+
+    return None, "none"
 
 
 # ── LIVE JOBS ────────────────────────────────────────────────
@@ -142,34 +222,27 @@ def arena_signal_check() -> list[dict]:
             if wl:
                 all_tickers.update(wl)
 
-        # Fallback: if no watchlists set, use default tickers
         if not all_tickers:
             all_tickers = set(settings.SCANNER_DEFAULT_TICKERS[:30])
 
-        # Fetch price data
-        bars = {}
-        volumes = {}
-        for ticker in all_tickers:
-            try:
-                df = fetch_price_history(ticker, period="1y", interval="1d")
-                if df is not None and not df.empty:
-                    bars[ticker] = df
-                    vol = df["Volume"].tail(20).mean() if "Volume" in df.columns else 1_000_000
-                    volumes[ticker] = float(vol) if vol and vol > 0 else 1_000_000
-            except Exception as e:
-                logger.debug(f"Arena: Failed to fetch {ticker}: {e}")
+        # Fetch price data via DataService
+        bars, volumes = _get_bars(list(all_tickers))
 
         if not bars:
-            logger.warning("Arena: No price data fetched")
+            logger.warning("ARENA: No price data fetched")
             return []
 
-        logger.info(f"Arena: Fetched bars for {len(bars)}/{len(all_tickers)} tickers")
+        source = "alpaca" if (_data_service and _data_service.alpaca) else "yfinance"
+        logger.info(
+            f"ARENA: Fetched bars for {len(bars)}/{len(all_tickers)} tickers "
+            f"via {source}"
+        )
 
         # Run signal check across all strategies
         executed = _engine.run_signal_check(
             bars=bars,
             volumes=volumes,
-            price_source="yfinance",
+            price_source=source,
         )
 
         # Persist executed trades to DB
@@ -200,7 +273,6 @@ def arena_position_monitor() -> list[dict]:
         return []
 
     try:
-        # Gather all tickers with open positions
         tickers_needed = set()
         for account in _engine.accounts.values():
             for pos in account.positions.values():
@@ -209,20 +281,20 @@ def arena_position_monitor() -> list[dict]:
         if not tickers_needed:
             return []
 
-        # Fetch current prices
+        # Fetch current prices via DataService
         prices = {}
+        source = "unknown"
         for ticker in tickers_needed:
-            price = _fetch_current_price(ticker)
+            price, src = _get_price(ticker)
             if price:
                 prices[ticker] = price
+                source = src
 
         if not prices:
             return []
 
-        # Monitor positions
-        closed = _engine.monitor_positions(prices, price_source="yfinance")
+        closed = _engine.monitor_positions(prices, price_source=source)
 
-        # Persist closed trades
         for trade in closed:
             _update_arena_trade_closed(trade)
 
@@ -253,7 +325,7 @@ def arena_close_day_trades() -> list[dict]:
             ]
 
             for trade_id, position in day_positions:
-                price = _fetch_current_price(position.ticker)
+                price, _ = _get_price(position.ticker)
                 if price is None:
                     price = position.last_known_price or position.entry_price
 
@@ -312,19 +384,7 @@ def arena_nightly_scan() -> None:
         _arena_status["errors"].append(f"nightly_scan: {e}")
 
 
-# ── HELPERS ──────────────────────────────────────────────────
-
-def _fetch_current_price(ticker: str) -> Optional[float]:
-    """Fetch latest price for a ticker."""
-    try:
-        t = yf.Ticker(ticker)
-        price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
-        if price and price > 0:
-            return round(float(price), 4)
-    except Exception as e:
-        logger.debug(f"Price fetch failed for {ticker}: {e}")
-    return None
-
+# ── DB PERSISTENCE ───────────────────────────────────────────
 
 def _save_arena_trade(trade: dict) -> None:
     """Persist an arena trade execution to the database."""

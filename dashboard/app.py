@@ -39,8 +39,6 @@ from modules.database import (
     AccountSnapshot,
     Suggestion,
 )
-from modules.journal import TradeJournal
-
 logger = logging.getLogger(__name__)
 
 # Static files / templates
@@ -48,9 +46,6 @@ DASHBOARD_DIR = Path(__file__).parent
 TEMPLATES_DIR = DASHBOARD_DIR / "templates"
 PROJECT_ROOT = DASHBOARD_DIR.parent
 SUGGESTIONS_JSON = PROJECT_ROOT / "data" / "suggestions.json"
-
-# Journal instance for stats
-_journal = TradeJournal()
 
 
 # ── SUGGESTIONS PERSISTENCE ─────────────────────────────────
@@ -406,107 +401,131 @@ async def get_signals(
 @app.get("/api/trades")
 async def get_trades(
     ticker: Optional[str] = Query(default=None),
-    trade_type: Optional[str] = Query(default=None),
+    strategy: Optional[str] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
 ):
-    """Get trade log."""
-    entries = _journal.get_trades(ticker=ticker, trade_type=trade_type, limit=limit)
-    return {
-        "count": len(entries),
-        "trades": [
-            {
-                "trade_id": e.trade_id,
-                "ticker": e.ticker,
-                "direction": e.direction,
-                "trade_type": e.trade_type,
-                "entry_price": e.entry_price,
-                "exit_price": e.exit_price,
-                "shares": e.shares,
-                "pnl_dollars": e.pnl_dollars,
-                "pnl_percent": e.pnl_percent,
-                "r_multiple": e.r_multiple,
-                "exit_reason": e.exit_reason,
-                "entry_time": e.entry_time.isoformat() if e.entry_time else None,
-                "exit_time": e.exit_time.isoformat() if e.exit_time else None,
-                "fundamental_score": e.fundamental_score,
-                "confidence_score": e.confidence_score,
-                "news_sentiment": e.news_sentiment,
-            }
-            for e in entries
-        ],
-    }
+    """Get arena trade log with full metadata."""
+    from modules.database import ArenaTradeLog
+    session = get_session()
+    try:
+        query = session.query(ArenaTradeLog).order_by(ArenaTradeLog.created_at.desc())
+        if ticker:
+            query = query.filter(ArenaTradeLog.ticker == ticker.upper())
+        if strategy:
+            query = query.filter(ArenaTradeLog.strategy_name == strategy)
+        trades = query.limit(limit).all()
+        return {
+            "count": len(trades),
+            "trades": [_format_arena_trade(t) for t in trades],
+        }
+    finally:
+        session.close()
 
 
 @app.get("/api/trades/stats")
 async def get_trade_stats(
-    days: Optional[int] = Query(default=None, ge=1, le=365),
+    strategy: Optional[str] = Query(default=None),
 ):
-    """Get aggregated trade statistics."""
-    stats = _journal.compute_stats(days=days)
-    return {
-        "total_trades": stats.total_trades,
-        "winning_trades": stats.winning_trades,
-        "losing_trades": stats.losing_trades,
-        "breakeven_trades": stats.breakeven_trades,
-        "win_rate": round(stats.win_rate, 4),
-        "total_pnl": stats.total_pnl,
-        "avg_pnl": stats.avg_pnl,
-        "avg_winner": stats.avg_winner,
-        "avg_loser": stats.avg_loser,
-        "largest_winner": stats.largest_winner,
-        "largest_loser": stats.largest_loser,
-        "avg_r_multiple": stats.avg_r_multiple,
-        "profit_factor": stats.profit_factor,
-        "day_trades": stats.day_trades,
-        "swing_trades": stats.swing_trades,
-        "total_signals": stats.total_signals,
-        "traded_signals": stats.traded_signals,
-        "skipped_signals": stats.skipped_signals,
-    }
+    """Get aggregated trade statistics from arena trades."""
+    from modules.database import ArenaTradeLog
+    session = get_session()
+    try:
+        query = session.query(ArenaTradeLog).filter(ArenaTradeLog.status == "CLOSED")
+        if strategy:
+            query = query.filter(ArenaTradeLog.strategy_name == strategy)
+        trades = query.all()
+
+        if not trades:
+            return {
+                "total_trades": 0, "winning_trades": 0, "losing_trades": 0,
+                "win_rate": 0, "total_pnl": 0, "avg_pnl": 0, "profit_factor": 0,
+            }
+
+        winners = [t for t in trades if (t.pnl_dollars or 0) > 0]
+        losers = [t for t in trades if (t.pnl_dollars or 0) < 0]
+        total_pnl = sum(t.pnl_dollars or 0 for t in trades)
+        gross_profit = sum(t.pnl_dollars for t in winners) if winners else 0
+        gross_loss = abs(sum(t.pnl_dollars for t in losers)) if losers else 0
+
+        return {
+            "total_trades": len(trades),
+            "winning_trades": len(winners),
+            "losing_trades": len(losers),
+            "win_rate": round(len(winners) / len(trades) * 100, 2) if trades else 0,
+            "total_pnl": round(total_pnl, 2),
+            "avg_pnl": round(total_pnl / len(trades), 2) if trades else 0,
+            "avg_winner": round(gross_profit / len(winners), 2) if winners else 0,
+            "avg_loser": round(-gross_loss / len(losers), 2) if losers else 0,
+            "largest_winner": round(max((t.pnl_dollars or 0) for t in trades), 2),
+            "largest_loser": round(min((t.pnl_dollars or 0) for t in trades), 2),
+            "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else 0,
+            "avg_r_multiple": round(
+                sum(t.r_multiple or 0 for t in trades) / len(trades), 2
+            ) if trades else 0,
+        }
+    finally:
+        session.close()
 
 
 @app.get("/api/equity-curve")
 async def get_equity_curve(
+    strategy: Optional[str] = Query(default=None),
     limit: int = Query(default=365, ge=1, le=1000),
 ):
-    """Get account snapshots for equity curve chart."""
-    curve = _journal.get_equity_curve(limit=limit)
-    return {
-        "count": len(curve),
-        "snapshots": curve,
-    }
+    """Get arena equity snapshots for charting."""
+    from modules.database import ArenaSnapshot
+    session = get_session()
+    try:
+        query = session.query(ArenaSnapshot).order_by(ArenaSnapshot.timestamp.asc())
+        if strategy:
+            query = query.filter(ArenaSnapshot.strategy_name == strategy)
+        snaps = query.limit(limit).all()
+        return {
+            "count": len(snaps),
+            "snapshots": [
+                {
+                    "strategy_name": s.strategy_name,
+                    "date": s.timestamp.isoformat() if s.timestamp else None,
+                    "total_value": s.total_equity,
+                    "cash": s.cash,
+                    "drawdown_pct": s.drawdown_pct,
+                    "total_return_pct": s.total_return_pct,
+                }
+                for s in snaps
+            ],
+        }
+    finally:
+        session.close()
 
 
 @app.get("/api/account")
 async def get_account():
-    """Get latest account snapshot."""
-    session = get_session()
+    """Get combined arena account state across all strategies."""
     try:
-        snapshot = session.query(AccountSnapshot).order_by(
-            AccountSnapshot.date.desc()
-        ).first()
-
-        if snapshot:
+        from modules.arena.live import get_arena_engine
+        engine = get_arena_engine()
+        if engine:
+            total_equity = sum(a.total_equity for a in engine.accounts.values())
+            total_cash = sum(a.cash for a in engine.accounts.values())
+            total_positions = sum(a.open_position_count for a in engine.accounts.values())
             return {
-                "date": snapshot.date.isoformat() if snapshot.date else None,
-                "cash": snapshot.cash,
-                "positions_value": snapshot.positions_value,
-                "total_value": snapshot.total_value,
-                "open_positions": snapshot.open_positions,
-                "peak_value": snapshot.peak_value,
-                "drawdown_pct": snapshot.drawdown_pct,
+                "date": datetime.now().isoformat(),
+                "cash": round(total_cash, 2),
+                "positions_value": round(total_equity - total_cash, 2),
+                "total_value": round(total_equity, 2),
+                "open_positions": total_positions,
+                "strategies": len(engine.accounts),
             }
-        return {
-            "date": None,
-            "cash": settings.STARTING_CAPITAL,
-            "positions_value": 0.0,
-            "total_value": settings.STARTING_CAPITAL,
-            "open_positions": 0,
-            "peak_value": settings.STARTING_CAPITAL,
-            "drawdown_pct": 0.0,
-        }
-    finally:
-        session.close()
+    except Exception:
+        pass
+    return {
+        "date": None,
+        "cash": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "positions_value": 0.0,
+        "total_value": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "open_positions": 0,
+        "strategies": 0,
+    }
 
 
 @app.get("/api/skipped-signals")
@@ -515,11 +534,131 @@ async def get_skipped_signals(
     limit: int = Query(default=50, ge=1, le=500),
 ):
     """Get signals that were detected but not traded."""
-    signals = _journal.get_skipped_signals(ticker=ticker, limit=limit)
+    session = get_session()
+    try:
+        query = session.query(SignalRecord).filter(
+            SignalRecord.was_traded == False  # noqa: E712
+        ).order_by(SignalRecord.timestamp.desc())
+        if ticker:
+            query = query.filter(SignalRecord.ticker == ticker.upper())
+        signals = query.limit(limit).all()
+        return {
+            "count": len(signals),
+            "signals": [
+                {
+                    "ticker": s.ticker,
+                    "signal_type": s.signal_type,
+                    "trade_type": s.trade_type,
+                    "confidence": s.confidence,
+                    "indicators": s.indicators,
+                    "reason_skipped": s.reason_skipped,
+                    "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                }
+                for s in signals
+            ],
+        }
+    finally:
+        session.close()
+
+
+def _format_arena_trade(t) -> dict:
+    """Format an ArenaTradeLog record with full metadata for API response."""
+    meta = t.extra_data or {}
+    indicators = meta.get("indicators", {})
+    trade_reason = meta.get("trade_reason", "")
+
+    # Build plain English explanation
+    explanation = _build_trade_explanation(t, meta)
+
     return {
-        "count": len(signals),
-        "signals": signals,
+        "trade_id": t.trade_id,
+        "strategy_name": t.strategy_name,
+        "strategy_version": t.strategy_version,
+        "ticker": t.ticker,
+        "action": t.action,
+        "direction": t.direction,
+        "trade_type": t.trade_type,
+        "signal_price": t.signal_price,
+        "execution_price": t.execution_price,
+        "exit_price": t.exit_price,
+        "slippage": t.slippage,
+        "shares": t.shares,
+        "stop_loss": t.stop_loss,
+        "target": t.target,
+        "confidence": t.confidence,
+        "pnl_dollars": t.pnl_dollars,
+        "pnl_percent": t.pnl_percent,
+        "r_multiple": t.r_multiple,
+        "exit_reason": t.exit_reason,
+        "price_source": t.price_source,
+        "market_regime": t.market_regime,
+        "signal_overlap": t.signal_overlap,
+        "position_overlap": t.position_overlap,
+        "bar_data_at_decision": t.bar_data_at_decision,
+        "indicators": indicators,
+        "trade_reason": trade_reason,
+        "explanation": explanation,
+        "strategy_metadata": meta,
+        "status": t.status,
+        "created_at": t.created_at.isoformat() if t.created_at else None,
     }
+
+
+def _build_trade_explanation(trade, meta: dict) -> str:
+    """Build plain English explanation for a trade."""
+    parts = []
+    strategy = trade.strategy_name or "unknown"
+    ticker = trade.ticker or "?"
+    price = trade.execution_price or trade.signal_price or 0
+
+    parts.append(f"{trade.action or 'BUY'} {ticker} @ ${price:.2f} [{strategy}]")
+
+    # Indicators
+    reason = meta.get("trade_reason", "")
+    if reason:
+        parts.append(f"Signals: {reason}")
+
+    # Strategy-specific scores
+    if strategy == "lynch":
+        score = meta.get("lynch_score")
+        cat = meta.get("lynch_category")
+        if score:
+            parts.append(f"Lynch score: {score}/100 ({cat or 'unknown'})")
+    elif strategy == "burry":
+        score = meta.get("burry_score")
+        fcf = meta.get("fcf_yield")
+        ptb = meta.get("price_to_tangible_book")
+        score_parts = []
+        if score:
+            score_parts.append(f"Burry score: {score}/100")
+        if fcf:
+            score_parts.append(f"FCF yield: {fcf:.1%}")
+        if ptb:
+            score_parts.append(f"P/TB: {ptb:.2f}")
+        if meta.get("rsi_boost_applied"):
+            score_parts.append("RSI oversold boost applied")
+        if score_parts:
+            parts.append(", ".join(score_parts))
+
+    # Risk
+    sl = trade.stop_loss
+    tgt = trade.target
+    if sl and tgt and price:
+        sl_pct = (sl - price) / price * 100
+        parts.append(f"Risk: Stop ${sl:.2f} ({sl_pct:.1f}%), Target ${tgt:.2f}")
+
+    # Confidence and source
+    extras = []
+    if trade.confidence:
+        extras.append(f"Confidence: {trade.confidence:.0f}%")
+    if trade.slippage:
+        extras.append(f"Slippage: ${trade.slippage:.4f}")
+    if trade.price_source:
+        extras.append(f"Source: {trade.price_source}")
+    if extras:
+        parts.append(" | ".join(extras))
+
+    return "\n".join(parts)
 
 
 @app.get("/api/suggestions")
@@ -633,7 +772,7 @@ async def get_arena_leaderboard():
 
 @app.get("/api/arena/strategy/{strategy_name}")
 async def get_arena_strategy(strategy_name: str):
-    """Get detailed info for a specific strategy."""
+    """Get detailed info for a specific strategy including open positions."""
     try:
         from modules.arena.live import get_arena_engine
         engine = get_arena_engine()
@@ -641,7 +780,54 @@ async def get_arena_strategy(strategy_name: str):
             return {"error": f"Strategy '{strategy_name}' not found"}
         account = engine.accounts[strategy_name]
         data = account.to_dict()
-        data["audit_log"] = engine.executor.get_audit_log(strategy_name)
+
+        # Enrich positions with metadata and explanations
+        enriched_positions = {}
+        for tid, pos in account.positions.items():
+            entry = {
+                "trade_id": tid,
+                "ticker": pos.ticker,
+                "direction": pos.direction,
+                "trade_type": pos.trade_type,
+                "entry_price": pos.entry_price,
+                "shares": pos.shares,
+                "stop_loss": pos.stop_loss,
+                "target": pos.target,
+                "trailing_stop": pos.trailing_stop,
+                "last_price": pos.last_known_price,
+                "high_water_mark": pos.high_water_mark,
+                "unrealized_pnl": round(pos.unrealized_pnl, 2),
+                "unrealized_pnl_pct": round(pos.unrealized_pnl_pct, 2),
+                "r_multiple": round(pos.r_multiple, 2),
+                "confidence": pos.confidence,
+                "entry_time": pos.entry_time.isoformat() if pos.entry_time else None,
+                "slippage_applied": pos.slippage_applied,
+                "metadata": pos.metadata,
+            }
+
+            # Build plain English explanation from metadata
+            meta = pos.metadata or {}
+            explanation_parts = [
+                f"BUY {pos.ticker} @ ${pos.entry_price:.2f} [{strategy_name}]"
+            ]
+            if meta.get("trade_reason"):
+                explanation_parts.append(f"Signals: {meta['trade_reason']}")
+            if meta.get("lynch_score"):
+                explanation_parts.append(
+                    f"Lynch score: {meta['lynch_score']}/100 ({meta.get('lynch_category', '')})"
+                )
+            if meta.get("burry_score"):
+                explanation_parts.append(f"Burry score: {meta['burry_score']}/100")
+            sl_pct = (pos.stop_loss - pos.entry_price) / pos.entry_price * 100 if pos.entry_price else 0
+            explanation_parts.append(
+                f"Risk: Stop ${pos.stop_loss:.2f} ({sl_pct:.1f}%), Target ${pos.target:.2f}"
+            )
+            entry["explanation"] = "\n".join(explanation_parts)
+            enriched_positions[tid] = entry
+
+        data["positions"] = enriched_positions
+        data["audit_log"] = engine.executor.get_audit_log(strategy_name)[-20:]
+        data["version"] = engine.strategies[strategy_name].version if strategy_name in engine.strategies else ""
         return data
     except Exception as e:
         logger.error(f"Arena strategy error: {e}")
@@ -653,7 +839,7 @@ async def get_arena_trades(
     strategy: Optional[str] = None,
     limit: int = Query(default=50, le=500),
 ):
-    """Get arena trade history from database."""
+    """Get arena trade history with full metadata and explanations."""
     try:
         from modules.database import ArenaTradeLog
         session = get_session()
@@ -663,30 +849,7 @@ async def get_arena_trades(
         if strategy:
             query = query.filter(ArenaTradeLog.strategy_name == strategy)
         trades = query.limit(limit).all()
-        result = []
-        for t in trades:
-            result.append({
-                "trade_id": t.trade_id,
-                "strategy_name": t.strategy_name,
-                "ticker": t.ticker,
-                "action": t.action,
-                "trade_type": t.trade_type,
-                "execution_price": t.execution_price,
-                "exit_price": t.exit_price,
-                "shares": t.shares,
-                "stop_loss": t.stop_loss,
-                "target": t.target,
-                "confidence": t.confidence,
-                "pnl_dollars": t.pnl_dollars,
-                "pnl_percent": t.pnl_percent,
-                "r_multiple": t.r_multiple,
-                "exit_reason": t.exit_reason,
-                "price_source": t.price_source,
-                "market_regime": t.market_regime,
-                "signal_overlap": t.signal_overlap,
-                "status": t.status,
-                "created_at": t.created_at.isoformat() if t.created_at else None,
-            })
+        result = [_format_arena_trade(t) for t in trades]
         session.close()
         return {"trades": result, "count": len(result)}
     except Exception as e:

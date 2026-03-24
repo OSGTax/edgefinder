@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from modules.database import (
     init_db, reset_engine, get_session,
-    WatchlistStock, Trade as TradeRecord, Signal as SignalRecord, AccountSnapshot,
+    WatchlistStock, Signal as SignalRecord, ArenaTradeLog, ArenaSnapshot,
 )
 
 
@@ -53,21 +53,23 @@ def _seed_watchlist():
 
 def _seed_trades():
     session = get_session()
-    session.add(TradeRecord(
-        trade_id="t-001", ticker="AAPL", direction="LONG", trade_type="DAY",
-        entry_price=100.0, exit_price=105.0, shares=10, stop_loss=98.0, target=103.0,
-        entry_time=datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc),
-        exit_time=datetime(2025, 1, 15, 14, 0, tzinfo=timezone.utc),
-        status="CLOSED", pnl_dollars=50.0, pnl_percent=0.05, r_multiple=2.5,
-        exit_reason="TARGET_HIT", confidence_score=80.0,
+    session.add(ArenaTradeLog(
+        trade_id="t-001", strategy_name="lynch", strategy_version="1.0",
+        ticker="AAPL", action="BUY", direction="LONG", trade_type="DAY",
+        signal_price=100.0, execution_price=100.0, exit_price=105.0,
+        shares=10, stop_loss=98.0, target=103.0, confidence=80.0,
+        pnl_dollars=50.0, pnl_percent=0.05, r_multiple=2.5,
+        exit_reason="TARGET_HIT", price_source="yfinance",
+        status="CLOSED", created_at=datetime(2025, 1, 15, 10, 0, tzinfo=timezone.utc),
     ))
-    session.add(TradeRecord(
-        trade_id="t-002", ticker="MSFT", direction="LONG", trade_type="SWING",
-        entry_price=200.0, exit_price=195.0, shares=5, stop_loss=196.0, target=206.0,
-        entry_time=datetime(2025, 1, 14, 10, 0, tzinfo=timezone.utc),
-        exit_time=datetime(2025, 1, 16, 10, 0, tzinfo=timezone.utc),
-        status="CLOSED", pnl_dollars=-25.0, pnl_percent=-0.025, r_multiple=-1.25,
-        exit_reason="STOP_HIT", confidence_score=65.0,
+    session.add(ArenaTradeLog(
+        trade_id="t-002", strategy_name="burry", strategy_version="1.0",
+        ticker="MSFT", action="BUY", direction="LONG", trade_type="SWING",
+        signal_price=200.0, execution_price=200.0, exit_price=195.0,
+        shares=5, stop_loss=196.0, target=206.0, confidence=65.0,
+        pnl_dollars=-25.0, pnl_percent=-0.025, r_multiple=-1.25,
+        exit_reason="STOP_HIT", price_source="yfinance",
+        status="CLOSED", created_at=datetime(2025, 1, 14, 10, 0, tzinfo=timezone.utc),
     ))
     session.commit()
     session.close()
@@ -94,11 +96,13 @@ def _seed_signals():
 def _seed_snapshots():
     session = get_session()
     for i in range(5):
-        session.add(AccountSnapshot(
-            date=datetime(2025, 1, i + 1, tzinfo=timezone.utc),
+        session.add(ArenaSnapshot(
+            strategy_name="lynch",
+            timestamp=datetime(2025, 1, i + 1, tzinfo=timezone.utc),
             cash=2500.0 + i * 20, positions_value=0.0,
-            total_value=2500.0 + i * 20, open_positions=0,
-            peak_value=2500.0 + i * 20, drawdown_pct=0.0,
+            total_equity=2500.0 + i * 20, peak_equity=2500.0 + i * 20,
+            drawdown_pct=0.0, open_positions=0,
+            total_return_pct=round(i * 20 / 2500.0 * 100, 2),
         ))
     session.commit()
     session.close()
@@ -214,9 +218,9 @@ class TestTradesAPI:
         data = resp.json()
         assert data["count"] == 1
 
-    def test_trades_filter_type(self, client):
+    def test_trades_filter_strategy(self, client):
         _seed_trades()
-        resp = client.get("/api/trades?trade_type=SWING")
+        resp = client.get("/api/trades?strategy=burry")
         data = resp.json()
         assert data["count"] == 1
         assert data["trades"][0]["ticker"] == "MSFT"
@@ -247,7 +251,7 @@ class TestTradeStatsAPI:
         assert data["winning_trades"] == 1
         assert data["losing_trades"] == 1
         assert data["total_pnl"] == 25.0
-        assert data["win_rate"] == 0.5
+        assert data["win_rate"] == 50.0
 
     def test_stats_fields(self, client):
         _seed_trades()
@@ -275,6 +279,7 @@ class TestEquityCurveAPI:
         data = resp.json()
         assert data["count"] == 5
         assert data["snapshots"][0]["total_value"] <= data["snapshots"][-1]["total_value"]
+        assert data["snapshots"][0]["strategy_name"] == "lynch"
 
     def test_curve_limit(self, client):
         _seed_snapshots()
@@ -291,14 +296,15 @@ class TestAccountAPI:
     def test_default_account(self, client):
         resp = client.get("/api/account")
         data = resp.json()
-        assert data["total_value"] == 2500.0
+        # No arena engine running in tests — falls back to 2 * ARENA_STARTING_CAPITAL_PER_STRATEGY
+        assert data["total_value"] == 5000.0
         assert data["open_positions"] == 0
 
-    def test_account_with_snapshot(self, client):
-        _seed_snapshots()
+    def test_account_fields(self, client):
         resp = client.get("/api/account")
         data = resp.json()
-        assert data["total_value"] == 2580.0  # Last snapshot
+        for f in ["cash", "positions_value", "total_value", "open_positions"]:
+            assert f in data, f"Missing field: {f}"
 
 
 # ════════════════════════════════════════════════════════════
@@ -336,5 +342,5 @@ class TestSkippedSignalsAPI:
 #   TestAccountAPI:          2 tests
 #   TestSkippedSignalsAPI:   2 tests
 #
-# TOTAL: 25 tests
+# TOTAL: 25 tests (seeding ArenaTradeLog + ArenaSnapshot)
 # ════════════════════════════════════════════════════════════
