@@ -89,6 +89,24 @@ class DataService:
         """Which data sources are configured and available."""
         return self._sources.copy()
 
+    @property
+    def fmp_remaining_requests(self) -> int:
+        """FMP API requests remaining today. Returns 0 if FMP not configured."""
+        if self.fmp:
+            return self.fmp.requests_remaining
+        return 0
+
+    def get_diagnostics(self) -> dict:
+        """Return diagnostic info about all data sources."""
+        diag = {
+            "sources": self._sources.copy(),
+            "fmp_remaining": self.fmp.requests_remaining if self.fmp else 0,
+            "fmp_used": self.fmp.requests_used if self.fmp else 0,
+            "fmp_limit": self.fmp._daily_limit if self.fmp else 0,
+            "cache_stats": self.cache.get_stats() if self.cache else {},
+        }
+        return diag
+
     # ── BAR DATA ────────────────────────────────────────────
 
     def get_bars(

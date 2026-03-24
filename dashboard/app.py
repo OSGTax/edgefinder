@@ -171,6 +171,36 @@ async def get_scheduler_info():
     return get_scheduler_status()
 
 
+@app.get("/api/diagnostics")
+async def get_diagnostics():
+    """Return data pipeline health: FMP budget, data sources, DB type, counts."""
+    import os
+    from modules.scanner import get_active_watchlist, _init_data_service
+    from modules.arena.live import get_arena_status
+    from modules.database import _get_database_url
+
+    ds = _init_data_service()
+    ds_diag = ds.get_diagnostics() if ds else {}
+    arena = get_arena_status()
+    db_url = _get_database_url()
+
+    return {
+        "database": "postgresql" if "postgresql" in db_url else "sqlite",
+        "data_sources": ds_diag.get("sources", {}),
+        "fmp": {
+            "remaining": ds_diag.get("fmp_remaining", 0),
+            "used": ds_diag.get("fmp_used", 0),
+            "limit": ds_diag.get("fmp_limit", 0),
+        },
+        "watchlist_count": len(get_active_watchlist()),
+        "arena_running": arena.get("running", False),
+        "strategies": arena.get("strategies", 0),
+        "last_signal_check": arena.get("last_signal_check"),
+        "last_scan": arena.get("last_scan"),
+        "errors": arena.get("errors", [])[-5:],  # Last 5 errors
+    }
+
+
 # ── MANUAL SCANNER ──────────────────────────────────────────
 
 _scan_status = {"running": False, "last_result": None, "last_error": None}

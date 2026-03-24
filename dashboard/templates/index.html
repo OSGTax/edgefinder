@@ -905,18 +905,41 @@ let _selectedStrategy = null;
 
 async function loadArena() {
     try {
-        const status = await (await fetch('/api/arena')).json();
+        const [status, diag] = await Promise.all([
+            (await fetch('/api/arena')).json(),
+            (await fetch('/api/diagnostics')).json().catch(() => null),
+        ]);
 
-        // Stats cards
+        // Stats cards with diagnostics
         const statsEl = document.getElementById('arena-stats');
         const ds = status.data_source || 'unknown';
         const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString() : 'never';
+
+        // FMP budget indicator
+        let fmpHtml = '';
+        if (diag && diag.fmp) {
+            const pct = diag.fmp.limit > 0 ? Math.round((diag.fmp.remaining / diag.fmp.limit) * 100) : 0;
+            const color = pct > 50 ? '#4ade80' : pct > 20 ? '#facc15' : '#f87171';
+            fmpHtml = `<div class="stat-card"><div class="label">FMP Budget</div><div class="value" style="color:${color}">${diag.fmp.remaining}/${diag.fmp.limit}</div></div>`;
+        }
+
+        // Data source health dots
+        let sourceDots = '';
+        if (diag && diag.data_sources) {
+            const dot = (name, ok) => `<span style="color:${ok ? '#4ade80' : '#f87171'}" title="${name}: ${ok ? 'connected' : 'offline'}">${ok ? '\u25CF' : '\u25CB'} ${name}</span>`;
+            sourceDots = `<div class="stat-card"><div class="label">Data Sources</div><div class="value" style="font-size:12px;">${dot('Alpaca', diag.data_sources.alpaca)} ${dot('FMP', diag.data_sources.fmp)} ${dot('yfinance', diag.data_sources.yfinance)}</div></div>`;
+        }
+
+        const dbType = diag ? (diag.database === 'postgresql' ? 'PostgreSQL' : 'SQLite') : '';
+
         statsEl.innerHTML = `
             <div class="stat-card"><div class="label">Strategies</div><div class="value">${status.enabled || 0} / ${status.strategies || 0}</div></div>
             <div class="stat-card"><div class="label">Open Positions</div><div class="value">${status.total_open_positions || 0}</div></div>
             <div class="stat-card"><div class="label">Closed Trades</div><div class="value">${status.total_closed_trades || 0}</div></div>
             <div class="stat-card"><div class="label">Last Signal Check</div><div class="value" style="font-size:14px;">${lastCheck}</div></div>
-            <div class="stat-card"><div class="label">Data Source</div><div class="value" style="font-size:12px;">${ds}</div></div>
+            ${fmpHtml}
+            ${sourceDots}
+            <div class="stat-card"><div class="label">Watchlist</div><div class="value">${diag ? diag.watchlist_count : '?'}</div></div>
         `;
 
         // Leaderboard

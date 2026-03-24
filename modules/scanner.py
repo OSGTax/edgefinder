@@ -120,68 +120,78 @@ def get_ticker_universe(sectors: list[str] | None = None) -> list[str]:
                  If None, returns full universe (all sectors).
 
     Priority:
-    1. FMP screener with sector filter (when sectors specified)
-    2. Alpaca Assets API for full universe (when no sector filter)
-    3. FMP screener unfiltered
+    1. FMP screener with sector filter (when sectors specified) — via DataService
+    2. Alpaca Assets API for full universe (when no sector filter) — via DataService
+    3. FMP screener unfiltered — via DataService
     4. Wikipedia S&P lists
     5. Hardcoded fallback
+
+    All FMP/Alpaca calls route through the shared DataService to ensure
+    a single rate-limit counter and benefit from caching.
     """
     _load_env()
     tickers = set()
+    ds = _init_data_service()
 
     # When sector-filtering, FMP screener is best (supports sector param)
-    if sectors:
+    if sectors and ds and ds.fmp and ds.fmp.has_budget(len(sectors) * 3):
         try:
-            fmp_key = os.getenv("FMP_API_KEY", "").strip()
-            if fmp_key:
-                from services.fmp_client import FMPClient
-                fmp = FMPClient(fmp_key)
-                for sector in sectors:
-                    for exchange in ["NYSE", "NASDAQ", "AMEX"]:
-                        results = fmp.get_stock_screener(
-                            market_cap_min=300_000_000,
-                            volume_min=500_000,
-                            price_min=5.0,
-                            price_max=500.0,
-                            exchange=exchange,
-                            sector=sector,
-                            limit=3000,
-                        )
-                        if results:
-                            symbols = [r["symbol"] for r in results if r.get("symbol")]
-                            tickers.update(symbols)
-                    logger.info(f"FMP screener: {sector} → {len(tickers)} tickers so far")
-                if tickers:
-                    logger.info(f"Sector scan universe: {len(tickers)} tickers for {sectors}")
-                    return sorted(tickers)
+            for sector in sectors:
+                for exchange in ["NYSE", "NASDAQ", "AMEX"]:
+                    results = ds.fmp.get_stock_screener(
+                        market_cap_min=300_000_000,
+                        volume_min=500_000,
+                        price_min=5.0,
+                        price_max=500.0,
+                        exchange=exchange,
+                        sector=sector,
+                        limit=3000,
+                    )
+                    if results:
+                        symbols = [r["symbol"] for r in results if r.get("symbol")]
+                        tickers.update(symbols)
+                logger.info(f"FMP screener: {sector} → {len(tickers)} tickers so far")
+            if tickers:
+                logger.info(f"Sector scan universe: {len(tickers)} tickers for {sectors}")
+                return sorted(tickers)
         except Exception as e:
             logger.warning(f"FMP sector screener failed: {e}")
 
     # Full universe: Alpaca Assets API (free, fast, ~8000+)
-    try:
-        alpaca_key = os.getenv("ALPACA_API_KEY", "").strip()
-        alpaca_secret = os.getenv("ALPACA_SECRET_KEY", "").strip()
-        if alpaca_key and alpaca_secret:
-            from services.alpaca_client import AlpacaClient
-            alpaca = AlpacaClient(alpaca_key, alpaca_secret)
-            assets = alpaca.get_tradeable_assets(
+    if ds and ds.alpaca:
+        try:
+            assets = ds.alpaca.get_tradeable_assets(
                 exchanges=["NYSE", "NASDAQ", "AMEX"]
             )
             if assets:
                 tickers = {a["symbol"] for a in assets}
                 logger.info(f"Alpaca universe: {len(tickers)} tradeable equities")
                 return sorted(tickers)
-    except Exception as e:
-        logger.warning(f"Alpaca assets unavailable: {e}")
+        except Exception as e:
+            logger.warning(f"Alpaca assets unavailable: {e}")
+    else:
+        # Try raw env vars as fallback if DataService didn't init Alpaca
+        try:
+            alpaca_key = os.getenv("ALPACA_API_KEY", "").strip()
+            alpaca_secret = os.getenv("ALPACA_SECRET_KEY", "").strip()
+            if alpaca_key and alpaca_secret:
+                from services.alpaca_client import AlpacaClient
+                alpaca = AlpacaClient(alpaca_key, alpaca_secret)
+                assets = alpaca.get_tradeable_assets(
+                    exchanges=["NYSE", "NASDAQ", "AMEX"]
+                )
+                if assets:
+                    tickers = {a["symbol"] for a in assets}
+                    logger.info(f"Alpaca universe: {len(tickers)} tradeable equities")
+                    return sorted(tickers)
+        except Exception as e:
+            logger.warning(f"Alpaca assets unavailable: {e}")
 
-    # Fallback: FMP screener unfiltered
-    try:
-        fmp_key = os.getenv("FMP_API_KEY", "").strip()
-        if fmp_key:
-            from services.fmp_client import FMPClient
-            fmp = FMPClient(fmp_key)
+    # Fallback: FMP screener unfiltered (only if budget allows)
+    if ds and ds.fmp and ds.fmp.has_budget(3):
+        try:
             for exchange in ["NYSE", "NASDAQ", "AMEX"]:
-                results = fmp.get_stock_screener(
+                results = ds.fmp.get_stock_screener(
                     market_cap_min=300_000_000,
                     volume_min=500_000,
                     price_min=5.0,
@@ -195,8 +205,8 @@ def get_ticker_universe(sectors: list[str] | None = None) -> list[str]:
             if tickers:
                 logger.info(f"FMP universe: {len(tickers)} total tickers")
                 return sorted(tickers)
-    except Exception as e:
-        logger.warning(f"FMP screener unavailable: {e}")
+        except Exception as e:
+            logger.warning(f"FMP screener unavailable: {e}")
 
     # Fallback: Wikipedia S&P lists
     try:
@@ -284,8 +294,25 @@ def fetch_fundamental_data(ticker: str, max_retries: int = 3) -> Optional[Fundam
 def fetch_batch(tickers: list[str], batch_size: int = 50) -> list[FundamentalData]:
     """
     Fetch fundamental data for a list of tickers via DataService (FMP + cache).
-    No per-ticker delays needed — FMP is fast and results are cached.
+    Budget-aware: caps the number of tickers based on FMP requests remaining.
+    Each ticker requires ~3 FMP calls (profile + metrics + ratios).
     """
+    ds = _init_data_service()
+
+    # Budget check: cap tickers to what FMP can handle
+    if ds and ds.fmp:
+        remaining = ds.fmp.requests_remaining
+        max_tickers = remaining // 3  # 3 FMP calls per ticker
+        if max_tickers < len(tickers):
+            logger.warning(
+                f"FMP budget: {remaining} requests remaining, "
+                f"capping scan from {len(tickers)} to {max_tickers} tickers"
+            )
+            tickers = tickers[:max_tickers]
+        logger.info(f"FMP budget: {remaining} remaining, scanning {len(tickers)} tickers")
+    elif ds:
+        logger.info("FMP not available — scanning with cache only")
+
     results = []
     total = len(tickers)
 
@@ -649,6 +676,18 @@ def run_scan(
     # Step 1: Get tickers
     if tickers is None:
         tickers = get_ticker_universe(sectors=sectors)
+
+    # Cap universe to what FMP budget allows (3 calls per ticker)
+    ds = _init_data_service()
+    if ds and ds.fmp:
+        max_scannable = ds.fmp.requests_remaining // 3
+        if len(tickers) > max_scannable:
+            logger.info(
+                f"Capping universe from {len(tickers)} to {max_scannable} tickers "
+                f"(FMP budget: {ds.fmp.requests_remaining} remaining)"
+            )
+            tickers = tickers[:max_scannable]
+
     if sectors:
         logger.info(f"Scanning {len(tickers)} tickers (sectors: {', '.join(sectors)})")
     else:

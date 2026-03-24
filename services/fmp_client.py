@@ -7,6 +7,7 @@ Free tier: 250 requests/day — cache aggressively.
 
 import logging
 import time
+from datetime import date
 from typing import Optional
 
 import requests
@@ -17,7 +18,20 @@ FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
 
 
 class FMPClient:
-    """Client for Financial Modeling Prep API."""
+    """Client for Financial Modeling Prep API.
+
+    Free tier limits:
+    - 250 requests/day
+    - ~10-20 requests/minute (undocumented but enforced via 429s)
+
+    This client enforces a minimum interval between requests to avoid
+    triggering per-minute rate limits, and only counts successful
+    requests against the daily budget.
+    """
+
+    # Minimum seconds between API requests (0.5s = max 120 req/min, well
+    # within FMP's per-minute limit)
+    MIN_REQUEST_INTERVAL = 0.5
 
     def __init__(self, api_key: str):
         if not api_key:
@@ -28,6 +42,27 @@ class FMPClient:
         self.api_key = api_key
         self._daily_requests = 0
         self._daily_limit = 250  # Free tier
+        self._daily_reset_date = date.today()
+        self._last_request_time = 0.0  # monotonic time of last request
+
+    def _check_daily_reset(self) -> None:
+        """Reset the daily counter if the date has changed."""
+        today = date.today()
+        if today != self._daily_reset_date:
+            logger.info(
+                f"FMP daily counter reset: {self._daily_requests} requests "
+                f"used on {self._daily_reset_date}"
+            )
+            self._daily_requests = 0
+            self._daily_reset_date = today
+
+    def _throttle(self) -> None:
+        """Enforce minimum interval between API requests."""
+        now = time.monotonic()
+        elapsed = now - self._last_request_time
+        if elapsed < self.MIN_REQUEST_INTERVAL:
+            time.sleep(self.MIN_REQUEST_INTERVAL - elapsed)
+        self._last_request_time = time.monotonic()
 
     def _request(
         self,
@@ -35,9 +70,13 @@ class FMPClient:
         params: Optional[dict] = None,
         max_retries: int = 3,
     ) -> dict | list | None:
-        """Make an FMP API request with retry logic."""
+        """Make an FMP API request with throttling and retry logic."""
+        self._check_daily_reset()
         if self._daily_requests >= self._daily_limit:
-            logger.warning("FMP daily request limit reached (250). Using cache only.")
+            logger.warning(
+                f"FMP daily limit reached ({self._daily_limit}). "
+                f"Resets at midnight. Using cache only."
+            )
             return None
 
         url = f"{FMP_BASE_URL}/{endpoint}"
@@ -47,10 +86,11 @@ class FMPClient:
 
         for attempt in range(max_retries):
             try:
+                self._throttle()
                 resp = requests.get(url, params=req_params, timeout=30)
-                self._daily_requests += 1
 
                 if resp.status_code == 200:
+                    self._daily_requests += 1  # Only count successes
                     data = resp.json()
                     # FMP returns error messages as dicts
                     if isinstance(data, dict) and "Error Message" in data:
@@ -58,11 +98,16 @@ class FMPClient:
                         return None
                     return data
                 elif resp.status_code == 429:
-                    wait = 2 ** (attempt + 1)
-                    logger.warning(f"FMP rate limited, retrying in {wait}s")
+                    # FMP per-minute rate limit hit — wait longer
+                    wait = 15 * (attempt + 1)  # 15s, 30s, 45s
+                    logger.warning(
+                        f"FMP rate limited (429), waiting {wait}s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
                     time.sleep(wait)
                     continue
                 else:
+                    self._daily_requests += 1  # Count non-429 errors
                     logger.error(f"FMP API error {resp.status_code}: {resp.text}")
                     if attempt < max_retries - 1:
                         time.sleep(2 ** (attempt + 1))
@@ -201,4 +246,16 @@ class FMPClient:
     @property
     def requests_remaining(self) -> int:
         """Estimated API requests remaining today."""
+        self._check_daily_reset()
         return max(0, self._daily_limit - self._daily_requests)
+
+    @property
+    def requests_used(self) -> int:
+        """API requests used today."""
+        self._check_daily_reset()
+        return self._daily_requests
+
+    def has_budget(self, needed: int = 1) -> bool:
+        """Check if we have enough budget for N requests."""
+        self._check_daily_reset()
+        return (self._daily_limit - self._daily_requests) >= needed

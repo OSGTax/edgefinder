@@ -2,7 +2,7 @@
 EdgeFinder Database Models and Helpers
 ======================================
 All database models and connection management.
-Uses SQLAlchemy with SQLite backend.
+Supports PostgreSQL (via DATABASE_URL) with SQLite fallback for local dev.
 """
 
 import os
@@ -18,6 +18,31 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 Base = declarative_base()
+
+
+def _get_database_url(db_path: str | None = None) -> str:
+    """
+    Determine the database URL to use.
+
+    Priority:
+    1. DATABASE_URL env var (Render PostgreSQL provides this)
+    2. db_path argument (for tests / explicit override)
+    3. settings.DATABASE_PATH (SQLite fallback for local dev)
+    """
+    database_url = os.getenv("DATABASE_URL", "")
+
+    # Render provides postgres:// but SQLAlchemy 2.x requires postgresql://
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+    if database_url:
+        return database_url
+
+    # SQLite fallback
+    path = db_path or settings.DATABASE_PATH
+    if path == ":memory:":
+        return "sqlite:///:memory:"
+    return f"sqlite:///{path}"
 
 
 # ── DATABASE MODELS ──────────────────────────────────────────
@@ -223,30 +248,44 @@ def get_engine(db_path: str | None = None, echo: bool = False):
     """Get or create the SQLAlchemy engine."""
     global _engine
     if _engine is None:
-        path = db_path or settings.DATABASE_PATH
-        os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+        url = _get_database_url(db_path)
+        is_sqlite = url.startswith("sqlite")
 
-        if path == ":memory:":
-            _engine = create_engine(
-                "sqlite:///:memory:",
-                echo=echo,
-                connect_args={"check_same_thread": False},
-                poolclass=StaticPool,
-            )
+        if is_sqlite:
+            # Ensure directory exists for SQLite file
+            if ":memory:" not in url:
+                path = db_path or settings.DATABASE_PATH
+                os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+
+            kwargs = {
+                "echo": echo,
+                "connect_args": {"check_same_thread": False},
+            }
+            if ":memory:" in url:
+                kwargs["poolclass"] = StaticPool
+
+            _engine = create_engine(url, **kwargs)
+
+            # Enable WAL mode for better concurrent access (SQLite only)
+            @event.listens_for(_engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
+
         else:
+            # PostgreSQL
             _engine = create_engine(
-                f"sqlite:///{path}",
+                url,
                 echo=echo,
-                connect_args={"check_same_thread": False},
+                pool_size=5,
+                max_overflow=10,
+                pool_pre_ping=True,
             )
 
-        # Enable WAL mode for better concurrent access
-        @event.listens_for(_engine, "connect")
-        def set_sqlite_pragma(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
+        db_type = "PostgreSQL" if not is_sqlite else "SQLite"
+        logger.info(f"Database engine: {db_type}")
 
     return _engine
 
@@ -264,7 +303,11 @@ def init_db(db_path: str | None = None, echo: bool = False):
     """Create all tables."""
     engine = get_engine(db_path, echo)
     Base.metadata.create_all(engine)
-    logger.info(f"Database initialized at {db_path or settings.DATABASE_PATH}")
+    url = _get_database_url(db_path)
+    if url.startswith("postgresql"):
+        logger.info("Database initialized (PostgreSQL)")
+    else:
+        logger.info(f"Database initialized at {db_path or settings.DATABASE_PATH}")
     return engine
 
 

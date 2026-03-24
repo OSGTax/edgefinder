@@ -162,10 +162,15 @@ def get_scheduler_status() -> dict:
 # ── HELPERS ──────────────────────────────────────────────────
 
 def _initial_scan() -> None:
-    """Run initial scan on first boot when watchlist is empty."""
+    """Run initial scan on first boot when watchlist is empty.
+
+    Uses the small default ticker list instead of full universe to avoid
+    burning the entire FMP daily budget on startup. The nightly scan at
+    4:30 PM will do proper sector rotation with the full universe.
+    """
     from modules.scanner import run_scan
     try:
-        results = run_scan(tickers=None, save_to_db=True)  # None = full universe
+        results = run_scan(tickers=settings.SCANNER_DEFAULT_TICKERS[:40], save_to_db=True)
         logger.info(f"Initial scan complete: {len(results)} stocks on watchlist")
 
         # Refresh arena watchlists after initial scan
