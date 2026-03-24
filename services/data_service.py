@@ -23,7 +23,6 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from services.alpaca_client import AlpacaClient
-from services.fmp_client import FMPClient
 from services.cache import DataCache
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,6 @@ class DataService:
         self,
         alpaca_key: Optional[str] = None,
         alpaca_secret: Optional[str] = None,
-        fmp_key: Optional[str] = None,
         cache_path: str = "data/cache.db",
     ):
         # Load secrets from env file
@@ -65,21 +63,13 @@ class DataService:
             except ValueError as e:
                 logger.warning(f"Alpaca not configured: {e}")
 
-        # Initialize FMP (optional — fundamentals fallback to yfinance)
-        fk = fmp_key or os.getenv("FMP_API_KEY", "")
-        self.fmp: Optional[FMPClient] = None
-        if fk:
-            try:
-                self.fmp = FMPClient(fk)
-                logger.info("FMP client initialized")
-            except ValueError as e:
-                logger.warning(f"FMP not configured: {e}")
+        # FMP removed — yfinance provides fundamentals (faster, no rate limits)
+        self.fmp = None
 
         # Track which sources are available
         self._sources = {
             "alpaca": self.alpaca is not None,
-            "fmp": self.fmp is not None,
-            "yfinance": True,  # Always available as fallback
+            "yfinance": True,  # Fundamentals + bar fallback
             "cache": True,
         }
         logger.info(f"Data sources: {self._sources}")
@@ -89,23 +79,14 @@ class DataService:
         """Which data sources are configured and available."""
         return self._sources.copy()
 
-    @property
-    def fmp_remaining_requests(self) -> int:
-        """FMP API requests remaining today. Returns 0 if FMP not configured."""
-        if self.fmp:
-            return self.fmp.requests_remaining
-        return 0
-
     def get_diagnostics(self) -> dict:
         """Return diagnostic info about all data sources."""
-        diag = {
+        return {
             "sources": self._sources.copy(),
-            "fmp_remaining": self.fmp.requests_remaining if self.fmp else 0,
-            "fmp_used": self.fmp.requests_used if self.fmp else 0,
-            "fmp_limit": self.fmp._daily_limit if self.fmp else 0,
+            "fundamentals_source": "yfinance",
+            "bars_source": "alpaca" if self.alpaca else "yfinance",
             "cache_stats": self.cache.get_stats() if self.cache else {},
         }
-        return diag
 
     # ── BAR DATA ────────────────────────────────────────────
 
@@ -248,10 +229,9 @@ class DataService:
 
     def get_profile(self, ticker: str, use_cache: bool = True) -> Optional[dict]:
         """
-        Get company profile. Cache → FMP.
+        Get company profile via yfinance.
 
-        Returns dict with: symbol, companyName, sector, industry, mktCap,
-        price, volAvg, description, etc.
+        Returns dict with: symbol, companyName, sector, industry, mktCap, etc.
         """
         # 1. Cache
         if use_cache:
@@ -259,20 +239,33 @@ class DataService:
             if cached:
                 return cached
 
-        # 2. FMP
-        if self.fmp:
-            data = self.fmp.get_profile(ticker)
-            if data:
+        # 2. yfinance
+        try:
+            import yfinance as yf
+            info = yf.Ticker(ticker).info
+            if info and info.get("marketCap"):
+                data = {
+                    "symbol": ticker,
+                    "companyName": info.get("shortName"),
+                    "sector": info.get("sector"),
+                    "industry": info.get("industry"),
+                    "mktCap": info.get("marketCap"),
+                    "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                    "volAvg": info.get("averageVolume"),
+                }
                 self.cache.store_fundamental(ticker, "profile", data)
                 return data
+        except Exception as e:
+            logger.debug(f"yfinance profile failed for {ticker}: {e}")
 
         return None
 
     def get_fundamentals(self, ticker: str, use_cache: bool = True) -> Optional[dict]:
         """
-        Get comprehensive fundamental data for scoring.
-        Combines metrics, ratios, and profile into a single dict
-        compatible with the existing scanner's FundamentalData format.
+        Get comprehensive fundamental data for scoring via yfinance.
+
+        Single yfinance .info call (~0.2s) provides all fields needed by
+        the scanner's Lynch + Burry scoring. No FMP dependency.
 
         Returns dict with all fields needed by scanner.score_stock().
         """
@@ -282,58 +275,62 @@ class DataService:
             if cached:
                 return cached
 
-        result = {}
+        # 2. yfinance — single .info call gets everything
+        try:
+            import yfinance as yf
+            t = yf.Ticker(ticker)
+            info = t.info
+            if not info or not info.get("marketCap"):
+                return None
 
-        # 2. Try FMP for rich data
-        if self.fmp:
-            profile = self.fmp.get_profile(ticker)
-            metrics = self.fmp.get_key_metrics(ticker, period="annual", limit=2)
-            ratios = self.fmp.get_ratios(ticker, period="annual", limit=2)
+            # D/E: yfinance returns as percentage (e.g. 102.63 = 1.0263 ratio)
+            de_raw = info.get("debtToEquity")
+            debt_to_equity = de_raw / 100.0 if de_raw is not None else None
 
-            if profile:
-                result.update({
-                    "ticker": ticker,
-                    "company_name": profile.get("companyName"),
-                    "sector": profile.get("sector"),
-                    "industry": profile.get("industry"),
-                    "market_cap": profile.get("mktCap"),
-                    "price": profile.get("price"),
-                    "avg_volume": profile.get("volAvg"),
-                    "exchange": profile.get("exchangeShortName"),
-                })
+            # PEG: use direct value, or calculate from P/E and growth
+            peg = info.get("pegRatio")
+            if peg is None:
+                trailing_pe = info.get("trailingPE")
+                eg = info.get("earningsGrowth")
+                if trailing_pe and eg and eg > 0:
+                    peg = trailing_pe / (eg * 100)  # eg is decimal (0.18 = 18%)
 
-            if metrics and len(metrics) > 0:
-                m = metrics[0]
-                result.update({
-                    "peg_ratio": m.get("pegRatio"),
-                    "earnings_growth": m.get("netIncomePerShareGrowth"),
-                    "fcf_yield": m.get("freeCashFlowYield"),
-                    "ev_to_ebitda": m.get("enterpriseValueOverEBITDA"),
-                    "current_ratio": m.get("currentRatio"),
-                    "price_to_tangible_book": m.get("ptbRatio"),
-                })
+            result = {
+                "ticker": ticker,
+                "company_name": info.get("shortName"),
+                "sector": info.get("sector"),
+                "industry": info.get("industry"),
+                "market_cap": info.get("marketCap"),
+                "price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                "avg_volume": info.get("averageVolume"),
+                "exchange": info.get("exchange"),
+                # Lynch fields
+                "peg_ratio": peg,
+                "earnings_growth": info.get("earningsGrowth"),
+                "debt_to_equity": debt_to_equity,
+                "revenue_growth": info.get("revenueGrowth"),
+                "institutional_pct": info.get("heldPercentInstitutions"),
+                # Burry fields
+                "fcf_yield": info.get("freeCashflow") / info.get("marketCap")
+                    if info.get("freeCashflow") and info.get("marketCap")
+                    else None,
+                "ev_to_ebitda": info.get("enterpriseToEbitda"),
+                "current_ratio": info.get("currentRatio"),
+                "short_interest": info.get("shortPercentOfFloat"),
+                "price_to_tangible_book": info.get("priceToBook"),
+            }
 
-            if ratios and len(ratios) > 0:
-                r = ratios[0]
-                result.update({
-                    "debt_to_equity": r.get("debtEquityRatio"),
-                    "revenue_growth": r.get("revenueGrowth"),
-                    "institutional_pct": None,  # FMP doesn't provide this easily
-                    "short_interest": None,  # Need separate endpoint
-                })
-
-        if result:
             self.cache.store_fundamental(ticker, "combined_fundamentals", result)
             return result
 
-        return None
+        except Exception as e:
+            logger.debug(f"yfinance fundamentals failed for {ticker}: {e}")
+            return None
 
     def get_earnings_calendar(
         self, from_date: Optional[str] = None, to_date: Optional[str] = None
     ) -> Optional[list]:
-        """Get upcoming earnings dates from FMP."""
-        if self.fmp:
-            return self.fmp.get_earnings_calendar(from_date, to_date)
+        """Get upcoming earnings dates. Currently unsupported without FMP."""
         return None
 
     # ── MARKET STATUS ───────────────────────────────────────
@@ -342,10 +339,6 @@ class DataService:
         """Check if the US stock market is currently open."""
         if self.alpaca:
             return self.alpaca.is_market_open()
-        if self.fmp:
-            data = self.fmp.get_market_hours()
-            if data:
-                return data.get("isTheStockMarketOpen", False)
         # Fallback: simple time check
         from datetime import timezone
         now = datetime.now(timezone.utc)
