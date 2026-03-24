@@ -334,7 +334,7 @@ class DataService:
             return result
 
         except Exception as e:
-            logger.debug(f"yfinance fundamentals failed for {ticker}: {e}")
+            logger.warning(f"yfinance fundamentals failed for {ticker}: {e}")
             return None
 
     def get_earnings_calendar(

@@ -267,22 +267,25 @@ async def get_scanner_status():
 
 
 @app.post("/api/watchlist/add")
-async def add_ticker_to_watchlist(payload: dict):
+def add_ticker_to_watchlist(payload: dict):
     """
     Manually add a ticker to the watchlist.
     Fetches fundamental data, scores it, and adds regardless of score.
     Includes detailed reasoning for why it scored the way it did.
+
+    Uses plain `def` (not async) so FastAPI runs it in a threadpool —
+    required because fetch_fundamental_data makes blocking HTTP calls.
     """
-    from modules.scanner import fetch_fundamental_data, score_stock
+    from modules.scanner import fetch_fundamental_data_verbose, score_stock
 
     ticker = (payload.get("ticker") or "").strip().upper()
     if not ticker:
         return {"error": "Ticker is required"}
 
-    # Fetch fundamental data (retries with backoff are built into fetch_fundamental_data)
-    data = fetch_fundamental_data(ticker)
+    # Fetch fundamental data with specific error reasons
+    data, error_reason = fetch_fundamental_data_verbose(ticker)
     if not data:
-        return {"error": f"Could not fetch data for {ticker}. Yahoo may be rate limiting — try again in a minute."}
+        return {"error": error_reason}
 
     # Score it
     scored = score_stock(data)
@@ -292,41 +295,64 @@ async def add_ticker_to_watchlist(payload: dict):
     from modules.scanner import _build_notes
     notes = "MANUAL | " + _build_notes(scored)
 
-    # Save to DB (regardless of composite score)
+    # Save to DB (regardless of composite score) — upsert to respect unique constraint
     session = get_session()
     try:
-        # Deactivate any existing entry for this ticker
-        session.query(WatchlistStock).filter(
+        existing = session.query(WatchlistStock).filter(
             WatchlistStock.ticker == ticker,
-            WatchlistStock.is_active == True,  # noqa: E712
-        ).update({"is_active": False})
+        ).first()
 
-        entry = WatchlistStock(
-            ticker=ticker,
-            company_name=data.company_name,
-            sector=data.sector,
-            industry=data.industry,
-            market_cap=data.market_cap,
-            price=data.price,
-            peg_ratio=data.peg_ratio,
-            earnings_growth=data.earnings_growth,
-            debt_to_equity=data.debt_to_equity,
-            revenue_growth=data.revenue_growth,
-            institutional_pct=data.institutional_pct,
-            lynch_category=scored.lynch_category,
-            lynch_score=scored.lynch_score,
-            fcf_yield=data.fcf_yield,
-            price_to_tangible_book=data.price_to_tangible_book,
-            short_interest=data.short_interest,
-            ev_to_ebitda=data.ev_to_ebitda,
-            current_ratio=data.current_ratio,
-            burry_score=scored.burry_score,
-            composite_score=scored.composite_score,
-            scan_date=datetime.now(timezone.utc),
-            is_active=True,
-            notes=notes,
-        )
-        session.add(entry)
+        if existing:
+            # Update existing row in-place
+            existing.company_name = data.company_name
+            existing.sector = data.sector
+            existing.industry = data.industry
+            existing.market_cap = data.market_cap
+            existing.price = data.price
+            existing.peg_ratio = data.peg_ratio
+            existing.earnings_growth = data.earnings_growth
+            existing.debt_to_equity = data.debt_to_equity
+            existing.revenue_growth = data.revenue_growth
+            existing.institutional_pct = data.institutional_pct
+            existing.lynch_category = scored.lynch_category
+            existing.lynch_score = scored.lynch_score
+            existing.fcf_yield = data.fcf_yield
+            existing.price_to_tangible_book = data.price_to_tangible_book
+            existing.short_interest = data.short_interest
+            existing.ev_to_ebitda = data.ev_to_ebitda
+            existing.current_ratio = data.current_ratio
+            existing.burry_score = scored.burry_score
+            existing.composite_score = scored.composite_score
+            existing.scan_date = datetime.now(timezone.utc)
+            existing.is_active = True
+            existing.notes = notes
+        else:
+            entry = WatchlistStock(
+                ticker=ticker,
+                company_name=data.company_name,
+                sector=data.sector,
+                industry=data.industry,
+                market_cap=data.market_cap,
+                price=data.price,
+                peg_ratio=data.peg_ratio,
+                earnings_growth=data.earnings_growth,
+                debt_to_equity=data.debt_to_equity,
+                revenue_growth=data.revenue_growth,
+                institutional_pct=data.institutional_pct,
+                lynch_category=scored.lynch_category,
+                lynch_score=scored.lynch_score,
+                fcf_yield=data.fcf_yield,
+                price_to_tangible_book=data.price_to_tangible_book,
+                short_interest=data.short_interest,
+                ev_to_ebitda=data.ev_to_ebitda,
+                current_ratio=data.current_ratio,
+                burry_score=scored.burry_score,
+                composite_score=scored.composite_score,
+                scan_date=datetime.now(timezone.utc),
+                is_active=True,
+                notes=notes,
+            )
+            session.add(entry)
         session.commit()
 
         return {
@@ -340,6 +366,10 @@ async def add_ticker_to_watchlist(payload: dict):
             "notes": notes,
             "breakdown": breakdown,
         }
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to save {ticker} to watchlist: {e}")
+        return {"error": f"Database error saving {ticker}: {e}"}
     finally:
         session.close()
 
