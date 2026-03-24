@@ -252,20 +252,16 @@ async def add_ticker_to_watchlist(payload: dict):
     Fetches fundamental data, scores it, and adds regardless of score.
     Includes detailed reasoning for why it scored the way it did.
     """
-    import time
     from modules.scanner import fetch_fundamental_data, score_stock
 
     ticker = (payload.get("ticker") or "").strip().upper()
     if not ticker:
         return {"error": "Ticker is required"}
 
-    # Fetch fundamental data (retry once — yfinance is flaky)
+    # Fetch fundamental data (retries with backoff are built into fetch_fundamental_data)
     data = fetch_fundamental_data(ticker)
     if not data:
-        time.sleep(1)
-        data = fetch_fundamental_data(ticker)
-    if not data:
-        return {"error": f"Could not fetch data for {ticker}. yfinance may be unavailable — try again in a minute."}
+        return {"error": f"Could not fetch data for {ticker}. Yahoo may be rate limiting — try again in a minute."}
 
     # Score it
     scored = score_stock(data)
