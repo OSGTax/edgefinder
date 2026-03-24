@@ -27,6 +27,8 @@ htmlcov/
 
 # EdgeFinder data (generated at runtime, don't commit)
 data/*.db
+data/*.db-shm
+data/*.db-wal
 data/*.log
 data/*.csv
 
