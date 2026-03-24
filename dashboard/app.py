@@ -160,7 +160,7 @@ async def health_check():
     return {
         "status": "ok",
         "service": "edgefinder-dashboard",
-        "scheduler_running": status["running"],
+        "scheduler_running": status.get("scheduler_running", status.get("running", False)),
     }
 
 
