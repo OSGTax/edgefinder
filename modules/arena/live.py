@@ -222,6 +222,28 @@ def _restore_state() -> None:
                     f"have ${account.cash:.2f})"
                 )
 
+        # ── Phase 1b: Update restored positions with current prices ──
+        if restored_positions > 0:
+            tickers_needed: set[str] = set()
+            for account in _engine.accounts.values():
+                for pos in account.positions.values():
+                    tickers_needed.add(pos.ticker)
+
+            updated_count = 0
+            for ticker in tickers_needed:
+                price, src = _get_price(ticker)
+                if price:
+                    for account in _engine.accounts.values():
+                        for pos in account.positions.values():
+                            if pos.ticker == ticker:
+                                account.update_position_price(pos.trade_id, price)
+                                updated_count += 1
+
+            logger.info(
+                f"Updated {updated_count} positions across "
+                f"{len(tickers_needed)} tickers with current prices"
+            )
+
         # ── Phase 2: Restore realized P&L + closed trades list ──
         total_realized = 0.0
         total_closed_count = 0
