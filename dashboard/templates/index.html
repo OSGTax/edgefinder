@@ -207,19 +207,28 @@
         .delete-btn:hover { color: var(--red); }
         .chart-area {
             padding: 20px;
-            height: 200px;
-            display: flex;
-            align-items: flex-end;
-            gap: 2px;
-        }
-        .chart-bar {
-            flex: 1;
-            background: var(--blue);
-            border-radius: 2px 2px 0 0;
-            min-width: 3px;
+            height: 280px;
             position: relative;
         }
-        .chart-bar:hover { opacity: 0.8; }
+        .chart-area canvas {
+            width: 100%;
+            height: 100%;
+        }
+        .legend-item {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 12px;
+            font-size: 12px;
+            color: var(--muted);
+            font-weight: normal;
+        }
+        .legend-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 4px;
+        }
         .header-btns { display: flex; gap: 8px; align-items: center; }
         .refresh-btn {
             background: var(--blue);
@@ -270,10 +279,11 @@
 
         <!-- Equity Curve -->
         <div class="panel">
-            <div class="panel-header">Equity Curve</div>
+            <div class="panel-header">Equity Curve <span id="equity-legend" style="margin-left:16px"></span></div>
             <div class="panel-body">
-                <div class="chart-area" id="equity-chart">
-                    <div class="empty" style="width:100%">No snapshots yet</div>
+                <div class="chart-area" id="equity-chart-container">
+                    <canvas id="equity-canvas"></canvas>
+                    <div class="empty" id="equity-empty" style="width:100%;position:absolute;top:50%;left:0;text-align:center">No snapshots yet</div>
                 </div>
             </div>
         </div>
@@ -648,11 +658,13 @@ async function loadStats() {
         const el = document.getElementById('stat-value');
         el.textContent = fmtMoney(account.total_value);
         el.className = 'value';
+
+        const pnl = document.getElementById('stat-pnl');
+        const totalPnl = account.total_pnl != null ? account.total_pnl : 0;
+        pnl.textContent = (totalPnl >= 0 ? '+' : '') + fmtMoney(totalPnl);
+        pnl.className = 'value ' + pnlClass(totalPnl);
     }
     if (stats) {
-        const pnl = document.getElementById('stat-pnl');
-        pnl.textContent = (stats.total_pnl >= 0 ? '+' : '') + fmtMoney(stats.total_pnl);
-        pnl.className = 'value ' + pnlClass(stats.total_pnl);
 
         const wr = document.getElementById('stat-winrate');
         wr.textContent = stats.total_trades > 0 ? (stats.win_rate * 100).toFixed(1) + '%' : '--';
@@ -860,17 +872,140 @@ async function loadTrades() {
 
 async function loadEquityCurve() {
     const data = await fetchJSON('/api/equity-curve');
-    if (!data || data.count === 0) return;
-    const chart = document.getElementById('equity-chart');
-    const values = data.snapshots.map(s => s.total_value);
-    const min = Math.min(...values) * 0.95;
-    const max = Math.max(...values) * 1.05;
-    const range = max - min || 1;
-    chart.innerHTML = values.map((v, i) => {
-        const h = Math.max(4, ((v - min) / range) * 180);
-        const color = v >= values[0] ? 'var(--green)' : 'var(--red)';
-        const date = data.snapshots[i].date || '';
-        return `<div class="chart-bar" style="height:${h}px;background:${color}" title="${date}: ${fmtMoney(v)}"></div>`;
+    const emptyEl = document.getElementById('equity-empty');
+    if (!data || data.count === 0) { emptyEl.style.display = ''; return; }
+    emptyEl.style.display = 'none';
+
+    const strategies = data.strategies;
+    const strategyNames = data.strategy_list;
+    const COLORS = ['#3b82f6', '#22c55e', '#ef4444', '#eab308', '#a855f7', '#ec4899', '#06b6d4', '#f97316'];
+
+    // Collect all unique dates and global value range
+    const allDates = new Set();
+    let globalMin = Infinity, globalMax = -Infinity;
+    for (const name of strategyNames) {
+        for (const snap of strategies[name]) {
+            const d = typeof snap.date === 'string' ? snap.date.split('T')[0] : String(snap.date).split('T')[0];
+            allDates.add(d);
+            globalMin = Math.min(globalMin, snap.total_value);
+            globalMax = Math.max(globalMax, snap.total_value);
+        }
+    }
+    const sortedDates = [...allDates].sort();
+    const yPad = (globalMax - globalMin) * 0.05 || 50;
+    globalMin -= yPad;
+    globalMax += yPad;
+
+    // Setup canvas with devicePixelRatio
+    const container = document.getElementById('equity-chart-container');
+    const canvas = document.getElementById('equity-canvas');
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    if (rect.width === 0) return;
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    const W = rect.width;
+    const H = rect.height;
+
+    const margin = {top: 10, right: 15, bottom: 35, left: 65};
+    const plotW = W - margin.left - margin.right;
+    const plotH = H - margin.top - margin.bottom;
+
+    function xPos(dateStr) {
+        const idx = sortedDates.indexOf(dateStr);
+        if (sortedDates.length <= 1) return margin.left + plotW / 2;
+        return margin.left + (idx / (sortedDates.length - 1)) * plotW;
+    }
+    function yPos(val) {
+        return margin.top + plotH - ((val - globalMin) / (globalMax - globalMin)) * plotH;
+    }
+
+    // Clear canvas
+    ctx.clearRect(0, 0, W, H);
+
+    // Draw grid lines + Y-axis labels
+    ctx.strokeStyle = '#2a2d3a';
+    ctx.fillStyle = '#8b8fa3';
+    ctx.font = '11px -apple-system, BlinkMacSystemFont, monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= 4; i++) {
+        const val = globalMin + (globalMax - globalMin) * (i / 4);
+        const y = yPos(val);
+        ctx.beginPath();
+        ctx.moveTo(margin.left, y);
+        ctx.lineTo(W - margin.right, y);
+        ctx.stroke();
+        ctx.fillText('$' + val.toFixed(0), margin.left - 8, y);
+    }
+
+    // Draw X-axis date labels
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const maxLabels = Math.floor(plotW / 65);
+    const step = Math.max(1, Math.ceil(sortedDates.length / maxLabels));
+    for (let i = 0; i < sortedDates.length; i += step) {
+        const d = new Date(sortedDates[i] + 'T12:00:00');
+        const label = d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+        const x = xPos(sortedDates[i]);
+        // Tick mark
+        ctx.strokeStyle = '#2a2d3a';
+        ctx.beginPath();
+        ctx.moveTo(x, margin.top + plotH);
+        ctx.lineTo(x, margin.top + plotH + 4);
+        ctx.stroke();
+        ctx.fillStyle = '#8b8fa3';
+        ctx.fillText(label, x, margin.top + plotH + 8);
+    }
+
+    // Draw axis lines
+    ctx.strokeStyle = '#3a3d4a';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(margin.left, margin.top);
+    ctx.lineTo(margin.left, margin.top + plotH);
+    ctx.lineTo(W - margin.right, margin.top + plotH);
+    ctx.stroke();
+
+    // Draw each strategy line
+    strategyNames.forEach((name, si) => {
+        const color = COLORS[si % COLORS.length];
+        const snaps = strategies[name];
+        if (snaps.length === 0) return;
+
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+
+        snaps.forEach((snap, i) => {
+            const dateStr = typeof snap.date === 'string' ? snap.date.split('T')[0] : String(snap.date).split('T')[0];
+            const x = xPos(dateStr);
+            const y = yPos(snap.total_value);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        // Draw a small dot at the start of each strategy line
+        const firstSnap = snaps[0];
+        const firstDate = typeof firstSnap.date === 'string' ? firstSnap.date.split('T')[0] : String(firstSnap.date).split('T')[0];
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(xPos(firstDate), yPos(firstSnap.total_value), 3, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // Build legend
+    const legendEl = document.getElementById('equity-legend');
+    legendEl.innerHTML = strategyNames.map((name, i) => {
+        const color = COLORS[i % COLORS.length];
+        return '<span class="legend-item"><span class="legend-dot" style="background:' + color + '"></span>' + name + '</span>';
     }).join('');
 }
 

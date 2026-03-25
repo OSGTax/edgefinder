@@ -640,19 +640,20 @@ async def get_equity_curve(
         if strategy:
             query = query.filter(ArenaSnapshot.strategy_name == strategy)
         snaps = query.limit(limit).all()
+        from collections import OrderedDict
+        grouped: dict[str, list] = OrderedDict()
+        for s in snaps:
+            grouped.setdefault(s.strategy_name, []).append({
+                "date": to_eastern(s.timestamp),
+                "total_value": s.total_equity,
+                "cash": s.cash,
+                "drawdown_pct": s.drawdown_pct,
+                "total_return_pct": s.total_return_pct,
+            })
         return {
             "count": len(snaps),
-            "snapshots": [
-                {
-                    "strategy_name": s.strategy_name,
-                    "date": to_eastern(s.timestamp),
-                    "total_value": s.total_equity,
-                    "cash": s.cash,
-                    "drawdown_pct": s.drawdown_pct,
-                    "total_return_pct": s.total_return_pct,
-                }
-                for s in snaps
-            ],
+            "strategies": dict(grouped),
+            "strategy_list": list(grouped.keys()),
         }
     finally:
         session.close()
@@ -668,13 +669,17 @@ async def get_account():
             total_equity = sum(a.total_equity for a in engine.accounts.values())
             total_cash = sum(a.cash for a in engine.accounts.values())
             total_positions = sum(a.open_position_count for a in engine.accounts.values())
+            num_strategies = len(engine.accounts)
+            total_deposited = num_strategies * settings.ARENA_STARTING_CAPITAL_PER_STRATEGY
             return {
                 "date": to_eastern(datetime.now(timezone.utc)),
                 "cash": round(total_cash, 2),
                 "positions_value": round(total_equity - total_cash, 2),
                 "total_value": round(total_equity, 2),
                 "open_positions": total_positions,
-                "strategies": len(engine.accounts),
+                "strategies": num_strategies,
+                "total_deposited": round(total_deposited, 2),
+                "total_pnl": round(total_equity - total_deposited, 2),
             }
     except Exception:
         pass
@@ -685,6 +690,8 @@ async def get_account():
         "total_value": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
         "open_positions": 0,
         "strategies": 0,
+        "total_deposited": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "total_pnl": 0.0,
     }
 
 
