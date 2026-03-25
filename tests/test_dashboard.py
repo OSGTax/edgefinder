@@ -297,14 +297,15 @@ class TestAccountAPI:
     def test_default_account(self, client):
         resp = client.get("/api/account")
         data = resp.json()
-        # No arena engine running in tests — falls back to 2 * ARENA_STARTING_CAPITAL_PER_STRATEGY
-        assert data["total_value"] == 5000.0
+        # No arena engine running in tests — falls back to zero values
+        assert data["total_value"] == 0.0
         assert data["open_positions"] == 0
 
     def test_account_fields(self, client):
         resp = client.get("/api/account")
         data = resp.json()
-        for f in ["cash", "positions_value", "total_value", "open_positions"]:
+        for f in ["cash", "positions_value", "total_value", "open_positions",
+                   "realized_pnl", "unrealized_pnl"]:
             assert f in data, f"Missing field: {f}"
 
 

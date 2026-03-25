@@ -126,11 +126,17 @@ async def lifespan(app: FastAPI):
     _seed_suggestions_from_json()
 
     from modules.scheduler import start_scheduler, stop_scheduler
-    start_scheduler()
+    try:
+        start_scheduler()
+    except Exception as e:
+        logger.error(f"Scheduler failed to start: {e}")
 
     yield
 
-    stop_scheduler()
+    try:
+        stop_scheduler()
+    except Exception:
+        pass
 
 
 # Initialize app
@@ -196,6 +202,7 @@ async def get_diagnostics():
         "arena_running": arena.get("running", False),
         "strategies": arena.get("strategies", 0),
         "last_signal_check": arena.get("last_signal_check"),
+        "last_signal_result": arena.get("last_signal_result"),
         "last_scan": arena.get("last_scan"),
         "errors": arena.get("errors", [])[-5:],
     }
@@ -692,6 +699,8 @@ async def get_account():
             total_equity = sum(a.total_equity for a in engine.accounts.values())
             total_cash = sum(a.cash for a in engine.accounts.values())
             total_positions = sum(a.open_position_count for a in engine.accounts.values())
+            total_realized = sum(a.realized_pnl for a in engine.accounts.values())
+            total_unrealized = sum(a.unrealized_pnl for a in engine.accounts.values())
             num_strategies = len(engine.accounts)
             total_deposited = num_strategies * settings.ARENA_STARTING_CAPITAL_PER_STRATEGY
             return {
@@ -703,18 +712,22 @@ async def get_account():
                 "strategies": num_strategies,
                 "total_deposited": round(total_deposited, 2),
                 "total_pnl": round(total_equity - total_deposited, 2),
+                "realized_pnl": round(total_realized, 2),
+                "unrealized_pnl": round(total_unrealized, 2),
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Account endpoint failed: {e}")
     return {
         "date": None,
-        "cash": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "cash": 0.0,
         "positions_value": 0.0,
-        "total_value": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "total_value": 0.0,
         "open_positions": 0,
         "strategies": 0,
-        "total_deposited": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "total_deposited": 0.0,
         "total_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "unrealized_pnl": 0.0,
     }
 
 

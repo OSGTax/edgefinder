@@ -271,7 +271,7 @@
         <!-- Stats Cards -->
         <div class="grid" id="stats-grid">
             <div class="stat-card"><div class="label">Account Value</div><div class="value" id="stat-value">--</div></div>
-            <div class="stat-card"><div class="label">Total P&L</div><div class="value" id="stat-pnl">--</div></div>
+            <div class="stat-card"><div class="label">Total P&L</div><div class="value" id="stat-pnl">--</div><div class="label" id="stat-pnl-breakdown" style="font-size:11px;margin-top:4px"></div></div>
             <div class="stat-card"><div class="label">Win Rate</div><div class="value" id="stat-winrate">--</div></div>
             <div class="stat-card"><div class="label">Avg R-Multiple</div><div class="value" id="stat-r">--</div></div>
             <div class="stat-card"><div class="label">Profit Factor</div><div class="value" id="stat-pf">--</div></div>
@@ -664,12 +664,20 @@ async function loadStats() {
         const totalPnl = account.total_pnl != null ? account.total_pnl : 0;
         pnl.textContent = (totalPnl >= 0 ? '+' : '') + fmtMoney(totalPnl);
         pnl.className = 'value ' + pnlClass(totalPnl);
+
+        const breakdown = document.getElementById('stat-pnl-breakdown');
+        const realized = account.realized_pnl != null ? account.realized_pnl : 0;
+        const unrealized = account.unrealized_pnl != null ? account.unrealized_pnl : 0;
+        breakdown.innerHTML =
+            '<span class="' + pnlClass(realized) + '">Realized: ' + (realized >= 0 ? '+' : '') + fmtMoney(realized) + '</span>' +
+            ' &nbsp;|&nbsp; ' +
+            '<span class="' + pnlClass(unrealized) + '">Open: ' + (unrealized >= 0 ? '+' : '') + fmtMoney(unrealized) + '</span>';
     }
     if (stats) {
 
         const wr = document.getElementById('stat-winrate');
-        wr.textContent = stats.total_trades > 0 ? (stats.win_rate * 100).toFixed(1) + '%' : '--';
-        wr.className = 'value ' + (stats.win_rate >= 0.5 ? 'positive' : stats.total_trades > 0 ? 'negative' : '');
+        wr.textContent = stats.total_trades > 0 ? stats.win_rate.toFixed(1) + '%' : '--';
+        wr.className = 'value ' + (stats.win_rate >= 50 ? 'positive' : stats.total_trades > 0 ? 'negative' : '');
 
         const r = document.getElementById('stat-r');
         r.textContent = stats.total_trades > 0 ? fmt(stats.avg_r_multiple) + 'R' : '--';
@@ -1165,6 +1173,7 @@ async function loadArena() {
         const statsEl = document.getElementById('arena-stats');
         const ds = status.data_source || 'unknown';
         const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'}) : 'never';
+        const lastResult = status.last_signal_result || '';
 
         // Data source health dots
         let sourceDots = '';
@@ -1179,7 +1188,7 @@ async function loadArena() {
             <div class="stat-card"><div class="label">Strategies</div><div class="value">${status.enabled || 0} / ${status.strategies || 0}</div></div>
             <div class="stat-card"><div class="label">Open Positions</div><div class="value">${status.total_open_positions || 0}</div></div>
             <div class="stat-card"><div class="label">Closed Trades</div><div class="value">${status.total_closed_trades || 0}</div></div>
-            <div class="stat-card"><div class="label">Last Signal Check</div><div class="value" style="font-size:14px;">${lastCheck}</div></div>
+            <div class="stat-card"><div class="label">Last Signal Check</div><div class="value" style="font-size:14px;">${lastCheck}</div>${lastResult ? `<div class="label" style="font-size:11px;margin-top:2px;">${lastResult}</div>` : ''}</div>
             ${sourceDots}
             <div class="stat-card"><div class="label">Watchlist</div><div class="value">${diag ? diag.watchlist_count : '?'}</div></div>
         `;

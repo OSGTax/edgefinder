@@ -8,7 +8,7 @@ Runs the arena trading pipeline on a schedule using APScheduler:
         Every  5 min: Monitor open positions (stops, targets, trailing)
     3:50 PM ET: Close all day trades
     4:05 PM ET: Save daily strategy snapshots
-    4:30 PM ET: Run nightly fundamental scan + refresh watchlists
+    6:15 PM ET: Run nightly fundamental scan + refresh watchlists
 
 Integrates with the FastAPI dashboard via lifespan hook.
 """
@@ -92,10 +92,10 @@ def create_scheduler() -> BackgroundScheduler:
         misfire_grace_time=120,
     )
 
-    # Nightly scan + watchlist refresh: 5:00 PM ET, Mon-Fri
+    # Nightly scan + watchlist refresh: 6:15 PM ET, Mon-Fri
     scheduler.add_job(
         arena_nightly_scan,
-        CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone=ET),
+        CronTrigger(hour=18, minute=15, day_of_week="mon-fri", timezone=ET),
         id="arena_nightly_scan",
         replace_existing=True,
         misfire_grace_time=300,
@@ -120,8 +120,14 @@ def start_scheduler() -> None:
         thread.start()
 
     # Initialize arena engine
-    from modules.arena.live import init_arena
-    init_arena()
+    try:
+        from modules.arena.live import init_arena
+        init_arena()
+    except Exception as e:
+        logger.error(
+            f"Arena initialization failed — scheduler will start "
+            f"without arena: {e}"
+        )
 
     # Create and start scheduler
     _scheduler = create_scheduler()
