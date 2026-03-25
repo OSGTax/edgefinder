@@ -153,22 +153,31 @@ def _refresh_watchlists() -> None:
 
 
 def _restore_state() -> None:
-    """Restore open positions and account state from database after restart.
+    """Restore full account state from database after restart.
 
     On every Render deploy, VirtualAccount instances are created fresh with
-    starting capital. This function loads OPEN trades from ArenaTradeLog back
-    into the in-memory accounts so balances and positions survive restarts.
+    starting capital. This function restores:
+    1. OPEN positions (deduct cost from cash, rebuild in-memory positions)
+    2. Realized P&L from CLOSED trades (add net profit/loss back to cash)
+    3. Closed trades list (so realized_pnl, win_rate properties work)
+    4. PDT day trade counter (from recent DAY-type closed trades)
+    5. Peak equity (from latest ArenaSnapshot per strategy)
+
+    This ensures account balances survive restarts, deploys, and code changes.
     """
     if _engine is None:
         return
 
+    from datetime import timedelta
+
     session = get_session()
     try:
+        # ── Phase 1: Restore OPEN positions ─────────────────────
         open_trades = session.query(ArenaTradeLog).filter(
             ArenaTradeLog.status == "OPEN"
         ).all()
 
-        restored = 0
+        restored_positions = 0
         for trade in open_trades:
             strategy_name = trade.strategy_name
             if strategy_name not in _engine.accounts:
@@ -201,7 +210,7 @@ def _restore_state() -> None:
                 position.high_water_mark = position.entry_price
                 position.last_known_price = position.entry_price
                 account.positions[position.trade_id] = position
-                restored += 1
+                restored_positions += 1
                 logger.info(
                     f"Restored position: {trade.ticker} ({strategy_name}) "
                     f"{trade.shares}x @ ${trade.execution_price:.2f}"
@@ -213,7 +222,69 @@ def _restore_state() -> None:
                     f"have ${account.cash:.2f})"
                 )
 
-        # Restore peak equity from most recent snapshot per strategy
+        # ── Phase 2: Restore realized P&L + closed trades list ──
+        total_realized = 0.0
+        total_closed_count = 0
+        pdt_cutoff = datetime.now(timezone.utc) - timedelta(
+            days=settings.PDT_WINDOW_DAYS
+        )
+
+        for strategy_name, account in _engine.accounts.items():
+            closed_trades = session.query(ArenaTradeLog).filter(
+                ArenaTradeLog.strategy_name == strategy_name,
+                ArenaTradeLog.status == "CLOSED",
+            ).order_by(ArenaTradeLog.exit_timestamp.asc()).all()
+
+            realized_pnl = 0.0
+            for trade in closed_trades:
+                pnl = trade.pnl_dollars or 0.0
+                realized_pnl += pnl
+
+                # Populate in-memory closed_trades list so
+                # realized_pnl property and win_rate work correctly
+                account.closed_trades.append({
+                    "trade_id": trade.trade_id,
+                    "strategy_name": trade.strategy_name,
+                    "ticker": trade.ticker,
+                    "direction": trade.direction or "LONG",
+                    "trade_type": trade.trade_type or "SWING",
+                    "entry_price": trade.execution_price,
+                    "exit_price": trade.exit_price,
+                    "shares": trade.shares,
+                    "stop_loss": trade.stop_loss,
+                    "target": trade.target,
+                    "entry_time": trade.execution_timestamp,
+                    "exit_time": trade.exit_timestamp,
+                    "pnl_dollars": pnl,
+                    "pnl_percent": trade.pnl_percent or 0.0,
+                    "r_multiple": trade.r_multiple or 0.0,
+                    "exit_reason": trade.exit_reason or "",
+                    "confidence": trade.confidence or 0.0,
+                    "slippage_applied": trade.slippage or 0.0,
+                    "metadata": trade.extra_data or {},
+                })
+
+                # Restore PDT day trade counter from recent DAY closes
+                if (
+                    trade.trade_type == "DAY"
+                    and trade.exit_timestamp
+                    and trade.exit_timestamp >= pdt_cutoff
+                ):
+                    account._day_trades.append(trade.exit_timestamp)
+
+            # Add realized P&L to cash — the critical fix
+            account.cash += realized_pnl
+            total_realized += realized_pnl
+            total_closed_count += len(closed_trades)
+
+            if realized_pnl != 0:
+                logger.info(
+                    f"Restored realized P&L for {strategy_name}: "
+                    f"${realized_pnl:+.2f} from {len(closed_trades)} "
+                    f"closed trades"
+                )
+
+        # ── Phase 3: Restore peak equity from snapshots ─────────
         for strategy_name, account in _engine.accounts.items():
             latest_snap = session.query(ArenaSnapshot).filter(
                 ArenaSnapshot.strategy_name == strategy_name
@@ -223,7 +294,9 @@ def _restore_state() -> None:
                 account.peak_equity = latest_snap.peak_equity
 
         logger.info(
-            f"State restored: {restored} open positions "
+            f"State restored: {restored_positions} open positions, "
+            f"{total_closed_count} closed trades "
+            f"(${total_realized:+.2f} realized P&L) "
             f"across {len(_engine.accounts)} strategies"
         )
 
