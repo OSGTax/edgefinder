@@ -8,7 +8,9 @@ Called by the scheduler jobs — does not own the scheduler lifecycle.
 """
 
 import logging
+import threading
 from datetime import datetime, timezone
+from functools import wraps
 from typing import Optional
 
 from config import settings
@@ -24,6 +26,43 @@ from modules.database import (
 from modules.utils import to_eastern, compute_trade_hash
 
 logger = logging.getLogger(__name__)
+
+
+def _job_timeout(seconds: int = 120):
+    """Decorator to prevent scheduler jobs from hanging indefinitely.
+
+    Runs the job in a daemon thread with a timeout. If the job doesn't
+    complete within `seconds`, logs an error and returns an empty list
+    so the scheduler thread is freed for the next run.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            result = [None]
+            exception = [None]
+
+            def target():
+                try:
+                    result[0] = func(*args, **kwargs)
+                except Exception as e:
+                    exception[0] = e
+
+            thread = threading.Thread(target=target, daemon=True)
+            thread.start()
+            thread.join(timeout=seconds)
+
+            if thread.is_alive():
+                logger.error(
+                    f"Job {func.__name__} timed out after {seconds}s — "
+                    f"freeing scheduler thread"
+                )
+                return []
+            if exception[0]:
+                raise exception[0]
+            return result[0]
+        return wrapper
+    return decorator
+
 
 # ── MODULE STATE ─────────────────────────────────────────────
 
@@ -466,6 +505,7 @@ def _get_price(ticker: str) -> tuple[Optional[float], str]:
 
 # ── LIVE JOBS ────────────────────────────────────────────────
 
+@_job_timeout(seconds=120)
 def arena_signal_check() -> list[dict]:
     """Fetch bars for watchlist, feed to all strategies, execute signals.
 
@@ -531,6 +571,7 @@ def arena_signal_check() -> list[dict]:
         return []
 
 
+@_job_timeout(seconds=60)
 def arena_position_monitor() -> list[dict]:
     """Fetch current prices for open positions, check stops/targets.
 

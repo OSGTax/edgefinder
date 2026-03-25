@@ -57,6 +57,7 @@ def create_scheduler() -> BackgroundScheduler:
         CronTrigger(minute="*/15", hour="7-17", day_of_week="mon-fri", timezone=ET),
         id="arena_signal_check",
         replace_existing=True,
+        misfire_grace_time=60,
     )
 
     # Position monitor: every 5 min, 7AM-6PM ET, Mon-Fri
@@ -70,6 +71,7 @@ def create_scheduler() -> BackgroundScheduler:
         ),
         id="arena_position_monitor",
         replace_existing=True,
+        misfire_grace_time=60,
     )
 
     # Close day trades: 3:50 PM ET, Mon-Fri
@@ -78,6 +80,7 @@ def create_scheduler() -> BackgroundScheduler:
         CronTrigger(hour=15, minute=50, day_of_week="mon-fri", timezone=ET),
         id="arena_close_day_trades",
         replace_existing=True,
+        misfire_grace_time=120,
     )
 
     # Strategy snapshots: 4:05 PM ET, Mon-Fri
@@ -86,6 +89,7 @@ def create_scheduler() -> BackgroundScheduler:
         CronTrigger(hour=16, minute=5, day_of_week="mon-fri", timezone=ET),
         id="arena_snapshot",
         replace_existing=True,
+        misfire_grace_time=120,
     )
 
     # Nightly scan + watchlist refresh: 5:00 PM ET, Mon-Fri
@@ -94,6 +98,7 @@ def create_scheduler() -> BackgroundScheduler:
         CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone=ET),
         id="arena_nightly_scan",
         replace_existing=True,
+        misfire_grace_time=300,
     )
 
     return scheduler
