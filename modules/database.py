@@ -304,10 +304,38 @@ def get_session(db_path: str | None = None) -> Session:
     return _SessionFactory()
 
 
+def _migrate_schema(engine):
+    """Add columns that exist in models but not yet in the database.
+
+    SQLAlchemy's create_all() only creates missing *tables*, not missing
+    *columns*.  This lightweight migration adds any columns that were
+    introduced after the table was first created.
+    """
+    from sqlalchemy import text, inspect as sa_inspect
+
+    inspector = sa_inspect(engine)
+    migrations = [
+        # (table, column_name, column_sql)
+        ("arena_trade_log", "sequence_num", "INTEGER"),
+        ("arena_trade_log", "integrity_hash", "VARCHAR(64)"),
+    ]
+    with engine.begin() as conn:
+        for table, col, col_type in migrations:
+            if table not in inspector.get_table_names():
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            if col not in existing:
+                logger.info(f"Migration: adding {table}.{col} ({col_type})")
+                conn.execute(text(
+                    f'ALTER TABLE {table} ADD COLUMN {col} {col_type}'
+                ))
+
+
 def init_db(db_path: str | None = None, echo: bool = False):
     """Create all tables."""
     engine = get_engine(db_path, echo)
     Base.metadata.create_all(engine)
+    _migrate_schema(engine)
     url = _get_database_url(db_path)
     if url.startswith("postgresql"):
         logger.info("Database initialized (PostgreSQL)")
