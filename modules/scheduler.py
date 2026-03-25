@@ -18,7 +18,8 @@ import threading
 from datetime import datetime, timezone
 from typing import Optional
 
-import pytz
+from zoneinfo import ZoneInfo
+
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -28,7 +29,7 @@ from modules.scanner import get_active_watchlist
 
 logger = logging.getLogger(__name__)
 
-ET = pytz.timezone("US/Eastern")
+ET = ZoneInfo("America/New_York")
 
 # ── MODULE STATE ─────────────────────────────────────────────
 

@@ -7,11 +7,15 @@ curl_cffi>=0.7.0
 pandas>=2.0.0
 numpy>=1.24.0
 
-# Technical Analysis
-pandas_ta>=0.3.14b0
+# Technical Analysis (optional — pure pandas/numpy fallback used when unavailable)
+pandas_ta>=0.3.14b0; python_version < "3.12"
+
+# Timezone data (required for ZoneInfo on some platforms)
+tzdata>=2023.3
 
 # Sentiment Analysis
 vaderSentiment>=3.3.2
+sgmllib3k>=1.0.0
 feedparser>=6.0.10
 beautifulsoup4>=4.12.0
 requests>=2.31.0

@@ -330,13 +330,14 @@ class TestDataService:
             assert ds.available_sources["yfinance"] is True
 
     def test_initializes_with_keys(self):
-        """Should initialize all clients when keys provided."""
+        """Should initialize Alpaca client when keys provided."""
         ds = DataService(
             alpaca_key="test", alpaca_secret="test",
-            fmp_key="test", cache_path=":memory:"
+            cache_path=":memory:"
         )
         assert ds.alpaca is not None
-        assert ds.fmp is not None
+        # FMP removed — yfinance provides fundamentals directly
+        assert ds.fmp is None
 
     def test_cache_first_lookup(self, sample_bars_df):
         """Should return cached data without hitting APIs."""
@@ -374,14 +375,19 @@ class TestDataService:
         # yfinance should NOT have been called again
         mock_yf.assert_not_called()
 
-    @patch("services.data_service.DataService._yfinance_profile")
-    def test_profile_fallback(self, mock_yf):
+    @patch("yfinance.Ticker")
+    def test_profile_fallback(self, mock_ticker_cls):
         """Should fall back to yfinance for profiles."""
-        mock_yf.return_value = {
-            "symbol": "AAPL",
-            "companyName": "Apple Inc.",
+        mock_ticker = MagicMock()
+        mock_ticker.info = {
+            "shortName": "Apple Inc.",
             "sector": "Technology",
+            "industry": "Consumer Electronics",
+            "marketCap": 2800000000000,
+            "currentPrice": 175.0,
+            "averageVolume": 50000000,
         }
+        mock_ticker_cls.return_value = mock_ticker
 
         ds = DataService(cache_path=":memory:")
         profile = ds.get_profile("AAPL")
@@ -389,17 +395,29 @@ class TestDataService:
         assert profile is not None
         assert profile["companyName"] == "Apple Inc."
 
-    @patch("services.data_service.DataService._yfinance_fundamentals")
-    def test_fundamentals_combined(self, mock_yf):
+    @patch("yfinance.Ticker")
+    def test_fundamentals_combined(self, mock_ticker_cls):
         """Should return combined fundamental data."""
-        mock_yf.return_value = {
-            "ticker": "AAPL",
-            "company_name": "Apple Inc.",
+        mock_ticker = MagicMock()
+        mock_ticker.info = {
+            "shortName": "Apple Inc.",
             "sector": "Technology",
-            "market_cap": 2800000000000,
-            "peg_ratio": 1.2,
-            "debt_to_equity": 0.45,
+            "industry": "Consumer Electronics",
+            "marketCap": 2800000000000,
+            "currentPrice": 175.0,
+            "averageVolume": 50000000,
+            "pegRatio": 1.2,
+            "debtToEquity": 45.0,  # yfinance returns as percentage
+            "earningsGrowth": 0.25,
+            "revenueGrowth": 0.15,
+            "heldPercentInstitutions": 0.60,
+            "freeCashflow": 100000000000,
+            "enterpriseToEbitda": 22.0,
+            "currentRatio": 1.1,
+            "shortPercentOfFloat": 0.01,
+            "priceToBook": 45.0,
         }
+        mock_ticker_cls.return_value = mock_ticker
 
         ds = DataService(cache_path=":memory:")
         data = ds.get_fundamentals("AAPL")

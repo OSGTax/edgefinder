@@ -278,8 +278,9 @@ class TestEquityCurveAPI:
         resp = client.get("/api/equity-curve")
         data = resp.json()
         assert data["count"] == 5
-        assert data["snapshots"][0]["total_value"] <= data["snapshots"][-1]["total_value"]
-        assert data["snapshots"][0]["strategy_name"] == "lynch"
+        assert "lynch" in data["strategies"]
+        lynch_snaps = data["strategies"]["lynch"]
+        assert lynch_snaps[0]["total_value"] <= lynch_snaps[-1]["total_value"]
 
     def test_curve_limit(self, client):
         _seed_snapshots()

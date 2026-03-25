@@ -10,8 +10,8 @@ setup(
         "yfinance>=0.2.31",
         "pandas>=2.0.0",
         "numpy>=1.24.0",
-        "pandas-ta>=0.3.14b",
         "vaderSentiment>=3.3.2",
+        "sgmllib3k>=1.0.0",
         "feedparser>=6.0.10",
         "beautifulsoup4>=4.12.0",
         "requests>=2.31.0",
@@ -19,7 +19,11 @@ setup(
         "fastapi>=0.104.0",
         "uvicorn>=0.24.0",
         "apscheduler>=3.10.0",
+        "tzdata>=2023.3",
         "rich>=13.0.0",
         "python-dotenv>=1.0.0",
     ],
+    extras_require={
+        "ta": ["pandas-ta>=0.3.14b0"],
+    },
 )

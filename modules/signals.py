@@ -17,13 +17,68 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
-import pandas_ta as ta
+
+try:
+    import pandas_ta as ta
+    # Verify pandas_ta is real (not a MagicMock from test fixtures)
+    _TA_AVAILABLE = callable(getattr(ta, "ema", None)) and not hasattr(ta.ema, "_mock_name")
+except ImportError:
+    _TA_AVAILABLE = False
+
+import numpy as np
 import yfinance as yf
 
 from config import settings
 from modules.database import Signal as SignalRecord, get_session, init_db
 
 logger = logging.getLogger(__name__)
+
+
+# ── PURE PANDAS/NUMPY FALLBACKS (when pandas_ta unavailable) ─────
+
+def _fallback_ema(series: pd.Series, length: int) -> Optional[pd.Series]:
+    """Compute EMA using pandas ewm (no pandas_ta required)."""
+    if series is None or len(series) < length:
+        return None
+    return series.ewm(span=length, adjust=False).mean()
+
+
+def _fallback_rsi(series: pd.Series, length: int = 14) -> Optional[pd.Series]:
+    """Compute RSI using pure pandas (no pandas_ta required)."""
+    if series is None or len(series) < length + 1:
+        return None
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+
+def _fallback_macd(
+    series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
+) -> Optional[pd.DataFrame]:
+    """Compute MACD using pure pandas (no pandas_ta required)."""
+    if series is None or len(series) < slow + signal:
+        return None
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    macd_signal = macd_line.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd_line - macd_signal
+    return pd.DataFrame({
+        f"MACD_{fast}_{slow}_{signal}": macd_line,
+        f"MACDs_{fast}_{slow}_{signal}": macd_signal,
+        f"MACDh_{fast}_{slow}_{signal}": macd_hist,
+    })
+
+
+def _fallback_sma(series: pd.Series, length: int) -> Optional[pd.Series]:
+    """Compute SMA using pandas rolling (no pandas_ta required)."""
+    if series is None or len(series) < length:
+        return None
+    return series.rolling(window=length).mean()
 
 
 # ── DATA CLASSES ─────────────────────────────────────────────
@@ -108,10 +163,11 @@ def compute_indicators(df: pd.DataFrame, ticker: str = "") -> Optional[Indicator
         volume = df["Volume"]
 
         # EMAs
-        ema_fast_day = ta.ema(close, length=settings.SIGNAL_EMA_FAST_DAY)
-        ema_slow_day = ta.ema(close, length=settings.SIGNAL_EMA_SLOW_DAY)
-        ema_fast_swing = ta.ema(close, length=settings.SIGNAL_EMA_FAST_SWING)
-        ema_slow_swing = ta.ema(close, length=settings.SIGNAL_EMA_SLOW_SWING)
+        _ema = ta.ema if _TA_AVAILABLE else _fallback_ema
+        ema_fast_day = _ema(close, length=settings.SIGNAL_EMA_FAST_DAY)
+        ema_slow_day = _ema(close, length=settings.SIGNAL_EMA_SLOW_DAY)
+        ema_fast_swing = _ema(close, length=settings.SIGNAL_EMA_FAST_SWING)
+        ema_slow_swing = _ema(close, length=settings.SIGNAL_EMA_SLOW_SWING)
 
         if ema_fast_day is not None and len(ema_fast_day) >= 2:
             snap.ema_fast_day = _safe_float(ema_fast_day.iloc[-1])
@@ -127,17 +183,26 @@ def compute_indicators(df: pd.DataFrame, ticker: str = "") -> Optional[Indicator
             snap.prev_ema_slow_swing = _safe_float(ema_slow_swing.iloc[-2])
 
         # RSI
-        rsi = ta.rsi(close, length=settings.SIGNAL_RSI_PERIOD)
+        _rsi = ta.rsi if _TA_AVAILABLE else _fallback_rsi
+        rsi = _rsi(close, length=settings.SIGNAL_RSI_PERIOD)
         if rsi is not None and len(rsi) >= 1:
             snap.rsi = _safe_float(rsi.iloc[-1])
 
         # MACD
-        macd_df = ta.macd(
-            close,
-            fast=settings.SIGNAL_MACD_FAST,
-            slow=settings.SIGNAL_MACD_SLOW,
-            signal=settings.SIGNAL_MACD_SIGNAL,
-        )
+        if _TA_AVAILABLE:
+            macd_df = ta.macd(
+                close,
+                fast=settings.SIGNAL_MACD_FAST,
+                slow=settings.SIGNAL_MACD_SLOW,
+                signal=settings.SIGNAL_MACD_SIGNAL,
+            )
+        else:
+            macd_df = _fallback_macd(
+                close,
+                fast=settings.SIGNAL_MACD_FAST,
+                slow=settings.SIGNAL_MACD_SLOW,
+                signal=settings.SIGNAL_MACD_SIGNAL,
+            )
         if macd_df is not None and len(macd_df) >= 2:
             # Dynamically find MACD columns by prefix to handle pandas_ta
             # naming variations (e.g., MACD_12_26_9, MACDs_12_26_9, MACDh_12_26_9)
@@ -161,7 +226,8 @@ def compute_indicators(df: pd.DataFrame, ticker: str = "") -> Optional[Indicator
                 snap.macd_histogram = _safe_float(macd_df[hist_col].iloc[-1])
 
         # Volume
-        vol_avg = ta.sma(volume.astype(float), length=settings.SIGNAL_VOLUME_AVG_PERIOD)
+        _sma = ta.sma if _TA_AVAILABLE else _fallback_sma
+        vol_avg = _sma(volume.astype(float), length=settings.SIGNAL_VOLUME_AVG_PERIOD)
         if vol_avg is not None and len(vol_avg) >= 1:
             snap.avg_volume = _safe_float(vol_avg.iloc[-1])
         snap.current_volume = _safe_float(volume.iloc[-1])

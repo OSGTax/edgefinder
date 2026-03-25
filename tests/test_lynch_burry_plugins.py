@@ -496,15 +496,23 @@ class TestSentimentIntegration:
 
 class TestArenaIntegration:
 
+    @patch("modules.arena.executor.datetime")
     @patch("modules.strategies.lynch.detect_signals")
     @patch("modules.strategies.lynch.compute_indicators")
     @patch("modules.strategies.burry.detect_signals")
     @patch("modules.strategies.burry.compute_indicators")
     def test_both_strategies_in_arena(
-        self, burry_compute, burry_detect, lynch_compute, lynch_detect
+        self, burry_compute, burry_detect, lynch_compute, lynch_detect, mock_dt
     ):
         """Both Lynch and Burry can run simultaneously in the arena."""
+        from zoneinfo import ZoneInfo
+
         from modules.arena.engine import ArenaEngine
+
+        # Mock time to be during market hours (Wednesday 12:00 PM ET)
+        fake_now = datetime(2025, 6, 4, 16, 0, 0, tzinfo=timezone.utc)  # Wed 12:00 ET
+        mock_dt.now.return_value = fake_now
+        mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
 
         engine = ArenaEngine(starting_capital=10000)
 
