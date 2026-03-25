@@ -7,10 +7,17 @@ Provides mock data so tests don't hit real APIs.
 
 import sys
 import os
-import pytest
+from unittest.mock import MagicMock
 
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Mock unavailable C-extension packages that may not be installable in CI/test envs
+for _mod in ("pandas_ta", "yfinance", "multitasking"):
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+import pytest
 
 from modules.database import init_db, reset_engine
 from modules.scanner import FundamentalData

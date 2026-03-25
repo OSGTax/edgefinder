@@ -86,6 +86,22 @@ def init_arena() -> ArenaEngine:
     # Import strategy modules to trigger registration
     import modules.strategies.lynch  # noqa: F401
     import modules.strategies.burry  # noqa: F401
+    import modules.strategies.alpha  # noqa: F401
+    import modules.strategies.bravo  # noqa: F401
+    import modules.strategies.charlie  # noqa: F401
+    import modules.strategies.delta  # noqa: F401
+    import modules.strategies.echo  # noqa: F401
+    import modules.strategies.foxtrot  # noqa: F401
+    import modules.strategies.golf  # noqa: F401
+    import modules.strategies.hotel  # noqa: F401
+    import modules.strategies.india  # noqa: F401
+    import modules.strategies.juliet  # noqa: F401
+    import modules.strategies.kilo  # noqa: F401
+    import modules.strategies.lima  # noqa: F401
+    import modules.strategies.mike  # noqa: F401
+    import modules.strategies.november  # noqa: F401
+    import modules.strategies.oscar  # noqa: F401
+    import modules.strategies.papa  # noqa: F401
 
     _engine = ArenaEngine(
         starting_capital=settings.ARENA_STARTING_CAPITAL_PER_STRATEGY,
