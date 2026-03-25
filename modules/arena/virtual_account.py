@@ -62,6 +62,11 @@ class Position:
         return self.unrealized_pnl / self.cost_basis * 100
 
     @property
+    def market_value(self) -> float:
+        price = self.last_known_price or self.entry_price
+        return price * self.shares
+
+    @property
     def r_multiple(self) -> float:
         if self.risk_per_share == 0:
             return 0.0
