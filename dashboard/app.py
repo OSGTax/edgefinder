@@ -30,6 +30,8 @@ from typing import Optional
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 
+from sqlalchemy.exc import IntegrityError
+
 from config import settings
 from modules.database import init_db, get_session
 from modules.database import (
@@ -359,7 +361,19 @@ def add_ticker_to_watchlist(payload: dict):
                 is_active=True,
                 notes=notes,
             )
-            session.add(entry)
+            try:
+                with session.begin_nested():
+                    session.add(entry)
+            except IntegrityError:
+                # Race condition: re-query and update instead
+                existing = session.query(WatchlistStock).filter(
+                    WatchlistStock.ticker == ticker,
+                ).first()
+                if existing:
+                    existing.composite_score = scored.composite_score
+                    existing.scan_date = datetime.now(timezone.utc)
+                    existing.is_active = True
+                    existing.notes = notes
         session.commit()
 
         return {
@@ -394,8 +408,17 @@ async def get_watchlist(
             WatchlistStock.composite_score.desc()
         ).limit(limit).all()
 
+        # Deduplicate by ticker (defense-in-depth)
+        seen = set()
+        unique_stocks = []
+        for s in stocks:
+            if s.ticker in seen:
+                continue
+            seen.add(s.ticker)
+            unique_stocks.append(s)
+
         return {
-            "count": len(stocks),
+            "count": len(unique_stocks),
             "watchlist": [
                 {
                     "ticker": s.ticker,
@@ -417,7 +440,7 @@ async def get_watchlist(
                     "scan_date": to_eastern(s.scan_date),
                     "notes": s.notes,
                 }
-                for s in stocks
+                for s in unique_stocks
             ],
         }
     finally:

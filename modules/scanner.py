@@ -21,6 +21,8 @@ from typing import Optional
 import pandas as pd
 from dotenv import load_dotenv
 
+from sqlalchemy.exc import IntegrityError
+
 from config import settings
 from modules.database import WatchlistStock, get_session, init_db
 
@@ -908,7 +910,7 @@ def _save_watchlist(watchlist: list[ScoredStock]):
                 existing.notes = _build_notes(s)
                 upserted += 1
             else:
-                # Insert new row
+                # Insert new row (with savepoint to handle race conditions)
                 entry = WatchlistStock(
                     ticker=s.data.ticker,
                     company_name=s.data.company_name,
@@ -934,8 +936,24 @@ def _save_watchlist(watchlist: list[ScoredStock]):
                     is_active=True,
                     notes=_build_notes(s),
                 )
-                session.add(entry)
-                inserted += 1
+                try:
+                    with session.begin_nested():
+                        session.add(entry)
+                    inserted += 1
+                except IntegrityError:
+                    # Race condition: another thread inserted first
+                    logger.debug(
+                        f"Duplicate insert caught for {s.data.ticker}, "
+                        f"falling back to update"
+                    )
+                    existing = session.query(WatchlistStock).filter(
+                        WatchlistStock.ticker == s.data.ticker,
+                    ).first()
+                    if existing:
+                        existing.composite_score = s.composite_score
+                        existing.scan_date = datetime.utcnow()
+                        existing.is_active = True
+                        upserted += 1
 
         # Deactivate re-scanned tickers that no longer qualify for ANY strategy.
         # Only check tickers that were in this scan batch but did NOT make the
@@ -1021,8 +1039,14 @@ def get_active_watchlist() -> list[dict]:
             WatchlistStock.is_active == True  # noqa: E712
         ).order_by(WatchlistStock.composite_score.desc()).all()
 
-        return [
-            {
+        # Deduplicate by ticker (defense-in-depth)
+        seen = set()
+        result = []
+        for s in stocks:
+            if s.ticker in seen:
+                continue
+            seen.add(s.ticker)
+            result.append({
                 "ticker": s.ticker,
                 "company_name": s.company_name,
                 "sector": s.sector,
@@ -1033,8 +1057,7 @@ def get_active_watchlist() -> list[dict]:
                 "price": s.price,
                 "market_cap": s.market_cap,
                 "scan_date": s.scan_date.isoformat() if s.scan_date else None,
-            }
-            for s in stocks
-        ]
+            })
+        return result
     finally:
         session.close()
