@@ -669,6 +669,8 @@ async def get_account():
             total_equity = sum(a.total_equity for a in engine.accounts.values())
             total_cash = sum(a.cash for a in engine.accounts.values())
             total_positions = sum(a.open_position_count for a in engine.accounts.values())
+            total_realized = sum(a.realized_pnl for a in engine.accounts.values())
+            total_unrealized = sum(a.unrealized_pnl for a in engine.accounts.values())
             num_strategies = len(engine.accounts)
             total_deposited = num_strategies * settings.ARENA_STARTING_CAPITAL_PER_STRATEGY
             return {
@@ -680,18 +682,22 @@ async def get_account():
                 "strategies": num_strategies,
                 "total_deposited": round(total_deposited, 2),
                 "total_pnl": round(total_equity - total_deposited, 2),
+                "realized_pnl": round(total_realized, 2),
+                "unrealized_pnl": round(total_unrealized, 2),
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Account endpoint failed: {e}")
     return {
         "date": None,
-        "cash": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "cash": 0.0,
         "positions_value": 0.0,
-        "total_value": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "total_value": 0.0,
         "open_positions": 0,
         "strategies": 0,
-        "total_deposited": settings.ARENA_STARTING_CAPITAL_PER_STRATEGY * 2,
+        "total_deposited": 0.0,
         "total_pnl": 0.0,
+        "realized_pnl": 0.0,
+        "unrealized_pnl": 0.0,
     }
 
 
