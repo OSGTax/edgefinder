@@ -28,12 +28,16 @@ from modules.utils import to_eastern, compute_trade_hash
 logger = logging.getLogger(__name__)
 
 
-def _job_timeout(seconds: int = 120):
+def _job_timeout(seconds: int = 120, status_key: str = None):
     """Decorator to prevent scheduler jobs from hanging indefinitely.
 
     Runs the job in a daemon thread with a timeout. If the job doesn't
     complete within `seconds`, logs an error and returns an empty list
     so the scheduler thread is freed for the next run.
+
+    Args:
+        seconds: Maximum time the job can run before being considered timed out.
+        status_key: Optional key in _arena_status to update on timeout.
     """
     def decorator(func):
         @wraps(func)
@@ -56,6 +60,13 @@ def _job_timeout(seconds: int = 120):
                     f"Job {func.__name__} timed out after {seconds}s — "
                     f"freeing scheduler thread"
                 )
+                if status_key:
+                    _arena_status[status_key] = to_eastern(
+                        datetime.now(timezone.utc)
+                    )
+                    _arena_status["last_signal_result"] = (
+                        f"Timed out after {seconds}s"
+                    )
                 return []
             if exception[0]:
                 raise exception[0]
@@ -71,6 +82,7 @@ _data_service = None  # services.data_service.DataService instance
 _arena_status = {
     "running": False,
     "last_signal_check": None,
+    "last_signal_result": None,
     "last_position_monitor": None,
     "last_scan": None,
     "errors": [],
@@ -90,6 +102,7 @@ def get_arena_status() -> dict:
     status = _engine.get_status()
     status.update({
         "last_signal_check": _arena_status["last_signal_check"],
+        "last_signal_result": _arena_status["last_signal_result"],
         "last_position_monitor": _arena_status["last_position_monitor"],
         "last_scan": _arena_status["last_scan"],
         "recent_errors": _arena_status["errors"][-5:],
@@ -505,13 +518,17 @@ def _get_price(ticker: str) -> tuple[Optional[float], str]:
 
 # ── LIVE JOBS ────────────────────────────────────────────────
 
-@_job_timeout(seconds=120)
+@_job_timeout(seconds=120, status_key="last_signal_check")
 def arena_signal_check() -> list[dict]:
     """Fetch bars for watchlist, feed to all strategies, execute signals.
 
     Called every 15 min during market hours by the scheduler.
     """
+    now = to_eastern(datetime.now(timezone.utc))
+
     if _engine is None:
+        _arena_status["last_signal_check"] = now
+        _arena_status["last_signal_result"] = "Engine not initialized"
         logger.warning("Arena not initialized")
         return []
 
@@ -525,6 +542,8 @@ def arena_signal_check() -> list[dict]:
             if wl:
                 all_tickers.update(wl)
 
+        strategy_count = len(_engine.strategies)
+
         if not all_tickers:
             logger.warning(
                 "ARENA: No watchlist tickers from strategies — "
@@ -532,16 +551,22 @@ def arena_signal_check() -> list[dict]:
             )
             all_tickers = set(settings.SCANNER_DEFAULT_TICKERS[:30])
 
+        ticker_count = len(all_tickers)
+
         # Fetch price data via DataService
         bars, volumes = _get_bars(list(all_tickers))
 
         if not bars:
+            _arena_status["last_signal_check"] = now
+            _arena_status["last_signal_result"] = (
+                f"No price data fetched (0/{ticker_count} tickers)"
+            )
             logger.warning("ARENA: No price data fetched")
             return []
 
         source = "alpaca" if (_data_service and _data_service.alpaca) else "yfinance"
         logger.info(
-            f"ARENA: Fetched bars for {len(bars)}/{len(all_tickers)} tickers "
+            f"ARENA: Fetched bars for {len(bars)}/{ticker_count} tickers "
             f"via {source}"
         )
 
@@ -556,7 +581,11 @@ def arena_signal_check() -> list[dict]:
         for trade in executed:
             _save_arena_trade(trade)
 
-        _arena_status["last_signal_check"] = to_eastern(datetime.now(timezone.utc))
+        _arena_status["last_signal_check"] = now
+        _arena_status["last_signal_result"] = (
+            f"{len(executed)} trades from {strategy_count} strategies "
+            f"({len(bars)}/{ticker_count} tickers)"
+        )
 
         if executed:
             logger.info(f"ARENA: {len(executed)} trades executed")
@@ -566,6 +595,8 @@ def arena_signal_check() -> list[dict]:
         return executed
 
     except Exception as e:
+        _arena_status["last_signal_check"] = now
+        _arena_status["last_signal_result"] = f"Error: {e}"
         logger.error(f"Arena signal check failed: {e}")
         _arena_status["errors"].append(f"signal_check: {e}")
         return []
