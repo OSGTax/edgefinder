@@ -117,6 +117,31 @@ SIGNAL_MACD_SIGNAL = 9
 SIGNAL_VOLUME_SPIKE_MULTIPLIER = 1.5  # 1.5x 20-day average
 SIGNAL_VOLUME_AVG_PERIOD = 20
 
+# Bollinger Bands
+SIGNAL_BB_PERIOD = 20
+SIGNAL_BB_STD = 2.0
+SIGNAL_BB_SQUEEZE_THRESHOLD = 0.04     # BBWidth below this = squeeze
+
+# ATR (Average True Range)
+SIGNAL_ATR_PERIOD = 14
+
+# Stochastic Oscillator
+SIGNAL_STOCH_K = 14
+SIGNAL_STOCH_D = 3
+SIGNAL_STOCH_OVERSOLD = 20
+SIGNAL_STOCH_OVERBOUGHT = 80
+
+# ADX (Average Directional Index)
+SIGNAL_ADX_PERIOD = 14
+SIGNAL_ADX_STRONG_TREND = 25           # ADX above this = trending
+
+# OBV (On-Balance Volume)
+SIGNAL_OBV_DIVERGENCE_BARS = 10        # Lookback for price vs OBV divergence
+
+# 52-Week Context
+SIGNAL_52W_HIGH_PROXIMITY = 0.05       # Within 5% of 52w high
+SIGNAL_52W_LOW_PROXIMITY = 0.10        # Within 10% of 52w low
+
 # Confidence Thresholds
 SIGNAL_CONFIDENCE_LOW = 40             # 1 indicator — no trade
 SIGNAL_CONFIDENCE_MODERATE = 60        # 2 indicators — half position

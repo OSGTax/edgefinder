@@ -7,7 +7,8 @@ Companies that don't need Wall Street's money to grow.
 Fundamental screening: FCF yield >= 7%, very low debt,
 cheap EV/EBITDA, positive earnings growth.
 
-Technical entry: EMA crossover (swing), MACD crossover.
+Technical entry: EMA crossover (swing), MACD crossover, Bollinger breakout,
+Stochastic oversold.
 Sentiment gate: blocks trades on strongly negative news.
 """
 
@@ -42,13 +43,16 @@ class MikeStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_swing", "macd_crossover"}
+        return {"ema_crossover_swing", "macd_crossover", "bollinger_breakout", "stochastic_oversold"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._atr_multiplier: float = 2.0
+        self._fallback_risk_pct: float = 0.05
+        self._hybrid_confidence_boost: float = 5.0
         logger.info("Mike (Cash Flow Compounder) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -112,15 +116,28 @@ class MikeStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[mike] Sentiment gate error: {e}")
+                # Confidence boost: hybrid signal (bollinger_breakout OR stochastic_oversold)
+                _has = lambda name: (name in ts.indicators) if isinstance(ts.indicators, dict) else any(ind.get("name") == name for ind in ts.indicators if isinstance(ind, dict))
+                hybrid_boost_applied = False
+                if _has("bollinger_breakout") or _has("stochastic_oversold"):
+                    confidence = min(100.0, confidence + self._hybrid_confidence_boost)
+                    hybrid_boost_applied = True
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.05
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                    atr_stop_used = True
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
+                    atr_stop_used = False
                 target = round(price + (price - stop_loss) * 1.8, 2)
                 meta = {
                     "strategy": "mike",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "atr_stop_used": atr_stop_used,
+                    "hybrid_boost_applied": hybrid_boost_applied,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -144,7 +161,14 @@ class MikeStrategy(BaseStrategy):
         logger.info(f"[mike] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[mike] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "sideways":
+            logger.info("[mike] Sideways market — range-bound suits FCF+growth hybrid")
+        elif regime.trend == "bull":
+            logger.info("[mike] Bull market — FCF compounders should outperform")
+        elif regime.trend == "bear":
+            logger.info("[mike] Bear market — FCF strength provides downside resilience")
+        else:
+            logger.info(f"[mike] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[mike] Strategy paused: {reason}")

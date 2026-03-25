@@ -56,6 +56,19 @@ class FundamentalData:
     ev_to_ebitda: Optional[float] = None
     current_ratio: Optional[float] = None
 
+    # Additional fundamentals (from yfinance .info, no extra API calls)
+    beta: Optional[float] = None
+    trailing_pe: Optional[float] = None
+    forward_pe: Optional[float] = None
+    dividend_yield: Optional[float] = None
+    operating_margins: Optional[float] = None
+    profit_margins: Optional[float] = None
+    return_on_equity: Optional[float] = None
+    return_on_assets: Optional[float] = None
+    quick_ratio: Optional[float] = None
+    price_to_sales: Optional[float] = None
+    fifty_two_week_change: Optional[float] = None
+
     # Meta
     avg_volume: Optional[float] = None
     fetch_errors: list = field(default_factory=list)
@@ -237,6 +250,19 @@ def fetch_fundamental_data(ticker: str, max_retries: int = 3) -> Optional[Fundam
         data.short_interest = _safe_float(info.get("short_interest"))
         data.price_to_tangible_book = _safe_float(info.get("price_to_tangible_book"))
 
+        # Additional fundamentals
+        data.beta = _safe_float(info.get("beta"))
+        data.trailing_pe = _safe_float(info.get("trailing_pe"))
+        data.forward_pe = _safe_float(info.get("forward_pe"))
+        data.dividend_yield = _safe_float(info.get("dividend_yield"))
+        data.operating_margins = _safe_float(info.get("operating_margins"))
+        data.profit_margins = _safe_float(info.get("profit_margins"))
+        data.return_on_equity = _safe_float(info.get("return_on_equity"))
+        data.return_on_assets = _safe_float(info.get("return_on_assets"))
+        data.quick_ratio = _safe_float(info.get("quick_ratio"))
+        data.price_to_sales = _safe_float(info.get("price_to_sales"))
+        data.fifty_two_week_change = _safe_float(info.get("fifty_two_week_change"))
+
         return data
 
     except Exception as e:
@@ -285,6 +311,19 @@ def fetch_fundamental_data_verbose(ticker: str) -> tuple[Optional[FundamentalDat
         data.current_ratio = _safe_float(info.get("current_ratio"))
         data.short_interest = _safe_float(info.get("short_interest"))
         data.price_to_tangible_book = _safe_float(info.get("price_to_tangible_book"))
+
+        # Additional fundamentals
+        data.beta = _safe_float(info.get("beta"))
+        data.trailing_pe = _safe_float(info.get("trailing_pe"))
+        data.forward_pe = _safe_float(info.get("forward_pe"))
+        data.dividend_yield = _safe_float(info.get("dividend_yield"))
+        data.operating_margins = _safe_float(info.get("operating_margins"))
+        data.profit_margins = _safe_float(info.get("profit_margins"))
+        data.return_on_equity = _safe_float(info.get("return_on_equity"))
+        data.return_on_assets = _safe_float(info.get("return_on_assets"))
+        data.quick_ratio = _safe_float(info.get("quick_ratio"))
+        data.price_to_sales = _safe_float(info.get("price_to_sales"))
+        data.fifty_two_week_change = _safe_float(info.get("fifty_two_week_change"))
 
         return data, ""
 
@@ -652,6 +691,18 @@ def _scored_stock_to_dict(s: ScoredStock) -> dict:
         "short_interest": s.data.short_interest,
         "ev_to_ebitda": s.data.ev_to_ebitda,
         "current_ratio": s.data.current_ratio,
+        # Additional fundamentals
+        "beta": s.data.beta,
+        "trailing_pe": s.data.trailing_pe,
+        "forward_pe": s.data.forward_pe,
+        "dividend_yield": s.data.dividend_yield,
+        "operating_margins": s.data.operating_margins,
+        "profit_margins": s.data.profit_margins,
+        "return_on_equity": s.data.return_on_equity,
+        "return_on_assets": s.data.return_on_assets,
+        "quick_ratio": s.data.quick_ratio,
+        "price_to_sales": s.data.price_to_sales,
+        "fifty_two_week_change": s.data.fifty_two_week_change,
     }
 
 

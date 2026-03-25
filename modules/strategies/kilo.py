@@ -43,7 +43,7 @@ class KiloStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_swing", "macd_crossover"}
+        return {"ema_crossover_swing", "macd_crossover", "adx_trend", "bollinger_breakout"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
@@ -52,6 +52,9 @@ class KiloStrategy(BaseStrategy):
         self._use_sentiment: bool = True
         self._top_sectors: set[str] = set()
         self._num_top_sectors: int = 2
+        self._adx_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 2.0
+        self._fallback_risk_pct: float = 0.06
         logger.info("Kilo (Sector Momentum Rotation) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -130,6 +133,11 @@ class KiloStrategy(BaseStrategy):
                 )
                 if price <= 0:
                     continue
+                # Confidence boost
+                _has = lambda name: (name in ts.indicators) if isinstance(ts.indicators, dict) else any(ind.get("name") == name for ind in ts.indicators if isinstance(ind, dict))
+                if _has("adx_trend"):
+                    confidence = min(100.0, confidence + self._adx_confidence_boost)
+
                 if self._use_sentiment:
                     try:
                         from modules.sentiment import gate_trade
@@ -142,14 +150,19 @@ class KiloStrategy(BaseStrategy):
                         logger.debug(f"[kilo] Sentiment gate error: {e}")
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.06
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 1.5, 2)
                 meta = {
                     "strategy": "kilo",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
                     "top_sectors": list(self._top_sectors),
+                    "atr_stop_used": snapshot.atr is not None,
+                    "adx_boost_applied": _has("adx_trend"),
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -172,7 +185,12 @@ class KiloStrategy(BaseStrategy):
         logger.info(f"[kilo] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[kilo] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "bull":
+            logger.info("[kilo] Bull market — sector rotation accelerating, following institutional flows")
+        elif regime.trend == "bear":
+            logger.info("[kilo] Bear market — rotating to defensive sectors")
+        else:
+            logger.info(f"[kilo] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[kilo] Strategy paused: {reason}")

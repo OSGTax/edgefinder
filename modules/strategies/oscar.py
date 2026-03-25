@@ -7,7 +7,8 @@ The boring strategy that quietly wins.
 Fundamental screening: PEG between 0.5-1.5, moderate earnings growth,
 low debt, balanced institutional ownership.
 
-Technical entry: EMA crossover (swing), MACD confirmation.
+Technical entry: EMA crossover (swing), MACD confirmation, near 52-week high,
+ADX trend strength.
 Sentiment gate: blocks trades on strongly negative news.
 """
 
@@ -42,13 +43,16 @@ class OscarStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_swing", "macd_crossover"}
+        return {"ema_crossover_swing", "macd_crossover", "near_52w_high", "adx_trend"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._adx_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 1.5
+        self._fallback_risk_pct: float = 0.04
         logger.info("Oscar (GARP Conservative) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -114,15 +118,28 @@ class OscarStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[oscar] Sentiment gate error: {e}")
+                # Confidence boost: ADX trend strength for conservative play
+                _has = lambda name: (name in ts.indicators) if isinstance(ts.indicators, dict) else any(ind.get("name") == name for ind in ts.indicators if isinstance(ind, dict))
+                adx_boost_applied = False
+                if _has("adx_trend"):
+                    confidence = min(100.0, confidence + self._adx_confidence_boost)
+                    adx_boost_applied = True
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.04  # Tight stop — conservative play
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                    atr_stop_used = True
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
+                    atr_stop_used = False
                 target = round(price + (price - stop_loss) * 1.5, 2)
                 meta = {
                     "strategy": "oscar",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "adx_boost_applied": adx_boost_applied,
+                    "atr_stop_used": atr_stop_used,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -146,7 +163,12 @@ class OscarStrategy(BaseStrategy):
         logger.info(f"[oscar] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[oscar] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "bull":
+            logger.info("[oscar] Bull market — conservative plays deliver steady returns")
+        elif regime.trend == "bear":
+            logger.info("[oscar] Bear market — capital preservation priority")
+        else:
+            logger.info(f"[oscar] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[oscar] Strategy paused: {reason}")

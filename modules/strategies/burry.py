@@ -58,7 +58,7 @@ class BurryStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"rsi_oversold", "ema_crossover_swing"}
+        return {"rsi_oversold", "ema_crossover_swing", "stochastic_oversold", "obv_divergence", "near_52w_low"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
@@ -67,6 +67,11 @@ class BurryStrategy(BaseStrategy):
         self._use_sentiment: bool = True
         self._min_burry_score: float = 50.0   # Minimum Burry sub-score
         self._rsi_confidence_boost: float = 10.0  # Extra confidence for RSI oversold
+        self._stoch_confidence_boost: float = 10.0
+        self._52w_low_confidence_boost: float = 5.0
+        self._obv_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 2.5
+        self._fallback_risk_pct: float = 0.07
         logger.info(
             f"Burry strategy initialized (min_score={self._min_burry_score})"
         )
@@ -161,6 +166,22 @@ class BurryStrategy(BaseStrategy):
                 if has_rsi_oversold:
                     confidence = min(100.0, confidence + self._rsi_confidence_boost)
 
+                # Stochastic oversold boost (double oversold confirmation)
+                has_stoch_oversold = any(
+                    (ind.get("name") if isinstance(ind, dict) else "") == "stochastic_oversold"
+                    for ind in (ts.indicators.values() if isinstance(ts.indicators, dict) else ts.indicators if isinstance(ts.indicators, list) else [])
+                )
+                if has_stoch_oversold:
+                    confidence = min(100.0, confidence + self._stoch_confidence_boost)
+
+                # Near 52-week low boost (deep value territory)
+                has_near_52w_low = any(
+                    (ind.get("name") if isinstance(ind, dict) else "") == "near_52w_low"
+                    for ind in (ts.indicators.values() if isinstance(ts.indicators, dict) else ts.indicators if isinstance(ts.indicators, list) else [])
+                )
+                if has_near_52w_low:
+                    confidence = min(100.0, confidence + self._52w_low_confidence_boost)
+
                 # Apply sentiment gate
                 if self._use_sentiment:
                     try:
@@ -181,9 +202,11 @@ class BurryStrategy(BaseStrategy):
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
 
-                # Burry uses wider stops (value takes longer to realize)
-                risk_pct = 0.07  # 7% stop loss (wider than Lynch's 5%)
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based dynamic stop-loss (wider for deep value)
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 # Burry targets deeper recoveries
                 target = round(
                     price + (price - stop_loss) * 2.0,  # 2:1 R:R
@@ -196,6 +219,9 @@ class BurryStrategy(BaseStrategy):
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
                     "rsi_boost_applied": has_rsi_oversold,
+                    "stoch_boost_applied": has_stoch_oversold,
+                    "near_52w_low_boost": has_near_52w_low,
+                    "atr_stop_used": snapshot.atr is not None,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:

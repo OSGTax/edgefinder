@@ -7,7 +7,8 @@ Positive FCF + liquidity = survival confirmed.
 Fundamental screening: lynch_category == turnaround, adequate current ratio,
 positive FCF, reasonable P/TB.
 
-Technical entry: RSI oversold reversal, volume spike, MACD crossover.
+Technical entry: RSI oversold reversal, MACD crossover, OBV divergence,
+near 52-week low.
 Sentiment gate: blocks trades on strongly negative news.
 """
 
@@ -42,13 +43,18 @@ class NovemberStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"rsi_oversold", "volume_spike", "macd_crossover"}
+        return {"rsi_oversold", "macd_crossover", "obv_divergence", "near_52w_low"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._rsi_confidence_boost: float = 10.0
+        self._obv_confidence_boost: float = 5.0
+        self._52w_low_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 2.5
+        self._fallback_risk_pct: float = 0.07
         logger.info("November (Turnaround Play) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -112,15 +118,38 @@ class NovemberStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[november] Sentiment gate error: {e}")
+                # Confidence boosts for turnaround signals
+                _has = lambda name: (name in ts.indicators) if isinstance(ts.indicators, dict) else any(ind.get("name") == name for ind in ts.indicators if isinstance(ind, dict))
+                rsi_boost_applied = False
+                obv_boost_applied = False
+                near_52w_low_boost_applied = False
+                if _has("rsi_oversold"):
+                    confidence = min(100.0, confidence + self._rsi_confidence_boost)
+                    rsi_boost_applied = True
+                if _has("obv_divergence"):
+                    confidence = min(100.0, confidence + self._obv_confidence_boost)
+                    obv_boost_applied = True
+                if _has("near_52w_low"):
+                    confidence = min(100.0, confidence + self._52w_low_confidence_boost)
+                    near_52w_low_boost_applied = True
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.07  # Wider stop for turnarounds
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                    atr_stop_used = True
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
+                    atr_stop_used = False
                 target = round(price + (price - stop_loss) * 2.5, 2)
                 meta = {
                     "strategy": "november",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "atr_stop_used": atr_stop_used,
+                    "rsi_boost_applied": rsi_boost_applied,
+                    "obv_boost_applied": obv_boost_applied,
+                    "near_52w_low_boost_applied": near_52w_low_boost_applied,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -146,7 +175,9 @@ class NovemberStrategy(BaseStrategy):
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
         if regime.trend == "bear":
-            logger.info("[november] Bear market — turnaround candidates multiplying")
+            logger.info("[november] Bear market — turnaround candidates emerge in downturns")
+        elif regime.trend == "bull":
+            logger.info("[november] Bull market — turnarounds get recognition")
         else:
             logger.info(f"[november] Market regime: {regime.trend}/{regime.volatility}")
 

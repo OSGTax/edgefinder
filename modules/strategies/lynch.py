@@ -56,7 +56,7 @@ class LynchStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_day", "ema_crossover_swing", "macd_crossover"}
+        return {"ema_crossover_day", "ema_crossover_swing", "macd_crossover", "bollinger_breakout", "adx_trend"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
@@ -64,6 +64,9 @@ class LynchStrategy(BaseStrategy):
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
         self._min_lynch_score: float = 50.0  # Minimum Lynch sub-score
+        self._atr_multiplier: float = 2.0
+        self._fallback_risk_pct: float = 0.05
+        self._adx_confidence_boost: float = 5.0
         logger.info(f"Lynch strategy initialized (min_score={self._min_lynch_score})")
 
     def set_watchlist(self, scored_stocks: list[dict]) -> None:
@@ -160,13 +163,22 @@ class LynchStrategy(BaseStrategy):
                     except Exception as e:
                         logger.debug(f"[lynch] Sentiment gate error: {e}")
 
+                # ADX trend strength boost
+                if any(
+                    (ind.get("name") if isinstance(ind, dict) else "") == "adx_trend"
+                    for ind in (ts.indicators.values() if isinstance(ts.indicators, dict) else ts.indicators if isinstance(ts.indicators, list) else [])
+                ):
+                    confidence = min(100.0, confidence + self._adx_confidence_boost)
+
                 # Skip if below minimum confidence
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
 
-                # Calculate stop and target
-                risk_pct = 0.05  # 5% stop loss
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(
                     price + (price - stop_loss) * settings.MIN_REWARD_TO_RISK_RATIO,
                     2,
@@ -178,6 +190,11 @@ class LynchStrategy(BaseStrategy):
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
                 }
+                meta["atr_stop_used"] = snapshot.atr is not None
+                meta["adx_boost_applied"] = any(
+                    (ind.get("name") if isinstance(ind, dict) else "") == "adx_trend"
+                    for ind in (ts.indicators.values() if isinstance(ts.indicators, dict) else ts.indicators if isinstance(ts.indicators, list) else [])
+                )
                 score_info = self._scores.get(ticker, {})
                 if score_info:
                     meta["lynch_score"] = score_info.get("lynch_score")
@@ -204,7 +221,12 @@ class LynchStrategy(BaseStrategy):
         )
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[lynch] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "bull":
+            logger.info("[lynch] Bull market — favorable for growth-at-reasonable-price")
+        elif regime.trend == "bear":
+            logger.info("[lynch] Bear market — tightening criteria, staying selective")
+        else:
+            logger.info(f"[lynch] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[lynch] Strategy paused: {reason}")

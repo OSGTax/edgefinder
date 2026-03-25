@@ -367,7 +367,9 @@ class TestSignalGeneration:
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
-            mc.return_value = MagicMock()
+            snapshot = MagicMock()
+            snapshot.atr = None  # Force fallback stop-loss path
+            mc.return_value = snapshot
             md.return_value = [_mock_buy_signal(preferred, price=100.0)]
 
             bars = {"AAPL": make_ohlcv(start_price=100.0)}
@@ -387,7 +389,9 @@ class TestSignalGeneration:
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
-            mc.return_value = MagicMock()
+            snapshot = MagicMock()
+            snapshot.atr = None
+            mc.return_value = snapshot
             sig = MagicMock()
             sig.signal_type = "SELL"
             md.return_value = [sig]
@@ -405,7 +409,9 @@ class TestSignalGeneration:
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
-            mc.return_value = MagicMock()
+            snapshot = MagicMock()
+            snapshot.atr = None
+            mc.return_value = snapshot
             md.return_value = [_mock_buy_signal(preferred, confidence=20.0)]
 
             bars = {"AAPL": make_ohlcv()}
@@ -427,7 +433,9 @@ class TestSignalGeneration:
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
-            mc.return_value = MagicMock()
+            snapshot = MagicMock()
+            snapshot.atr = None
+            mc.return_value = snapshot
             md.return_value = [_mock_buy_signal(wrong_signal)]
 
             bars = {"AAPL": make_ohlcv()}
@@ -449,7 +457,9 @@ class TestStopLossAndTarget:
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
-            mc.return_value = MagicMock()
+            snapshot = MagicMock()
+            snapshot.atr = None  # Force fallback stop-loss path
+            mc.return_value = snapshot
             md.return_value = [_mock_buy_signal(preferred, price=price)]
 
             bars = {"AAPL": make_ohlcv(start_price=price)}
@@ -470,7 +480,9 @@ class TestStopLossAndTarget:
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
-            mc.return_value = MagicMock()
+            snapshot = MagicMock()
+            snapshot.atr = None  # Force fallback stop-loss path
+            mc.return_value = snapshot
             md.return_value = [_mock_buy_signal(preferred, price=price)]
 
             bars = {"AAPL": make_ohlcv(start_price=price)}
@@ -542,22 +554,24 @@ class TestKiloSectorRotation:
         assert "Healthcare" in s._top_sectors
 
 
-# ── PAPA VOLUME SPIKE BOOST TESTS ──────────────────────────
+# ── PAPA SQUEEZE BOOST TESTS ───────────────────────────────
 
-class TestPapaVolumeSpikeBoost:
-    """Papa has a confidence boost for volume spikes."""
+class TestPapaSqueezeBoost:
+    """Papa has confidence boosts for RSI oversold and squeeze setups."""
 
-    def test_volume_spike_boost_applied(self):
+    def test_rsi_oversold_boost_applied(self):
         s = _make_strategy("papa")
         with patch("modules.strategies.papa.compute_indicators") as mc, \
              patch("modules.strategies.papa.detect_signals") as md:
-            mc.return_value = MagicMock()
+            snapshot = MagicMock()
+            snapshot.atr = None
+            mc.return_value = snapshot
             sig = MagicMock()
             sig.signal_type = "BUY"
             sig.confidence = 65.0
             sig.price = 50.0
             sig.trade_type = "DAY"
-            sig.indicators = [{"name": "volume_spike"}]
+            sig.indicators = {"rsi_oversold": {"name": "rsi_oversold", "rsi": 25}}
             sig.reason = ""
             md.return_value = [sig]
 
@@ -565,8 +579,7 @@ class TestPapaVolumeSpikeBoost:
             signals = s.generate_signals(bars)
 
             assert len(signals) == 1
-            assert signals[0].confidence == 70.0  # 65 + 5 boost
-            assert signals[0].metadata["volume_spike_detected"] is True
+            assert signals[0].confidence == 75.0  # 65 + 10 RSI boost
 
 
 # ── CROSS-STRATEGY DIFFERENTIATION TESTS ───────────────────

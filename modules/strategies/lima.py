@@ -42,13 +42,16 @@ class LimaStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"volume_spike", "ema_crossover_day"}
+        return {"ema_crossover_day", "volume_spike", "bollinger_breakout", "obv_divergence"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._obv_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 2.5
+        self._fallback_risk_pct: float = 0.06
         logger.info("Lima (Small Cap Quality) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -103,6 +106,11 @@ class LimaStrategy(BaseStrategy):
                 )
                 if price <= 0:
                     continue
+                # Confidence boost
+                _has = lambda name: (name in ts.indicators) if isinstance(ts.indicators, dict) else any(ind.get("name") == name for ind in ts.indicators if isinstance(ind, dict))
+                if _has("obv_divergence"):
+                    confidence = min(100.0, confidence + self._obv_confidence_boost)
+
                 if self._use_sentiment:
                     try:
                         from modules.sentiment import gate_trade
@@ -115,13 +123,18 @@ class LimaStrategy(BaseStrategy):
                         logger.debug(f"[lima] Sentiment gate error: {e}")
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.06
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 2.0, 2)
                 meta = {
                     "strategy": "lima",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "atr_stop_used": snapshot.atr is not None,
+                    "obv_boost_applied": _has("obv_divergence"),
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -145,7 +158,12 @@ class LimaStrategy(BaseStrategy):
         logger.info(f"[lima] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[lima] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "bull":
+            logger.info("[lima] Bull market — small caps lead in early bull")
+        elif regime.trend == "bear":
+            logger.info("[lima] Bear market — small caps most vulnerable, extra caution")
+        else:
+            logger.info(f"[lima] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[lima] Strategy paused: {reason}")
