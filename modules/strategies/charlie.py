@@ -28,6 +28,15 @@ from modules.signals import compute_indicators, generate_signals as detect_signa
 logger = logging.getLogger(__name__)
 
 
+def _has_indicator(ts_indicators, name: str) -> bool:
+    """Check if a named indicator fired in a signal's indicator data."""
+    if isinstance(ts_indicators, dict):
+        return name in ts_indicators
+    elif isinstance(ts_indicators, list):
+        return any(ind.get("name") == name for ind in ts_indicators if isinstance(ind, dict))
+    return False
+
+
 @StrategyRegistry.register("charlie")
 class CharlieStrategy(BaseStrategy):
     """Burry Deep Value — below tangible book, high FCF."""
@@ -42,13 +51,18 @@ class CharlieStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"rsi_oversold", "ema_crossover_swing", "volume_spike"}
+        return {"rsi_oversold", "ema_crossover_swing", "stochastic_oversold", "obv_divergence"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._rsi_confidence_boost: float = 10.0
+        self._stoch_confidence_boost: float = 10.0
+        self._obv_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 2.5
+        self._fallback_risk_pct: float = 0.07
         logger.info("Charlie (Burry Deep Value) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -112,15 +126,34 @@ class CharlieStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[charlie] Sentiment gate error: {e}")
+
+                # Confidence boosts: deep value indicator confirmations
+                has_rsi = _has_indicator(ts.indicators, "rsi_oversold")
+                has_stoch = _has_indicator(ts.indicators, "stochastic_oversold")
+                has_obv = _has_indicator(ts.indicators, "obv_divergence")
+                if has_rsi:
+                    confidence = min(100.0, confidence + self._rsi_confidence_boost)
+                if has_stoch:
+                    confidence = min(100.0, confidence + self._stoch_confidence_boost)
+                if has_obv:
+                    confidence = min(100.0, confidence + self._obv_confidence_boost)
+
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.07  # Wider stop — deep value needs room
-                stop_loss = round(price * (1 - risk_pct), 2)
+
+                # ATR-based dynamic stop-loss (wider for deep value)
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 2.0, 2)
                 meta = {
                     "strategy": "charlie",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "rsi_boost_applied": has_rsi,
+                    "stoch_boost_applied": has_stoch,
+                    "obv_boost_applied": has_obv,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -146,6 +179,8 @@ class CharlieStrategy(BaseStrategy):
     def on_market_regime_change(self, regime: MarketRegime) -> None:
         if regime.trend == "bear":
             logger.info("[charlie] Bear market — deep value hunting season")
+        elif regime.trend == "bull":
+            logger.info("[charlie] Bull market — staying selective on deep value")
         else:
             logger.info(f"[charlie] Market regime: {regime.trend}/{regime.volatility}")
 

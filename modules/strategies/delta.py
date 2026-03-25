@@ -28,6 +28,15 @@ from modules.signals import compute_indicators, generate_signals as detect_signa
 logger = logging.getLogger(__name__)
 
 
+def _has_indicator(ts_indicators, name: str) -> bool:
+    """Check if a named indicator fired in a signal's indicator data."""
+    if isinstance(ts_indicators, dict):
+        return name in ts_indicators
+    elif isinstance(ts_indicators, list):
+        return any(ind.get("name") == name for ind in ts_indicators if isinstance(ind, dict))
+    return False
+
+
 @StrategyRegistry.register("delta")
 class DeltaStrategy(BaseStrategy):
     """Burry Cash Flow Machine — extreme FCF yield, fortress balance sheet."""
@@ -42,13 +51,17 @@ class DeltaStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_swing", "macd_crossover"}
+        return {"ema_crossover_swing", "macd_crossover", "near_52w_low", "stochastic_oversold"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._atr_multiplier: float = 2.0
+        self._fallback_risk_pct: float = 0.06
+        self._52w_low_confidence_boost: float = 5.0
+        self._stoch_confidence_boost: float = 5.0
         logger.info("Delta (Burry Cash Flow Machine) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -112,15 +125,30 @@ class DeltaStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[delta] Sentiment gate error: {e}")
+
+                # Confidence boosts: cash machine confirmations
+                has_52w_low = _has_indicator(ts.indicators, "near_52w_low")
+                has_stoch = _has_indicator(ts.indicators, "stochastic_oversold")
+                if has_52w_low:
+                    confidence = min(100.0, confidence + self._52w_low_confidence_boost)
+                if has_stoch:
+                    confidence = min(100.0, confidence + self._stoch_confidence_boost)
+
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.06
-                stop_loss = round(price * (1 - risk_pct), 2)
+
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 2.0, 2)
                 meta = {
                     "strategy": "delta",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "52w_low_boost_applied": has_52w_low,
+                    "stoch_boost_applied": has_stoch,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -144,7 +172,12 @@ class DeltaStrategy(BaseStrategy):
         logger.info(f"[delta] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[delta] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "bear":
+            logger.info("[delta] Bear market — cash machines survive downturns")
+        elif regime.trend == "bull":
+            logger.info("[delta] Bull market — selective on cash flow plays")
+        else:
+            logger.info(f"[delta] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[delta] Strategy paused: {reason}")

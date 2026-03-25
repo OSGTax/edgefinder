@@ -42,13 +42,16 @@ class IndiaStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_day", "macd_crossover", "volume_spike"}
+        return {"ema_crossover_day", "macd_crossover", "bollinger_breakout", "adx_trend"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._adx_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 2.0
+        self._fallback_risk_pct: float = 0.05
         logger.info("India (Momentum Growth) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -101,6 +104,11 @@ class IndiaStrategy(BaseStrategy):
                 )
                 if price <= 0:
                     continue
+                # Confidence boost
+                _has = lambda name: (name in ts.indicators) if isinstance(ts.indicators, dict) else any(ind.get("name") == name for ind in ts.indicators if isinstance(ind, dict))
+                if _has("adx_trend"):
+                    confidence = min(100.0, confidence + self._adx_confidence_boost)
+
                 if self._use_sentiment:
                     try:
                         from modules.sentiment import gate_trade
@@ -113,13 +121,18 @@ class IndiaStrategy(BaseStrategy):
                         logger.debug(f"[india] Sentiment gate error: {e}")
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.05
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 2.0, 2)
                 meta = {
                     "strategy": "india",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "atr_stop_used": snapshot.atr is not None,
+                    "adx_boost_applied": _has("adx_trend"),
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -144,7 +157,9 @@ class IndiaStrategy(BaseStrategy):
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
         if regime.trend == "bull":
-            logger.info("[india] Bull market — momentum plays thriving")
+            logger.info("[india] Bull market — growth stocks thriving")
+        elif regime.trend == "bear":
+            logger.info("[india] Bear market — growth vulnerable, tightening criteria")
         else:
             logger.info(f"[india] Market regime: {regime.trend}/{regime.volatility}")
 

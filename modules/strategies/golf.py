@@ -43,13 +43,17 @@ class GolfStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"rsi_oversold", "volume_spike", "ema_crossover_day"}
+        return {"rsi_oversold", "ema_crossover_day", "bollinger_breakout", "obv_divergence"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._rsi_confidence_boost: float = 10.0
+        self._obv_confidence_boost: float = 5.0
+        self._atr_multiplier: float = 3.0
+        self._fallback_risk_pct: float = 0.07
         logger.info("Golf (Burry Contrarian) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -104,6 +108,13 @@ class GolfStrategy(BaseStrategy):
                 )
                 if price <= 0:
                     continue
+                # Confidence boosts
+                _has = lambda name: (name in ts.indicators) if isinstance(ts.indicators, dict) else any(ind.get("name") == name for ind in ts.indicators if isinstance(ind, dict))
+                if _has("rsi_oversold"):
+                    confidence = min(100.0, confidence + self._rsi_confidence_boost)
+                if _has("obv_divergence"):
+                    confidence = min(100.0, confidence + self._obv_confidence_boost)
+
                 if self._use_sentiment:
                     try:
                         from modules.sentiment import gate_trade
@@ -116,13 +127,19 @@ class GolfStrategy(BaseStrategy):
                         logger.debug(f"[golf] Sentiment gate error: {e}")
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.07  # Wider stop for contrarian plays
-                stop_loss = round(price * (1 - risk_pct), 2)
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 2.5, 2)
                 meta = {
                     "strategy": "golf",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "atr_stop_used": snapshot.atr is not None,
+                    "rsi_boost_applied": _has("rsi_oversold"),
+                    "obv_boost_applied": _has("obv_divergence"),
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -146,8 +163,10 @@ class GolfStrategy(BaseStrategy):
         logger.info(f"[golf] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        if regime.trend == "bear":
-            logger.info("[golf] Bear market — contrarian setups multiplying")
+        if regime.volatility == "high":
+            logger.info("[golf] High volatility — prime conditions for squeeze plays")
+        elif regime.trend == "bear":
+            logger.info("[golf] Bear market — shorts get aggressive, more squeeze candidates")
         else:
             logger.info(f"[golf] Market regime: {regime.trend}/{regime.volatility}")
 

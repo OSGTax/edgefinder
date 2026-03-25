@@ -28,6 +28,15 @@ from modules.signals import compute_indicators, generate_signals as detect_signa
 logger = logging.getLogger(__name__)
 
 
+def _has_indicator(ts_indicators, name: str) -> bool:
+    """Check if a named indicator fired in a signal's indicator data."""
+    if isinstance(ts_indicators, dict):
+        return name in ts_indicators
+    elif isinstance(ts_indicators, list):
+        return any(ind.get("name") == name for ind in ts_indicators if isinstance(ind, dict))
+    return False
+
+
 @StrategyRegistry.register("echo")
 class EchoStrategy(BaseStrategy):
     """Lynch Cyclical — buy the cycle trough, sell the peak."""
@@ -42,13 +51,16 @@ class EchoStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_day", "rsi_oversold", "volume_spike"}
+        return {"ema_crossover_day", "rsi_oversold", "stochastic_oversold", "bollinger_breakout"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._atr_multiplier: float = 2.0
+        self._fallback_risk_pct: float = 0.06
+        self._double_oversold_boost: float = 10.0
         logger.info("Echo (Lynch Cyclical) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -112,15 +124,28 @@ class EchoStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[echo] Sentiment gate error: {e}")
+
+                # Confidence boost: double oversold = high conviction cyclical bottom
+                has_rsi = _has_indicator(ts.indicators, "rsi_oversold")
+                has_stoch = _has_indicator(ts.indicators, "stochastic_oversold")
+                double_oversold = has_rsi and has_stoch
+                if double_oversold:
+                    confidence = min(100.0, confidence + self._double_oversold_boost)
+
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.06
-                stop_loss = round(price * (1 - risk_pct), 2)
+
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 2.0, 2)
                 meta = {
                     "strategy": "echo",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "double_oversold_boost_applied": double_oversold,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -145,7 +170,9 @@ class EchoStrategy(BaseStrategy):
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
         if regime.trend == "bear":
-            logger.info("[echo] Bear market — cyclicals bottoming, prime entry window")
+            logger.info("[echo] Bear market — cyclical bottom hunting")
+        elif regime.trend == "bull":
+            logger.info("[echo] Bull market — riding the cycle up")
         else:
             logger.info(f"[echo] Market regime: {regime.trend}/{regime.volatility}")
 

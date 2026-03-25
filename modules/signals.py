@@ -81,6 +81,92 @@ def _fallback_sma(series: pd.Series, length: int) -> Optional[pd.Series]:
     return series.rolling(window=length).mean()
 
 
+def _fallback_bbands(
+    close: pd.Series, length: int = 20, std: float = 2.0
+) -> Optional[pd.DataFrame]:
+    """Compute Bollinger Bands using pure pandas."""
+    if close is None or len(close) < length:
+        return None
+    mid = close.rolling(window=length).mean()
+    rolling_std = close.rolling(window=length).std()
+    upper = mid + std * rolling_std
+    lower = mid - std * rolling_std
+    width = (upper - lower) / mid
+    pct_b = (close - lower) / (upper - lower)
+    return pd.DataFrame({
+        f"BBL_{length}_{std}": lower,
+        f"BBM_{length}_{std}": mid,
+        f"BBU_{length}_{std}": upper,
+        f"BBB_{length}_{std}": width,
+        f"BBP_{length}_{std}": pct_b,
+    })
+
+
+def _fallback_atr(
+    high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14
+) -> Optional[pd.Series]:
+    """Compute ATR using pure pandas."""
+    if high is None or len(high) < length + 1:
+        return None
+    tr1 = high - low
+    tr2 = (high - close.shift(1)).abs()
+    tr3 = (low - close.shift(1)).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+
+
+def _fallback_stoch(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    k: int = 14, d: int = 3
+) -> Optional[pd.DataFrame]:
+    """Compute Stochastic Oscillator using pure pandas."""
+    if high is None or len(high) < k + d:
+        return None
+    lowest_low = low.rolling(window=k).min()
+    highest_high = high.rolling(window=k).max()
+    denom = highest_high - lowest_low
+    stoch_k = 100 * (close - lowest_low) / denom.replace(0, np.nan)
+    stoch_d = stoch_k.rolling(window=d).mean()
+    return pd.DataFrame({
+        f"STOCHk_{k}_{d}_0.0": stoch_k,
+        f"STOCHd_{k}_{d}_0.0": stoch_d,
+    })
+
+
+def _fallback_adx(
+    high: pd.Series, low: pd.Series, close: pd.Series, length: int = 14
+) -> Optional[pd.DataFrame]:
+    """Compute ADX using pure pandas."""
+    if high is None or len(high) < length * 2:
+        return None
+    up_move = high.diff()
+    down_move = -low.diff()
+    plus_dm = pd.Series(np.where((up_move > down_move) & (up_move > 0), up_move, 0),
+                        index=high.index)
+    minus_dm = pd.Series(np.where((down_move > up_move) & (down_move > 0), down_move, 0),
+                         index=high.index)
+    atr = _fallback_atr(high, low, close, length)
+    if atr is None:
+        return None
+    plus_di = 100 * plus_dm.ewm(alpha=1 / length, min_periods=length, adjust=False).mean() / atr.replace(0, np.nan)
+    minus_di = 100 * minus_dm.ewm(alpha=1 / length, min_periods=length, adjust=False).mean() / atr.replace(0, np.nan)
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan)
+    adx = dx.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+    return pd.DataFrame({
+        f"ADX_{length}": adx,
+        f"DMP_{length}": plus_di,
+        f"DMN_{length}": minus_di,
+    })
+
+
+def _fallback_obv(close: pd.Series, volume: pd.Series) -> Optional[pd.Series]:
+    """Compute OBV using pure pandas."""
+    if close is None or volume is None or len(close) < 2:
+        return None
+    direction = np.sign(close.diff())
+    return (direction * volume).cumsum()
+
+
 # ── DATA CLASSES ─────────────────────────────────────────────
 
 @dataclass
@@ -118,6 +204,39 @@ class IndicatorSnapshot:
     prev_ema_slow_swing: Optional[float] = None
     prev_macd_line: Optional[float] = None
     prev_macd_signal: Optional[float] = None
+
+    # Bollinger Bands
+    bb_upper: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_lower: Optional[float] = None
+    bb_width: Optional[float] = None         # (upper - lower) / middle
+    bb_pct_b: Optional[float] = None         # (price - lower) / (upper - lower)
+
+    # ATR (Average True Range)
+    atr: Optional[float] = None              # 14-period ATR
+    atr_pct: Optional[float] = None          # ATR as % of price
+
+    # Stochastic Oscillator
+    stoch_k: Optional[float] = None
+    stoch_d: Optional[float] = None
+    prev_stoch_k: Optional[float] = None     # for crossover detection
+    prev_stoch_d: Optional[float] = None
+
+    # ADX (Average Directional Index)
+    adx: Optional[float] = None
+    plus_di: Optional[float] = None
+    minus_di: Optional[float] = None
+
+    # OBV (On-Balance Volume)
+    obv: Optional[float] = None
+    obv_sma: Optional[float] = None          # 20-period SMA of OBV
+    obv_slope: Optional[float] = None        # direction of OBV trend
+
+    # 52-week context
+    high_52w: Optional[float] = None
+    low_52w: Optional[float] = None
+    pct_from_52w_high: Optional[float] = None   # negative value (how far below)
+    pct_from_52w_low: Optional[float] = None    # positive value (how far above)
 
 
 @dataclass
@@ -236,6 +355,113 @@ def compute_indicators(df: pd.DataFrame, ticker: str = "") -> Optional[Indicator
         snap.current_price = _safe_float(close.iloc[-1])
         if len(close) >= 2:
             snap.prev_close = _safe_float(close.iloc[-2])
+
+        # ── NEW INDICATORS (use High/Low for the first time) ──
+        high = df["High"]
+        low = df["Low"]
+
+        # Bollinger Bands
+        if _TA_AVAILABLE:
+            bbands = ta.bbands(close, length=settings.SIGNAL_BB_PERIOD,
+                               std=settings.SIGNAL_BB_STD)
+        else:
+            bbands = _fallback_bbands(close, length=settings.SIGNAL_BB_PERIOD,
+                                      std=settings.SIGNAL_BB_STD)
+        if bbands is not None and len(bbands) >= 1:
+            bbl_col = next((c for c in bbands.columns if c.startswith("BBL_")), None)
+            bbm_col = next((c for c in bbands.columns if c.startswith("BBM_")), None)
+            bbu_col = next((c for c in bbands.columns if c.startswith("BBU_")), None)
+            bbb_col = next((c for c in bbands.columns if c.startswith("BBB_")), None)
+            bbp_col = next((c for c in bbands.columns if c.startswith("BBP_")), None)
+            if bbl_col:
+                snap.bb_lower = _safe_float(bbands[bbl_col].iloc[-1])
+            if bbm_col:
+                snap.bb_middle = _safe_float(bbands[bbm_col].iloc[-1])
+            if bbu_col:
+                snap.bb_upper = _safe_float(bbands[bbu_col].iloc[-1])
+            if bbb_col:
+                snap.bb_width = _safe_float(bbands[bbb_col].iloc[-1])
+            elif snap.bb_upper and snap.bb_lower and snap.bb_middle and snap.bb_middle > 0:
+                snap.bb_width = (snap.bb_upper - snap.bb_lower) / snap.bb_middle
+            if bbp_col:
+                snap.bb_pct_b = _safe_float(bbands[bbp_col].iloc[-1])
+            elif snap.bb_upper and snap.bb_lower and snap.current_price:
+                width = snap.bb_upper - snap.bb_lower
+                if width > 0:
+                    snap.bb_pct_b = (snap.current_price - snap.bb_lower) / width
+
+        # ATR (Average True Range) — uses High, Low, Close
+        if _TA_AVAILABLE:
+            atr_series = ta.atr(high, low, close, length=settings.SIGNAL_ATR_PERIOD)
+        else:
+            atr_series = _fallback_atr(high, low, close, length=settings.SIGNAL_ATR_PERIOD)
+        if atr_series is not None and len(atr_series) >= 1:
+            snap.atr = _safe_float(atr_series.iloc[-1])
+            if snap.atr and snap.current_price and snap.current_price > 0:
+                snap.atr_pct = snap.atr / snap.current_price
+
+        # Stochastic Oscillator — uses High, Low, Close
+        if _TA_AVAILABLE:
+            stoch_df = ta.stoch(high, low, close,
+                                k=settings.SIGNAL_STOCH_K, d=settings.SIGNAL_STOCH_D)
+        else:
+            stoch_df = _fallback_stoch(high, low, close,
+                                       k=settings.SIGNAL_STOCH_K, d=settings.SIGNAL_STOCH_D)
+        if stoch_df is not None and len(stoch_df) >= 2:
+            k_col = next((c for c in stoch_df.columns if c.startswith("STOCHk_")), None)
+            d_col = next((c for c in stoch_df.columns if c.startswith("STOCHd_")), None)
+            if k_col:
+                snap.stoch_k = _safe_float(stoch_df[k_col].iloc[-1])
+                snap.prev_stoch_k = _safe_float(stoch_df[k_col].iloc[-2])
+            if d_col:
+                snap.stoch_d = _safe_float(stoch_df[d_col].iloc[-1])
+                snap.prev_stoch_d = _safe_float(stoch_df[d_col].iloc[-2])
+
+        # ADX (Average Directional Index) — uses High, Low, Close
+        if _TA_AVAILABLE:
+            adx_df = ta.adx(high, low, close, length=settings.SIGNAL_ADX_PERIOD)
+        else:
+            adx_df = _fallback_adx(high, low, close, length=settings.SIGNAL_ADX_PERIOD)
+        if adx_df is not None and len(adx_df) >= 1:
+            adx_col = next((c for c in adx_df.columns if c.startswith("ADX_")), None)
+            dmp_col = next((c for c in adx_df.columns if c.startswith("DMP_")), None)
+            dmn_col = next((c for c in adx_df.columns if c.startswith("DMN_")), None)
+            if adx_col:
+                snap.adx = _safe_float(adx_df[adx_col].iloc[-1])
+            if dmp_col:
+                snap.plus_di = _safe_float(adx_df[dmp_col].iloc[-1])
+            if dmn_col:
+                snap.minus_di = _safe_float(adx_df[dmn_col].iloc[-1])
+
+        # OBV (On-Balance Volume)
+        if _TA_AVAILABLE:
+            obv_series = ta.obv(close, volume)
+        else:
+            obv_series = _fallback_obv(close, volume)
+        if obv_series is not None and len(obv_series) >= 1:
+            snap.obv = _safe_float(obv_series.iloc[-1])
+            obv_avg = _sma(obv_series.astype(float),
+                           length=settings.SIGNAL_VOLUME_AVG_PERIOD)
+            if obv_avg is not None and len(obv_avg) >= 1:
+                snap.obv_sma = _safe_float(obv_avg.iloc[-1])
+            # OBV slope: compare current vs N bars ago
+            lookback = settings.SIGNAL_OBV_DIVERGENCE_BARS
+            if len(obv_series) > lookback:
+                obv_now = _safe_float(obv_series.iloc[-1])
+                obv_prev = _safe_float(obv_series.iloc[-lookback])
+                if obv_now is not None and obv_prev is not None:
+                    snap.obv_slope = obv_now - obv_prev
+
+        # 52-week context (pure pandas rolling)
+        bars_available = len(close)
+        window = min(252, bars_available)
+        if window >= 50:  # need reasonable history
+            snap.high_52w = _safe_float(close.rolling(window).max().iloc[-1])
+            snap.low_52w = _safe_float(close.rolling(window).min().iloc[-1])
+            if snap.high_52w and snap.current_price and snap.high_52w > 0:
+                snap.pct_from_52w_high = (snap.current_price - snap.high_52w) / snap.high_52w
+            if snap.low_52w and snap.current_price and snap.low_52w > 0:
+                snap.pct_from_52w_low = (snap.current_price - snap.low_52w) / snap.low_52w
 
     except Exception as e:
         logger.warning(f"{ticker}: Error computing indicators — {e}")
@@ -433,6 +659,154 @@ def detect_volume_spike(snap: IndicatorSnapshot) -> Optional[dict]:
     return None
 
 
+# ── NEW DETECTORS ───────────────────────────────────────────
+
+def detect_bollinger_signal(snap: IndicatorSnapshot) -> Optional[dict]:
+    """Detect price at Bollinger Band extremes (mean-reversion / breakout)."""
+    if snap.bb_pct_b is None or snap.bb_upper is None or snap.bb_lower is None:
+        return None
+
+    # Price at or below lower band — potential mean-reversion BUY
+    if snap.bb_pct_b <= 0:
+        return {
+            "name": "bollinger_breakout",
+            "direction": "BUY",
+            "bb_pct_b": round(snap.bb_pct_b, 4),
+            "bb_lower": round(snap.bb_lower, 4),
+            "bb_upper": round(snap.bb_upper, 4),
+        }
+
+    # Price at or above upper band — potential SELL
+    if snap.bb_pct_b >= 1.0:
+        return {
+            "name": "bollinger_breakout",
+            "direction": "SELL",
+            "bb_pct_b": round(snap.bb_pct_b, 4),
+            "bb_lower": round(snap.bb_lower, 4),
+            "bb_upper": round(snap.bb_upper, 4),
+        }
+
+    return None
+
+
+def detect_bollinger_squeeze(snap: IndicatorSnapshot) -> Optional[dict]:
+    """Detect Bollinger Band squeeze (low volatility = expansion incoming)."""
+    if snap.bb_width is None:
+        return None
+
+    if snap.bb_width < settings.SIGNAL_BB_SQUEEZE_THRESHOLD:
+        return {
+            "name": "bollinger_squeeze",
+            "direction": "NEUTRAL",
+            "bb_width": round(snap.bb_width, 4),
+        }
+
+    return None
+
+
+def detect_stochastic_signal(snap: IndicatorSnapshot) -> Optional[dict]:
+    """Detect Stochastic %K/%D crossover in oversold/overbought zones."""
+    if (snap.stoch_k is None or snap.stoch_d is None or
+            snap.prev_stoch_k is None or snap.prev_stoch_d is None):
+        return None
+
+    # Bullish: %K crosses above %D in oversold zone
+    if (snap.stoch_k <= settings.SIGNAL_STOCH_OVERSOLD and
+            snap.prev_stoch_k <= snap.prev_stoch_d and
+            snap.stoch_k > snap.stoch_d):
+        return {
+            "name": "stochastic_oversold",
+            "direction": "BUY",
+            "stoch_k": round(snap.stoch_k, 2),
+            "stoch_d": round(snap.stoch_d, 2),
+        }
+
+    # Bearish: %K crosses below %D in overbought zone
+    if (snap.stoch_k >= settings.SIGNAL_STOCH_OVERBOUGHT and
+            snap.prev_stoch_k >= snap.prev_stoch_d and
+            snap.stoch_k < snap.stoch_d):
+        return {
+            "name": "stochastic_overbought",
+            "direction": "SELL",
+            "stoch_k": round(snap.stoch_k, 2),
+            "stoch_d": round(snap.stoch_d, 2),
+        }
+
+    return None
+
+
+def detect_adx_trend(snap: IndicatorSnapshot) -> Optional[dict]:
+    """Detect strong trend via ADX. Confirmation signal (NEUTRAL direction)."""
+    if snap.adx is None:
+        return None
+
+    if snap.adx >= settings.SIGNAL_ADX_STRONG_TREND:
+        return {
+            "name": "adx_trend",
+            "direction": "NEUTRAL",
+            "adx": round(snap.adx, 2),
+            "plus_di": round(snap.plus_di, 2) if snap.plus_di else None,
+            "minus_di": round(snap.minus_di, 2) if snap.minus_di else None,
+            "trend_direction": "bullish" if (snap.plus_di or 0) > (snap.minus_di or 0) else "bearish",
+        }
+
+    return None
+
+
+def detect_obv_divergence(snap: IndicatorSnapshot) -> Optional[dict]:
+    """Detect OBV divergence (price vs volume trend disagreement)."""
+    if snap.obv_slope is None or snap.current_price is None or snap.prev_close is None:
+        return None
+
+    price_change = snap.current_price - snap.prev_close
+
+    # Bullish divergence: price falling but OBV rising (accumulation)
+    if price_change < 0 and snap.obv_slope > 0:
+        return {
+            "name": "obv_divergence",
+            "direction": "BUY",
+            "obv_slope": round(snap.obv_slope, 0),
+            "price_change": round(price_change, 4),
+        }
+
+    # Bearish divergence: price rising but OBV falling (distribution)
+    if price_change > 0 and snap.obv_slope < 0:
+        return {
+            "name": "obv_divergence",
+            "direction": "SELL",
+            "obv_slope": round(snap.obv_slope, 0),
+            "price_change": round(price_change, 4),
+        }
+
+    return None
+
+
+def detect_52w_proximity(snap: IndicatorSnapshot) -> Optional[dict]:
+    """Detect price near 52-week high or low."""
+    if snap.pct_from_52w_high is None or snap.pct_from_52w_low is None:
+        return None
+
+    # Near 52-week low (within configured proximity)
+    if snap.pct_from_52w_low is not None and snap.pct_from_52w_low <= settings.SIGNAL_52W_LOW_PROXIMITY:
+        return {
+            "name": "near_52w_low",
+            "direction": "BUY",
+            "pct_from_low": round(snap.pct_from_52w_low * 100, 2),
+            "low_52w": round(snap.low_52w, 4) if snap.low_52w else None,
+        }
+
+    # Near 52-week high (within configured proximity)
+    if snap.pct_from_52w_high is not None and abs(snap.pct_from_52w_high) <= settings.SIGNAL_52W_HIGH_PROXIMITY:
+        return {
+            "name": "near_52w_high",
+            "direction": "SELL",
+            "pct_from_high": round(snap.pct_from_52w_high * 100, 2),
+            "high_52w": round(snap.high_52w, 4) if snap.high_52w else None,
+        }
+
+    return None
+
+
 # ── SIGNAL AGGREGATION & CONFIDENCE ─────────────────────────
 
 def classify_trade_type(indicators: list[dict]) -> str:
@@ -483,11 +857,18 @@ def compute_confidence(indicators: list[dict], has_volume_spike: bool) -> float:
 
     # Indicator-specific bonuses for strong readings
     bonus = 0.0
-    for ind in directional:
-        if ind.get("name") == "rsi_oversold" and ind.get("rsi", 50) <= 20:
+    for ind in indicators:
+        name = ind.get("name", "")
+        if name == "rsi_oversold" and ind.get("rsi", 50) <= 20:
             bonus += 5.0  # Deeply oversold
-        elif ind.get("name") == "rsi_overbought" and ind.get("rsi", 50) >= 80:
+        elif name == "rsi_overbought" and ind.get("rsi", 50) >= 80:
             bonus += 5.0  # Deeply overbought
+        elif name == "adx_trend":
+            bonus += 5.0  # Strong trend confirmation
+        elif name == "bollinger_squeeze":
+            bonus += 5.0  # Volatility expansion incoming
+        elif name == "obv_divergence":
+            bonus += 5.0  # Volume-price divergence
 
     return min(100.0, base + volume_bonus + bonus)
 
@@ -572,6 +953,12 @@ def generate_signals(snap: IndicatorSnapshot) -> list[TradeSignal]:
         detect_rsi_signal,
         detect_macd_crossover,
         detect_volume_spike,
+        detect_bollinger_signal,
+        detect_bollinger_squeeze,
+        detect_stochastic_signal,
+        detect_adx_trend,
+        detect_obv_divergence,
+        detect_52w_proximity,
     ]:
         try:
             result = detector(snap)
@@ -585,12 +972,15 @@ def generate_signals(snap: IndicatorSnapshot) -> list[TradeSignal]:
     if not all_indicators:
         return []
 
-    # Separate volume from directional
+    # Separate confirmation (NEUTRAL) from directional indicators
     volume_spike = None
+    confirmation = []
     directional = []
     for ind in all_indicators:
         if ind.get("direction") == "NEUTRAL":
-            volume_spike = ind
+            if ind.get("name") == "volume_spike":
+                volume_spike = ind
+            confirmation.append(ind)
         else:
             directional.append(ind)
 
@@ -604,10 +994,10 @@ def generate_signals(snap: IndicatorSnapshot) -> list[TradeSignal]:
     signals = []
 
     if buy_indicators:
-        signals.append(_build_signal(snap, "BUY", buy_indicators, volume_spike))
+        signals.append(_build_signal(snap, "BUY", buy_indicators + confirmation, volume_spike))
 
     if sell_indicators:
-        signals.append(_build_signal(snap, "SELL", sell_indicators, volume_spike))
+        signals.append(_build_signal(snap, "SELL", sell_indicators + confirmation, volume_spike))
 
     return signals
 

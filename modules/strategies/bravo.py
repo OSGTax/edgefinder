@@ -28,6 +28,15 @@ from modules.signals import compute_indicators, generate_signals as detect_signa
 logger = logging.getLogger(__name__)
 
 
+def _has_indicator(ts_indicators, name: str) -> bool:
+    """Check if a named indicator fired in a signal's indicator data."""
+    if isinstance(ts_indicators, dict):
+        return name in ts_indicators
+    elif isinstance(ts_indicators, list):
+        return any(ind.get("name") == name for ind in ts_indicators if isinstance(ind, dict))
+    return False
+
+
 @StrategyRegistry.register("bravo")
 class BravoStrategy(BaseStrategy):
     """Lynch Stalwart — large cap steady growers."""
@@ -42,13 +51,16 @@ class BravoStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"ema_crossover_swing", "macd_crossover"}
+        return {"ema_crossover_swing", "macd_crossover", "adx_trend", "near_52w_high"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._atr_multiplier: float = 1.5
+        self._fallback_risk_pct: float = 0.04
+        self._adx_confidence_boost: float = 5.0
         logger.info("Bravo (Lynch Stalwart) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -115,15 +127,26 @@ class BravoStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[bravo] Sentiment gate error: {e}")
+
+                # Confidence boost: ADX trend confirms steady trend for stalwarts
+                has_adx = _has_indicator(ts.indicators, "adx_trend")
+                if has_adx:
+                    confidence = min(100.0, confidence + self._adx_confidence_boost)
+
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.04  # Tighter stop — lower vol stalwarts
-                stop_loss = round(price * (1 - risk_pct), 2)
+
+                # ATR-based dynamic stop-loss
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 1.5, 2)
                 meta = {
                     "strategy": "bravo",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "adx_boost_applied": has_adx,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -147,7 +170,12 @@ class BravoStrategy(BaseStrategy):
         logger.info(f"[bravo] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[bravo] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "bull":
+            logger.info("[bravo] Bull market — steady gains expected from stalwarts")
+        elif regime.trend == "bear":
+            logger.info("[bravo] Bear market — stalwarts hold up best")
+        else:
+            logger.info(f"[bravo] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[bravo] Strategy paused: {reason}")

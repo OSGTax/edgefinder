@@ -14,6 +14,13 @@ from unittest.mock import patch, MagicMock
 from modules.strategies.base import StrategyRegistry, Signal, TradeNotification, MarketRegime
 
 
+def _mock_snapshot():
+    """Create a MagicMock snapshot with atr=None to avoid comparison errors."""
+    m = MagicMock()
+    m.atr = None
+    return m
+
+
 # ── HELPERS ──────────────────────────────────────────────────
 
 def make_ohlcv(
@@ -156,7 +163,7 @@ class TestLynchStrategy:
         s = self._make_strategy()
 
         # Mock indicator computation
-        mock_snapshot = MagicMock()
+        mock_snapshot = _mock_snapshot()
         mock_compute.return_value = mock_snapshot
 
         # Mock a buy signal
@@ -183,7 +190,7 @@ class TestLynchStrategy:
     @patch("modules.strategies.lynch.compute_indicators")
     def test_sell_signals_skipped(self, mock_compute, mock_detect):
         s = self._make_strategy()
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
 
         mock_signal = MagicMock()
         mock_signal.signal_type = "SELL"
@@ -197,7 +204,7 @@ class TestLynchStrategy:
     @patch("modules.strategies.lynch.compute_indicators")
     def test_low_confidence_skipped(self, mock_compute, mock_detect):
         s = self._make_strategy()
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
 
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
@@ -218,7 +225,7 @@ class TestLynchStrategy:
         s = self._make_strategy()
         s.set_watchlist([make_scored_stock("AAPL", lynch_score=80, lynch_category="fast_grower")])
 
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
         mock_signal.confidence = 75.0
@@ -251,15 +258,15 @@ class TestLynchStrategy:
         s.on_market_regime_change(MarketRegime(trend="bull"))
         s.on_strategy_pause("test")
 
-    def test_stop_loss_is_5_percent(self):
-        """Lynch uses 5% stop loss."""
+    def test_stop_loss_fallback_5_percent(self):
+        """Lynch uses 5% fallback stop loss when ATR unavailable."""
         s = self._make_strategy()
         price = 100.0
         expected_stop = 95.0
         # Verify from signal generation
         with patch("modules.strategies.lynch.compute_indicators") as mc, \
              patch("modules.strategies.lynch.detect_signals") as md:
-            mc.return_value = MagicMock()
+            mc.return_value = _mock_snapshot()
             sig = MagicMock()
             sig.signal_type = "BUY"
             sig.confidence = 80.0
@@ -306,7 +313,7 @@ class TestBurryStrategy:
     @patch("modules.strategies.burry.compute_indicators")
     def test_generate_signals_basic(self, mock_compute, mock_detect):
         s = self._make_strategy()
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
 
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
@@ -330,7 +337,7 @@ class TestBurryStrategy:
     def test_rsi_oversold_boost(self, mock_compute, mock_detect):
         """Burry boosts confidence when RSI is oversold."""
         s = self._make_strategy()
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
 
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
@@ -353,7 +360,7 @@ class TestBurryStrategy:
     @patch("modules.strategies.burry.compute_indicators")
     def test_no_rsi_boost_without_oversold(self, mock_compute, mock_detect):
         s = self._make_strategy()
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
 
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
@@ -373,9 +380,9 @@ class TestBurryStrategy:
     @patch("modules.strategies.burry.detect_signals")
     @patch("modules.strategies.burry.compute_indicators")
     def test_wider_stop_loss(self, mock_compute, mock_detect):
-        """Burry uses 7% stop loss (wider than Lynch's 5%)."""
+        """Burry uses 7% fallback stop loss when ATR unavailable."""
         s = self._make_strategy()
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
 
         price = 100.0
         mock_signal = MagicMock()
@@ -400,7 +407,7 @@ class TestBurryStrategy:
         s.set_watchlist([make_scored_stock(
             "AAPL", burry_score=75, fcf_yield=0.09, price_to_tangible_book=0.8
         )])
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
 
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
@@ -448,7 +455,7 @@ class TestSentimentIntegration:
         s.init()
         s._use_sentiment = True
 
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
         mock_signal.confidence = 80.0
@@ -473,7 +480,7 @@ class TestSentimentIntegration:
         s.init()
         s._use_sentiment = True
 
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
         mock_signal.confidence = 70.0
@@ -531,7 +538,7 @@ class TestArenaIntegration:
         engine.add_strategy("burry", burry)
 
         # Lynch gets a momentum signal, Burry gets a mean-reversion signal
-        lynch_compute.return_value = MagicMock()
+        lynch_compute.return_value = _mock_snapshot()
         lynch_sig = MagicMock()
         lynch_sig.signal_type = "BUY"
         lynch_sig.confidence = 75.0
@@ -541,7 +548,7 @@ class TestArenaIntegration:
         lynch_sig.reason = ""
         lynch_detect.return_value = [lynch_sig]
 
-        burry_compute.return_value = MagicMock()
+        burry_compute.return_value = _mock_snapshot()
         burry_sig = MagicMock()
         burry_sig.signal_type = "BUY"
         burry_sig.confidence = 75.0
@@ -611,7 +618,7 @@ class TestSignalFiltering:
         s.init()
         s._use_sentiment = False
 
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
         mock_signal.confidence = 80.0
@@ -634,7 +641,7 @@ class TestSignalFiltering:
         s.init()
         s._use_sentiment = False
 
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
         mock_signal.confidence = 80.0
@@ -657,7 +664,7 @@ class TestSignalFiltering:
         s.init()
         s._use_sentiment = False
 
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
         mock_signal.confidence = 80.0
@@ -680,7 +687,7 @@ class TestSignalFiltering:
         s.init()
         s._use_sentiment = False
 
-        mock_compute.return_value = MagicMock()
+        mock_compute.return_value = _mock_snapshot()
         mock_signal = MagicMock()
         mock_signal.signal_type = "BUY"
         mock_signal.confidence = 80.0

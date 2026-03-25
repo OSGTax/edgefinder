@@ -28,6 +28,15 @@ from modules.signals import compute_indicators, generate_signals as detect_signa
 logger = logging.getLogger(__name__)
 
 
+def _has_indicator(ts_indicators, name: str) -> bool:
+    """Check if a named indicator fired in a signal's indicator data."""
+    if isinstance(ts_indicators, dict):
+        return name in ts_indicators
+    elif isinstance(ts_indicators, list):
+        return any(ind.get("name") == name for ind in ts_indicators if isinstance(ind, dict))
+    return False
+
+
 @StrategyRegistry.register("foxtrot")
 class FoxtrotStrategy(BaseStrategy):
     """Lynch Asset Play — hidden balance sheet value, undiscovered."""
@@ -42,13 +51,17 @@ class FoxtrotStrategy(BaseStrategy):
 
     @property
     def preferred_signals(self) -> set[str]:
-        return {"volume_spike", "ema_crossover_swing"}
+        return {"ema_crossover_swing", "volume_spike", "near_52w_low", "obv_divergence"}
 
     def init(self) -> None:
         self._watchlist: list[str] = []
         self._scores: dict[str, dict] = {}
         self._trades_log: list[TradeNotification] = []
         self._use_sentiment: bool = True
+        self._atr_multiplier: float = 2.5
+        self._fallback_risk_pct: float = 0.06
+        self._obv_confidence_boost: float = 5.0
+        self._52w_low_confidence_boost: float = 5.0
         logger.info("Foxtrot (Lynch Asset Play) strategy initialized")
 
     def qualifies_stock(self, stock_data: dict) -> bool:
@@ -112,15 +125,30 @@ class FoxtrotStrategy(BaseStrategy):
                         confidence = adjusted_confidence
                     except Exception as e:
                         logger.debug(f"[foxtrot] Sentiment gate error: {e}")
+
+                # Confidence boosts: asset play confirmations
+                has_obv = _has_indicator(ts.indicators, "obv_divergence")
+                has_52w_low = _has_indicator(ts.indicators, "near_52w_low")
+                if has_obv:
+                    confidence = min(100.0, confidence + self._obv_confidence_boost)
+                if has_52w_low:
+                    confidence = min(100.0, confidence + self._52w_low_confidence_boost)
+
                 if confidence < settings.SIGNAL_MIN_CONFIDENCE_TO_TRADE:
                     continue
-                risk_pct = 0.06
-                stop_loss = round(price * (1 - risk_pct), 2)
+
+                # ATR-based dynamic stop-loss (wider for asset plays)
+                if snapshot.atr and snapshot.atr > 0:
+                    stop_loss = round(price - (snapshot.atr * self._atr_multiplier), 2)
+                else:
+                    stop_loss = round(price * (1 - self._fallback_risk_pct), 2)
                 target = round(price + (price - stop_loss) * 2.5, 2)  # Higher R:R for asset plays
                 meta = {
                     "strategy": "foxtrot",
                     "indicators": ts.indicators,
                     "trade_reason": ts.reason,
+                    "obv_boost_applied": has_obv,
+                    "52w_low_boost_applied": has_52w_low,
                 }
                 score_info = self._scores.get(ticker, {})
                 if score_info:
@@ -145,7 +173,12 @@ class FoxtrotStrategy(BaseStrategy):
         logger.info(f"[foxtrot] Trade: {notification.action} {notification.ticker} @ ${notification.entry_price:.2f}")
 
     def on_market_regime_change(self, regime: MarketRegime) -> None:
-        logger.info(f"[foxtrot] Market regime: {regime.trend}/{regime.volatility}")
+        if regime.trend == "bear":
+            logger.info("[foxtrot] Bear market — asset plays get cheaper")
+        elif regime.trend == "bull":
+            logger.info("[foxtrot] Bull market — hidden value surfaces")
+        else:
+            logger.info(f"[foxtrot] Market regime: {regime.trend}/{regime.volatility}")
 
     def on_strategy_pause(self, reason: str) -> None:
         logger.warning(f"[foxtrot] Strategy paused: {reason}")

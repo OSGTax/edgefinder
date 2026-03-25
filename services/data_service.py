@@ -328,6 +328,18 @@ class DataService:
                 "current_ratio": info.get("currentRatio"),
                 "short_interest": info.get("shortPercentOfFloat"),
                 "price_to_tangible_book": info.get("priceToBook"),
+                # Additional fundamentals (already in yfinance .info)
+                "beta": info.get("beta"),
+                "trailing_pe": info.get("trailingPE"),
+                "forward_pe": info.get("forwardPE"),
+                "dividend_yield": info.get("dividendYield"),
+                "operating_margins": info.get("operatingMargins"),
+                "profit_margins": info.get("profitMargins"),
+                "return_on_equity": info.get("returnOnEquity"),
+                "return_on_assets": info.get("returnOnAssets"),
+                "quick_ratio": info.get("quickRatio"),
+                "price_to_sales": info.get("priceToSalesTrailing12Months"),
+                "fifty_two_week_change": info.get("52WeekChange"),
             }
 
             self.cache.store_fundamental(ticker, "combined_fundamentals", result)
