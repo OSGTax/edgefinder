@@ -170,10 +170,10 @@ SENTIMENT_RSS_FEEDS = [
 # ============================================================
 # SCHEDULING
 # ============================================================
-SCANNER_RUN_TIME = "17:00"             # 5:00 PM ET (after extended trading)
+SCANNER_RUN_TIME = "18:15"             # 6:15 PM ET (after extended trading)
 SIGNAL_CHECK_INTERVAL_MINUTES = 15     # During market hours
-MARKET_OPEN_ET = "09:00"               # 30 min before regular open
-MARKET_CLOSE_ET = "16:30"              # 30 min after regular close
+MARKET_OPEN_ET = "07:00"               # Pre-market coverage
+MARKET_CLOSE_ET = "18:00"              # Extended hours coverage
 POSITION_MONITOR_INTERVAL_MINUTES = 5  # Price check frequency
 
 # ============================================================

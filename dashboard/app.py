@@ -194,6 +194,7 @@ async def get_diagnostics():
         "arena_running": arena.get("running", False),
         "strategies": arena.get("strategies", 0),
         "last_signal_check": arena.get("last_signal_check"),
+        "last_signal_result": arena.get("last_signal_result"),
         "last_scan": arena.get("last_scan"),
         "errors": arena.get("errors", [])[-5:],
     }
