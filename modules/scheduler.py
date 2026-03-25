@@ -120,8 +120,14 @@ def start_scheduler() -> None:
         thread.start()
 
     # Initialize arena engine
-    from modules.arena.live import init_arena
-    init_arena()
+    try:
+        from modules.arena.live import init_arena
+        init_arena()
+    except Exception as e:
+        logger.error(
+            f"Arena initialization failed — scheduler will start "
+            f"without arena: {e}"
+        )
 
     # Create and start scheduler
     _scheduler = create_scheduler()

@@ -136,24 +136,32 @@ def init_arena() -> ArenaEngine:
         _data_service = None
 
     # Import strategy modules to trigger registration
-    import modules.strategies.lynch  # noqa: F401
-    import modules.strategies.burry  # noqa: F401
-    import modules.strategies.alpha  # noqa: F401
-    import modules.strategies.bravo  # noqa: F401
-    import modules.strategies.charlie  # noqa: F401
-    import modules.strategies.delta  # noqa: F401
-    import modules.strategies.echo  # noqa: F401
-    import modules.strategies.foxtrot  # noqa: F401
-    import modules.strategies.golf  # noqa: F401
-    import modules.strategies.hotel  # noqa: F401
-    import modules.strategies.india  # noqa: F401
-    import modules.strategies.juliet  # noqa: F401
-    import modules.strategies.kilo  # noqa: F401
-    import modules.strategies.lima  # noqa: F401
-    import modules.strategies.mike  # noqa: F401
-    import modules.strategies.november  # noqa: F401
-    import modules.strategies.oscar  # noqa: F401
-    import modules.strategies.papa  # noqa: F401
+    _strategy_modules = [
+        "modules.strategies.lynch",
+        "modules.strategies.burry",
+        "modules.strategies.alpha",
+        "modules.strategies.bravo",
+        "modules.strategies.charlie",
+        "modules.strategies.delta",
+        "modules.strategies.echo",
+        "modules.strategies.foxtrot",
+        "modules.strategies.golf",
+        "modules.strategies.hotel",
+        "modules.strategies.india",
+        "modules.strategies.juliet",
+        "modules.strategies.kilo",
+        "modules.strategies.lima",
+        "modules.strategies.mike",
+        "modules.strategies.november",
+        "modules.strategies.oscar",
+        "modules.strategies.papa",
+    ]
+    import importlib
+    for mod_name in _strategy_modules:
+        try:
+            importlib.import_module(mod_name)
+        except Exception as e:
+            logger.error(f"Failed to import strategy {mod_name}: {e}")
 
     _engine = ArenaEngine(
         starting_capital=settings.ARENA_STARTING_CAPITAL_PER_STRATEGY,
@@ -165,7 +173,10 @@ def init_arena() -> ArenaEngine:
     _arena_status["running"] = True
 
     # Populate watchlists from existing scan data
-    _refresh_watchlists()
+    try:
+        _refresh_watchlists()
+    except Exception as e:
+        logger.error(f"Failed to refresh watchlists: {e}")
 
     # Restore open positions and account state from database
     _restore_state()

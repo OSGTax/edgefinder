@@ -124,11 +124,17 @@ async def lifespan(app: FastAPI):
     _seed_suggestions_from_json()
 
     from modules.scheduler import start_scheduler, stop_scheduler
-    start_scheduler()
+    try:
+        start_scheduler()
+    except Exception as e:
+        logger.error(f"Scheduler failed to start: {e}")
 
     yield
 
-    stop_scheduler()
+    try:
+        stop_scheduler()
+    except Exception:
+        pass
 
 
 # Initialize app
