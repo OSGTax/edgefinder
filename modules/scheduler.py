@@ -88,10 +88,10 @@ def create_scheduler() -> BackgroundScheduler:
         replace_existing=True,
     )
 
-    # Nightly scan + watchlist refresh: 4:30 PM ET, Mon-Fri
+    # Nightly scan + watchlist refresh: 5:00 PM ET, Mon-Fri
     scheduler.add_job(
         arena_nightly_scan,
-        CronTrigger(hour=16, minute=30, day_of_week="mon-fri", timezone=ET),
+        CronTrigger(hour=17, minute=0, day_of_week="mon-fri", timezone=ET),
         id="arena_nightly_scan",
         replace_existing=True,
     )
