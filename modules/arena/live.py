@@ -115,9 +115,8 @@ def init_arena() -> ArenaEngine:
     # Populate watchlists from existing scan data
     _refresh_watchlists()
 
-    # One-time reset: cancel all prior open trades and start fresh at $2,500
-    # Remove this block after the reset has been deployed successfully.
-    reset_arena()
+    # Restore open positions and account state from database
+    _restore_state()
 
     logger.info(
         f"Arena initialized: {len(_engine.strategies)} strategies, "
