@@ -268,10 +268,14 @@ def _restore_state() -> None:
                 })
 
                 # Restore PDT day trade counter from recent DAY closes
+                # Normalize both sides to naive UTC to avoid
+                # offset-naive vs offset-aware comparison errors
+                # (PostgreSQL may return naive, SQLite may return aware)
                 if (
                     trade.trade_type == "DAY"
                     and trade.exit_timestamp
-                    and trade.exit_timestamp >= pdt_cutoff
+                    and trade.exit_timestamp.replace(tzinfo=None)
+                        >= pdt_cutoff.replace(tzinfo=None)
                 ):
                     account._day_trades.append(trade.exit_timestamp)
 
