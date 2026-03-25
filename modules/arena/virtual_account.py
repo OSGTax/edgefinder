@@ -420,7 +420,9 @@ class VirtualAccount:
         cutoff = datetime.now(timezone.utc) - timedelta(
             days=settings.PDT_WINDOW_DAYS
         )
-        recent = [dt for dt in self._day_trades if dt > cutoff]
+        # Normalize to naive UTC to avoid offset-naive vs offset-aware errors
+        cutoff_naive = cutoff.replace(tzinfo=None)
+        recent = [dt for dt in self._day_trades if dt.replace(tzinfo=None) > cutoff_naive]
         self._day_trades = recent  # Clean old entries
         return max(0, settings.PDT_DAY_TRADE_LIMIT - len(recent))
 
