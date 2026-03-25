@@ -330,6 +330,28 @@ def _migrate_schema(engine):
                     f'ALTER TABLE {table} ADD COLUMN {col} {col_type}'
                 ))
 
+        # Ensure UNIQUE constraint on watchlist.ticker
+        if "watchlist" in inspector.get_table_names():
+            indexes = inspector.get_indexes("watchlist")
+            has_unique_ticker = any(
+                idx.get("unique") and idx.get("column_names") == ["ticker"]
+                for idx in indexes
+            )
+            if not has_unique_ticker:
+                # Clean duplicates first (keep highest id per ticker)
+                conn.execute(text(
+                    "DELETE FROM watchlist WHERE id NOT IN "
+                    "(SELECT MAX(id) FROM watchlist GROUP BY ticker)"
+                ))
+                logger.info(
+                    "Migration: cleaned duplicate watchlist tickers, "
+                    "adding unique index"
+                )
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_watchlist_ticker ON watchlist(ticker)"
+                ))
+
 
 def init_db(db_path: str | None = None, echo: bool = False):
     """Create all tables."""

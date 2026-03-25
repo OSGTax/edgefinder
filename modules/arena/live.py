@@ -28,16 +28,24 @@ from modules.utils import to_eastern, compute_trade_hash
 logger = logging.getLogger(__name__)
 
 
-def _job_timeout(seconds: int = 120):
+def _job_timeout(seconds: int = 120, status_key: str | None = None):
     """Decorator to prevent scheduler jobs from hanging indefinitely.
 
     Runs the job in a daemon thread with a timeout. If the job doesn't
     complete within `seconds`, logs an error and returns an empty list
     so the scheduler thread is freed for the next run.
+
+    If *status_key* is provided, the corresponding entry in
+    ``_arena_status`` is updated at the START of the call (so the
+    dashboard always shows when the job last ran, even on timeout).
     """
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
+            # Always record that the job was attempted
+            if status_key:
+                _arena_status[status_key] = to_eastern(datetime.now(timezone.utc))
+
             result = [None]
             exception = [None]
 
@@ -52,10 +60,12 @@ def _job_timeout(seconds: int = 120):
             thread.join(timeout=seconds)
 
             if thread.is_alive():
-                logger.error(
+                msg = (
                     f"Job {func.__name__} timed out after {seconds}s — "
                     f"freeing scheduler thread"
                 )
+                logger.error(msg)
+                _arena_status["errors"].append(msg)
                 return []
             if exception[0]:
                 raise exception[0]
@@ -175,9 +185,14 @@ def _refresh_watchlists() -> None:
         return
 
     scored = []
+    seen_tickers: set[str] = set()
     for stock in watchlist:
+        ticker = stock.get("ticker", "")
+        if ticker in seen_tickers:
+            continue
+        seen_tickers.add(ticker)
         scored.append({
-            "ticker": stock.get("ticker", ""),
+            "ticker": ticker,
             "lynch_score": stock.get("lynch_score", 0),
             "burry_score": stock.get("burry_score", 0),
             "composite_score": stock.get("composite_score", 0),
@@ -505,7 +520,7 @@ def _get_price(ticker: str) -> tuple[Optional[float], str]:
 
 # ── LIVE JOBS ────────────────────────────────────────────────
 
-@_job_timeout(seconds=120)
+@_job_timeout(seconds=120, status_key="last_signal_check")
 def arena_signal_check() -> list[dict]:
     """Fetch bars for watchlist, feed to all strategies, execute signals.
 
@@ -556,8 +571,6 @@ def arena_signal_check() -> list[dict]:
         for trade in executed:
             _save_arena_trade(trade)
 
-        _arena_status["last_signal_check"] = to_eastern(datetime.now(timezone.utc))
-
         if executed:
             logger.info(f"ARENA: {len(executed)} trades executed")
         else:
@@ -571,7 +584,7 @@ def arena_signal_check() -> list[dict]:
         return []
 
 
-@_job_timeout(seconds=60)
+@_job_timeout(seconds=60, status_key="last_position_monitor")
 def arena_position_monitor() -> list[dict]:
     """Fetch current prices for open positions, check stops/targets.
 
@@ -605,8 +618,6 @@ def arena_position_monitor() -> list[dict]:
 
         for trade in closed:
             _update_arena_trade_closed(trade)
-
-        _arena_status["last_position_monitor"] = to_eastern(datetime.now(timezone.utc))
 
         if closed:
             logger.info(f"ARENA: {len(closed)} positions closed")
