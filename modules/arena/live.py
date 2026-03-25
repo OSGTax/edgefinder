@@ -157,11 +157,12 @@ def _restore_state() -> None:
 
     On every Render deploy, VirtualAccount instances are created fresh with
     starting capital. This function restores:
-    1. OPEN positions (deduct cost from cash, rebuild in-memory positions)
-    2. Realized P&L from CLOSED trades (add net profit/loss back to cash)
-    3. Closed trades list (so realized_pnl, win_rate properties work)
-    4. PDT day trade counter (from recent DAY-type closed trades)
-    5. Peak equity (from latest ArenaSnapshot per strategy)
+    1. Realized P&L from CLOSED trades (replenish cash before deducting opens)
+    2. Closed trades list (so realized_pnl, win_rate properties work)
+    3. PDT day trade counter (from recent DAY-type closed trades)
+    4. OPEN positions (deduct cost from cash, rebuild in-memory positions)
+    5. Current prices for open positions (so unrealized P&L is visible)
+    6. Peak equity (from latest ArenaSnapshot per strategy)
 
     This ensures account balances survive restarts, deploys, and code changes.
     """
@@ -172,79 +173,9 @@ def _restore_state() -> None:
 
     session = get_session()
     try:
-        # ── Phase 1: Restore OPEN positions ─────────────────────
-        open_trades = session.query(ArenaTradeLog).filter(
-            ArenaTradeLog.status == "OPEN"
-        ).all()
-
-        restored_positions = 0
-        for trade in open_trades:
-            strategy_name = trade.strategy_name
-            if strategy_name not in _engine.accounts:
-                logger.warning(
-                    f"Restore: strategy '{strategy_name}' not loaded, "
-                    f"skipping trade {trade.trade_id}"
-                )
-                continue
-
-            account = _engine.accounts[strategy_name]
-            position = Position(
-                trade_id=trade.trade_id,
-                ticker=trade.ticker,
-                direction=trade.direction or "LONG",
-                trade_type=trade.trade_type or "SWING",
-                entry_price=trade.execution_price,
-                shares=trade.shares,
-                stop_loss=trade.stop_loss,
-                target=trade.target,
-                entry_time=trade.execution_timestamp,
-                confidence=trade.confidence or 0.5,
-                slippage_applied=trade.slippage or 0.0,
-                metadata=trade.extra_data or {},
-            )
-
-            # Deduct cost from cash and add position
-            cost = position.entry_price * position.shares
-            if cost <= account.cash:
-                account.cash -= cost
-                position.high_water_mark = position.entry_price
-                position.last_known_price = position.entry_price
-                account.positions[position.trade_id] = position
-                restored_positions += 1
-                logger.info(
-                    f"Restored position: {trade.ticker} ({strategy_name}) "
-                    f"{trade.shares}x @ ${trade.execution_price:.2f}"
-                )
-            else:
-                logger.warning(
-                    f"Restore: insufficient cash for {trade.ticker} "
-                    f"in {strategy_name} (need ${cost:.2f}, "
-                    f"have ${account.cash:.2f})"
-                )
-
-        # ── Phase 1b: Update restored positions with current prices ──
-        if restored_positions > 0:
-            tickers_needed: set[str] = set()
-            for account in _engine.accounts.values():
-                for pos in account.positions.values():
-                    tickers_needed.add(pos.ticker)
-
-            updated_count = 0
-            for ticker in tickers_needed:
-                price, src = _get_price(ticker)
-                if price:
-                    for account in _engine.accounts.values():
-                        for pos in account.positions.values():
-                            if pos.ticker == ticker:
-                                account.update_position_price(pos.trade_id, price)
-                                updated_count += 1
-
-            logger.info(
-                f"Updated {updated_count} positions across "
-                f"{len(tickers_needed)} tickers with current prices"
-            )
-
-        # ── Phase 2: Restore realized P&L + closed trades list ──
+        # ── Phase 1: Restore realized P&L + closed trades list ──
+        # This MUST run before open positions so cash includes profits
+        # from closed trades that may have funded later opens.
         total_realized = 0.0
         total_closed_count = 0
         pdt_cutoff = datetime.now(timezone.utc) - timedelta(
@@ -294,7 +225,7 @@ def _restore_state() -> None:
                 ):
                     account._day_trades.append(trade.exit_timestamp)
 
-            # Add realized P&L to cash — the critical fix
+            # Add realized P&L to cash before open positions are deducted
             account.cash += realized_pnl
             total_realized += realized_pnl
             total_closed_count += len(closed_trades)
@@ -305,6 +236,78 @@ def _restore_state() -> None:
                     f"${realized_pnl:+.2f} from {len(closed_trades)} "
                     f"closed trades"
                 )
+
+        # ── Phase 2: Restore OPEN positions ─────────────────────
+        open_trades = session.query(ArenaTradeLog).filter(
+            ArenaTradeLog.status == "OPEN"
+        ).all()
+
+        restored_positions = 0
+        for trade in open_trades:
+            strategy_name = trade.strategy_name
+            if strategy_name not in _engine.accounts:
+                logger.warning(
+                    f"Restore: strategy '{strategy_name}' not loaded, "
+                    f"skipping trade {trade.trade_id}"
+                )
+                continue
+
+            account = _engine.accounts[strategy_name]
+            position = Position(
+                trade_id=trade.trade_id,
+                ticker=trade.ticker,
+                direction=trade.direction or "LONG",
+                trade_type=trade.trade_type or "SWING",
+                entry_price=trade.execution_price,
+                shares=trade.shares,
+                stop_loss=trade.stop_loss,
+                target=trade.target,
+                entry_time=trade.execution_timestamp,
+                confidence=trade.confidence or 0.5,
+                slippage_applied=trade.slippage or 0.0,
+                metadata=trade.extra_data or {},
+            )
+
+            # Deduct cost from cash and add position — always restore
+            # since these were validly opened during live execution
+            cost = position.entry_price * position.shares
+            if cost > account.cash:
+                logger.warning(
+                    f"Restore: cash deficit for {trade.ticker} "
+                    f"in {strategy_name} (need ${cost:.2f}, "
+                    f"have ${account.cash:.2f}) — restoring anyway"
+                )
+            account.cash -= cost
+            position.high_water_mark = position.entry_price
+            position.last_known_price = position.entry_price
+            account.positions[position.trade_id] = position
+            restored_positions += 1
+            logger.info(
+                f"Restored position: {trade.ticker} ({strategy_name}) "
+                f"{trade.shares}x @ ${trade.execution_price:.2f}"
+            )
+
+        # ── Phase 2b: Update restored positions with current prices ──
+        if restored_positions > 0:
+            tickers_needed: set[str] = set()
+            for account in _engine.accounts.values():
+                for pos in account.positions.values():
+                    tickers_needed.add(pos.ticker)
+
+            updated_count = 0
+            for ticker in tickers_needed:
+                price, src = _get_price(ticker)
+                if price:
+                    for account in _engine.accounts.values():
+                        for pos in account.positions.values():
+                            if pos.ticker == ticker:
+                                account.update_position_price(pos.trade_id, price)
+                                updated_count += 1
+
+            logger.info(
+                f"Updated {updated_count} positions across "
+                f"{len(tickers_needed)} tickers with current prices"
+            )
 
         # ── Phase 3: Restore peak equity from snapshots ─────────
         for strategy_name, account in _engine.accounts.items():

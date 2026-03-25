@@ -570,8 +570,8 @@
                     <div class="panel-body">
                         <table id="detail-positions">
                             <thead><tr>
-                                <th>Ticker</th><th>Type</th><th>Entry</th><th>Current</th>
-                                <th>Unrealized P&L</th><th>R</th><th>Stop</th><th>Target</th>
+                                <th>Ticker</th><th>Type</th><th>Shares</th><th>Entry</th><th>Current</th>
+                                <th>Value</th><th>Unrealized P&L</th><th>R</th><th>Stop</th><th>Target</th>
                                 <th>Trailing</th><th>Confidence</th><th>Time Held</th>
                             </tr></thead>
                             <tbody></tbody>
@@ -1247,8 +1247,10 @@ async function loadStrategyDetail(name) {
             return `<tr>
                 <td><strong>${p.ticker}</strong></td>
                 <td>${p.trade_type}</td>
+                <td>${p.shares||0}</td>
                 <td>$${(p.entry_price||0).toFixed(2)}</td>
                 <td>$${(p.last_price||0).toFixed(2)}</td>
+                <td>$${(p.market_value||0).toFixed(2)}</td>
                 <td class="${pnlClass}">$${(p.unrealized_pnl||0).toFixed(2)} (${(p.unrealized_pnl_pct||0).toFixed(1)}%)</td>
                 <td>${(p.r_multiple||0).toFixed(2)}R</td>
                 <td>$${(p.stop_loss||0).toFixed(2)}</td>
@@ -1257,7 +1259,7 @@ async function loadStrategyDetail(name) {
                 <td>${(p.confidence||0).toFixed(0)}%</td>
                 <td>${held}</td>
             </tr>`;
-        }).join('') || '<tr><td colspan="11" style="text-align:center;padding:16px;color:var(--muted);">No open positions</td></tr>';
+        }).join('') || '<tr><td colspan="13" style="text-align:center;padding:16px;color:var(--muted);">No open positions</td></tr>';
 
         // Trade explanations (for open positions)
         const explEl = document.getElementById('detail-explanations');

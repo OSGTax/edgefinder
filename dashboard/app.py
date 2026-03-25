@@ -969,6 +969,7 @@ async def get_arena_strategy(strategy_name: str):
                 "unrealized_pnl": round(pos.unrealized_pnl, 2),
                 "unrealized_pnl_pct": round(pos.unrealized_pnl_pct, 2),
                 "r_multiple": round(pos.r_multiple, 2),
+                "market_value": round(pos.market_value, 2),
                 "confidence": pos.confidence,
                 "entry_time": to_eastern(pos.entry_time),
                 "slippage_applied": pos.slippage_applied,
