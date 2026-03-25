@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-import pytz
+from zoneinfo import ZoneInfo
 
 from config import settings
 from modules.strategies.base import Signal, TradeNotification, MarketRegime
@@ -158,7 +158,7 @@ class Executor:
         exec_price = current_price or signal.entry_price
 
         # ── MARKET HOURS GATE ──────────────────────────────
-        _ET = pytz.timezone("US/Eastern")
+        _ET = ZoneInfo("America/New_York")
         now_et = now.astimezone(_ET)
 
         # Reject weekends
