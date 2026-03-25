@@ -1085,3 +1085,14 @@ async def resume_arena_strategy(strategy_name: str):
         return {"status": "enabled", "strategy": strategy_name}
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.post("/api/arena/reset")
+async def reset_arena_endpoint():
+    """Cancel all open trades and reset all strategy accounts to starting capital."""
+    try:
+        from modules.arena.live import reset_arena
+        result = reset_arena()
+        return result
+    except Exception as e:
+        return {"error": str(e), "reset": False}

@@ -152,6 +152,56 @@ def _refresh_watchlists() -> None:
             strategy.set_watchlist(scored)
 
 
+def reset_arena() -> dict:
+    """Cancel all OPEN arena trades and reset all virtual accounts to starting capital."""
+    global _engine
+
+    if _engine is None:
+        return {"error": "Arena not initialized", "reset": False}
+
+    now = datetime.now(timezone.utc)
+    session = get_session()
+    try:
+        # DB: mark all OPEN trades as CANCELLED
+        open_trades = session.query(ArenaTradeLog).filter(
+            ArenaTradeLog.status == "OPEN"
+        ).all()
+
+        cancelled_count = len(open_trades)
+        for trade in open_trades:
+            trade.status = "CANCELLED"
+            trade.exit_reason = "ARENA_RESET"
+            trade.exit_timestamp = now
+
+        session.commit()
+
+        # In-memory: reset every VirtualAccount
+        strategies_reset = 0
+        for name, account in _engine.accounts.items():
+            account.reset_account()
+            strategies_reset += 1
+
+        logger.info(
+            f"ARENA RESET: {cancelled_count} trades cancelled, "
+            f"{strategies_reset} accounts reset to "
+            f"${settings.ARENA_STARTING_CAPITAL_PER_STRATEGY}"
+        )
+
+        return {
+            "reset": True,
+            "trades_cancelled": cancelled_count,
+            "strategies_reset": strategies_reset,
+            "timestamp": to_eastern(now),
+        }
+
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Arena reset failed: {e}")
+        return {"error": str(e), "reset": False}
+    finally:
+        session.close()
+
+
 def _restore_state() -> None:
     """Restore full account state from database after restart.
 

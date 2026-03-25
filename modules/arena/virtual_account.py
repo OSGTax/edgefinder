@@ -195,6 +195,11 @@ class VirtualAccount:
             if sector_count >= settings.MAX_SAME_SECTOR_POSITIONS:
                 return False, f"Sector concentration limit for {sector} ({sector_count}/{settings.MAX_SAME_SECTOR_POSITIONS})"
 
+        # Aggregate position value cap
+        capital_deployed = sum(p.cost_basis for p in self.positions.values())
+        if capital_deployed >= settings.ARENA_MAX_TOTAL_POSITION_VALUE:
+            return False, f"Aggregate position cap reached (${capital_deployed:.2f} / ${settings.ARENA_MAX_TOTAL_POSITION_VALUE:.2f})"
+
         return True, "OK"
 
     def max_position_dollars(self) -> float:
@@ -225,7 +230,12 @@ class VirtualAccount:
         # Cash limit
         cash_shares = int(self.cash / entry_price)
 
-        shares = min(risk_shares, concentration_shares, cash_shares)
+        # Aggregate position value cap
+        capital_deployed = sum(p.cost_basis for p in self.positions.values())
+        remaining_budget = settings.ARENA_MAX_TOTAL_POSITION_VALUE - capital_deployed
+        budget_shares = int(remaining_budget / entry_price) if remaining_budget > 0 else 0
+
+        shares = min(risk_shares, concentration_shares, cash_shares, budget_shares)
         return max(shares, 0)
 
     def open_position(self, position: Position) -> bool:
@@ -418,6 +428,19 @@ class VirtualAccount:
         return self.day_trades_remaining() > 0
 
     # ── SERIALIZATION ────────────────────────────────────────
+
+    def reset_account(self) -> None:
+        """Reset account to starting state — full cash, no positions."""
+        self.cash = self.starting_capital
+        self.positions.clear()
+        self.closed_trades.clear()
+        self.equity_history.clear()
+        self.peak_equity = self.starting_capital
+        self.is_paused = False
+        self.pause_reason = ""
+        self._day_trades.clear()
+        self._last_stop_out.clear()
+        self._position_sectors.clear()
 
     def to_dict(self) -> dict:
         """Serialize account state for persistence or API response."""
