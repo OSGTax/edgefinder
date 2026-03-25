@@ -218,6 +218,7 @@ LOG_FORMAT = "%(asctime)s | %(name)s | %(levelname)s | %(message)s"
 # ARENA — Multi-Strategy Configuration
 # ============================================================
 ARENA_STARTING_CAPITAL_PER_STRATEGY = 2500.00   # Each strategy gets this much
+ARENA_MAX_TOTAL_POSITION_VALUE = 2500.00         # Max aggregate cost of open positions per strategy
 ARENA_MAX_POSITIONS_PER_STRATEGY = 5             # Max open positions per strategy
 ARENA_DRAWDOWN_PAUSE_PCT = -15.0                 # Auto-pause at -15% drawdown
 ARENA_SIGNAL_CHECK_INTERVAL_MINUTES = 15         # How often to check signals
