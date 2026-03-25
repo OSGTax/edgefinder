@@ -99,9 +99,10 @@ def get_arena_engine() -> Optional[ArenaEngine]:
 def get_arena_status() -> dict:
     """Get arena status for API."""
     if _engine is None:
-        return {"running": False, "strategies": 0}
+        status = {"running": False, "strategies": 0}
+    else:
+        status = _engine.get_status()
 
-    status = _engine.get_status()
     status.update({
         "last_signal_check": _arena_status["last_signal_check"],
         "last_signal_result": _arena_status["last_signal_result"],
