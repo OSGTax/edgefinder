@@ -124,10 +124,14 @@ def start_scheduler() -> None:
         from modules.arena.live import init_arena
         init_arena()
     except Exception as e:
+        import traceback
         logger.error(
             f"Arena initialization failed — scheduler will start "
-            f"without arena: {e}"
+            f"without arena: {e}\n{traceback.format_exc()}"
         )
+        # Surface the error so the dashboard shows why trades aren't running
+        from modules.arena.live import _arena_status
+        _arena_status["errors"].append(f"init_arena failed: {e}")
 
     # Create and start scheduler
     _scheduler = create_scheduler()

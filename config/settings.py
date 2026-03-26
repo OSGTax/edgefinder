@@ -18,8 +18,6 @@ PDT_WINDOW_DAYS = 5                     # Rolling window for PDT
 # ============================================================
 # RISK MANAGEMENT
 # ============================================================
-DAILY_LOSS_LIMIT_PCT = 0.05            # Stop trading if down 5% in a day
-WEEKLY_LOSS_LIMIT_PCT = 0.10           # Pause if down 10% in a week
 DRAWDOWN_CIRCUIT_BREAKER_PCT = 0.20    # Halt at 20% drawdown from peak
 MIN_REWARD_TO_RISK_RATIO = 1.5         # Minimum R:R for any trade
 REVENGE_TRADE_COOLDOWN_MINUTES = 30    # Wait after a stop-out
@@ -246,6 +244,3 @@ ARENA_STARTING_CAPITAL_PER_STRATEGY = 2500.00   # Each strategy gets this much
 ARENA_MAX_TOTAL_POSITION_VALUE = 2500.00         # Max aggregate cost of open positions per strategy
 ARENA_MAX_POSITIONS_PER_STRATEGY = 5             # Max open positions per strategy
 ARENA_DRAWDOWN_PAUSE_PCT = -15.0                 # Auto-pause at -15% drawdown
-ARENA_SIGNAL_CHECK_INTERVAL_MINUTES = 15         # How often to check signals
-ARENA_POSITION_MONITOR_INTERVAL_MINUTES = 5      # How often to check stops/targets
-ARENA_SNAPSHOT_TIME = "16:05"                     # Daily snapshot after close

@@ -9,6 +9,7 @@ Called by the scheduler jobs — does not own the scheduler lifecycle.
 
 import logging
 import threading
+from collections import deque
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Optional
@@ -82,12 +83,11 @@ def _job_timeout(seconds: int = 120, status_key: str | None = None):
 _engine: Optional[ArenaEngine] = None
 _data_service = None  # services.data_service.DataService instance
 _arena_status = {
-    "running": False,
     "last_signal_check": None,
     "last_signal_result": None,
     "last_position_monitor": None,
     "last_scan": None,
-    "errors": [],
+    "errors": deque(maxlen=50),
 }
 
 
@@ -108,7 +108,7 @@ def get_arena_status() -> dict:
         "last_signal_result": _arena_status["last_signal_result"],
         "last_position_monitor": _arena_status["last_position_monitor"],
         "last_scan": _arena_status["last_scan"],
-        "recent_errors": _arena_status["errors"][-5:],
+        "recent_errors": list(_arena_status["errors"])[-5:],
         "data_source": "DataService (Alpaca/FMP/yfinance)",
     })
     return status
@@ -173,7 +173,6 @@ def init_arena() -> ArenaEngine:
     )
 
     _engine.load_strategies()
-    _arena_status["running"] = True
 
     # Populate watchlists from existing scan data
     try:
@@ -458,6 +457,15 @@ def _restore_state() -> None:
 
 # ── DATA FETCHING ────────────────────────────────────────────
 
+def _get_yf_session():
+    """Create a yfinance-compatible session with curl_cffi for server compatibility."""
+    try:
+        from curl_cffi.requests import Session as CffiSession
+        return CffiSession(impersonate="chrome")
+    except ImportError:
+        return None
+
+
 def _get_bars(tickers: list[str], days_back: int = 365) -> dict:
     """Fetch OHLCV bars via DataService with title-case column mapping.
 
@@ -488,16 +496,12 @@ def _get_bars(tickers: list[str], days_back: int = 365) -> dict:
                 else:
                     volumes[ticker] = 1_000_000
     else:
-        # Fallback: direct yfinance with curl_cffi for server compatibility
+        # Fallback: direct yfinance
         import yfinance as yf
-        try:
-            from curl_cffi.requests import Session as CffiSession
-            _yf_sess = CffiSession(impersonate="chrome")
-        except ImportError:
-            _yf_sess = None
+        sess = _get_yf_session()
         for ticker in tickers:
             try:
-                stock = yf.Ticker(ticker, session=_yf_sess)
+                stock = yf.Ticker(ticker, session=sess)
                 df = stock.history(period="1y", interval="1d")
                 if df is not None and not df.empty:
                     bars[ticker] = df
@@ -520,12 +524,7 @@ def _get_price(ticker: str) -> tuple[Optional[float], str]:
     # Fallback
     try:
         import yfinance as yf
-        try:
-            from curl_cffi.requests import Session as CffiSession
-            _sess = CffiSession(impersonate="chrome")
-        except ImportError:
-            _sess = None
-        t = yf.Ticker(ticker, session=_sess)
+        t = yf.Ticker(ticker, session=_get_yf_session())
         price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
         if price and price > 0:
             return round(float(price), 4), "yfinance"

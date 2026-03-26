@@ -116,7 +116,10 @@ class TestHealth:
     def test_health_check(self, client):
         resp = client.get("/api/health")
         assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
+        data = resp.json()
+        assert data["status"] in ("ok", "degraded")
+        assert "scheduler_running" in data
+        assert "arena_engine_initialized" in data
 
 
 # ════════════════════════════════════════════════════════════
