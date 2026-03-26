@@ -882,26 +882,34 @@ async function loadTrades() {
 async function loadEquityCurve() {
     const data = await fetchJSON('/api/equity-curve');
     const emptyEl = document.getElementById('equity-empty');
-    if (!data || data.count === 0) { emptyEl.style.display = ''; return; }
+    if (!data || (data.count === 0 && data.strategy_list.length === 0)) { emptyEl.style.display = ''; return; }
     emptyEl.style.display = 'none';
 
     const strategies = data.strategies;
     const strategyNames = data.strategy_list;
     const COLORS = ['#3b82f6', '#22c55e', '#ef4444', '#eab308', '#a855f7', '#ec4899', '#06b6d4', '#f97316'];
 
-    // Collect all unique dates and global value range
-    const allDates = new Set();
+    // Parse dates as timestamps for time-based x-axis
+    function parseDate(dateStr) {
+        const s = typeof dateStr === 'string' ? dateStr.split('T')[0] : String(dateStr).split('T')[0];
+        return new Date(s + 'T12:00:00');
+    }
+
+    // Collect time range and global value range
+    let tMin = Infinity, tMax = -Infinity;
     let globalMin = Infinity, globalMax = -Infinity;
     for (const name of strategyNames) {
         for (const snap of strategies[name]) {
-            const d = typeof snap.date === 'string' ? snap.date.split('T')[0] : String(snap.date).split('T')[0];
-            allDates.add(d);
+            const t = parseDate(snap.date).getTime();
+            tMin = Math.min(tMin, t);
+            tMax = Math.max(tMax, t);
             globalMin = Math.min(globalMin, snap.total_value);
             globalMax = Math.max(globalMax, snap.total_value);
         }
     }
-    const sortedDates = [...allDates].sort();
-    const yPad = (globalMax - globalMin) * 0.05 || 50;
+    // Handle single data point or flat values
+    if (tMin === tMax) { tMax = tMin + 86400000; }
+    const yPad = (globalMax - globalMin) * 0.08 || 50;
     globalMin -= yPad;
     globalMax += yPad;
 
@@ -924,10 +932,8 @@ async function loadEquityCurve() {
     const plotW = W - margin.left - margin.right;
     const plotH = H - margin.top - margin.bottom;
 
-    function xPos(dateStr) {
-        const idx = sortedDates.indexOf(dateStr);
-        if (sortedDates.length <= 1) return margin.left + plotW / 2;
-        return margin.left + (idx / (sortedDates.length - 1)) * plotW;
+    function xPos(timestamp) {
+        return margin.left + ((timestamp - tMin) / (tMax - tMin)) * plotW;
     }
     function yPos(val) {
         return margin.top + plotH - ((val - globalMin) / (globalMax - globalMin)) * plotH;
@@ -952,16 +958,16 @@ async function loadEquityCurve() {
         ctx.fillText('$' + val.toFixed(0), margin.left - 8, y);
     }
 
-    // Draw X-axis date labels
+    // Draw X-axis date labels (time-based spacing)
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const maxLabels = Math.floor(plotW / 65);
-    const step = Math.max(1, Math.ceil(sortedDates.length / maxLabels));
-    for (let i = 0; i < sortedDates.length; i += step) {
-        const d = new Date(sortedDates[i] + 'T12:00:00');
+    const totalDays = (tMax - tMin) / 86400000;
+    const maxLabels = Math.floor(plotW / 70);
+    const dayStep = Math.max(1, Math.ceil(totalDays / maxLabels));
+    for (let d = new Date(tMin); d.getTime() <= tMax; d.setDate(d.getDate() + dayStep)) {
+        const t = d.getTime();
+        const x = xPos(t);
         const label = d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
-        const x = xPos(sortedDates[i]);
-        // Tick mark
         ctx.strokeStyle = '#2a2d3a';
         ctx.beginPath();
         ctx.moveTo(x, margin.top + plotH);
@@ -993,20 +999,20 @@ async function loadEquityCurve() {
         ctx.lineCap = 'round';
 
         snaps.forEach((snap, i) => {
-            const dateStr = typeof snap.date === 'string' ? snap.date.split('T')[0] : String(snap.date).split('T')[0];
-            const x = xPos(dateStr);
+            const t = parseDate(snap.date).getTime();
+            const x = xPos(t);
             const y = yPos(snap.total_value);
             if (i === 0) ctx.moveTo(x, y);
             else ctx.lineTo(x, y);
         });
         ctx.stroke();
 
-        // Draw a small dot at the start of each strategy line
-        const firstSnap = snaps[0];
-        const firstDate = typeof firstSnap.date === 'string' ? firstSnap.date.split('T')[0] : String(firstSnap.date).split('T')[0];
+        // Draw dot at the latest point (current position)
+        const lastSnap = snaps[snaps.length - 1];
+        const lastT = parseDate(lastSnap.date).getTime();
         ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(xPos(firstDate), yPos(firstSnap.total_value), 3, 0, Math.PI * 2);
+        ctx.arc(xPos(lastT), yPos(lastSnap.total_value), 3, 0, Math.PI * 2);
         ctx.fill();
     });
 
