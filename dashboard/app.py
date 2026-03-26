@@ -667,25 +667,47 @@ async def get_equity_curve(
     strategy: Optional[str] = Query(default=None),
     limit: int = Query(default=365, ge=1, le=1000),
 ):
-    """Get arena equity snapshots for charting, including live data point."""
+    """Get arena equity snapshots for charting, including live data point.
+
+    The limit is applied PER STRATEGY (not globally) so all strategies
+    get up to `limit` data points each.
+    """
     from modules.database import ArenaSnapshot
     from modules.arena.live import get_arena_engine
     session = get_session()
     try:
-        query = session.query(ArenaSnapshot).order_by(ArenaSnapshot.timestamp.asc())
+        # Get distinct strategy names first
         if strategy:
-            query = query.filter(ArenaSnapshot.strategy_name == strategy)
-        snaps = query.limit(limit).all()
+            strat_names = [strategy]
+        else:
+            strat_names = [
+                r[0] for r in session.query(ArenaSnapshot.strategy_name)
+                .distinct().order_by(ArenaSnapshot.strategy_name).all()
+            ]
+
+        # Query per strategy with individual limit
         from collections import OrderedDict
         grouped: dict[str, list] = OrderedDict()
-        for s in snaps:
-            grouped.setdefault(s.strategy_name, []).append({
-                "date": to_eastern(s.timestamp),
-                "total_value": s.total_equity,
-                "cash": s.cash,
-                "drawdown_pct": s.drawdown_pct,
-                "total_return_pct": s.total_return_pct,
-            })
+        total_count = 0
+        for name in strat_names:
+            snaps = (
+                session.query(ArenaSnapshot)
+                .filter(ArenaSnapshot.strategy_name == name)
+                .order_by(ArenaSnapshot.timestamp.asc())
+                .limit(limit)
+                .all()
+            )
+            total_count += len(snaps)
+            grouped[name] = [
+                {
+                    "date": to_eastern(s.timestamp),
+                    "total_value": s.total_equity,
+                    "cash": s.cash,
+                    "drawdown_pct": s.drawdown_pct,
+                    "total_return_pct": s.total_return_pct,
+                }
+                for s in snaps
+            ]
 
         # Append live data point from in-memory accounts
         engine = get_arena_engine()
@@ -703,7 +725,7 @@ async def get_equity_curve(
                 })
 
         return {
-            "count": len(snaps),
+            "count": total_count,
             "strategies": dict(grouped),
             "strategy_list": list(grouped.keys()),
         }
