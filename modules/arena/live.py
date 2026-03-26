@@ -22,6 +22,7 @@ from modules.scanner import get_active_watchlist, run_scan
 from modules.database import (
     ArenaTradeLog,
     ArenaSnapshot,
+    ArenaKeyValue,
     get_session,
 )
 from modules.utils import to_eastern, compute_trade_hash
@@ -43,9 +44,11 @@ def _job_timeout(seconds: int = 120, status_key: str | None = None):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Always record that the job was attempted
+            # Always record that the job was attempted (memory + DB)
             if status_key:
-                _arena_status[status_key] = to_eastern(datetime.now(timezone.utc))
+                ts = to_eastern(datetime.now(timezone.utc))
+                _arena_status[status_key] = ts
+                _save_status_to_db(status_key, ts)
 
             result = [None]
             exception = [None]
@@ -112,6 +115,38 @@ def get_arena_status() -> dict:
         "data_source": "DataService (Alpaca/FMP/yfinance)",
     })
     return status
+
+
+def _save_status_to_db(key: str, value: str) -> None:
+    """Upsert a status timestamp to the arena_kv table."""
+    try:
+        session = get_session()
+        existing = session.query(ArenaKeyValue).filter_by(key=key).first()
+        if existing:
+            existing.value = value
+        else:
+            session.add(ArenaKeyValue(key=key, value=value))
+        session.commit()
+    except Exception as e:
+        logger.debug(f"Failed to persist status {key}: {e}")
+    finally:
+        session.close()
+
+
+def _load_status_from_db() -> None:
+    """Load persisted status timestamps into _arena_status on startup."""
+    try:
+        session = get_session()
+        rows = session.query(ArenaKeyValue).all()
+        for row in rows:
+            if row.key in _arena_status and row.key != "errors":
+                _arena_status[row.key] = row.value
+        if rows:
+            logger.info(f"Restored {len(rows)} status values from database")
+    except Exception as e:
+        logger.debug(f"Failed to load persisted status: {e}")
+    finally:
+        session.close()
 
 
 # ── INITIALIZATION ───────────────────────────────────────────
@@ -454,6 +489,9 @@ def _restore_state() -> None:
     finally:
         session.close()
 
+    # ── Phase 4: Restore status timestamps from arena_kv ──────
+    _load_status_from_db()
+
 
 # ── DATA FETCHING ────────────────────────────────────────────
 
@@ -736,7 +774,9 @@ def arena_nightly_scan() -> None:
             run_scan(tickers=None, save_to_db=True)
 
         _refresh_watchlists()
-        _arena_status["last_scan"] = to_eastern(datetime.now(timezone.utc))
+        scan_ts = to_eastern(datetime.now(timezone.utc))
+        _arena_status["last_scan"] = scan_ts
+        _save_status_to_db("last_scan", scan_ts)
         logger.info("ARENA: Nightly scan complete, watchlists refreshed")
 
     except Exception as e:

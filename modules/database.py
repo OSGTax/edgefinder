@@ -243,6 +243,14 @@ class ArenaSnapshot(Base):
     is_paused = Column(Boolean, default=False)
 
 
+class ArenaKeyValue(Base):
+    """Simple key-value store for arena status that persists across restarts."""
+    __tablename__ = "arena_kv"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(String(500))
+
+
 # ── DATABASE ENGINE ──────────────────────────────────────────
 
 _engine = None
