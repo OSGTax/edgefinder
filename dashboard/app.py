@@ -667,8 +667,9 @@ async def get_equity_curve(
     strategy: Optional[str] = Query(default=None),
     limit: int = Query(default=365, ge=1, le=1000),
 ):
-    """Get arena equity snapshots for charting."""
+    """Get arena equity snapshots for charting, including live data point."""
     from modules.database import ArenaSnapshot
+    from modules.arena.live import get_arena_engine
     session = get_session()
     try:
         query = session.query(ArenaSnapshot).order_by(ArenaSnapshot.timestamp.asc())
@@ -685,6 +686,22 @@ async def get_equity_curve(
                 "drawdown_pct": s.drawdown_pct,
                 "total_return_pct": s.total_return_pct,
             })
+
+        # Append live data point from in-memory accounts
+        engine = get_arena_engine()
+        if engine:
+            now_str = to_eastern(datetime.now(timezone.utc))
+            for name, account in engine.accounts.items():
+                if strategy and name != strategy:
+                    continue
+                grouped.setdefault(name, []).append({
+                    "date": now_str,
+                    "total_value": round(account.total_equity, 2),
+                    "cash": round(account.cash, 2),
+                    "drawdown_pct": round(account.drawdown_pct, 4),
+                    "total_return_pct": round(account.total_return_pct, 4),
+                })
+
         return {
             "count": len(snaps),
             "strategies": dict(grouped),
