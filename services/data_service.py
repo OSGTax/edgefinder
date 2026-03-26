@@ -14,6 +14,7 @@ Usage:
     profile = ds.get_profile("AAPL")
 """
 
+import concurrent.futures
 import logging
 import os
 from datetime import datetime, timedelta
@@ -22,10 +23,22 @@ from typing import Optional
 import pandas as pd
 from dotenv import load_dotenv
 
+from config import settings
 from services.alpaca_client import AlpacaClient
 from services.cache import DataCache
 
 logger = logging.getLogger(__name__)
+
+
+def _call_with_timeout(fn, timeout: float = 10):
+    """Run fn() in a thread with a timeout. Returns None on timeout/error."""
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        future = pool.submit(fn)
+        try:
+            return future.result(timeout=timeout)
+        except (concurrent.futures.TimeoutError, Exception) as e:
+            logger.debug(f"Call timed out or failed after {timeout}s: {e}")
+            return None
 
 
 class DataService:
@@ -170,15 +183,18 @@ class DataService:
                 if bid > 0 and ask > 0:
                     return round((bid + ask) / 2, 4)
 
-        # 2. yfinance fast_info
-        try:
+        # 2. yfinance fast_info (with timeout)
+        def _yf_price():
             import yfinance as yf
             t = yf.Ticker(ticker, session=self._yf_session)
-            price = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
-            if price and price > 0:
-                return round(float(price), 4)
-        except Exception as e:
-            logger.debug(f"yfinance price lookup failed for {ticker}: {e}")
+            p = t.fast_info.get("lastPrice") or t.fast_info.get("regularMarketPrice")
+            if p and p > 0:
+                return round(float(p), 4)
+            return None
+
+        price = _call_with_timeout(_yf_price, timeout=settings.YFINANCE_CALL_TIMEOUT)
+        if price:
+            return price
 
         # 3. Last cached close
         cached = self.cache.get_bars(ticker, "1Day")
@@ -225,12 +241,27 @@ class DataService:
                     result[ticker] = df
                     uncached.remove(ticker)
 
-        # Fallback remaining to yfinance one by one
-        for ticker in uncached:
-            df = self._yfinance_bars(ticker, timeframe, start)
-            if df is not None and not df.empty:
-                self.cache.store_bars(ticker, timeframe, df)
-                result[ticker] = df
+        # Fallback remaining to yfinance in parallel
+        if uncached:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=settings.PRICE_FETCH_WORKERS
+            ) as pool:
+                future_map = {
+                    pool.submit(self._yfinance_bars, t, timeframe, start): t
+                    for t in uncached
+                }
+                done, _ = concurrent.futures.wait(
+                    future_map, timeout=settings.BARS_FETCH_TOTAL_TIMEOUT
+                )
+                for future in done:
+                    ticker = future_map[future]
+                    try:
+                        df = future.result(timeout=0)
+                        if df is not None and not df.empty:
+                            self.cache.store_bars(ticker, timeframe, df)
+                            result[ticker] = df
+                    except Exception:
+                        pass
 
         logger.info(f"Got bars for {len(result)}/{len(tickers)} tickers")
         return result
@@ -415,7 +446,10 @@ class DataService:
                 start = (datetime.utcnow() - timedelta(days=60)).strftime("%Y-%m-%d")
 
             t = yf.Ticker(ticker, session=self._yf_session)
-            df = t.history(start=start, end=end, interval=interval, auto_adjust=True)
+            df = _call_with_timeout(
+                lambda: t.history(start=start, end=end, interval=interval, auto_adjust=True),
+                timeout=settings.YFINANCE_BARS_TIMEOUT,
+            )
 
             if df is None or df.empty:
                 return None

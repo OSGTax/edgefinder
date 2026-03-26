@@ -7,6 +7,7 @@ Fetches data via DataService (Alpaca → FMP → yfinance fallback).
 Called by the scheduler jobs — does not own the scheduler lifecycle.
 """
 
+import concurrent.futures
 import logging
 import threading
 from collections import deque
@@ -440,14 +441,13 @@ def _restore_state() -> None:
                     tickers_needed.add(pos.ticker)
 
             updated_count = 0
-            for ticker in tickers_needed:
-                price, src = _get_price(ticker)
-                if price:
-                    for account in _engine.accounts.values():
-                        for pos in account.positions.values():
-                            if pos.ticker == ticker:
-                                account.update_position_price(pos.trade_id, price)
-                                updated_count += 1
+            restored_prices, _ = _fetch_prices_parallel(tickers_needed)
+            for ticker, price in restored_prices.items():
+                for account in _engine.accounts.values():
+                    for pos in account.positions.values():
+                        if pos.ticker == ticker:
+                            account.update_position_price(pos.trade_id, price)
+                            updated_count += 1
 
             logger.info(
                 f"Updated {updated_count} positions across "
@@ -558,6 +558,38 @@ def _get_price(ticker: str) -> tuple[Optional[float], str]:
     return None, "none"
 
 
+def _fetch_prices_parallel(tickers: set[str]) -> tuple[dict[str, float], str]:
+    """Fetch prices for multiple tickers concurrently.
+
+    Returns (prices_dict, source_string).
+    """
+    prices: dict[str, float] = {}
+    source = "unknown"
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=settings.PRICE_FETCH_WORKERS
+    ) as pool:
+        future_map = {pool.submit(_get_price, t): t for t in tickers}
+        done, _ = concurrent.futures.wait(
+            future_map, timeout=settings.PRICE_FETCH_TOTAL_TIMEOUT
+        )
+        for future in done:
+            ticker = future_map[future]
+            try:
+                price, src = future.result(timeout=0)
+                if price:
+                    prices[ticker] = price
+                    source = src
+            except Exception:
+                pass
+
+    timed_out = len(tickers) - len(done)
+    if timed_out > 0:
+        logger.warning(
+            f"Price fetch: {timed_out}/{len(tickers)} tickers timed out"
+        )
+    return prices, source
+
+
 # ── LIVE JOBS ────────────────────────────────────────────────
 
 @_job_timeout(seconds=120, status_key="last_signal_check")
@@ -661,14 +693,8 @@ def arena_position_monitor() -> list[dict]:
         if not tickers_needed:
             return []
 
-        # Fetch current prices via DataService
-        prices = {}
-        source = "unknown"
-        for ticker in tickers_needed:
-            price, src = _get_price(ticker)
-            if price:
-                prices[ticker] = price
-                source = src
+        # Fetch current prices via DataService (parallel)
+        prices, source = _fetch_prices_parallel(tickers_needed)
 
         if not prices:
             return []

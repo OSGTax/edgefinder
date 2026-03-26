@@ -175,6 +175,16 @@ MARKET_CLOSE_ET = "18:00"              # Extended hours coverage
 POSITION_MONITOR_INTERVAL_MINUTES = 5  # Price check frequency
 
 # ============================================================
+# TIMEOUT & PARALLELISM
+# ============================================================
+YFINANCE_CALL_TIMEOUT = 10            # Seconds per individual yfinance call
+YFINANCE_BARS_TIMEOUT = 15            # Seconds for bars fetch (larger payload)
+PRICE_FETCH_WORKERS = 8               # Parallel threads for price fetching
+PRICE_FETCH_TOTAL_TIMEOUT = 30        # Total seconds for parallel price batch
+BARS_FETCH_TOTAL_TIMEOUT = 60         # Total seconds for parallel bars batch
+SCHEDULER_EXECUTOR_THREADS = 3        # APScheduler thread pool size
+
+# ============================================================
 # DEFAULT TICKER UNIVERSE (used when Wikipedia S&P lists are unavailable)
 # ============================================================
 SCANNER_DEFAULT_TICKERS = [
