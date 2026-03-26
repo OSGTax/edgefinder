@@ -1,8 +1,8 @@
 """
-Tests for NATO Strategy Plugins (Alpha through Papa)
-=====================================================
+Tests for NATO Strategy Plugins (Alpha through Quebec)
+======================================================
 Tests registration, qualification filters, signal generation,
-stop loss / target parameters, and metadata for all 14 new strategies.
+stop loss / target parameters, and metadata for all 15 NATO strategies.
 """
 
 import pytest
@@ -58,6 +58,7 @@ NATO_STRATEGIES = {
     "november": "modules.strategies.november",
     "oscar": "modules.strategies.oscar",
     "papa": "modules.strategies.papa",
+    "quebec": "modules.strategies.quebec",
 }
 
 # Expected stop loss percentages and R:R ratios per strategy
@@ -78,6 +79,7 @@ STRATEGY_PARAMS = {
     "november": {"stop_pct": 0.07, "rr": 2.5},
     "oscar":    {"stop_pct": 0.04, "rr": 1.5},
     "papa":     {"stop_pct": 0.08, "rr": 3.0},
+    "quebec":   {"stop_pct": 0.07, "rr": 3.0},
 }
 
 # Stock data templates for qualification tests
@@ -161,6 +163,9 @@ QUALIFYING_STOCKS = {
         "current_ratio": 1.5, "ev_to_ebitda": 12,
         "composite_score": 55,
     },
+    "quebec": {
+        "ticker": "QMOM", "avg_volume": 500_000, "price": 50.0,
+    },
 }
 
 # Stocks that should NOT qualify for each strategy
@@ -181,6 +186,7 @@ NON_QUALIFYING_STOCKS = {
     "november": {"ticker": "X", "lynch_category": "fast_grower", "current_ratio": 0.8, "fcf_yield": -0.02, "price_to_tangible_book": 5.0},
     "oscar": {"ticker": "X", "peg_ratio": 3.0, "earnings_growth": 0.05, "debt_to_equity": 1.5, "institutional_pct": 0.90},
     "papa": {"ticker": "X", "short_interest": 0.05, "revenue_growth": -0.10, "current_ratio": 0.8, "ev_to_ebitda": 25},
+    "quebec": {"ticker": "X", "avg_volume": 50_000, "price": 0.50},
 }
 
 
@@ -205,6 +211,7 @@ def clean_registry():
     import modules.strategies.november
     import modules.strategies.oscar
     import modules.strategies.papa
+    import modules.strategies.quebec
 
     # Re-register if cleared (decorators only fire once per import)
     strategy_classes = {
@@ -224,6 +231,7 @@ def clean_registry():
         "november": modules.strategies.november.NovemberStrategy,
         "oscar": modules.strategies.oscar.OscarStrategy,
         "papa": modules.strategies.papa.PapaStrategy,
+        "quebec": modules.strategies.quebec.QuebecStrategy,
     }
     for name, cls in strategy_classes.items():
         if name not in StrategyRegistry.list_strategies():
@@ -241,15 +249,23 @@ def _make_strategy(name: str):
     return s
 
 
-def _mock_buy_signal(preferred_signal: str, price: float = 100.0, confidence: float = 75.0):
-    """Create a mock trade signal matching a preferred signal type."""
+def _mock_buy_signal(preferred_signal, price: float = 100.0, confidence: float = 75.0):
+    """Create a mock trade signal matching preferred signal type(s).
+
+    Args:
+        preferred_signal: A single signal name (str) or a set/list of names.
+    """
     sig = MagicMock()
     sig.signal_type = "BUY"
     sig.confidence = confidence
     sig.price = price
     sig.trade_type = "DAY"
-    sig.indicators = {preferred_signal: {"name": preferred_signal}}
-    sig.reason = f"BUY: {preferred_signal}"
+    if isinstance(preferred_signal, (set, list, frozenset)):
+        sig.indicators = {s: {"name": s} for s in preferred_signal}
+        sig.reason = f"BUY: {', '.join(sorted(preferred_signal))}"
+    else:
+        sig.indicators = {preferred_signal: {"name": preferred_signal}}
+        sig.reason = f"BUY: {preferred_signal}"
     return sig
 
 
@@ -268,10 +284,10 @@ class TestRegistration:
         assert s.name == name
         assert s.version == "1.0.0"
 
-    def test_all_16_strategies_registered(self):
-        """All 14 NATO + Lynch + Burry = 16 total."""
+    def test_all_17_strategies_registered(self):
+        """All 15 NATO + Lynch + Burry = 17 total."""
         strategies = StrategyRegistry.list_strategies()
-        assert len(strategies) >= 16
+        assert len(strategies) >= 17
 
     @pytest.mark.parametrize("name", list(NATO_STRATEGIES.keys()))
     def test_preferred_signals_not_empty(self, name):
@@ -362,15 +378,19 @@ class TestSignalGeneration:
     def test_generates_buy_signal(self, name):
         """Each strategy generates a signal when given matching technical data."""
         s = _make_strategy(name)
-        preferred = list(s.preferred_signals)[0]
+        all_preferred = s.preferred_signals
         module_path = NATO_STRATEGIES[name]
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
             snapshot = MagicMock()
             snapshot.atr = None  # Force fallback stop-loss path
+            snapshot.rsi = 55.0  # In range for strategies that check RSI
+            snapshot.adx = 26.0
+            snapshot.current_volume = 1_000_000
+            snapshot.avg_volume = 1_000_000
             mc.return_value = snapshot
-            md.return_value = [_mock_buy_signal(preferred, price=100.0)]
+            md.return_value = [_mock_buy_signal(all_preferred, price=100.0)]
 
             bars = {"AAPL": make_ohlcv(start_price=100.0)}
             signals = s.generate_signals(bars)
@@ -404,15 +424,19 @@ class TestSignalGeneration:
     def test_low_confidence_skipped(self, name):
         """Signals below SIGNAL_MIN_CONFIDENCE_TO_TRADE are skipped."""
         s = _make_strategy(name)
-        preferred = list(s.preferred_signals)[0]
+        all_preferred = s.preferred_signals
         module_path = NATO_STRATEGIES[name]
 
         with patch(f"{module_path}.compute_indicators") as mc, \
              patch(f"{module_path}.detect_signals") as md:
             snapshot = MagicMock()
             snapshot.atr = None
+            snapshot.rsi = 55.0
+            snapshot.adx = 26.0
+            snapshot.current_volume = 1_000_000
+            snapshot.avg_volume = 1_000_000
             mc.return_value = snapshot
-            md.return_value = [_mock_buy_signal(preferred, confidence=20.0)]
+            md.return_value = [_mock_buy_signal(all_preferred, confidence=20.0)]
 
             bars = {"AAPL": make_ohlcv()}
             signals = s.generate_signals(bars)
@@ -451,7 +475,7 @@ class TestStopLossAndTarget:
     @pytest.mark.parametrize("name,params", list(STRATEGY_PARAMS.items()))
     def test_stop_loss_percentage(self, name, params):
         s = _make_strategy(name)
-        preferred = list(s.preferred_signals)[0]
+        all_preferred = s.preferred_signals
         module_path = NATO_STRATEGIES[name]
         price = 100.0
 
@@ -459,8 +483,12 @@ class TestStopLossAndTarget:
              patch(f"{module_path}.detect_signals") as md:
             snapshot = MagicMock()
             snapshot.atr = None  # Force fallback stop-loss path
+            snapshot.rsi = 55.0
+            snapshot.adx = 26.0
+            snapshot.current_volume = 1_000_000
+            snapshot.avg_volume = 1_000_000
             mc.return_value = snapshot
-            md.return_value = [_mock_buy_signal(preferred, price=price)]
+            md.return_value = [_mock_buy_signal(all_preferred, price=price)]
 
             bars = {"AAPL": make_ohlcv(start_price=price)}
             signals = s.generate_signals(bars)
@@ -474,7 +502,7 @@ class TestStopLossAndTarget:
     @pytest.mark.parametrize("name,params", list(STRATEGY_PARAMS.items()))
     def test_target_rr_ratio(self, name, params):
         s = _make_strategy(name)
-        preferred = list(s.preferred_signals)[0]
+        all_preferred = s.preferred_signals
         module_path = NATO_STRATEGIES[name]
         price = 100.0
 
@@ -482,8 +510,12 @@ class TestStopLossAndTarget:
              patch(f"{module_path}.detect_signals") as md:
             snapshot = MagicMock()
             snapshot.atr = None  # Force fallback stop-loss path
+            snapshot.rsi = 55.0
+            snapshot.adx = 26.0
+            snapshot.current_volume = 1_000_000
+            snapshot.avg_volume = 1_000_000
             mc.return_value = snapshot
-            md.return_value = [_mock_buy_signal(preferred, price=price)]
+            md.return_value = [_mock_buy_signal(all_preferred, price=price)]
 
             bars = {"AAPL": make_ohlcv(start_price=price)}
             signals = s.generate_signals(bars)
