@@ -213,7 +213,11 @@ class StreamProvider(Protocol):  # For real-time
     async def subscribe(self, tickers, callback) -> None
     async def connect(self) -> None
 ```
-Single data source: Polygon.io. No Alpaca, no yfinance. Polygon covers bars, fundamentals, universe, and streaming. Retry logic on failures instead of fallback providers that add complexity and data inconsistency.
+Single data source to start: Polygon.io (US equities, real-time, streaming). The `DataProvider` protocol is abstracted so consuming code never imports Polygon directly — when international stocks (EODHD) and US options (Polygon paid tier) are added later, it's a new file, not a rewrite. Retry logic on failures; no fallback providers that cause data inconsistency.
+
+**Planned future additions (not in scope for initial build):**
+- US options: Polygon.io paid tier upgrade
+- International equities: EODHD (EOD Historical Data, 60+ exchanges)
 
 ### Strategy Plugin (v2 — adds AI hooks)
 ```python
