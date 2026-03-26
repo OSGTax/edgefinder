@@ -5,7 +5,7 @@
 EdgeFinder v1 is a fully-built paper trading system (~80KB arena, 21 strategies, 15+ indicators, dashboard). However, the design evolved organically and now has fundamental issues: data sources are too limited for complex strategies, the watchlist is redundant, there's no market benchmarking, sentiment is basic (VADER on RSS only), no social media integration, no market context captured with trades, and the dashboard can't filter by strategy. The user wants to **reset the repo and rewrite from scratch** with a clearer vision — shifting from "automated trading pipeline" to a **trading workbench** for research, strategy development, and eventually an AI meta-strategy.
 
 **Key user decisions:**
-- Real-time data required (not just delayed/free tier)
+- Real-time data via Polygon.io (single source, no fallback chain — keep it clean)
 - Social sentiment from Reddit + Twitter/X
 - Per-strategy views everywhere (no aggregate P&L)
 - Research tool replaces watchlist
@@ -51,8 +51,7 @@ Every file will be written fresh — no porting, no legacy baggage. If unsure ab
               ┌──────────▼──────────┐
               │  Data Layer         │
               │  (Protocol-based)   │
-              │  Polygon > Alpaca > │
-              │  yfinance fallback  │
+              │  Polygon.io only    │
               └─────────────────────┘
 ```
 
@@ -101,12 +100,10 @@ edgefinder/
 │   │   ├── interfaces.py             # Protocols: DataProvider, SentimentProvider, etc.
 │   │   └── events.py                  # In-process event bus (pub/sub)
 │   ├── data/
-│   │   ├── provider.py               # DataProvider factory + CachedDataProvider wrapper
-│   │   ├── polygon.py                # Polygon.io (primary, real-time)
-│   │   ├── alpaca.py                 # Alpaca (fallback)
-│   │   ├── yfinance_provider.py      # yfinance (last resort)
-│   │   ├── cache.py                  # Local cache layer
-│   │   └── stream.py                 # WebSocket streaming abstraction
+│   │   ├── provider.py               # DataProvider interface + CachedDataProvider wrapper
+│   │   ├── polygon.py                # Polygon.io — sole data source (bars, fundamentals, universe, streaming)
+│   │   ├── cache.py                  # Local cache layer (reduces API calls)
+│   │   └── stream.py                 # WebSocket streaming (Polygon real-time)
 │   ├── db/
 │   │   ├── engine.py                 # SQLAlchemy engine/session (SQLite/PostgreSQL)
 │   │   ├── models.py                 # ORM models (new schema)
@@ -203,19 +200,20 @@ edgefinder/
 
 ## Key Interfaces
 
-### Data Provider (Protocol-based, swappable)
+### Data Provider (Polygon.io only — no fallback chain)
 ```python
 class DataProvider(Protocol):
     def get_bars(self, ticker, timeframe, start, end) -> DataFrame | None
     def get_latest_price(self, ticker) -> float | None
     def get_fundamentals(self, ticker) -> dict | None
+    def get_ticker_universe(self) -> list[str]
     def is_market_open(self) -> bool
 
 class StreamProvider(Protocol):  # For real-time
     async def subscribe(self, tickers, callback) -> None
     async def connect(self) -> None
 ```
-Factory reads config -> instantiates Polygon (if key set) > Alpaca > yfinance. Consuming code never imports a specific provider.
+Single data source: Polygon.io. No Alpaca, no yfinance. Polygon covers bars, fundamentals, universe, and streaming. Retry logic on failures instead of fallback providers that add complexity and data inconsistency.
 
 ### Strategy Plugin (v2 — adds AI hooks)
 ```python
@@ -272,7 +270,7 @@ The DB schema already supports every query this interface needs.
 - `pyproject.toml`, package structure, config
 - `core/models.py` (Pydantic domain models), `core/interfaces.py` (Protocols)
 - `db/engine.py` + `db/models.py` (new schema) + Alembic setup
-- `data/provider.py` + `yfinance_provider.py` + `cache.py` (start with free data)
+- `data/polygon.py` + `data/cache.py` + `data/stream.py` (Polygon.io from day 1)
 - Tests for data layer and DB
 
 ### Phase 2: Scanner + Strategy System
@@ -284,7 +282,7 @@ The DB schema already supports every query this interface needs.
 ### Phase 3: Trading Engine
 - `trading/account.py`, `trading/executor.py`, `trading/arena.py`
 - `trading/journal.py` (with market context integration)
-- Full pipeline test: scan -> signal -> execute -> journal
+- Full pipeline test: scan → signal → execute → journal
 
 ### Phase 4: Market Context + Benchmarks
 - `market/snapshot.py` (captures indices, VIX, sectors at trade time)
@@ -304,17 +302,12 @@ The DB schema already supports every query this interface needs.
 - Strategy selector/filter, strategy-vs-index charts
 - Manual ticker injection endpoint
 
-### Phase 7: Real-Time Data Upgrade
-- `data/polygon.py` or `data/alpaca.py` (paid tier)
-- `data/stream.py` (WebSocket streaming)
-- Port remaining strategies
-
-### Phase 8: Scheduler + Deployment
+### Phase 7: Scheduler + Deployment
 - APScheduler jobs for all features
 - Render deployment config
 - End-to-end integration testing
 
-### Phase 9 (Future): AI Meta-Strategy
+### Phase 8 (Future): AI Meta-Strategy
 - `strategies/ai_agent.py` as a strategy plugin
 - Uses `AIAgentDataAccess` to query trade history + market snapshots
 - Calls `get_state()`/`apply_suggestion()` on other strategies
@@ -326,11 +319,10 @@ The DB schema already supports every query this interface needs.
 
 After each phase, verify by:
 1. `python -m pytest tests/ -v -m "not integration"` — all unit tests pass
-2. Phase 1: Can fetch bars and fundamentals through abstracted data provider
+2. Phase 1: Can fetch bars and fundamentals from Polygon.io, streaming connects
 3. Phase 2: `python scripts/run_scanner.py --quick` produces scored results
 4. Phase 3: Simulated trade pipeline executes end-to-end
 5. Phase 4: Trades in DB have non-null `market_snapshot_id`
 6. Phase 5: `SentimentAggregator` returns scores from multiple sources
 7. Phase 6: Dashboard loads, strategy filter works, benchmark charts render
-8. Phase 7: Real-time prices stream via WebSocket
-9. Phase 8: Full system runs on schedule, deployed to Render
+8. Phase 7: Full system runs on schedule, deployed to Render
