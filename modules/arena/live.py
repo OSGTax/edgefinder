@@ -152,10 +152,10 @@ def _load_status_from_db() -> None:
 # ── INITIALIZATION ───────────────────────────────────────────
 
 def init_arena() -> ArenaEngine:
-    """Initialize the arena engine with Lynch and Burry strategies.
+    """Initialize the arena engine with all registered strategies.
 
-    Called once at startup. Loads strategies from registry, sets up
-    watchlists from existing scan data, and initializes DataService.
+    Auto-discovers strategy modules from modules/strategies/, loads them
+    via the registry, sets up watchlists, and initializes DataService.
     """
     global _engine, _data_service
 
@@ -173,33 +173,19 @@ def init_arena() -> ArenaEngine:
         logger.warning(f"DataService init failed, will use yfinance fallback: {e}")
         _data_service = None
 
-    # Import strategy modules to trigger registration
-    _strategy_modules = [
-        "modules.strategies.lynch",
-        "modules.strategies.burry",
-        "modules.strategies.alpha",
-        "modules.strategies.bravo",
-        "modules.strategies.charlie",
-        "modules.strategies.delta",
-        "modules.strategies.echo",
-        "modules.strategies.foxtrot",
-        "modules.strategies.golf",
-        "modules.strategies.hotel",
-        "modules.strategies.india",
-        "modules.strategies.juliet",
-        "modules.strategies.kilo",
-        "modules.strategies.lima",
-        "modules.strategies.mike",
-        "modules.strategies.november",
-        "modules.strategies.oscar",
-        "modules.strategies.papa",
-    ]
+    # Auto-discover and import all strategy modules from modules/strategies/
     import importlib
-    for mod_name in _strategy_modules:
+    import pkgutil
+    import modules.strategies as _strat_pkg
+
+    for _importer, mod_name, _is_pkg in pkgutil.iter_modules(_strat_pkg.__path__):
+        if mod_name in ("base",):
+            continue
+        full_name = f"modules.strategies.{mod_name}"
         try:
-            importlib.import_module(mod_name)
+            importlib.import_module(full_name)
         except Exception as e:
-            logger.error(f"Failed to import strategy {mod_name}: {e}")
+            logger.error(f"Failed to import strategy {full_name}: {e}")
 
     _engine = ArenaEngine(
         starting_capital=settings.ARENA_STARTING_CAPITAL_PER_STRATEGY,
