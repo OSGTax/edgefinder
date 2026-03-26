@@ -36,9 +36,7 @@ from config import settings
 from modules.database import init_db, get_session
 from modules.database import (
     WatchlistStock,
-    Trade as TradeRecord,
     Signal as SignalRecord,
-    AccountSnapshot,
     ArenaTradeLog,
     Suggestion,
 )
@@ -166,11 +164,18 @@ async def dashboard_home():
 async def health_check():
     """Health check endpoint."""
     from modules.scheduler import get_scheduler_status
+    from modules.arena.live import get_arena_engine
     status = get_scheduler_status()
+    scheduler_ok = status.get("scheduler_running", False)
+    engine_ok = get_arena_engine() is not None
+    errors = status.get("recent_errors", [])
+    health = "ok" if (scheduler_ok and engine_ok) else "degraded"
     return {
-        "status": "ok",
+        "status": health,
         "service": "edgefinder-dashboard",
-        "scheduler_running": status.get("scheduler_running", status.get("running", False)),
+        "scheduler_running": scheduler_ok,
+        "arena_engine_initialized": engine_ok,
+        "recent_errors": errors[-3:] if errors else [],
     }
 
 

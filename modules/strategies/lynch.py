@@ -127,14 +127,8 @@ class LynchStrategy(BaseStrategy):
                 if ts.signal_type != "BUY":
                     continue
 
-                # Only act on momentum-based signals matching this strategy
-                signal_names = (
-                    set(ts.indicators.keys())
-                    if isinstance(ts.indicators, dict)
-                    else {ind.get("name") for ind in ts.indicators
-                          if isinstance(ind, dict)}
-                )
-                if not signal_names & self.preferred_signals:
+                # Only act on signals matching this strategy's preferred types
+                if not set(ts.indicators.keys()) & self.preferred_signals:
                     continue
 
                 confidence = ts.confidence
@@ -164,10 +158,7 @@ class LynchStrategy(BaseStrategy):
                         logger.debug(f"[lynch] Sentiment gate error: {e}")
 
                 # ADX trend strength boost
-                if any(
-                    (ind.get("name") if isinstance(ind, dict) else "") == "adx_trend"
-                    for ind in (ts.indicators.values() if isinstance(ts.indicators, dict) else ts.indicators if isinstance(ts.indicators, list) else [])
-                ):
+                if "adx_trend" in ts.indicators:
                     confidence = min(100.0, confidence + self._adx_confidence_boost)
 
                 # Skip if below minimum confidence
@@ -191,10 +182,7 @@ class LynchStrategy(BaseStrategy):
                     "trade_reason": ts.reason,
                 }
                 meta["atr_stop_used"] = snapshot.atr is not None
-                meta["adx_boost_applied"] = any(
-                    (ind.get("name") if isinstance(ind, dict) else "") == "adx_trend"
-                    for ind in (ts.indicators.values() if isinstance(ts.indicators, dict) else ts.indicators if isinstance(ts.indicators, list) else [])
-                )
+                meta["adx_boost_applied"] = "adx_trend" in ts.indicators
                 score_info = self._scores.get(ticker, {})
                 if score_info:
                     meta["lynch_score"] = score_info.get("lynch_score")
