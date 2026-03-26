@@ -40,7 +40,7 @@ _scheduler: Optional[BackgroundScheduler] = None
 
 def create_scheduler() -> BackgroundScheduler:
     """Create and configure the APScheduler with arena trading jobs."""
-    executors = {"default": ThreadPoolExecutor(1)}
+    executors = {"default": ThreadPoolExecutor(settings.SCHEDULER_EXECUTOR_THREADS)}
     scheduler = BackgroundScheduler(timezone=ET, executors=executors)
 
     from modules.arena.live import (
@@ -57,7 +57,9 @@ def create_scheduler() -> BackgroundScheduler:
         CronTrigger(minute="*/15", hour="7-17", day_of_week="mon-fri", timezone=ET),
         id="arena_signal_check",
         replace_existing=True,
-        misfire_grace_time=60,
+        misfire_grace_time=120,
+        coalesce=True,
+        max_instances=1,
     )
 
     # Position monitor: every 5 min, 7AM-6PM ET, Mon-Fri
@@ -72,6 +74,8 @@ def create_scheduler() -> BackgroundScheduler:
         id="arena_position_monitor",
         replace_existing=True,
         misfire_grace_time=60,
+        coalesce=True,
+        max_instances=1,
     )
 
     # Close day trades: 3:50 PM ET, Mon-Fri
