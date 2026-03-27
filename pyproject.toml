@@ -28,6 +28,7 @@ dependencies = [
 
     # Scheduling
     "apscheduler>=3.10.0",
+    "tzdata>=2024.1",
 
     # Web framework
     "fastapi>=0.109.0",
