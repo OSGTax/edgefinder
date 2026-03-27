@@ -7,7 +7,7 @@ a weighted composite score. Stores readings to DB. Gates trades.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -140,7 +140,7 @@ class SentimentAggregator:
                 score=reading.score,
                 mention_count=reading.mention_count,
                 is_trending=reading.is_trending,
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
             )
             self._session.add(record)
         try:

@@ -1,6 +1,6 @@
 """Tests for edgefinder/db/ — engine and ORM models."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import inspect
@@ -148,7 +148,7 @@ class TestTradeRecord:
             stop_loss=145.0,
             target=160.0,
             confidence=75.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
         )
         db_session.add(trade)
         db_session.flush()
@@ -159,7 +159,7 @@ class TestTradeRecord:
 
     def test_trade_with_market_snapshot_fk(self, db_session):
         snapshot = MarketSnapshotRecord(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             spy_price=450.0, spy_change_pct=0.5,
             qqq_price=380.0, qqq_change_pct=0.8,
             iwm_price=200.0, iwm_change_pct=-0.3,
@@ -180,7 +180,7 @@ class TestTradeRecord:
             stop_loss=290.0,
             target=320.0,
             confidence=80.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             market_snapshot_id=snapshot.id,
         )
         db_session.add(trade)
@@ -202,7 +202,7 @@ class TestTradeRecord:
             stop_loss=490.0,
             target=520.0,
             confidence=65.0,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             technical_signals={"ema_crossover": True, "rsi": 35, "macd": "bullish"},
         )
         db_session.add(trade)
@@ -244,7 +244,7 @@ class TestStrategyAccount:
 class TestMarketSnapshotRecord:
     def test_create(self, db_session):
         snap = MarketSnapshotRecord(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             spy_price=450.0, spy_change_pct=0.5,
             qqq_price=380.0, qqq_change_pct=0.8,
             iwm_price=200.0, iwm_change_pct=-0.3,
@@ -263,7 +263,7 @@ class TestOtherModels:
     def test_strategy_snapshot(self, db_session):
         snap = StrategySnapshot(
             strategy_name="alpha",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             cash=4500.0,
             positions_value=500.0,
             total_equity=5000.0,

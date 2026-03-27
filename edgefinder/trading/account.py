@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from config.settings import settings
 
@@ -29,7 +29,7 @@ class Position:
     target: float
     direction: str  # LONG or SHORT
     trade_type: str  # DAY or SWING
-    entry_time: datetime = field(default_factory=datetime.utcnow)
+    entry_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     trade_id: str = ""
 
     @property
@@ -135,7 +135,7 @@ class VirtualAccount:
 
     def _can_day_trade(self) -> bool:
         """Check PDT compliance: max 3 day trades per 5 rolling business days."""
-        cutoff = datetime.utcnow() - timedelta(days=settings.pdt_window_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.pdt_window_days)
         recent = [dt for dt in self._day_trades if dt > cutoff]
         return len(recent) < settings.pdt_day_trade_limit
 
@@ -143,7 +143,7 @@ class VirtualAccount:
         if self._last_stop_out is None:
             return False
         cooldown = timedelta(minutes=settings.revenge_trade_cooldown_minutes)
-        return datetime.utcnow() - self._last_stop_out < cooldown
+        return datetime.now(timezone.utc) - self._last_stop_out < cooldown
 
     # ── Position Management ──────────────────────────
 
@@ -178,11 +178,11 @@ class VirtualAccount:
 
         # Track day trades for PDT
         if position.trade_type == "DAY":
-            self._day_trades.append(datetime.utcnow())
+            self._day_trades.append(datetime.now(timezone.utc))
 
         # Track stop-outs for revenge trade cooldown
         if reason in ("STOP_HIT", "STOP_LOSS"):
-            self._last_stop_out = datetime.utcnow()
+            self._last_stop_out = datetime.now(timezone.utc)
 
         logger.info(
             "[%s] Closed %s %s: %d shares @ $%.2f | P&L: $%.2f (%.1fR) | Reason: %s",

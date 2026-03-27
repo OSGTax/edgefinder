@@ -83,18 +83,21 @@ class PolygonDataProvider:
             context=f"get_fundamentals.details({ticker})",
         )
 
-        # Financials (experimental vX endpoint)
-        financials = self._retry(
-            lambda: next(
+        # Financials — fetch 2 annual periods for YoY growth calculation
+        financials_list = self._retry(
+            lambda: list(
                 self._client.vx.list_stock_financials(
-                    ticker=ticker, limit=1, sort="period_of_report_date", order="desc"
-                ),
-                None,
+                    ticker=ticker, limit=2, timeframe="annual",
+                    sort="period_of_report_date", order="desc",
+                )
             ),
             context=f"get_fundamentals.financials({ticker})",
         )
+        financials_list = financials_list or []
+        current_fin = financials_list[0] if len(financials_list) >= 1 else None
+        prev_fin = financials_list[1] if len(financials_list) >= 2 else None
 
-        return self._build_fundamentals(ticker, details, financials)
+        return self._build_fundamentals(ticker, details, current_fin, prev_fin)
 
     def get_ticker_universe(
         self, min_market_cap: int = 0, min_volume: int = 0
@@ -171,8 +174,47 @@ class PolygonDataProvider:
         df = df.set_index("timestamp")
         return df
 
+    @staticmethod
+    def _extract_financial_values(financials_obj: Any) -> dict[str, float | None]:
+        """Extract key numeric values from a Polygon financials object."""
+        result: dict[str, float | None] = {}
+        if not financials_obj or not hasattr(financials_obj, "financials"):
+            return result
+        fin = financials_obj.financials
+
+        if hasattr(fin, "income_statement"):
+            inc = fin.income_statement
+            rev = getattr(inc, "revenues", None)
+            if rev:
+                result["revenues"] = getattr(rev, "value", None)
+            ni = getattr(inc, "net_income_loss", None)
+            if ni:
+                result["net_income"] = getattr(ni, "value", None)
+
+        if hasattr(fin, "balance_sheet"):
+            bs = fin.balance_sheet
+            for key, attr in [
+                ("total_assets", "assets"),
+                ("total_liabilities", "liabilities"),
+                ("equity", "equity"),
+                ("current_assets", "current_assets"),
+                ("current_liabilities", "current_liabilities"),
+            ]:
+                val = getattr(bs, attr, None)
+                if val:
+                    result[key] = getattr(val, "value", None)
+
+        if hasattr(fin, "cash_flow_statement"):
+            cf = fin.cash_flow_statement
+            op_cf = getattr(cf, "net_cash_flow_from_operating_activities", None)
+            if op_cf:
+                result["operating_cash_flow"] = getattr(op_cf, "value", None)
+
+        return result
+
     def _build_fundamentals(
-        self, ticker: str, details: Any, financials: Any
+        self, ticker: str, details: Any, financials: Any,
+        prev_financials: Any = None,
     ) -> TickerFundamentals:
         """Build TickerFundamentals from Polygon API responses.
 
@@ -186,10 +228,8 @@ class PolygonDataProvider:
             fund.company_name = getattr(details, "name", None)
             fund.sector = getattr(details, "sic_description", None)
             fund.market_cap = getattr(details, "market_cap", None)
-            # Polygon puts industry info in description or SIC codes
             fund.industry = getattr(details, "sic_description", None)
             fund.raw_data = {}
-            # Store the full details for research
             for attr in ("name", "market_cap", "sic_code", "sic_description",
                          "total_employees", "list_date", "description",
                          "homepage_url", "locale", "primary_exchange"):
@@ -197,58 +237,55 @@ class PolygonDataProvider:
                 if val is not None:
                     fund.raw_data[attr] = val
 
-        # From financials (experimental vX endpoint)
-        if financials and hasattr(financials, "financials"):
-            fin = financials.financials
-            raw_fin = {}
+        # Extract current period financials
+        raw_fin = self._extract_financial_values(financials)
 
-            # Income statement
-            if hasattr(fin, "income_statement"):
-                inc = fin.income_statement
-                revenues = getattr(inc, "revenues", None)
-                if revenues:
-                    raw_fin["revenues"] = getattr(revenues, "value", None)
-                net_income = getattr(inc, "net_income_loss", None)
-                if net_income:
-                    raw_fin["net_income"] = getattr(net_income, "value", None)
+        if raw_fin:
+            # Derive current_ratio
+            ca = raw_fin.get("current_assets")
+            cl = raw_fin.get("current_liabilities")
+            if ca and cl and cl != 0:
+                fund.current_ratio = ca / cl
 
-            # Balance sheet
-            if hasattr(fin, "balance_sheet"):
-                bs = fin.balance_sheet
-                total_assets = getattr(bs, "assets", None)
-                if total_assets:
-                    raw_fin["total_assets"] = getattr(total_assets, "value", None)
-                total_liabilities = getattr(bs, "liabilities", None)
-                if total_liabilities:
-                    raw_fin["total_liabilities"] = getattr(total_liabilities, "value", None)
-                equity = getattr(bs, "equity", None)
-                if equity:
-                    raw_fin["equity"] = getattr(equity, "value", None)
-                current_assets = getattr(bs, "current_assets", None)
-                if current_assets:
-                    raw_fin["current_assets"] = getattr(current_assets, "value", None)
-                current_liabilities = getattr(bs, "current_liabilities", None)
-                if current_liabilities:
-                    raw_fin["current_liabilities"] = getattr(current_liabilities, "value", None)
+            # Derive debt_to_equity
+            tl = raw_fin.get("total_liabilities")
+            eq = raw_fin.get("equity")
+            if tl and eq and eq != 0:
+                fund.debt_to_equity = tl / eq
 
-                # Derive current_ratio
-                ca = raw_fin.get("current_assets")
-                cl = raw_fin.get("current_liabilities")
-                if ca and cl and cl != 0:
-                    fund.current_ratio = ca / cl
+            # Derive fcf_yield = operating_cash_flow / market_cap
+            ocf = raw_fin.get("operating_cash_flow")
+            mc = fund.market_cap
+            if ocf is not None and mc is not None and mc > 0:
+                fund.fcf_yield = ocf / mc
 
-                # Derive debt_to_equity
-                tl = raw_fin.get("total_liabilities")
-                eq = raw_fin.get("equity")
-                if tl and eq and eq != 0:
-                    fund.debt_to_equity = tl / eq
+            # Derive price_to_tangible_book = market_cap / (assets - liabilities)
+            ta = raw_fin.get("total_assets")
+            tl = raw_fin.get("total_liabilities")
+            if ta is not None and tl is not None and fund.market_cap:
+                tangible_book = ta - tl
+                if tangible_book > 0:
+                    fund.price_to_tangible_book = fund.market_cap / tangible_book
 
-            # Cash flow statement
-            if hasattr(fin, "cash_flow_statement"):
-                cf = fin.cash_flow_statement
-                op_cf = getattr(cf, "net_cash_flow_from_operating_activities", None)
-                if op_cf:
-                    raw_fin["operating_cash_flow"] = getattr(op_cf, "value", None)
+            # YoY growth from previous period
+            prev_fin = self._extract_financial_values(prev_financials)
+            if prev_fin:
+                curr_ni = raw_fin.get("net_income")
+                prev_ni = prev_fin.get("net_income")
+                if curr_ni is not None and prev_ni is not None and prev_ni != 0:
+                    fund.earnings_growth = (curr_ni - prev_ni) / abs(prev_ni)
+
+                curr_rev = raw_fin.get("revenues")
+                prev_rev = prev_fin.get("revenues")
+                if curr_rev is not None and prev_rev is not None and prev_rev != 0:
+                    fund.revenue_growth = (curr_rev - prev_rev) / abs(prev_rev)
+
+            # Derive peg_ratio = (market_cap / net_income) / (earnings_growth% )
+            ni = raw_fin.get("net_income")
+            if (fund.market_cap and ni and ni > 0 and
+                    fund.earnings_growth is not None and fund.earnings_growth > 0):
+                pe_ratio = fund.market_cap / ni
+                fund.peg_ratio = pe_ratio / (fund.earnings_growth * 100)
 
             if fund.raw_data is None:
                 fund.raw_data = {}

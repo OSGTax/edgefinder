@@ -1,6 +1,6 @@
 """Tests for edgefinder/trading/ — account, executor, arena, journal."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -80,7 +80,7 @@ class TestVirtualAccount:
         acct = VirtualAccount("alpha", pdt_enabled=True)
         # Simulate 3 recent day trades
         acct._day_trades = [
-            datetime.utcnow() - timedelta(hours=i) for i in range(3)
+            datetime.now(timezone.utc) - timedelta(hours=i) for i in range(3)
         ]
         allowed, reason = acct.can_open_position(100.0, "DAY")
         assert allowed is False
@@ -89,14 +89,14 @@ class TestVirtualAccount:
     def test_pdt_disabled_allows_day_trades(self):
         acct = VirtualAccount("alpha", pdt_enabled=False)
         acct._day_trades = [
-            datetime.utcnow() - timedelta(hours=i) for i in range(5)
+            datetime.now(timezone.utc) - timedelta(hours=i) for i in range(5)
         ]
         allowed, _ = acct.can_open_position(100.0, "DAY")
         assert allowed is True
 
     def test_revenge_trade_cooldown(self):
         acct = VirtualAccount("alpha")
-        acct._last_stop_out = datetime.utcnow()
+        acct._last_stop_out = datetime.now(timezone.utc)
         allowed, reason = acct.can_open_position(100.0)
         assert allowed is False
         assert "cooldown" in reason.lower()
@@ -334,7 +334,7 @@ class TestTradeJournal:
         trade.pnl_percent = 5.0
         trade.r_multiple = 1.5
         trade.exit_reason = "TARGET_HIT"
-        trade.exit_time = datetime.utcnow()
+        trade.exit_time = datetime.now(timezone.utc)
         journal.log_trade(trade)
 
         records = journal.get_closed_trades("alpha")
@@ -378,7 +378,7 @@ class TestTradeJournal:
         journal = TradeJournal(db_session)
         for sym in ["AAPL", "MSFT", "AAPL"]:
             trade = Trade(
-                trade_id=f"sym-{sym}-{datetime.utcnow().timestamp()}",
+                trade_id=f"sym-{sym}-{datetime.now(timezone.utc).timestamp()}",
                 strategy_name="alpha",
                 symbol=sym,
                 direction=Direction.LONG,

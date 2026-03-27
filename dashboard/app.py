@@ -24,8 +24,12 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from dashboard.services import init_services, shutdown_services
+
     logger.info("EdgeFinder v2 dashboard starting")
+    init_services()
     yield
+    shutdown_services()
     logger.info("EdgeFinder v2 dashboard shutting down")
 
 

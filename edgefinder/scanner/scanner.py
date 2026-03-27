@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -89,7 +89,7 @@ class FundamentalScanner:
             "total_scanned": len(universe),
             "passed_prescreen": len(prescreened),
             "qualified": qualified_count,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
         return scored
@@ -106,7 +106,14 @@ class FundamentalScanner:
             fund = self._provider.get_fundamentals(ticker)
             if fund is None:
                 continue
+            # Polygon fundamentals don't include price — fetch it separately
+            if fund.price is None:
+                fund.price = self._provider.get_latest_price(ticker)
             if not self._passes_prescreen(fund):
+                logger.debug(
+                    "Pre-screen rejected %s (price=%s, market_cap=%s, sector=%s)",
+                    ticker, fund.price, fund.market_cap, fund.sector,
+                )
                 continue
             passed.append(fund)
         return passed
@@ -398,7 +405,7 @@ class FundamentalScanner:
                 burry_score=stock.burry_score,
                 composite_score=stock.composite_score,
                 raw_data=fund.raw_data,
-                scan_date=datetime.utcnow(),
+                scan_date=datetime.now(timezone.utc),
             )
 
             if existing_fund is None:

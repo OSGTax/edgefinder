@@ -83,42 +83,55 @@ class TestGetLatestPrice:
         assert p.get_latest_price("AAPL") is None
 
 
+def _make_details_mock():
+    details = MagicMock()
+    details.name = "Apple Inc."
+    details.sic_description = "Technology"
+    details.market_cap = 3_000_000_000_000
+    details.sic_code = "3571"
+    details.total_employees = 160000
+    details.list_date = "1980-12-12"
+    details.description = "Apple designs..."
+    details.homepage_url = "https://apple.com"
+    details.locale = "us"
+    details.primary_exchange = "XNAS"
+    return details
+
+
+def _make_financials_mock(
+    revenues=380_000_000_000, net_income=95_000_000_000,
+    assets=350_000_000_000, liabilities=280_000_000_000,
+    equity=70_000_000_000, current_assets=135_000_000_000,
+    current_liabilities=145_000_000_000, operating_cf=110_000_000_000,
+):
+    fin = MagicMock()
+    fin.financials = MagicMock()
+    fin.financials.income_statement = MagicMock()
+    fin.financials.balance_sheet = MagicMock()
+    fin.financials.cash_flow_statement = MagicMock()
+
+    fin.financials.income_statement.revenues = MagicMock(value=revenues)
+    fin.financials.income_statement.net_income_loss = MagicMock(value=net_income)
+
+    fin.financials.balance_sheet.assets = MagicMock(value=assets)
+    fin.financials.balance_sheet.liabilities = MagicMock(value=liabilities)
+    fin.financials.balance_sheet.equity = MagicMock(value=equity)
+    fin.financials.balance_sheet.current_assets = MagicMock(value=current_assets)
+    fin.financials.balance_sheet.current_liabilities = MagicMock(value=current_liabilities)
+    fin.financials.cash_flow_statement.net_cash_flow_from_operating_activities = MagicMock(value=operating_cf)
+    return fin
+
+
 class TestGetFundamentals:
     def test_returns_fundamentals(self, provider):
         p, client = provider
-        details = MagicMock()
-        details.name = "Apple Inc."
-        details.sic_description = "Technology"
-        details.market_cap = 3_000_000_000_000
-        details.sic_code = "3571"
-        details.total_employees = 160000
-        details.list_date = "1980-12-12"
-        details.description = "Apple designs..."
-        details.homepage_url = "https://apple.com"
-        details.locale = "us"
-        details.primary_exchange = "XNAS"
-        client.get_ticker_details.return_value = details
+        client.get_ticker_details.return_value = _make_details_mock()
 
-        # Mock financials
-        financials = MagicMock()
-        financials.financials = MagicMock()
-        financials.financials.income_statement = MagicMock()
-        financials.financials.balance_sheet = MagicMock()
-        financials.financials.cash_flow_statement = MagicMock()
-
-        revenues = MagicMock()
-        revenues.value = 380_000_000_000
-        financials.financials.income_statement.revenues = revenues
-        financials.financials.income_statement.net_income_loss = MagicMock(value=95_000_000_000)
-
-        financials.financials.balance_sheet.assets = MagicMock(value=350_000_000_000)
-        financials.financials.balance_sheet.liabilities = MagicMock(value=280_000_000_000)
-        financials.financials.balance_sheet.equity = MagicMock(value=70_000_000_000)
-        financials.financials.balance_sheet.current_assets = MagicMock(value=135_000_000_000)
-        financials.financials.balance_sheet.current_liabilities = MagicMock(value=145_000_000_000)
-        financials.financials.cash_flow_statement.net_cash_flow_from_operating_activities = MagicMock(value=110_000_000_000)
-
-        client.vx.list_stock_financials.return_value = iter([financials])
+        current = _make_financials_mock()
+        previous = _make_financials_mock(
+            revenues=340_000_000_000, net_income=80_000_000_000,
+        )
+        client.vx.list_stock_financials.return_value = [current, previous]
 
         result = p.get_fundamentals("AAPL")
         assert result is not None
@@ -127,11 +140,51 @@ class TestGetFundamentals:
         assert result.current_ratio is not None
         assert result.debt_to_equity is not None
         assert result.raw_data is not None
+        # Derived metrics from 2-period comparison
+        assert result.earnings_growth == pytest.approx(
+            (95e9 - 80e9) / 80e9, rel=1e-4
+        )
+        assert result.revenue_growth == pytest.approx(
+            (380e9 - 340e9) / 340e9, rel=1e-4
+        )
+        assert result.fcf_yield == pytest.approx(110e9 / 3e12, rel=1e-4)
+        assert result.price_to_tangible_book == pytest.approx(
+            3e12 / (350e9 - 280e9), rel=1e-4
+        )
+        assert result.peg_ratio is not None
+
+    def test_single_period_no_growth(self, provider):
+        """With only 1 period, growth metrics are None but others still work."""
+        p, client = provider
+        client.get_ticker_details.return_value = _make_details_mock()
+        client.vx.list_stock_financials.return_value = [_make_financials_mock()]
+
+        result = p.get_fundamentals("AAPL")
+        assert result.earnings_growth is None
+        assert result.revenue_growth is None
+        # Single-period metrics still derived
+        assert result.fcf_yield is not None
+        assert result.price_to_tangible_book is not None
+        assert result.current_ratio is not None
+
+    def test_zero_denominator_safety(self, provider):
+        """Division by zero in previous period should not crash."""
+        p, client = provider
+        client.get_ticker_details.return_value = _make_details_mock()
+
+        current = _make_financials_mock()
+        previous = _make_financials_mock(revenues=0, net_income=0)
+        client.vx.list_stock_financials.return_value = [current, previous]
+
+        result = p.get_fundamentals("AAPL")
+        assert result is not None
+        assert result.earnings_growth is None  # prev_ni == 0 → skipped
+        assert result.revenue_growth is None   # prev_rev == 0 → skipped
 
     def test_api_error_returns_basic(self, provider):
         p, client = provider
         client.get_ticker_details.side_effect = Exception("fail")
-        client.vx.list_stock_financials.return_value = iter([])
+        client.vx.list_stock_financials.return_value = []
         result = p.get_fundamentals("AAPL")
         assert result is not None
         assert result.symbol == "AAPL"

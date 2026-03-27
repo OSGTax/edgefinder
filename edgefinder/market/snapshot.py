@@ -8,7 +8,7 @@ to the exact market conditions when it was executed.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -54,7 +54,7 @@ class MarketSnapshotService:
         regime = self._determine_regime(spy_price)
 
         snapshot = MarketSnapshot(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             spy_price=spy_price,
             spy_change_pct=0.0,  # Filled by benchmarks service with daily data
             qqq_price=qqq_price,

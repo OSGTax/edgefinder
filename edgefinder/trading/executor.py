@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from config.settings import settings
 from edgefinder.core.events import event_bus
@@ -60,7 +60,7 @@ class Executor:
             target=signal.target,
             direction="LONG" if signal.action.value == "BUY" else "SHORT",
             trade_type=signal.trade_type.value,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             trade_id=trade_id,
         )
 
@@ -80,7 +80,7 @@ class Executor:
             confidence=signal.confidence,
             status=TradeStatus.OPEN,
             technical_signals=signal.indicators,
-            entry_time=datetime.utcnow(),
+            entry_time=datetime.now(timezone.utc),
             sequence_num=self._sequence_num,
             integrity_hash=self._compute_hash(trade_id),
         )
@@ -127,7 +127,7 @@ class Executor:
                     pnl_percent=result["pnl_percent"],
                     r_multiple=result["r_multiple"],
                     exit_reason=reason,
-                    exit_time=datetime.utcnow(),
+                    exit_time=datetime.now(timezone.utc),
                     sequence_num=self._sequence_num,
                     integrity_hash=self._compute_hash(result["trade_id"]),
                 )

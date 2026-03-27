@@ -51,8 +51,8 @@ def sentiment_history(
     db: Session = Depends(get_db),
 ):
     """Get sentiment reading history for a ticker."""
-    from datetime import datetime, timedelta
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    from datetime import datetime, timedelta, timezone
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     readings = (
         db.query(SentimentReading)
         .filter(SentimentReading.symbol == symbol.upper(), SentimentReading.timestamp >= cutoff)

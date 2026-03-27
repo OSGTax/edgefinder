@@ -5,6 +5,8 @@ services:
     buildCommand: pip install -e .
     startCommand: python scripts/render_start.py
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.8"
       - key: EDGEFINDER_POLYGON_API_KEY
         sync: false
       - key: DATABASE_URL

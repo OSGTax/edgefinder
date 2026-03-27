@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -73,7 +73,7 @@ class NewsSentimentProvider:
     def _fetch_articles(self, ticker: str) -> list[dict]:
         """Fetch articles from RSS feeds within lookback window."""
         articles = []
-        cutoff = datetime.utcnow() - timedelta(hours=settings.sentiment_lookback_hours)
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.sentiment_lookback_hours)
 
         for feed_template in RSS_FEEDS:
             url = feed_template.format(ticker=ticker)

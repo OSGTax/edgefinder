@@ -6,7 +6,7 @@ They are distinct from the SQLAlchemy ORM models in db/models.py.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -93,7 +93,7 @@ class Signal(BaseModel):
     strategy_name: str = ""
     indicators: dict = Field(default_factory=dict)
     metadata: dict = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def risk_per_share(self) -> float:
@@ -129,7 +129,7 @@ class Trade(BaseModel):
     sentiment_score: Optional[float] = None
     sentiment_data: Optional[dict] = None
     technical_signals: Optional[dict] = None
-    entry_time: datetime = Field(default_factory=datetime.utcnow)
+    entry_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     exit_time: Optional[datetime] = None
     sequence_num: Optional[int] = None
     integrity_hash: Optional[str] = None
@@ -138,7 +138,7 @@ class Trade(BaseModel):
 class MarketSnapshot(BaseModel):
     """Broad market state captured at trade time or periodically."""
 
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     spy_price: float = 0.0
     spy_change_pct: float = 0.0
     qqq_price: float = 0.0
@@ -162,7 +162,7 @@ class TickerSentiment(BaseModel):
     mention_count: int = 0
     is_trending: bool = False
     summary: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class AggregatedSentiment(BaseModel):
@@ -174,7 +174,7 @@ class AggregatedSentiment(BaseModel):
     total_mentions: int = 0
     is_trending: bool = False
     action: SentimentAction = SentimentAction.PROCEED
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class TickerFundamentals(BaseModel):

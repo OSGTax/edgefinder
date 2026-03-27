@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -37,7 +37,7 @@ def inject_ticker(req: InjectRequest, db: Session = Depends(get_db)):
     # Create injection record
     expires = None
     if req.expires_hours:
-        expires = datetime.utcnow() + timedelta(hours=req.expires_hours)
+        expires = datetime.now(timezone.utc) + timedelta(hours=req.expires_hours)
 
     injection = ManualInjection(
         symbol=symbol,
@@ -60,7 +60,7 @@ def inject_ticker(req: InjectRequest, db: Session = Depends(get_db)):
 def list_injections(db: Session = Depends(get_db)):
     """Get all active manual injections."""
     injections = db.query(ManualInjection).order_by(ManualInjection.created_at.desc()).all()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return [
         {
             "id": inj.id,

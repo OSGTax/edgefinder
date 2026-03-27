@@ -23,9 +23,11 @@ from edgefinder.scanner.scanner import FundamentalScanner
 console = Console()
 
 QUICK_TICKERS = [
-    "AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA", "JPM",
-    "V", "JNJ", "WMT", "PG", "MA", "HD", "BAC", "XOM", "PFE", "COST",
-    "DIS", "NFLX",
+    # Mix of mid-caps ($300M-$200B) and mega-caps for broad coverage
+    "AAPL", "MSFT", "GOOG", "AMZN", "NVDA",       # mega-cap (may exceed filter)
+    "CROX", "DKNG", "DUOL", "FIVE", "GRMN",        # mid-cap growth
+    "LULU", "NCLH", "OLED", "PAYC", "PSTG",        # mid-cap value/growth
+    "SAIA", "DECK", "TMDX", "WSM", "ZWS",          # mid-cap diverse sectors
 ]
 
 

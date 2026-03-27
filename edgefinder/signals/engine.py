@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -199,7 +199,7 @@ def detect_signals(indicators: IndicatorSnapshot, ticker: str) -> list[Signal]:
     Returns 0-N Signal objects with confidence, entry/stop/target.
     """
     signals: list[Signal] = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     is_volume_spike = (
         indicators.volume_ratio is not None
