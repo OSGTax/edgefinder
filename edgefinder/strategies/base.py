@@ -66,6 +66,15 @@ class BaseStrategy(ABC):
 
     # ── Optional hooks (default no-ops) ──────────────
 
+    @property
+    def exit_signals(self) -> list[str]:
+        """Bearish signal patterns that trigger early exits on open positions.
+
+        Override to enable signal-based exits. Patterns should match names
+        from detect_signals() with SELL action (e.g., "ema_crossover_bearish").
+        """
+        return []
+
     def get_watchlist(self) -> list[str]:
         """Return tickers this strategy currently wants data for."""
         return []

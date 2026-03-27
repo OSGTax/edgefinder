@@ -115,10 +115,16 @@ class ArenaEngine:
         return all_trades
 
     def check_positions(self) -> list[Trade]:
-        """Check all open positions against current prices.
+        """Check all open positions against current prices and exit signals.
+
+        Two-pass check:
+        1. Stop loss / target hit (price-based)
+        2. Bearish signal exit (technical-based)
 
         Returns all closed trades.
         """
+        from edgefinder.signals.engine import compute_indicators, detect_signals
+
         all_closed: list[Trade] = []
 
         for name, slot in self._slots.items():
@@ -132,12 +138,48 @@ class ArenaEngine:
                 if price is not None:
                     prices[pos.symbol] = price
 
+            # Pass 1: stop loss / target hit
             closed = slot.executor.check_positions(prices)
             for trade in closed:
                 slot.strategy.on_trade_executed(
                     TradeNotification(trade=trade, event="closed")
                 )
             all_closed.extend(closed)
+
+            # Pass 2: bearish signal exits
+            exit_patterns = slot.strategy.exit_signals
+            if not exit_patterns:
+                continue
+
+            for pos in list(slot.account.positions):
+                price = prices.get(pos.symbol)
+                if price is None:
+                    continue
+                try:
+                    bars = self._fetch_bars(pos.symbol)
+                    if bars is None or bars.empty:
+                        continue
+                    indicators = compute_indicators(bars)
+                    if indicators is None:
+                        continue
+                    signals = detect_signals(indicators, pos.symbol)
+                    for sig in signals:
+                        pattern = sig.metadata.get("pattern", "")
+                        if pattern in exit_patterns and sig.action.value == "SELL":
+                            trade = slot.executor.close_on_signal(pos, price, pattern)
+                            slot.strategy.on_trade_executed(
+                                TradeNotification(trade=trade, event="closed")
+                            )
+                            all_closed.append(trade)
+                            logger.info(
+                                "[%s] Signal exit: %s closed on %s",
+                                name, pos.symbol, pattern,
+                            )
+                            break  # position is closed, move to next
+                except Exception:
+                    logger.exception(
+                        "Signal exit check failed for %s/%s", name, pos.symbol
+                    )
 
         return all_closed
 

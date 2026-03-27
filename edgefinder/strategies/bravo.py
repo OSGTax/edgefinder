@@ -24,11 +24,15 @@ class BravoStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "2.0"
+        return "2.1"
 
     @property
     def preferred_signals(self) -> list[str]:
         return ["bb_lower_touch", "rsi_oversold"]
+
+    @property
+    def exit_signals(self) -> list[str]:
+        return ["rsi_overbought"]
 
     def init(self) -> None:
         pass

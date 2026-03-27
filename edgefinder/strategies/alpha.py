@@ -24,11 +24,15 @@ class AlphaStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "2.0"
+        return "2.1"
 
     @property
     def preferred_signals(self) -> list[str]:
         return ["ema_crossover_bullish", "macd_bullish_cross", "volume_spike_bullish"]
+
+    @property
+    def exit_signals(self) -> list[str]:
+        return ["ema_crossover_bearish", "volume_spike_bearish"]
 
     def init(self) -> None:
         pass

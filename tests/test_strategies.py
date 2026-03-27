@@ -93,8 +93,13 @@ class TestAlphaStrategy:
     def test_properties(self):
         s = StrategyRegistry.get("alpha")()
         assert s.name == "alpha"
-        assert s.version == "2.0"
+        assert s.version == "2.1"
         assert "ema_crossover_bullish" in s.preferred_signals
+
+    def test_exit_signals(self):
+        s = StrategyRegistry.get("alpha")()
+        assert "ema_crossover_bearish" in s.exit_signals
+        assert "volume_spike_bearish" in s.exit_signals
 
 
 class TestBravoStrategy:
@@ -125,24 +130,37 @@ class TestBravoStrategy:
         strategy = StrategyRegistry.get("bravo")()
         assert strategy.qualifies_stock(fund) is False
 
+    def test_exit_signals(self):
+        s = StrategyRegistry.get("bravo")()
+        assert "rsi_overbought" in s.exit_signals
+
 
 class TestCharlieStrategy:
     def test_qualifies_deep_value(self):
         fund = TickerFundamentals(
             symbol="DEEP",
-            burry_score=80.0,
-            short_interest=0.20,
-            fcf_yield=0.08,
+            burry_score=55.0,
+            fcf_yield=0.06,
+            debt_to_equity=1.5,
         )
         strategy = StrategyRegistry.get("charlie")()
         assert strategy.qualifies_stock(fund) is True
 
-    def test_rejects_low_short_interest(self):
+    def test_qualifies_without_debt_data(self):
+        """Charlie should qualify stocks even when debt_to_equity is unavailable."""
         fund = TickerFundamentals(
-            symbol="NOSQUEEZE",
-            burry_score=80.0,
-            short_interest=0.05,
-            fcf_yield=0.08,
+            symbol="NODBT",
+            burry_score=55.0,
+            fcf_yield=0.05,
+        )
+        strategy = StrategyRegistry.get("charlie")()
+        assert strategy.qualifies_stock(fund) is True
+
+    def test_rejects_low_burry(self):
+        fund = TickerFundamentals(
+            symbol="WEAK",
+            burry_score=40.0,
+            fcf_yield=0.06,
         )
         strategy = StrategyRegistry.get("charlie")()
         assert strategy.qualifies_stock(fund) is False
@@ -150,12 +168,25 @@ class TestCharlieStrategy:
     def test_rejects_low_fcf(self):
         fund = TickerFundamentals(
             symbol="NOCASH",
-            burry_score=80.0,
-            short_interest=0.20,
+            burry_score=55.0,
             fcf_yield=0.02,
         )
         strategy = StrategyRegistry.get("charlie")()
         assert strategy.qualifies_stock(fund) is False
+
+    def test_rejects_high_debt(self):
+        fund = TickerFundamentals(
+            symbol="LEVERAGED",
+            burry_score=55.0,
+            fcf_yield=0.06,
+            debt_to_equity=4.0,
+        )
+        strategy = StrategyRegistry.get("charlie")()
+        assert strategy.qualifies_stock(fund) is False
+
+    def test_exit_signals(self):
+        s = StrategyRegistry.get("charlie")()
+        assert "macd_bearish_cross" in s.exit_signals
 
 
 class TestOptionalMethods:

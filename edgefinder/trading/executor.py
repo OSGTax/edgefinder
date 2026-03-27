@@ -136,6 +136,36 @@ class Executor:
 
         return closed_trades
 
+    def close_on_signal(self, position: Position, price: float, signal_pattern: str) -> Trade:
+        """Close an open position due to a bearish exit signal."""
+        reason = f"SIGNAL_EXIT:{signal_pattern}"
+        result = self.account.close_position(position, price, reason)
+        self._sequence_num += 1
+
+        trade = Trade(
+            trade_id=result["trade_id"],
+            strategy_name=self.account.strategy_name,
+            symbol=result["symbol"],
+            direction=Direction(result["direction"]),
+            trade_type=TradeType(result["trade_type"]),
+            entry_price=result["entry_price"],
+            exit_price=result["exit_price"],
+            shares=result["shares"],
+            stop_loss=position.stop_loss,
+            target=position.target,
+            confidence=0,
+            status=TradeStatus.CLOSED,
+            pnl_dollars=result["pnl_dollars"],
+            pnl_percent=result["pnl_percent"],
+            r_multiple=result["r_multiple"],
+            exit_reason=reason,
+            exit_time=datetime.now(timezone.utc),
+            sequence_num=self._sequence_num,
+            integrity_hash=self._compute_hash(result["trade_id"]),
+        )
+        event_bus.publish("trade.closed", trade)
+        return trade
+
     # ── Private ──────────────────────────────────────
 
     def _size_position(self, signal: Signal) -> tuple[int, float]:
