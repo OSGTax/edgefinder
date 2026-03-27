@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from edgefinder.core.models import Signal, TickerFundamentals
+from edgefinder.core.models import Signal, SignalAction, TickerFundamentals
 from edgefinder.signals.engine import compute_indicators, detect_signals
 from edgefinder.strategies.base import BaseStrategy, StrategyRegistry, TradeNotification
 
@@ -57,7 +57,7 @@ class CharlieStrategy(BaseStrategy):
             pattern = sig.metadata.get("pattern", "")
             if (
                 pattern in self.preferred_signals
-                and sig.action.value == "BUY"
+                and sig.action == SignalAction.BUY
                 and sig.confidence >= MIN_CONFIDENCE
             ):
                 sig.strategy_name = self.name

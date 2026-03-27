@@ -5,14 +5,18 @@ Provides DB sessions, data providers, and services to route handlers.
 
 from __future__ import annotations
 
+import logging
 from typing import Generator
 
 from sqlalchemy.orm import Session
 
 from edgefinder.db.engine import get_engine, get_session_factory
 
+logger = logging.getLogger(__name__)
+
 _engine = None
 _session_factory = None
+_data_provider = None
 
 
 def _get_session_factory():
@@ -31,3 +35,18 @@ def get_db() -> Generator[Session, None, None]:
         yield session
     finally:
         session.close()
+
+
+def get_data_provider():
+    """Singleton CachedDataProvider for all dashboard routes."""
+    global _data_provider
+    if _data_provider is None:
+        try:
+            from edgefinder.data.polygon import PolygonDataProvider
+            from edgefinder.data.cache import DataCache
+            from edgefinder.data.provider import CachedDataProvider
+            _data_provider = CachedDataProvider(PolygonDataProvider(), DataCache())
+        except ValueError:
+            logger.warning("Polygon API key not set — data provider unavailable")
+            _data_provider = None
+    return _data_provider

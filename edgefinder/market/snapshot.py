@@ -50,8 +50,7 @@ class MarketSnapshotService:
         iwm_price = index_prices.get("IWM") or 0.0
         dia_price = index_prices.get("DIA") or 0.0
 
-        # Determine market regime from SPY behavior
-        regime = self._determine_regime(spy_price)
+        regime = self._determine_regime(vix or 20.0)
 
         snapshot = MarketSnapshot(
             timestamp=datetime.utcnow(),
@@ -104,18 +103,16 @@ class MarketSnapshotService:
             .first()
         )
 
-    def _determine_regime(self, spy_price: float) -> MarketRegime:
-        """Simple regime detection based on VIX and recent snapshots.
+    @staticmethod
+    def _determine_regime(vix_level: float) -> MarketRegime:
+        """Simple regime detection based on VIX level.
 
         - VIX > 30: BEAR
         - VIX < 15: BULL
         - Otherwise: SIDEWAYS
         """
-        latest = self.get_latest()
-        vix = self._provider.get_latest_price(settings.vix_symbol) or 20.0
-
-        if vix > 30:
+        if vix_level > 30:
             return MarketRegime.BEAR
-        if vix < 15:
+        if vix_level < 15:
             return MarketRegime.BULL
         return MarketRegime.SIDEWAYS

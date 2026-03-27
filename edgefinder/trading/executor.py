@@ -13,7 +13,7 @@ from datetime import datetime
 
 from config.settings import settings
 from edgefinder.core.events import event_bus
-from edgefinder.core.models import Direction, Signal, Trade, TradeStatus, TradeType
+from edgefinder.core.models import Direction, Signal, SignalAction, Trade, TradeStatus, TradeType
 from edgefinder.trading.account import Position, VirtualAccount
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ class Executor:
             entry_price=execution_price,
             stop_loss=signal.stop_loss,
             target=signal.target,
-            direction="LONG" if signal.action.value == "BUY" else "SHORT",
+            direction=Direction.LONG.value if signal.action == SignalAction.BUY else Direction.SHORT.value,
             trade_type=signal.trade_type.value,
             entry_time=datetime.utcnow(),
             trade_id=trade_id,
@@ -173,7 +173,7 @@ class Executor:
     def _apply_slippage(price: float, action: str) -> float:
         """Apply realistic slippage to execution price."""
         slip = price * settings.slippage_base_rate
-        if action == "BUY":
+        if action in ("BUY", SignalAction.BUY):
             return round(price + slip, 2)
         return round(price - slip, 2)
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from config.settings import settings
+from edgefinder.core.models import Direction, TradeType
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,8 @@ class Position:
     entry_price: float
     stop_loss: float
     target: float
-    direction: str  # LONG or SHORT
-    trade_type: str  # DAY or SWING
+    direction: str  # Use Direction enum values
+    trade_type: str  # Use TradeType enum values
     entry_time: datetime = field(default_factory=datetime.utcnow)
     trade_id: str = ""
 
@@ -181,7 +182,7 @@ class VirtualAccount:
             self._day_trades.append(datetime.utcnow())
 
         # Track stop-outs for revenge trade cooldown
-        if reason in ("STOP_HIT", "STOP_LOSS"):
+        if reason == "STOP_HIT":
             self._last_stop_out = datetime.utcnow()
 
         logger.info(

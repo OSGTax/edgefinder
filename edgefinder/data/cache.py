@@ -39,6 +39,10 @@ class DataCache:
             return None
         try:
             df = pd.read_parquet(path)
+            if df.index.name == "timestamp" and start:
+                start_ts = pd.Timestamp(start)
+                end_ts = pd.Timestamp(end) if end else pd.Timestamp.now()
+                df = df.loc[start_ts:end_ts]
             return df
         except Exception:
             logger.warning("Failed to read cached bars for %s/%s", ticker, timeframe)

@@ -7,19 +7,14 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from dashboard.dependencies import get_db
-from edgefinder.data.polygon import PolygonDataProvider
+from dashboard.dependencies import get_data_provider, get_db
 from edgefinder.research.research import ResearchService
 
 router = APIRouter()
 
 
 def _get_research_service(db: Session = Depends(get_db)) -> ResearchService:
-    try:
-        provider = PolygonDataProvider()
-    except ValueError:
-        provider = None
-    return ResearchService(provider=provider, session=db)
+    return ResearchService(provider=get_data_provider(), session=db)
 
 
 @router.get("/ticker/{symbol}")
