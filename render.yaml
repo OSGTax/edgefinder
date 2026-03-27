@@ -1,20 +1,18 @@
-databases:
-  - name: edgefinder-db
-    plan: free
-    region: oregon
-
 services:
   - type: web
     name: edgefinder
     runtime: python
-    plan: free
-    buildCommand: pip install -r requirements.txt && python -c "from modules.database import init_db; init_db()"
+    buildCommand: pip install -e .
     startCommand: python scripts/render_start.py
-    healthCheckPath: /api/health
     envVars:
-      - key: PYTHON_VERSION
-        value: "3.12.3"
+      - key: EDGEFINDER_POLYGON_API_KEY
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: edgefinder-db
           property: connectionString
+
+databases:
+  - name: edgefinder-db
+    plan: free
+    databaseName: edgefinder

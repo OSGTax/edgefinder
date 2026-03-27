@@ -1,560 +1,207 @@
-"""
-EdgeFinder Module 2.5 Tests: News Sentiment Gate
-==================================================
-Tests cover: VADER scoring, action mapping, confidence adjustment,
-RSS fetching (mocked), HTML cleaning, pipeline integration, and edge cases.
+"""Tests for edgefinder/sentiment/."""
 
-Run: python -m pytest tests/test_sentiment.py -v
-"""
+from unittest.mock import MagicMock, patch
 
 import pytest
-from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, MagicMock
 
-from modules.sentiment import (
-    NewsArticle,
-    SentimentResult,
-    score_text,
-    score_articles,
-    determine_action,
-    apply_sentiment_to_confidence,
-    assess_sentiment,
-    gate_trade,
-    fetch_news_rss,
-    _clean_html,
-)
-from config import settings
+from edgefinder.core.models import SentimentAction, SentimentSource, TickerSentiment
+from edgefinder.db.models import SentimentReading
+from edgefinder.sentiment.aggregator import SentimentAggregator
+from edgefinder.sentiment.news_rss import NewsSentimentProvider
+from edgefinder.sentiment.provider import map_score_to_action
+from edgefinder.sentiment.reddit import RedditSentimentProvider
+from edgefinder.sentiment.twitter import TwitterSentimentProvider
 
 
-# ════════════════════════════════════════════════════════════
-# VADER SCORING
-# ════════════════════════════════════════════════════════════
-
-class TestVADERScoring:
-    """Test VADER sentiment analysis on text."""
-
-    def test_positive_text(self):
-        score = score_text("Company reports record earnings and amazing growth")
-        assert score > 0.0
-
-    def test_negative_text(self):
-        score = score_text("Stock crashes amid fraud investigation and massive losses")
-        assert score < 0.0
-
-    def test_neutral_text(self):
-        score = score_text("The meeting is scheduled for Tuesday")
-        assert -0.3 <= score <= 0.3
-
-    def test_strongly_positive(self):
-        score = score_text("Incredible breakthrough! Outstanding results exceed all expectations!")
-        assert score >= 0.5
-
-    def test_strongly_negative(self):
-        score = score_text("Terrible disaster! Company facing bankruptcy and total collapse!")
-        assert score <= -0.5
-
-    def test_empty_string(self):
-        assert score_text("") == 0.0
-
-    def test_whitespace_only(self):
-        assert score_text("   ") == 0.0
-
-    def test_none_input(self):
-        assert score_text(None) == 0.0
-
-    def test_score_range(self):
-        """VADER compound scores must be in [-1, 1]."""
-        texts = [
-            "Best day ever!",
-            "Worst day ever!",
-            "Meeting at 3pm",
-            "",
-        ]
-        for text in texts:
-            score = score_text(text)
-            assert -1.0 <= score <= 1.0, f"Score {score} out of range for: {text}"
+# ── Action Mapping Tests ─────────────────────────────────
 
 
-class TestScoreArticles:
-    """Test batch scoring of article lists."""
-
-    def test_scores_all_articles(self):
-        articles = [
-            NewsArticle(title="Great earnings report"),
-            NewsArticle(title="Terrible fraud scandal"),
-            NewsArticle(title="Meeting scheduled"),
-        ]
-        scored = score_articles(articles)
-        assert len(scored) == 3
-        assert scored[0].compound_score > 0
-        assert scored[1].compound_score < 0
-        # All should have scores set
-        for a in scored:
-            assert a.compound_score != 0.0 or "scheduled" in a.title.lower()
-
-    def test_empty_list(self):
-        assert score_articles([]) == []
-
-    def test_modifies_in_place(self):
-        articles = [NewsArticle(title="Great news")]
-        result = score_articles(articles)
-        assert result is articles
-        assert articles[0].compound_score > 0
-
-
-# ════════════════════════════════════════════════════════════
-# ACTION MAPPING
-# ════════════════════════════════════════════════════════════
-
-class TestActionMapping:
-    """Test sentiment score → trading action mapping."""
-
+class TestMapScoreToAction:
     def test_strong_negative_blocks(self):
-        action, reason = determine_action(-0.7)
-        assert action == "BLOCK"
+        assert map_score_to_action(-0.6) == SentimentAction.BLOCK
 
     def test_mild_negative_reduces(self):
-        action, reason = determine_action(-0.3)
-        assert action == "REDUCE_50"
+        assert map_score_to_action(-0.3) == SentimentAction.REDUCE_50
 
     def test_neutral_proceeds(self):
-        action, reason = determine_action(0.0)
-        assert action == "PROCEED"
+        assert map_score_to_action(0.0) == SentimentAction.PROCEED
 
     def test_mild_positive_boosts_10(self):
-        action, reason = determine_action(0.3)
-        assert action == "CONFIDENCE_PLUS_10"
+        assert map_score_to_action(0.3) == SentimentAction.CONFIDENCE_PLUS_10
 
     def test_strong_positive_boosts_20(self):
-        action, reason = determine_action(0.7)
-        assert action == "CONFIDENCE_PLUS_20"
-
-    def test_boundary_strong_negative(self):
-        """Exactly at strong negative threshold should be BLOCK."""
-        action, _ = determine_action(settings.SENTIMENT_STRONG_NEGATIVE)
-        assert action == "BLOCK"
-
-    def test_boundary_mild_negative(self):
-        """Exactly at mild negative threshold should be REDUCE_50."""
-        action, _ = determine_action(settings.SENTIMENT_MILD_NEGATIVE)
-        assert action == "REDUCE_50"
-
-    def test_boundary_mild_positive(self):
-        """Just below mild positive threshold should be PROCEED."""
-        action, _ = determine_action(settings.SENTIMENT_MILD_POSITIVE - 0.001)
-        assert action == "PROCEED"
-
-    def test_boundary_strong_positive(self):
-        """Exactly at strong positive threshold should be CONFIDENCE_PLUS_20."""
-        action, _ = determine_action(settings.SENTIMENT_STRONG_POSITIVE)
-        assert action == "CONFIDENCE_PLUS_20"
-
-    def test_extreme_negative(self):
-        action, _ = determine_action(-1.0)
-        assert action == "BLOCK"
-
-    def test_extreme_positive(self):
-        action, _ = determine_action(1.0)
-        assert action == "CONFIDENCE_PLUS_20"
-
-    def test_reason_includes_score(self):
-        _, reason = determine_action(0.6)
-        assert "0.600" in reason
-
-
-# ════════════════════════════════════════════════════════════
-# CONFIDENCE ADJUSTMENT
-# ════════════════════════════════════════════════════════════
-
-class TestConfidenceAdjustment:
-    """Test how sentiment actions modify trade confidence."""
-
-    def test_block_zeroes_confidence(self):
-        assert apply_sentiment_to_confidence(80.0, "BLOCK") == 0.0
-
-    def test_reduce_50_keeps_confidence(self):
-        """REDUCE_50 doesn't change confidence — caller halves position size."""
-        assert apply_sentiment_to_confidence(80.0, "REDUCE_50") == 80.0
-
-    def test_proceed_no_change(self):
-        assert apply_sentiment_to_confidence(65.0, "PROCEED") == 65.0
-
-    def test_plus_10(self):
-        assert apply_sentiment_to_confidence(70.0, "CONFIDENCE_PLUS_10") == 80.0
-
-    def test_plus_20(self):
-        assert apply_sentiment_to_confidence(70.0, "CONFIDENCE_PLUS_20") == 90.0
-
-    def test_plus_10_capped_at_100(self):
-        assert apply_sentiment_to_confidence(95.0, "CONFIDENCE_PLUS_10") == 100.0
-
-    def test_plus_20_capped_at_100(self):
-        assert apply_sentiment_to_confidence(90.0, "CONFIDENCE_PLUS_20") == 100.0
-
-    def test_block_zeroes_even_high_confidence(self):
-        assert apply_sentiment_to_confidence(100.0, "BLOCK") == 0.0
-
-    def test_unknown_action_no_change(self):
-        assert apply_sentiment_to_confidence(60.0, "UNKNOWN") == 60.0
-
-    def test_zero_confidence_stays_zero(self):
-        assert apply_sentiment_to_confidence(0.0, "PROCEED") == 0.0
-
-
-# ════════════════════════════════════════════════════════════
-# ASSESS SENTIMENT (PIPELINE)
-# ════════════════════════════════════════════════════════════
-
-class TestAssessSentiment:
-    """Test the full sentiment assessment pipeline."""
-
-    def test_positive_headlines_proceed_or_boost(self):
-        headlines = [
-            "Company beats earnings expectations",
-            "Stock upgraded by major analysts",
-            "Revenue growth exceeds forecasts",
-        ]
-        result = assess_sentiment("TEST", headlines=headlines)
-        assert result.action in ("PROCEED", "CONFIDENCE_PLUS_10", "CONFIDENCE_PLUS_20")
-        assert result.avg_compound > 0
-        assert result.num_articles == 3
-
-    def test_negative_headlines_block_or_reduce(self):
-        headlines = [
-            "Company under investigation for fraud",
-            "Massive layoffs announced amid losses",
-            "Stock crashes on terrible earnings miss",
-        ]
-        result = assess_sentiment("TEST", headlines=headlines)
-        assert result.action in ("BLOCK", "REDUCE_50")
-        assert result.avg_compound < 0
-
-    def test_mixed_headlines_moderate(self):
-        headlines = [
-            "Company reports strong growth",
-            "But faces regulatory headwinds",
-        ]
-        result = assess_sentiment("TEST", headlines=headlines)
-        assert result.ticker == "TEST"
-        assert result.num_articles == 2
-        assert len(result.articles) == 2
-
-    def test_no_headlines_neutral(self):
-        result = assess_sentiment("TEST", headlines=[])
-        assert result.action == "PROCEED"
-        assert result.avg_compound == 0.0
-        assert result.num_articles == 0
-        assert "No recent news" in result.reason
-
-    def test_none_headlines_fetches_rss(self):
-        """When headlines=None, should try RSS fetch."""
-        with patch("modules.sentiment.fetch_news_rss") as mock_fetch:
-            mock_fetch.return_value = [
-                NewsArticle(title="Good earnings report"),
-            ]
-            result = assess_sentiment("AAPL", headlines=None, feeds=["fake"])
-            mock_fetch.assert_called_once()
-            assert result.num_articles == 1
-
-    def test_result_has_timestamp(self):
-        result = assess_sentiment("TEST", headlines=["Neutral news"])
-        assert result.timestamp is not None
-
-    def test_empty_string_headlines_filtered(self):
-        result = assess_sentiment("TEST", headlines=["Good news", "", "  "])
-        assert result.num_articles == 1
-
-    def test_articles_have_scores(self):
-        result = assess_sentiment("TEST", headlines=["Great results!", "Terrible loss"])
-        for article in result.articles:
-            assert article.compound_score != 0.0
-
-
-# ════════════════════════════════════════════════════════════
-# GATE TRADE (CONVENIENCE FUNCTION)
-# ════════════════════════════════════════════════════════════
-
-class TestGateTrade:
-    """Test the trade gating convenience function."""
-
-    def test_block_trade(self):
-        headlines = [
-            "Fraud investigation launched",
-            "SEC charges company with deception",
-            "Stock plummets on scandal",
-        ]
-        action, adjusted, result = gate_trade("BAD", 80.0, headlines=headlines)
-        assert action == "BLOCK"
-        assert adjusted == 0.0
-
-    def test_boost_trade(self):
-        headlines = [
-            "Incredible earnings beat!",
-            "Analysts upgrade to strong buy!",
-            "Record revenue growth announced!",
-        ]
-        action, adjusted, result = gate_trade("GOOD", 70.0, headlines=headlines)
-        assert action in ("CONFIDENCE_PLUS_10", "CONFIDENCE_PLUS_20")
-        assert adjusted > 70.0
-
-    def test_proceed_no_change(self):
-        headlines = ["Meeting scheduled for Tuesday"]
-        action, adjusted, result = gate_trade("MEH", 65.0, headlines=headlines)
-        # Neutral headline
-        assert adjusted >= 65.0  # Either unchanged or slightly boosted
-
-    def test_returns_full_result(self):
-        action, adjusted, result = gate_trade("X", 50.0, headlines=["Neutral"])
-        assert isinstance(result, SentimentResult)
-        assert result.ticker == "X"
-
-
-# ════════════════════════════════════════════════════════════
-# RSS FETCHING (MOCKED)
-# ════════════════════════════════════════════════════════════
-
-class TestRSSFetching:
-    """Test RSS news fetching with mocked feedparser."""
-
-    def test_fetch_parses_entries(self):
-        mock_entry = MagicMock()
-        mock_entry.get = lambda k, d="": {
-            "title": "Test headline about stock",
-            "link": "https://example.com/article",
-        }.get(k, d)
-        mock_entry.published_parsed = None
-
-        mock_feed = MagicMock()
-        mock_feed.entries = [mock_entry]
-        mock_feed.feed = {"title": "Test Feed"}
-
-        with patch("modules.sentiment.feedparser.parse", return_value=mock_feed):
-            articles = fetch_news_rss("AAPL", feeds=["https://test.com/{ticker}"])
-            assert len(articles) == 1
-            assert articles[0].title == "Test headline about stock"
-
-    def test_fetch_filters_old_articles(self):
-        """Articles older than lookback window should be excluded."""
-        old_time = datetime.now(timezone.utc) - timedelta(hours=72)
-
-        mock_entry = MagicMock()
-        mock_entry.get = lambda k, d="": {
-            "title": "Old article",
-            "link": "https://example.com",
-        }.get(k, d)
-        mock_entry.published_parsed = old_time.timetuple()
-
-        mock_feed = MagicMock()
-        mock_feed.entries = [mock_entry]
-        mock_feed.feed = {"title": "Test Feed"}
-
-        with patch("modules.sentiment.feedparser.parse", return_value=mock_feed):
-            articles = fetch_news_rss("AAPL", feeds=["https://test.com/{ticker}"],
-                                       lookback_hours=48)
-            assert len(articles) == 0
-
-    def test_fetch_keeps_recent_articles(self):
-        """Articles within lookback window should be included."""
-        recent_time = datetime.now(timezone.utc) - timedelta(hours=1)
-
-        mock_entry = MagicMock()
-        mock_entry.get = lambda k, d="": {
-            "title": "Recent article",
-            "link": "https://example.com",
-        }.get(k, d)
-        mock_entry.published_parsed = recent_time.timetuple()
-
-        mock_feed = MagicMock()
-        mock_feed.entries = [mock_entry]
-        mock_feed.feed = {"title": "Test Feed"}
-
-        with patch("modules.sentiment.feedparser.parse", return_value=mock_feed):
-            articles = fetch_news_rss("AAPL", feeds=["https://test.com/{ticker}"],
-                                       lookback_hours=48)
-            assert len(articles) == 1
-
-    def test_fetch_handles_bad_feed(self):
-        """Failed RSS feed should not crash — returns empty list."""
-        with patch("modules.sentiment.feedparser.parse", side_effect=Exception("Network error")):
-            articles = fetch_news_rss("AAPL", feeds=["https://broken.com/{ticker}"])
-            assert articles == []
-
-    def test_fetch_substitutes_ticker(self):
-        """Feed URL template should have {ticker} replaced."""
-        with patch("modules.sentiment.feedparser.parse") as mock_parse:
-            mock_parse.return_value = MagicMock(entries=[], feed={})
-            fetch_news_rss("MSFT", feeds=["https://feed.com/rss?s={ticker}"])
-            mock_parse.assert_called_once_with("https://feed.com/rss?s=MSFT")
-
-    def test_fetch_empty_title_skipped(self):
-        """Entries with empty titles should be skipped."""
-        mock_entry = MagicMock()
-        mock_entry.get = lambda k, d="": {
-            "title": "",
-            "link": "https://example.com",
-        }.get(k, d)
-        mock_entry.published_parsed = None
-
-        mock_feed = MagicMock()
-        mock_feed.entries = [mock_entry]
-        mock_feed.feed = {"title": "Test Feed"}
-
-        with patch("modules.sentiment.feedparser.parse", return_value=mock_feed):
-            articles = fetch_news_rss("AAPL", feeds=["https://test.com/{ticker}"])
-            assert len(articles) == 0
-
-
-# ════════════════════════════════════════════════════════════
-# HTML CLEANING
-# ════════════════════════════════════════════════════════════
-
-class TestHTMLCleaning:
-    """Test HTML tag stripping from RSS content."""
-
-    def test_plain_text_unchanged(self):
-        assert _clean_html("Hello world") == "Hello world"
-
-    def test_html_stripped(self):
-        assert _clean_html("<b>Bold</b> text") == "Bold text"
-
-    def test_complex_html(self):
-        result = _clean_html('<a href="link">Click <b>here</b></a>')
-        assert "Click" in result
-        assert "here" in result
-        assert "<" not in result
-
-    def test_empty_string(self):
-        assert _clean_html("") == ""
-
-    def test_none_input(self):
-        assert _clean_html(None) == ""
-
-    def test_whitespace_trimmed(self):
-        assert _clean_html("  spaced  ") == "spaced"
-
-
-# ════════════════════════════════════════════════════════════
-# EDGE CASES
-# ════════════════════════════════════════════════════════════
-
-class TestEdgeCases:
-    """Test boundary conditions and edge cases."""
-
-    def test_single_article_decides_action(self):
-        result = assess_sentiment("X", headlines=["Total catastrophe and collapse!"])
-        assert result.num_articles == 1
-        assert result.avg_compound < 0
-
-    def test_many_articles_averaged(self):
-        """Average of many positive + one negative should still be positive."""
-        headlines = [
-            "Great earnings!",
-            "Revenue beats estimates!",
-            "Strong guidance!",
-            "Amazing growth!",
-            "Minor concerns about costs",  # One mild negative
-        ]
-        result = assess_sentiment("X", headlines=headlines)
-        assert result.avg_compound > 0
-
-    def test_all_neutral_articles(self):
-        headlines = [
-            "Meeting at 3pm",
-            "Report due Friday",
-            "Conference scheduled",
-        ]
-        result = assess_sentiment("X", headlines=headlines)
-        assert result.action == "PROCEED"
-
-    def test_exact_zero_compound(self):
-        """Zero average should map to PROCEED."""
-        action, _ = determine_action(0.0)
-        assert action == "PROCEED"
-
-    def test_assess_returns_correct_ticker(self):
-        result = assess_sentiment("TSLA", headlines=["Neutral"])
-        assert result.ticker == "TSLA"
-
-    def test_gate_with_zero_confidence(self):
-        action, adjusted, result = gate_trade("X", 0.0, headlines=["Good news!"])
-        assert adjusted >= 0.0
-
-    def test_gate_with_max_confidence(self):
-        action, adjusted, result = gate_trade("X", 100.0, headlines=["Good news!"])
-        assert adjusted <= 100.0
-
-    def test_avg_compound_rounded(self):
-        result = assess_sentiment("X", headlines=["Somewhat positive outlook"])
-        # avg_compound should be rounded to 4 decimal places
-        s = str(result.avg_compound)
-        if "." in s:
-            decimals = len(s.split(".")[-1])
-            assert decimals <= 4
-
-
-# ════════════════════════════════════════════════════════════
-# INTEGRATION TEST (hits real API — skip in CI)
-# ════════════════════════════════════════════════════════════
-
-@pytest.mark.integration
-class TestIntegration:
-    """
-    Integration tests that hit real RSS feeds.
-    Run with: python -m pytest tests/test_sentiment.py -v -m integration
-    Skip with: python -m pytest tests/test_sentiment.py -v -m "not integration"
-    """
-
-    def test_fetch_real_rss(self):
-        """Fetch real Yahoo Finance RSS for AAPL."""
-        articles = fetch_news_rss("AAPL")
-        # Yahoo may return 0 articles, but should not crash
-        assert isinstance(articles, list)
-        for article in articles:
-            assert isinstance(article, NewsArticle)
-            assert article.title
-
-    def test_full_pipeline_real(self):
-        """Full sentiment pipeline on a real ticker."""
-        result = assess_sentiment("MSFT")
-        assert isinstance(result, SentimentResult)
-        assert result.ticker == "MSFT"
-        assert result.action in (
-            "BLOCK", "REDUCE_50", "PROCEED",
-            "CONFIDENCE_PLUS_10", "CONFIDENCE_PLUS_20",
-        )
-        assert -1.0 <= result.avg_compound <= 1.0
-
-    def test_gate_real_trade(self):
-        """Gate a trade using real news data."""
-        action, adjusted, result = gate_trade("GOOGL", 75.0)
-        assert action in (
-            "BLOCK", "REDUCE_50", "PROCEED",
-            "CONFIDENCE_PLUS_10", "CONFIDENCE_PLUS_20",
-        )
-        assert 0.0 <= adjusted <= 100.0
-
-
-# ════════════════════════════════════════════════════════════
-# TEST RESULTS SUMMARY
-# ════════════════════════════════════════════════════════════
-#
-# Run: python -m pytest tests/test_sentiment.py -v
-#
-# Expected results:
-#   TestVADERScoring:          9 tests  — all should PASS
-#   TestScoreArticles:         3 tests  — all should PASS
-#   TestActionMapping:        12 tests  — all should PASS
-#   TestConfidenceAdjustment: 10 tests  — all should PASS
-#   TestAssessSentiment:       8 tests  — all should PASS
-#   TestGateTrade:             4 tests  — all should PASS
-#   TestRSSFetching:           6 tests  — all should PASS
-#   TestHTMLCleaning:          6 tests  — all should PASS
-#   TestEdgeCases:             8 tests  — all should PASS
-#   TestIntegration:           3 tests  — may skip if no network
-#
-# TOTAL: 69 tests
-#
-# If any test in TestActionMapping, TestConfidenceAdjustment,
-# or TestAssessSentiment fails, DO NOT proceed to Module 3-4.
-# Fix the sentiment logic first.
-# ════════════════════════════════════════════════════════════
+        assert map_score_to_action(0.6) == SentimentAction.CONFIDENCE_PLUS_20
+
+
+# ── News RSS Tests ───────────────────────────────────────
+
+
+class TestNewsSentiment:
+    def test_score_text_positive(self):
+        provider = NewsSentimentProvider()
+        score = provider._score_text("Stock surge rally beat expectations strong growth")
+        assert score > 0
+
+    def test_score_text_negative(self):
+        provider = NewsSentimentProvider()
+        score = provider._score_text("Stock crash plunge loss decline weak")
+        assert score < 0
+
+    def test_score_text_neutral(self):
+        provider = NewsSentimentProvider()
+        score = provider._score_text("Company announces quarterly results")
+        assert score == 0.0
+
+    def test_parse_rss(self):
+        xml = """
+        <rss><channel>
+            <item><title>AAPL hits record high</title></item>
+            <item><title>Market update for today</title></item>
+        </channel></rss>
+        """
+        from datetime import datetime
+        items = NewsSentimentProvider._parse_rss(xml, datetime(2020, 1, 1))
+        assert len(items) == 2
+        assert items[0]["title"] == "AAPL hits record high"
+
+    def test_get_sentiment_no_articles(self):
+        provider = NewsSentimentProvider()
+        with patch.object(provider, "_fetch_articles", return_value=[]):
+            result = provider.get_sentiment("AAPL")
+            assert result.score == 0.0
+            assert result.mention_count == 0
+
+
+# ── Reddit Tests ─────────────────────────────────────────
+
+
+class TestRedditSentiment:
+    def test_extract_tickers_dollar_sign(self):
+        tickers = RedditSentimentProvider._extract_tickers("I love $AAPL and $TSLA!")
+        assert "AAPL" in tickers
+        assert "TSLA" in tickers
+
+    def test_extract_tickers_caps(self):
+        tickers = RedditSentimentProvider._extract_tickers("NVDA is going to the moon")
+        assert "NVDA" in tickers
+
+    def test_extract_tickers_filters_noise(self):
+        tickers = RedditSentimentProvider._extract_tickers("THE CEO said YOLO on this DD")
+        assert "THE" not in tickers
+        assert "CEO" not in tickers
+        assert "YOLO" not in tickers
+
+    def test_score_post_high_upvote(self):
+        post = {"upvote_ratio": 0.9, "score": 1000, "num_comments": 50}
+        score = RedditSentimentProvider._score_post(post)
+        assert score > 0
+
+    def test_score_post_low_upvote(self):
+        post = {"upvote_ratio": 0.2, "score": 100, "num_comments": 10}
+        score = RedditSentimentProvider._score_post(post)
+        assert score < 0
+
+    def test_score_post_neutral(self):
+        post = {"upvote_ratio": 0.5, "score": 50, "num_comments": 5}
+        score = RedditSentimentProvider._score_post(post)
+        assert score == 0.0
+
+    def test_get_sentiment_no_results(self):
+        provider = RedditSentimentProvider()
+        with patch.object(provider, "_search_subreddit", return_value=[]):
+            result = provider.get_sentiment("AAPL")
+            assert result.score == 0.0
+            assert result.mention_count == 0
+
+
+# ── Twitter Tests ────────────────────────────────────────
+
+
+class TestTwitterSentiment:
+    def test_returns_neutral(self):
+        provider = TwitterSentimentProvider()
+        result = provider.get_sentiment("AAPL")
+        assert result.score == 0.0
+        assert result.source == SentimentSource.TWITTER
+
+    def test_trending_empty(self):
+        provider = TwitterSentimentProvider()
+        assert provider.get_trending() == []
+
+
+# ── Aggregator Tests ─────────────────────────────────────
+
+
+class TestSentimentAggregator:
+    def test_aggregates_sources(self):
+        agg = SentimentAggregator()
+        # Mock all providers to return known scores
+        with patch.object(agg._providers[0], "get_sentiment", return_value=TickerSentiment(
+            symbol="AAPL", source=SentimentSource.NEWS, score=0.5, mention_count=10,
+        )), patch.object(agg._providers[1], "get_sentiment", return_value=TickerSentiment(
+            symbol="AAPL", source=SentimentSource.REDDIT, score=0.3, mention_count=20,
+        )), patch.object(agg._providers[2], "get_sentiment", return_value=TickerSentiment(
+            symbol="AAPL", source=SentimentSource.TWITTER, score=0.0, mention_count=0,
+        )):
+            result = agg.get_sentiment("AAPL")
+            assert result.composite_score > 0
+            assert result.total_mentions == 30
+            assert "news" in result.source_scores
+            assert "reddit" in result.source_scores
+
+    def test_gate_trade_block(self):
+        agg = SentimentAggregator()
+        with patch.object(agg, "get_sentiment", return_value=MagicMock(
+            action=SentimentAction.BLOCK, composite_score=-0.7,
+        )):
+            action, conf, _ = agg.gate_trade("AAPL", 70.0)
+            assert action == SentimentAction.BLOCK
+            assert conf == 0.0
+
+    def test_gate_trade_proceed(self):
+        agg = SentimentAggregator()
+        with patch.object(agg, "get_sentiment", return_value=MagicMock(
+            action=SentimentAction.PROCEED, composite_score=0.0,
+        )):
+            action, conf, _ = agg.gate_trade("AAPL", 70.0)
+            assert action == SentimentAction.PROCEED
+            assert conf == 70.0
+
+    def test_gate_trade_boost(self):
+        agg = SentimentAggregator()
+        with patch.object(agg, "get_sentiment", return_value=MagicMock(
+            action=SentimentAction.CONFIDENCE_PLUS_20, composite_score=0.6,
+        )):
+            action, conf, _ = agg.gate_trade("AAPL", 70.0)
+            assert action == SentimentAction.CONFIDENCE_PLUS_20
+            assert conf == 90.0
+
+    def test_confidence_caps_at_100(self):
+        adjusted = SentimentAggregator._adjust_confidence(95, SentimentAction.CONFIDENCE_PLUS_20)
+        assert adjusted == 100
+
+    def test_persist_readings(self, db_session):
+        agg = SentimentAggregator(session=db_session)
+        with patch.object(agg._providers[0], "get_sentiment", return_value=TickerSentiment(
+            symbol="AAPL", source=SentimentSource.NEWS, score=0.5, mention_count=5,
+        )), patch.object(agg._providers[1], "get_sentiment", return_value=TickerSentiment(
+            symbol="AAPL", source=SentimentSource.REDDIT, score=0.3, mention_count=10,
+        )), patch.object(agg._providers[2], "get_sentiment", return_value=TickerSentiment(
+            symbol="AAPL", source=SentimentSource.TWITTER, score=0.0, mention_count=0,
+        )):
+            agg.get_sentiment("AAPL")
+            count = db_session.query(SentimentReading).count()
+            assert count == 3
+
+    def test_provider_failure_handled(self):
+        agg = SentimentAggregator()
+        with patch.object(agg._providers[0], "get_sentiment", side_effect=Exception("fail")), \
+             patch.object(agg._providers[1], "get_sentiment", return_value=TickerSentiment(
+                 symbol="AAPL", source=SentimentSource.REDDIT, score=0.5, mention_count=5,
+             )), \
+             patch.object(agg._providers[2], "get_sentiment", return_value=TickerSentiment(
+                 symbol="AAPL", source=SentimentSource.TWITTER, score=0.0, mention_count=0,
+             )):
+            result = agg.get_sentiment("AAPL")
+            assert result is not None
+            assert "reddit" in result.source_scores

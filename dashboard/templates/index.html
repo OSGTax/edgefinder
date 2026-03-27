@@ -1,1363 +1,410 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EdgeFinder Dashboard</title>
-    <style>
-        :root {
-            --bg: #0f1117;
-            --surface: #1a1d27;
-            --border: #2a2d3a;
-            --text: #e1e4eb;
-            --muted: #8b8fa3;
-            --green: #22c55e;
-            --red: #ef4444;
-            --blue: #3b82f6;
-            --yellow: #eab308;
-            --purple: #a855f7;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-            background: var(--bg);
-            color: var(--text);
-            line-height: 1.5;
-        }
-        .header {
-            background: var(--surface);
-            border-bottom: 1px solid var(--border);
-            padding: 16px 24px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .header h1 { font-size: 20px; font-weight: 600; }
-        .header .status { font-size: 13px; color: var(--muted); }
-        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .stat-card {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 16px;
-        }
-        .stat-card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
-        .stat-card .value { font-size: 24px; font-weight: 700; margin-top: 4px; }
-        .stat-card .value.positive { color: var(--green); }
-        .stat-card .value.negative { color: var(--red); }
-        .panel {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            margin-bottom: 24px;
-            overflow: hidden;
-        }
-        .panel-header {
-            padding: 14px 18px;
-            border-bottom: 1px solid var(--border);
-            font-weight: 600;
-            font-size: 14px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .panel-body { padding: 0; overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; }
-        th {
-            text-align: left;
-            padding: 10px 14px;
-            color: var(--muted);
-            font-weight: 500;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 1px solid var(--border);
-            white-space: nowrap;
-            cursor: pointer;
-            user-select: none;
-        }
-        th:hover { color: var(--text); }
-        th .sort-arrow { font-size: 10px; margin-left: 4px; }
-        td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border);
-            white-space: nowrap;
-        }
-        tr:hover td { background: rgba(255,255,255,0.02); }
-        .badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            font-weight: 600;
-        }
-        .badge-buy { background: rgba(34,197,94,0.15); color: var(--green); }
-        .badge-sell { background: rgba(239,68,68,0.15); color: var(--red); }
-        .badge-day { background: rgba(59,130,246,0.15); color: var(--blue); }
-        .badge-swing { background: rgba(168,85,247,0.15); color: var(--purple); }
-        .score-bar {
-            display: inline-block;
-            height: 6px;
-            border-radius: 3px;
-            background: var(--border);
-            width: 60px;
-            position: relative;
-            vertical-align: middle;
-            margin-right: 6px;
-        }
-        .score-bar .fill {
-            position: absolute;
-            left: 0; top: 0; bottom: 0;
-            border-radius: 3px;
-        }
-        .tabs {
-            display: flex;
-            gap: 0;
-            border-bottom: 1px solid var(--border);
-            margin-bottom: 24px;
-        }
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            font-size: 13px;
-            color: var(--muted);
-            border-bottom: 2px solid transparent;
-            transition: all 0.2s;
-        }
-        .tab:hover { color: var(--text); }
-        .tab.active { color: var(--blue); border-bottom-color: var(--blue); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .empty { padding: 40px; text-align: center; color: var(--muted); }
-        .about-content { padding: 24px; line-height: 1.8; }
-        .about-content h2 { font-size: 18px; margin: 20px 0 10px; color: var(--blue); }
-        .about-content h2:first-child { margin-top: 0; }
-        .about-content p { color: var(--text); margin-bottom: 12px; }
-        .about-content .layer {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 12px 16px;
-            margin-bottom: 8px;
-        }
-        .about-content .layer-num {
-            display: inline-block;
-            background: var(--blue);
-            color: white;
-            border-radius: 4px;
-            padding: 1px 8px;
-            font-size: 11px;
-            font-weight: 600;
-            margin-right: 8px;
-        }
-        .about-content .layer-title { font-weight: 600; }
-        .about-content .layer-desc { color: var(--muted); font-size: 13px; margin-top: 4px; }
-        .suggest-form {
-            padding: 24px;
-            border-bottom: 1px solid var(--border);
-        }
-        .suggest-form .form-row {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 12px;
-            align-items: flex-start;
-        }
-        .suggest-form select, .suggest-form input, .suggest-form textarea {
-            background: var(--bg);
-            border: 1px solid var(--border);
-            color: var(--text);
-            border-radius: 4px;
-            padding: 8px 12px;
-            font-size: 13px;
-            font-family: inherit;
-        }
-        .suggest-form select { width: 140px; }
-        .suggest-form input { flex: 1; }
-        .suggest-form textarea { width: 100%; min-height: 60px; resize: vertical; }
-        .suggest-form button {
-            background: var(--blue);
-            color: white;
-            border: none;
-            padding: 8px 20px;
-            border-radius: 4px;
-            font-size: 13px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-        .suggest-form button:hover { opacity: 0.9; }
-        .suggest-status { font-size: 12px; padding: 2px 8px; border-radius: 4px; }
-        .status-new { background: rgba(59,130,246,0.15); color: var(--blue); }
-        .status-reviewing { background: rgba(234,179,8,0.15); color: var(--yellow); }
-        .status-implemented { background: rgba(34,197,94,0.15); color: var(--green); }
-        .status-declined { background: rgba(239,68,68,0.15); color: var(--red); }
-        .delete-btn {
-            background: none;
-            border: none;
-            color: var(--muted);
-            cursor: pointer;
-            font-size: 14px;
-            padding: 2px 6px;
-        }
-        .delete-btn:hover { color: var(--red); }
-        .chart-area {
-            padding: 20px;
-            height: 400px;
-            position: relative;
-            overflow: hidden;
-        }
-        .chart-area canvas {
-            width: 100%;
-            height: 100%;
-        }
-        .legend-item {
-            display: inline-flex;
-            align-items: center;
-            margin-right: 12px;
-            font-size: 12px;
-            color: var(--muted);
-            font-weight: normal;
-        }
-        .legend-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 4px;
-        }
-        .header-btns { display: flex; gap: 8px; align-items: center; }
-        .refresh-btn {
-            background: var(--blue);
-            color: white;
-            border: none;
-            padding: 6px 14px;
-            border-radius: 4px;
-            font-size: 12px;
-            cursor: pointer;
-        }
-        .refresh-btn:hover { opacity: 0.9; }
-        .scan-btn {
-            background: var(--green);
-            color: white;
-            border: none;
-            padding: 6px 14px;
-            border-radius: 4px;
-            font-size: 12px;
-            cursor: pointer;
-            font-weight: 600;
-        }
-        .scan-btn:hover { opacity: 0.9; }
-        .scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .scan-status { font-size: 11px; color: var(--muted); }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EdgeFinder v2</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root { --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a; --text: #e0e0e0; --muted: #888; --green: #22c55e; --red: #ef4444; --blue: #3b82f6; --yellow: #eab308; --purple: #a855f7; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: var(--bg); color: var(--text); }
+.header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .status { font-size: 12px; color: var(--muted); }
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 24px; }
+.tab { padding: 12px 20px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; font-size: 14px; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+.content { padding: 24px; max-width: 1400px; margin: 0 auto; }
+.panel { display: none; }
+.panel.active { display: block; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.card h3 { font-size: 14px; margin-bottom: 12px; color: var(--blue); }
+.card .row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+.card .label { color: var(--muted); }
+.card .value { font-weight: 600; }
+.card .value.positive { color: var(--green); }
+.card .value.negative { color: var(--red); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 500; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+tr:hover { background: rgba(59,130,246,0.05); }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.pill.open { background: rgba(59,130,246,0.2); color: var(--blue); }
+.pill.closed { background: rgba(136,136,136,0.2); color: var(--muted); }
+.pill.win { background: rgba(34,197,94,0.2); color: var(--green); }
+.pill.loss { background: rgba(239,68,68,0.2); color: var(--red); }
+.filter-bar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
+select, input, button { background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+button { cursor: pointer; background: var(--blue); border: none; color: white; font-weight: 600; }
+button:hover { opacity: 0.9; }
+.sub-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.sub-tab { padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; background: var(--card); border: 1px solid var(--border); }
+.sub-tab.active { background: var(--blue); border-color: var(--blue); color: white; }
+.stats-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; }
+.stat .num { font-size: 24px; font-weight: 700; }
+.stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.research-box { display: flex; gap: 12px; margin-bottom: 24px; }
+.research-box input { flex: 1; }
+.report { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+.report h2 { margin-bottom: 16px; }
+.report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.inject-form { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.chart-container { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+.empty { text-align: center; padding: 40px; color: var(--muted); }
+</style>
 </head>
 <body>
-    <div class="header">
-        <h1>EdgeFinder</h1>
-        <div class="header-btns">
-            <span class="scan-status" id="scan-status"></span>
-            <button class="scan-btn" id="scan-btn" onclick="runScanner()">Run Scanner</button>
-            <span class="status" id="last-updated">Loading...</span>
-            <button class="refresh-btn" onclick="loadAll()">Refresh</button>
-        </div>
+
+<div class="header">
+  <h1>EdgeFinder v2</h1>
+  <div class="status" id="health-status">Connecting...</div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('strategies')">Strategies</div>
+  <div class="tab" onclick="switchTab('trades')">Trades</div>
+  <div class="tab" onclick="switchTab('research')">Research</div>
+  <div class="tab" onclick="switchTab('sentiment')">Sentiment</div>
+  <div class="tab" onclick="switchTab('benchmarks')">Benchmarks</div>
+  <div class="tab" onclick="switchTab('inject')">Inject</div>
+</div>
+
+<div class="content">
+
+<!-- STRATEGIES PANEL -->
+<div class="panel active" id="panel-strategies">
+  <h2 style="margin-bottom:16px">Strategy Accounts</h2>
+  <div class="cards" id="strategy-cards"></div>
+</div>
+
+<!-- TRADES PANEL -->
+<div class="panel" id="panel-trades">
+  <div class="filter-bar">
+    <select id="trade-strategy-filter" onchange="loadTrades()">
+      <option value="">All Strategies</option>
+    </select>
+    <div class="sub-tabs">
+      <div class="sub-tab active" onclick="setTradeFilter('all', this)">All</div>
+      <div class="sub-tab" onclick="setTradeFilter('OPEN', this)">Open</div>
+      <div class="sub-tab" onclick="setTradeFilter('wins', this)">Wins</div>
+      <div class="sub-tab" onclick="setTradeFilter('losses', this)">Losses</div>
     </div>
+  </div>
+  <div class="stats-row" id="trade-stats"></div>
+  <table>
+    <thead>
+      <tr><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Type</th><th>Entry</th><th>Exit</th><th>Shares</th><th>P&L</th><th>R</th><th>Status</th><th>Reason</th></tr>
+    </thead>
+    <tbody id="trades-body"></tbody>
+  </table>
+</div>
 
-    <div class="container">
-        <!-- Stats Cards -->
-        <div class="grid" id="stats-grid">
-            <div class="stat-card"><div class="label">Account Value</div><div class="value" id="stat-value">--</div></div>
-            <div class="stat-card"><div class="label">Total P&L</div><div class="value" id="stat-pnl">--</div><div class="label" id="stat-pnl-breakdown" style="font-size:11px;margin-top:4px"></div></div>
-            <div class="stat-card"><div class="label">Win Rate</div><div class="value" id="stat-winrate">--</div></div>
-            <div class="stat-card"><div class="label">Avg R-Multiple</div><div class="value" id="stat-r">--</div></div>
-            <div class="stat-card"><div class="label">Profit Factor</div><div class="value" id="stat-pf">--</div></div>
-            <div class="stat-card"><div class="label">Total Trades</div><div class="value" id="stat-trades">--</div></div>
-        </div>
+<!-- RESEARCH PANEL -->
+<div class="panel" id="panel-research">
+  <div class="research-box">
+    <input type="text" id="research-input" placeholder="Enter ticker symbol (e.g., AAPL)" onkeydown="if(event.key==='Enter')doResearch()">
+    <button onclick="doResearch()">Research</button>
+  </div>
+  <div id="research-result"></div>
+  <h3 style="margin:24px 0 12px">Active Watchlist</h3>
+  <table>
+    <thead><tr><th>Symbol</th><th>Company</th><th>Sector</th><th>Market Cap</th><th>Price</th></tr></thead>
+    <tbody id="active-tickers"></tbody>
+  </table>
+</div>
 
-        <!-- Equity Curve -->
-        <div class="panel">
-            <div class="panel-header">Equity Curve <span id="equity-legend" style="margin-left:16px"></span></div>
-            <div class="panel-body">
-                <div class="chart-area" id="equity-chart-container">
-                    <canvas id="equity-canvas"></canvas>
-                    <div class="empty" id="equity-empty" style="width:100%;position:absolute;top:50%;left:0;text-align:center">No snapshots yet</div>
-                </div>
-            </div>
-        </div>
+<!-- SENTIMENT PANEL -->
+<div class="panel" id="panel-sentiment">
+  <h2 style="margin-bottom:16px">Trending Tickers</h2>
+  <div class="cards" id="trending-cards"></div>
+  <div class="research-box" style="margin-top:24px">
+    <input type="text" id="sentiment-input" placeholder="Check sentiment for ticker..." onkeydown="if(event.key==='Enter')doSentiment()">
+    <button onclick="doSentiment()">Check</button>
+  </div>
+  <div id="sentiment-result"></div>
+</div>
 
-        <!-- Tabs -->
-        <div class="tabs">
-            <div class="tab active" data-tab="arena">Arena</div>
-            <div class="tab" data-tab="trades">Trades</div>
-            <div class="tab" data-tab="watchlist">Watchlist</div>
-            <div class="tab" data-tab="fundamentals">Fundamentals</div>
-            <div class="tab" data-tab="signals">Signals</div>
-            <div class="tab" data-tab="about">About</div>
-            <div class="tab" data-tab="suggestions">Suggestions</div>
-        </div>
+<!-- BENCHMARKS PANEL -->
+<div class="panel" id="panel-benchmarks">
+  <div class="filter-bar">
+    <select id="benchmark-days" onchange="loadBenchmarks()">
+      <option value="30">30 Days</option>
+      <option value="90" selected>90 Days</option>
+      <option value="180">180 Days</option>
+      <option value="365">1 Year</option>
+    </select>
+    <button onclick="fetch('/api/benchmarks/collect',{method:'POST'}).then(()=>loadBenchmarks())">Collect Today</button>
+    <button onclick="fetch('/api/benchmarks/backfill?days=365',{method:'POST'}).then(()=>loadBenchmarks())">Backfill 1Y</button>
+  </div>
+  <div class="chart-container"><canvas id="benchmark-chart" height="300"></canvas></div>
+</div>
 
-        <!-- About -->
-        <div class="tab-content" id="tab-about">
-            <div class="panel">
-                <div class="panel-header">How EdgeFinder Works</div>
-                <div class="panel-body about-content">
-                    <p>EdgeFinder is a multi-strategy paper trading arena that pits different investment philosophies
-                    against each other in real-time. Each strategy gets its own capital, makes independent decisions,
-                    and is tracked on a leaderboard.</p>
+<!-- INJECT PANEL -->
+<div class="panel" id="panel-inject">
+  <h2 style="margin-bottom:16px">Manual Ticker Injection</h2>
+  <div class="inject-form">
+    <input type="text" id="inject-symbol" placeholder="Symbol (e.g., GME)">
+    <select id="inject-strategy"><option value="">All Strategies</option></select>
+    <input type="text" id="inject-notes" placeholder="Notes (optional)">
+    <input type="number" id="inject-hours" placeholder="Expires in hours" style="width:140px">
+    <button onclick="doInject()">Inject</button>
+  </div>
+  <table>
+    <thead><tr><th>Symbol</th><th>Target</th><th>Notes</th><th>Expires</th><th>Created</th><th></th></tr></thead>
+    <tbody id="injections-body"></tbody>
+  </table>
+</div>
 
-                    <h2>The Arena</h2>
-                    <p>Two strategies compete head-to-head, each starting with $2,500 in simulated capital:</p>
-
-                    <div class="layer">
-                        <span class="layer-num">L</span>
-                        <span class="layer-title">Lynch Strategy</span>
-                        <div class="layer-desc">Growth at a reasonable price. Favors stocks with low PEG ratios,
-                        strong earnings growth, and manageable debt. Uses tighter stops (5%) and 1.5:1 reward-to-risk.</div>
-                    </div>
-                    <div class="layer">
-                        <span class="layer-num">B</span>
-                        <span class="layer-title">Burry Strategy</span>
-                        <div class="layer-desc">Deep value contrarian. Targets high free cash flow yield,
-                        low price-to-tangible-book, and strong balance sheets. Wider stops (7%) and 2:1 reward-to-risk.
-                        Gets an RSI oversold boost for beaten-down names.</div>
-                    </div>
-
-                    <h2>Data Pipeline</h2>
-                    <div class="layer">
-                        <span class="layer-num">1</span>
-                        <span class="layer-title">Fundamental Scanner</span>
-                        <div class="layer-desc">Nightly scan of ~8,000+ US equities via Alpaca (universe) and FMP (fundamentals).
-                        Scores each stock using Lynch and Burry criteria (50/50 weight). Top candidates go on the watchlist.</div>
-                    </div>
-                    <div class="layer">
-                        <span class="layer-num">2</span>
-                        <span class="layer-title">Signal Check (every 15 min)</span>
-                        <div class="layer-desc">Each strategy scans its watchlist for technical entry signals
-                        (RSI, MACD, EMA crossovers, volume spikes). Signals pass through a news sentiment gate
-                        before execution.</div>
-                    </div>
-                    <div class="layer">
-                        <span class="layer-num">3</span>
-                        <span class="layer-title">Execution + Risk Management</span>
-                        <div class="layer-desc">Honest executor applies realistic slippage, enforces PDT limits (3 day trades / 5 days),
-                        position sizing (2% max risk), stop losses, trailing stops, and circuit breakers.
-                        Every execution is logged with full audit trail.</div>
-                    </div>
-
-                    <h2>Scheduler</h2>
-                    <p>Runs Mon-Fri during extended market hours (7 AM &ndash; 6 PM ET):</p>
-                    <p>Signal check every 15 min &bull; Position monitor every 5 min &bull;
-                    Day trade close at 3:50 PM &bull; Snapshots at 4:05 PM &bull; Nightly scan at 4:30 PM</p>
-
-                    <h2>Data Sources</h2>
-                    <p><strong>Alpaca</strong> &mdash; Ticker universe, real-time prices, historical bars.<br>
-                    <strong>FMP</strong> &mdash; Fundamental data (ratios, metrics, profiles). Cached to stay under 250/day limit.<br>
-                    <strong>VADER</strong> &mdash; News sentiment analysis via RSS feeds.</p>
-
-                    <h2>Dashboard Tabs</h2>
-                    <p><strong>Arena</strong> &mdash; Strategy leaderboard, per-strategy positions, trade explanations, and audit trail.<br>
-                    <strong>Trades</strong> &mdash; All executed trades across all strategies in one view.<br>
-                    <strong>Watchlist</strong> &mdash; Stocks that passed fundamental screening, ranked by composite score.<br>
-                    <strong>Signals</strong> &mdash; Technical entry/exit signals detected on watchlist stocks.<br>
-                    <strong>Suggestions</strong> &mdash; Submit ideas for new features, strategy changes, or bug reports.</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Watchlist -->
-        <div class="tab-content" id="tab-watchlist">
-            <div class="panel" style="margin-bottom:16px">
-                <div class="panel-header">Add Ticker Manually</div>
-                <div style="padding:16px;display:flex;gap:10px;align-items:center">
-                    <input type="text" id="add-ticker-input" placeholder="Enter ticker (e.g. AAPL)"
-                        onkeydown="if(event.key==='Enter')addTicker()"
-                        style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:8px 12px;font-size:13px;width:160px;text-transform:uppercase">
-                    <button class="scan-btn" id="add-ticker-btn" onclick="addTicker()">Add &amp; Analyze</button>
-                    <span id="add-ticker-msg" style="font-size:13px;color:var(--muted)"></span>
-                </div>
-            </div>
-            <div class="panel">
-                <div class="panel-header">
-                    <span>Active Watchlist</span>
-                    <span class="status" id="watchlist-count">0 stocks</span>
-                </div>
-                <div class="panel-body">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>#</th><th>Ticker</th><th>Company</th><th>Sector</th>
-                                <th>Price</th><th>Composite</th><th>Lynch</th><th>Burry</th>
-                                <th>Category</th><th>PEG</th><th>FCF Yield</th><th>Reason</th>
-                            </tr>
-                        </thead>
-                        <tbody id="watchlist-body"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- Fundamentals Browser -->
-        <div class="tab-content" id="tab-fundamentals">
-            <div class="panel" style="margin-bottom:16px">
-                <div class="panel-header">
-                    <span>Fundamentals Browser</span>
-                    <span class="status" id="fundamentals-count">0 stocks</span>
-                </div>
-                <div style="padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                    <label style="font-size:12px;color:var(--muted)">Sector:
-                        <select id="fundamentals-sector" onchange="loadFundamentals()"
-                            style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:4px 8px;font-size:12px;margin-left:4px">
-                            <option value="">All Sectors</option>
-                        </select>
-                    </label>
-                    <label style="font-size:12px;color:var(--muted)">Sort by:
-                        <select id="fundamentals-sort" onchange="loadFundamentals()"
-                            style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:4px 8px;font-size:12px;margin-left:4px">
-                            <option value="composite_score">Composite Score</option>
-                            <option value="lynch_score">Lynch Score</option>
-                            <option value="burry_score">Burry Score</option>
-                            <option value="peg_ratio">PEG Ratio</option>
-                            <option value="earnings_growth">Earnings Growth</option>
-                            <option value="revenue_growth">Revenue Growth</option>
-                            <option value="debt_to_equity">Debt/Equity</option>
-                            <option value="fcf_yield">FCF Yield</option>
-                            <option value="ev_to_ebitda">EV/EBITDA</option>
-                            <option value="current_ratio">Current Ratio</option>
-                            <option value="short_interest">Short Interest</option>
-                            <option value="price_to_tangible_book">P/TBV</option>
-                            <option value="institutional_pct">Institutional %</option>
-                            <option value="market_cap">Market Cap</option>
-                        </select>
-                    </label>
-                </div>
-            </div>
-            <div class="panel">
-                <div class="panel-body" style="overflow-x:auto">
-                    <table style="min-width:1600px">
-                        <thead>
-                            <tr>
-                                <th>#</th><th>Ticker</th><th>Company</th><th>Sector</th><th>Industry</th>
-                                <th>Mkt Cap</th><th>Price</th>
-                                <th>Composite</th><th>Lynch</th><th>Burry</th><th>Category</th>
-                                <th>PEG</th><th>Earn Grth</th><th>Rev Grth</th><th>D/E</th>
-                                <th>Inst %</th><th>FCF Yld</th><th>P/TBV</th><th>Short Int</th>
-                                <th>EV/EBITDA</th><th>Curr Ratio</th><th>Scanned</th>
-                            </tr>
-                        </thead>
-                        <tbody id="fundamentals-body"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- Signals -->
-        <div class="tab-content" id="tab-signals">
-            <div class="panel">
-                <div class="panel-header">
-                    <span>Recent Signals</span>
-                    <span class="status" id="signals-count">0 signals</span>
-                </div>
-                <div class="panel-body">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Time</th><th>Ticker</th><th>Type</th><th>Trade</th>
-                                <th>Confidence</th><th>Traded</th><th>Reason Skipped</th>
-                            </tr>
-                        </thead>
-                        <tbody id="signals-body"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- Trades -->
-        <div class="tab-content" id="tab-trades">
-            <div class="panel">
-                <div class="panel-header">
-                    <span>All Arena Trades</span>
-                    <span class="status" id="trades-count">0 trades</span>
-                </div>
-                <div class="panel-body">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Date</th><th>Strategy</th><th>Ticker</th><th>Type</th>
-                                <th>Entry</th><th>Exit</th><th>Shares</th>
-                                <th>P&L</th><th>R</th><th>Exit Reason</th><th>Source</th><th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="trades-body"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- Suggestions -->
-        <div class="tab-content" id="tab-suggestions">
-            <div class="panel">
-                <div class="panel-header">
-                    <span>Submit a Suggestion</span>
-                </div>
-                <div class="suggest-form">
-                    <div class="form-row">
-                        <select id="suggest-category">
-                            <option value="feature">Feature</option>
-                            <option value="strategy">Strategy</option>
-                            <option value="bug">Bug Report</option>
-                            <option value="other">Other</option>
-                        </select>
-                        <input type="text" id="suggest-title" placeholder="Short title for your suggestion...">
-                    </div>
-                    <div class="form-row">
-                        <textarea id="suggest-desc" placeholder="Describe your idea in more detail (optional)..."></textarea>
-                    </div>
-                    <div class="form-row">
-                        <button onclick="submitSuggestion()">Submit</button>
-                        <span id="suggest-msg" style="font-size:13px;color:var(--muted);line-height:32px"></span>
-                    </div>
-                </div>
-            </div>
-            <div class="panel">
-                <div class="panel-header">
-                    <span>All Suggestions</span>
-                    <span class="status" id="suggestions-count">0 suggestions</span>
-                </div>
-                <div class="panel-body">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Date</th><th>Category</th><th>Title</th>
-                                <th>Description</th><th>Status</th><th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="suggestions-body"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        <!-- Arena -->
-        <div class="tab-content active" id="tab-arena">
-            <!-- Stats Row -->
-            <div class="grid" id="arena-stats"></div>
-
-            <!-- Strategy Leaderboard -->
-            <div class="panel">
-                <div class="panel-header"><span>Strategy Leaderboard</span></div>
-                <div class="panel-body">
-                    <table id="arena-leaderboard">
-                        <thead><tr>
-                            <th>Strategy</th><th>Version</th><th>Equity</th><th>Return</th>
-                            <th>Drawdown</th><th>Open</th><th>Closed</th><th>Win Rate</th>
-                            <th>Day Trades Left</th><th>Status</th><th>Action</th>
-                        </tr></thead>
-                        <tbody></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Strategy Selector -->
-            <div style="display:flex;gap:8px;margin-bottom:16px;" id="strategy-selector"></div>
-
-            <!-- Per-Strategy Detail -->
-            <div id="strategy-detail" style="display:none;">
-                <!-- Open Positions -->
-                <div class="panel">
-                    <div class="panel-header"><span id="detail-positions-header">Open Positions</span></div>
-                    <div class="panel-body">
-                        <table id="detail-positions">
-                            <thead><tr>
-                                <th>Ticker</th><th>Type</th><th>Shares</th><th>Entry</th><th>Current</th>
-                                <th>Value</th><th>Unrealized P&L</th><th>R</th><th>Stop</th><th>Target</th>
-                                <th>Trailing</th><th>Confidence</th><th>Time Held</th>
-                            </tr></thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                </div>
-                <!-- Trade Explanations -->
-                <div class="panel">
-                    <div class="panel-header"><span>Trade Explanations (Plain English)</span></div>
-                    <div class="panel-body" id="detail-explanations" style="padding:16px;"></div>
-                </div>
-                <!-- Closed Trades -->
-                <div class="panel">
-                    <div class="panel-header"><span id="detail-trades-header">Recent Trades</span></div>
-                    <div class="panel-body">
-                        <table id="detail-trades">
-                            <thead><tr>
-                                <th>Ticker</th><th>Type</th><th>Entry</th><th>Exit</th>
-                                <th>P&L</th><th>R</th><th>Exit Reason</th><th>Slippage</th>
-                                <th>Source</th><th>Overlap</th>
-                            </tr></thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
-                </div>
-                <!-- Audit Trail -->
-                <div class="panel">
-                    <div class="panel-header"><span>Audit Trail (last 10)</span></div>
-                    <div class="panel-body" id="detail-audit" style="padding:16px;font-size:12px;"></div>
-                </div>
-            </div>
-        </div>
-    </div>
+</div>
 
 <script>
-// Tab switching
-document.querySelectorAll('.tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
-    });
-});
+let currentTradeFilter = 'all';
+let benchmarkChart = null;
 
-function fmt(n, decimals = 2) { return n != null ? Number(n).toFixed(decimals) : '--'; }
-function fmtPct(n) { return n != null ? (n * 100).toFixed(1) + '%' : '--'; }
-function fmtMoney(n) { return n != null ? '$' + Number(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '--'; }
-function fmtDate(iso) {
-    if (!iso) return '--';
-    const d = new Date(iso);
-    const tz = 'America/New_York';
-    return d.toLocaleDateString('en-US', {month: 'short', day: 'numeric', timeZone: tz}) + ' ' +
-           d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', timeZone: tz});
-}
-function scoreColor(score) {
-    if (score >= 70) return 'var(--green)';
-    if (score >= 50) return 'var(--yellow)';
-    return 'var(--red)';
-}
-function scoreBar(score) {
-    const pct = Math.min(100, Math.max(0, score || 0));
-    return `<span class="score-bar"><span class="fill" style="width:${pct}%;background:${scoreColor(score)}"></span></span>${fmt(score, 1)}`;
-}
-function pnlClass(val) { return val > 0 ? 'positive' : val < 0 ? 'negative' : ''; }
-function badge(text, type) { return `<span class="badge badge-${type}">${text}</span>`; }
-
-async function fetchJSON(url) {
-    try {
-        const res = await fetch(url);
-        return await res.json();
-    } catch (e) {
-        console.error('Fetch error:', url, e);
-        return null;
-    }
+// ── Tab switching ───────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+  if (name === 'strategies') loadStrategies();
+  if (name === 'trades') loadTrades();
+  if (name === 'research') loadActiveTickers();
+  if (name === 'sentiment') loadTrending();
+  if (name === 'benchmarks') loadBenchmarks();
+  if (name === 'inject') loadInjections();
 }
 
-async function loadStats() {
-    const [stats, account] = await Promise.all([
-        fetchJSON('/api/trades/stats'),
-        fetchJSON('/api/account'),
-    ]);
-    if (account) {
-        const el = document.getElementById('stat-value');
-        el.textContent = fmtMoney(account.total_value);
-        el.className = 'value';
-
-        const pnl = document.getElementById('stat-pnl');
-        const totalPnl = account.total_pnl != null ? account.total_pnl : 0;
-        pnl.textContent = (totalPnl >= 0 ? '+' : '') + fmtMoney(totalPnl);
-        pnl.className = 'value ' + pnlClass(totalPnl);
-
-        const breakdown = document.getElementById('stat-pnl-breakdown');
-        const realized = account.realized_pnl != null ? account.realized_pnl : 0;
-        const unrealized = account.unrealized_pnl != null ? account.unrealized_pnl : 0;
-        breakdown.innerHTML =
-            '<span class="' + pnlClass(realized) + '">Realized: ' + (realized >= 0 ? '+' : '') + fmtMoney(realized) + '</span>' +
-            ' &nbsp;|&nbsp; ' +
-            '<span class="' + pnlClass(unrealized) + '">Open: ' + (unrealized >= 0 ? '+' : '') + fmtMoney(unrealized) + '</span>';
-    }
-    if (stats) {
-
-        const wr = document.getElementById('stat-winrate');
-        wr.textContent = stats.total_trades > 0 ? stats.win_rate.toFixed(1) + '%' : '--';
-        wr.className = 'value ' + (stats.win_rate >= 50 ? 'positive' : stats.total_trades > 0 ? 'negative' : '');
-
-        const r = document.getElementById('stat-r');
-        r.textContent = stats.total_trades > 0 ? fmt(stats.avg_r_multiple) + 'R' : '--';
-        r.className = 'value ' + pnlClass(stats.avg_r_multiple);
-
-        const pf = document.getElementById('stat-pf');
-        pf.textContent = stats.total_trades > 0 ? fmt(stats.profit_factor) : '--';
-
-        document.getElementById('stat-trades').textContent = stats.total_trades;
-    }
+// ── Health ───────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    document.getElementById('health-status').textContent = `v${d.version} | ${d.status}`;
+    document.getElementById('health-status').style.color = '#22c55e';
+  } catch { document.getElementById('health-status').textContent = 'Disconnected'; }
 }
 
-async function loadWatchlist() {
-    const data = await fetchJSON('/api/watchlist');
-    if (!data) return;
-    document.getElementById('watchlist-count').textContent = data.count + ' stocks';
-    const body = document.getElementById('watchlist-body');
-    if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="12" class="empty">No watchlist data. Run the scanner or add a ticker manually.</td></tr>';
-        return;
-    }
-    body.innerHTML = data.watchlist.map((s, i) => {
-        const isManual = s.notes && s.notes.startsWith('MANUAL');
-        const tagHtml = isManual ? '<span class="badge badge-swing" style="margin-right:4px">MANUAL</span>' : '';
-        return `<tr>
-        <td>${i + 1}</td>
-        <td><strong>${tagHtml}${s.ticker}</strong></td>
-        <td>${s.company_name || ''}</td>
-        <td>${s.sector || ''}</td>
-        <td>${fmtMoney(s.price)}</td>
-        <td>${scoreBar(s.composite_score)}</td>
-        <td>${scoreBar(s.lynch_score)}</td>
-        <td>${scoreBar(s.burry_score)}</td>
-        <td>${s.lynch_category || ''}</td>
-        <td>${fmt(s.peg_ratio)}</td>
-        <td>${s.fcf_yield != null ? fmtPct(s.fcf_yield) : '--'}</td>
-        <td style="white-space:normal;max-width:300px;font-size:11px;color:var(--muted)">${escHtml(s.notes || '')}</td>
-    </tr>`;
-    }).join('');
+// ── Strategies ──────────────────────────────
+async function loadStrategies() {
+  const [strats, accounts] = await Promise.all([
+    fetch('/api/strategies').then(r => r.json()),
+    fetch('/api/strategies/accounts').then(r => r.json()),
+  ]);
+  const container = document.getElementById('strategy-cards');
+  if (!accounts.length && strats.length) {
+    container.innerHTML = strats.map(s => `
+      <div class="card">
+        <h3>${s.name}</h3>
+        <div class="row"><span class="label">Class</span><span class="value">${s.class}</span></div>
+        <div class="row"><span class="label">Status</span><span class="value">No account yet</span></div>
+      </div>`).join('');
+    return;
+  }
+  container.innerHTML = accounts.map(a => {
+    const pnl = a.total_equity - a.starting_capital;
+    const cls = pnl >= 0 ? 'positive' : 'negative';
+    return `<div class="card">
+      <h3>${a.strategy_name}</h3>
+      <div class="row"><span class="label">Cash</span><span class="value">$${a.cash_balance.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Equity</span><span class="value">$${a.total_equity.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Open Value</span><span class="value">$${a.open_positions_value.toFixed(2)}</span></div>
+      <div class="row"><span class="label">P&L</span><span class="value ${cls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Drawdown</span><span class="value">${(a.drawdown_pct*100).toFixed(1)}%</span></div>
+      <div class="row"><span class="label">PDT</span><span class="value">${a.pdt_enabled ? 'Enabled' : 'Disabled'}</span></div>
+      <div class="row"><span class="label">Status</span><span class="value">${a.is_paused ? 'PAUSED' : 'Active'}</span></div>
+    </div>`;
+  }).join('');
+  // Populate filter dropdowns
+  const opts = strats.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  document.getElementById('trade-strategy-filter').innerHTML = '<option value="">All Strategies</option>' + opts;
+  document.getElementById('inject-strategy').innerHTML = '<option value="">All Strategies</option>' + opts;
 }
 
-async function loadFundamentals() {
-    const sector = document.getElementById('fundamentals-sector').value;
-    const sortBy = document.getElementById('fundamentals-sort').value;
-    let url = `/api/fundamentals?sort_by=${sortBy}&limit=500`;
-    if (sector) url += `&sector=${encodeURIComponent(sector)}`;
-
-    const data = await fetchJSON(url);
-    if (!data) return;
-    document.getElementById('fundamentals-count').textContent = data.count + ' stocks';
-
-    // Populate sector dropdown (preserve selection)
-    const sel = document.getElementById('fundamentals-sector');
-    const curVal = sel.value;
-    if (sel.options.length <= 1 && data.sectors) {
-        data.sectors.forEach(s => {
-            const opt = document.createElement('option');
-            opt.value = s; opt.text = s;
-            sel.appendChild(opt);
-        });
-        sel.value = curVal;
-    }
-
-    const body = document.getElementById('fundamentals-body');
-    if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="22" class="empty">No fundamental data yet. Click <strong>Run Scanner</strong> in the top bar to populate the watchlist, then refresh.</td></tr>';
-        return;
-    }
-
-    function metricCell(val, goodFn) {
-        if (val == null) return '<td style="color:var(--muted)">--</td>';
-        const color = goodFn ? (goodFn(val) ? 'var(--green)' : 'var(--text)') : 'var(--text)';
-        return `<td style="color:${color}">${typeof val === 'number' ? val.toFixed(2) : val}</td>`;
-    }
-    function pctCell(val, goodFn) {
-        if (val == null) return '<td style="color:var(--muted)">--</td>';
-        const color = goodFn ? (goodFn(val) ? 'var(--green)' : val < 0 ? 'var(--red)' : 'var(--text)') : 'var(--text)';
-        return `<td style="color:${color}">${(val * 100).toFixed(1)}%</td>`;
-    }
-    function capFmt(v) {
-        if (!v) return '--';
-        if (v >= 1e12) return '$' + (v/1e12).toFixed(1) + 'T';
-        if (v >= 1e9) return '$' + (v/1e9).toFixed(1) + 'B';
-        if (v >= 1e6) return '$' + (v/1e6).toFixed(0) + 'M';
-        return '$' + v.toLocaleString();
-    }
-
-    body.innerHTML = data.stocks.map((s, i) => `<tr>
-        <td>${i + 1}</td>
-        <td><strong>${s.ticker}</strong></td>
-        <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.company_name || ''}</td>
-        <td>${s.sector || ''}</td>
-        <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.industry || ''}</td>
-        <td>${capFmt(s.market_cap)}</td>
-        <td>${fmtMoney(s.price)}</td>
-        <td>${scoreBar(s.composite_score)}</td>
-        <td>${scoreBar(s.lynch_score)}</td>
-        <td>${scoreBar(s.burry_score)}</td>
-        <td>${s.lynch_category || ''}</td>
-        ${metricCell(s.peg_ratio, v => v > 0 && v <= 1.5)}
-        ${pctCell(s.earnings_growth, v => v >= 0.15)}
-        ${pctCell(s.revenue_growth, v => v >= 0.10)}
-        ${metricCell(s.debt_to_equity, v => v <= 1.0)}
-        ${pctCell(s.institutional_pct, v => v >= 0.20 && v <= 0.70)}
-        ${pctCell(s.fcf_yield, v => v >= 0.05)}
-        ${metricCell(s.price_to_tangible_book, v => v <= 2.0)}
-        ${pctCell(s.short_interest, v => v >= 0.05)}
-        ${metricCell(s.ev_to_ebitda, v => v <= 8.0)}
-        ${metricCell(s.current_ratio, v => v >= 1.5)}
-        <td style="font-size:11px;color:var(--muted)">${s.scan_date ? s.scan_date.split('T')[0] : '--'}</td>
-    </tr>`).join('');
-}
-
-async function addTicker() {
-    const input = document.getElementById('add-ticker-input');
-    const btn = document.getElementById('add-ticker-btn');
-    const msg = document.getElementById('add-ticker-msg');
-    const ticker = input.value.trim().toUpperCase();
-
-    if (!ticker) { msg.textContent = 'Enter a ticker symbol'; msg.style.color = 'var(--red)'; return; }
-
-    btn.disabled = true;
-    btn.textContent = 'Analyzing...';
-    msg.textContent = `Fetching data for ${ticker}...`;
-    msg.style.color = 'var(--yellow)';
-
-    try {
-        const res = await fetch('/api/watchlist/add', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ticker}),
-        });
-        const data = await res.json();
-        if (data.error) {
-            msg.textContent = data.error;
-            msg.style.color = 'var(--red)';
-        } else {
-            msg.textContent = `${ticker} added! Composite: ${data.composite_score.toFixed(1)} (Lynch: ${data.lynch_score.toFixed(1)}, Burry: ${data.burry_score.toFixed(1)})`;
-            msg.style.color = 'var(--green)';
-            input.value = '';
-            loadWatchlist();
-        }
-    } catch (e) {
-        msg.textContent = 'Error adding ticker';
-        msg.style.color = 'var(--red)';
-    }
-    btn.disabled = false;
-    btn.textContent = 'Add & Analyze';
-    setTimeout(() => { msg.textContent = ''; }, 15000);
-}
-
-async function loadSignals() {
-    const data = await fetchJSON('/api/signals?limit=100');
-    if (!data) return;
-    document.getElementById('signals-count').textContent = data.count + ' signals';
-    const body = document.getElementById('signals-body');
-    if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="7" class="empty">No signals yet.</td></tr>';
-        return;
-    }
-    body.innerHTML = data.signals.map(s => `<tr>
-        <td>${fmtDate(s.timestamp)}</td>
-        <td><strong>${s.ticker}</strong></td>
-        <td>${badge(s.signal_type, s.signal_type === 'BUY' ? 'buy' : 'sell')}</td>
-        <td>${badge(s.trade_type, s.trade_type === 'DAY' ? 'day' : 'swing')}</td>
-        <td>${fmt(s.confidence, 1)}</td>
-        <td>${s.was_traded ? 'Yes' : 'No'}</td>
-        <td style="color:var(--muted)">${s.reason_skipped || ''}</td>
-    </tr>`).join('');
+// ── Trades ──────────────────────────────────
+function setTradeFilter(filter, el) {
+  currentTradeFilter = filter;
+  document.querySelectorAll('#panel-trades .sub-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  loadTrades();
 }
 
 async function loadTrades() {
-    const data = await fetchJSON('/api/trades?limit=200');
-    if (!data) return;
-    document.getElementById('trades-count').textContent = data.count + ' trades';
-    const body = document.getElementById('trades-body');
-    if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="12" class="empty">No trades yet. Arena strategies will execute trades during market hours.</td></tr>';
-        return;
-    }
-    body.innerHTML = data.trades.map(t => {
-        const pnl = t.pnl_dollars;
-        const pnlStr = pnl != null ? `${pnl >= 0 ? '+' : ''}${fmtMoney(pnl)}` : '—';
-        const rStr = t.r_multiple != null ? `${fmt(t.r_multiple)}R` : '—';
-        return `<tr>
-        <td>${fmtDate(t.created_at)}</td>
-        <td><strong style="color:var(--blue);">${t.strategy_name || ''}</strong></td>
-        <td><strong>${t.ticker}</strong></td>
-        <td>${badge(t.trade_type, t.trade_type === 'DAY' ? 'day' : 'swing')}</td>
-        <td>${fmtMoney(t.execution_price)}</td>
-        <td>${t.exit_price ? fmtMoney(t.exit_price) : '—'}</td>
-        <td>${t.shares}</td>
-        <td class="${pnlClass(pnl)}">${pnlStr}</td>
-        <td class="${pnlClass(t.r_multiple)}">${rStr}</td>
-        <td>${t.exit_reason || '—'}</td>
-        <td style="font-size:11px;color:var(--muted)">${t.price_source || '—'}</td>
-        <td>${t.status === 'OPEN' ? badge('OPEN', 'day') : badge('CLOSED', 'swing')}</td>
+  const strat = document.getElementById('trade-strategy-filter').value;
+  let url, trades;
+  if (currentTradeFilter === 'wins') { url = `/api/trades/wins${strat ? '?strategy=' + strat : ''}`; }
+  else if (currentTradeFilter === 'losses') { url = `/api/trades/losses${strat ? '?strategy=' + strat : ''}`; }
+  else { url = `/api/trades?${strat ? 'strategy=' + strat + '&' : ''}${currentTradeFilter !== 'all' ? 'status=' + currentTradeFilter : ''}`; }
+  trades = await fetch(url).then(r => r.json());
+  // Stats
+  const statsUrl = `/api/trades/stats${strat ? '?strategy=' + strat : ''}`;
+  const stats = await fetch(statsUrl).then(r => r.json());
+  document.getElementById('trade-stats').innerHTML = [
+    ['Total', stats.total_trades || 0],
+    ['Wins', stats.wins || 0],
+    ['Losses', stats.losses || 0],
+    ['Win Rate', stats.win_rate ? (stats.win_rate * 100).toFixed(1) + '%' : '—'],
+    ['Total P&L', stats.total_pnl ? '$' + stats.total_pnl.toFixed(2) : '—'],
+    ['Avg R', stats.avg_r_multiple ? stats.avg_r_multiple.toFixed(2) + 'R' : '—'],
+    ['Profit Factor', stats.profit_factor ? stats.profit_factor.toFixed(2) : '—'],
+  ].map(([l, v]) => `<div class="stat"><div class="num">${v}</div><div class="lbl">${l}</div></div>`).join('');
+  // Table
+  document.getElementById('trades-body').innerHTML = trades.length ? trades.map(t => {
+    const pnlCls = (t.pnl_dollars || 0) > 0 ? 'positive' : (t.pnl_dollars || 0) < 0 ? 'negative' : '';
+    const statusCls = t.status === 'OPEN' ? 'open' : t.pnl_dollars > 0 ? 'win' : 'loss';
+    return `<tr>
+      <td><strong>${t.symbol}</strong></td><td>${t.strategy_name}</td><td>${t.direction}</td><td>${t.trade_type}</td>
+      <td>$${t.entry_price?.toFixed(2) || '—'}</td><td>${t.exit_price ? '$' + t.exit_price.toFixed(2) : '—'}</td>
+      <td>${t.shares}</td><td class="${pnlCls}">${t.pnl_dollars ? '$' + t.pnl_dollars.toFixed(2) : '—'}</td>
+      <td>${t.r_multiple ? t.r_multiple.toFixed(2) + 'R' : '—'}</td>
+      <td><span class="pill ${statusCls}">${t.status}</span></td><td>${t.exit_reason || '—'}</td>
     </tr>`;
-    }).join('');
+  }).join('') : '<tr><td colspan="11" class="empty">No trades yet</td></tr>';
 }
 
-async function loadEquityCurve() {
-    const data = await fetchJSON('/api/equity-curve');
-    const emptyEl = document.getElementById('equity-empty');
-    if (!data || (data.count === 0 && data.strategy_list.length === 0)) { emptyEl.style.display = ''; return; }
-    emptyEl.style.display = 'none';
-
-    const strategies = data.strategies;
-    const strategyNames = data.strategy_list;
-    const COLORS = ['#3b82f6', '#22c55e', '#ef4444', '#eab308', '#a855f7', '#ec4899', '#06b6d4', '#f97316'];
-
-    // Parse dates as timestamps for time-based x-axis
-    function parseDate(dateStr) {
-        const s = typeof dateStr === 'string' ? dateStr.split('T')[0] : String(dateStr).split('T')[0];
-        return new Date(s + 'T12:00:00');
-    }
-
-    // Collect time range and global value range
-    let tMin = Infinity, tMax = -Infinity;
-    let globalMin = Infinity, globalMax = -Infinity;
-    for (const name of strategyNames) {
-        for (const snap of strategies[name]) {
-            const t = parseDate(snap.date).getTime();
-            tMin = Math.min(tMin, t);
-            tMax = Math.max(tMax, t);
-            globalMin = Math.min(globalMin, snap.total_value);
-            globalMax = Math.max(globalMax, snap.total_value);
-        }
-    }
-    // Handle single data point or flat values
-    if (tMin === tMax) { tMax = tMin + 86400000; }
-    const yPad = (globalMax - globalMin) * 0.08 || 50;
-    globalMin -= yPad;
-    globalMax += yPad;
-
-    // Setup canvas with devicePixelRatio
-    const container = document.getElementById('equity-chart-container');
-    const canvas = document.getElementById('equity-canvas');
-    const dpr = window.devicePixelRatio || 1;
-    const rect = container.getBoundingClientRect();
-    if (rect.width === 0) return;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
-    const ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-    const W = rect.width;
-    const H = rect.height;
-
-    const margin = {top: 10, right: 15, bottom: 35, left: 65};
-    const plotW = W - margin.left - margin.right;
-    const plotH = H - margin.top - margin.bottom;
-
-    function xPos(timestamp) {
-        return margin.left + ((timestamp - tMin) / (tMax - tMin)) * plotW;
-    }
-    function yPos(val) {
-        return margin.top + plotH - ((val - globalMin) / (globalMax - globalMin)) * plotH;
-    }
-
-    // Clear canvas
-    ctx.clearRect(0, 0, W, H);
-
-    // Draw grid lines + Y-axis labels
-    ctx.strokeStyle = '#2a2d3a';
-    ctx.fillStyle = '#8b8fa3';
-    ctx.font = '11px -apple-system, BlinkMacSystemFont, monospace';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    for (let i = 0; i <= 4; i++) {
-        const val = globalMin + (globalMax - globalMin) * (i / 4);
-        const y = yPos(val);
-        ctx.beginPath();
-        ctx.moveTo(margin.left, y);
-        ctx.lineTo(W - margin.right, y);
-        ctx.stroke();
-        ctx.fillText('$' + val.toFixed(0), margin.left - 8, y);
-    }
-
-    // Draw X-axis date labels (time-based spacing)
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    const totalDays = (tMax - tMin) / 86400000;
-    const maxLabels = Math.floor(plotW / 70);
-    const dayStep = Math.max(1, Math.ceil(totalDays / maxLabels));
-    for (let d = new Date(tMin); d.getTime() <= tMax; d.setDate(d.getDate() + dayStep)) {
-        const t = d.getTime();
-        const x = xPos(t);
-        const label = d.toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
-        ctx.strokeStyle = '#2a2d3a';
-        ctx.beginPath();
-        ctx.moveTo(x, margin.top + plotH);
-        ctx.lineTo(x, margin.top + plotH + 4);
-        ctx.stroke();
-        ctx.fillStyle = '#8b8fa3';
-        ctx.fillText(label, x, margin.top + plotH + 8);
-    }
-
-    // Draw axis lines
-    ctx.strokeStyle = '#3a3d4a';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(margin.left, margin.top);
-    ctx.lineTo(margin.left, margin.top + plotH);
-    ctx.lineTo(W - margin.right, margin.top + plotH);
-    ctx.stroke();
-
-    // Draw each strategy line
-    strategyNames.forEach((name, si) => {
-        const color = COLORS[si % COLORS.length];
-        const snaps = strategies[name];
-        if (snaps.length === 0) return;
-
-        ctx.beginPath();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
-
-        snaps.forEach((snap, i) => {
-            const t = parseDate(snap.date).getTime();
-            const x = xPos(t);
-            const y = yPos(snap.total_value);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        });
-        ctx.stroke();
-
-        // Draw dot at the latest point (current position)
-        const lastSnap = snaps[snaps.length - 1];
-        const lastT = parseDate(lastSnap.date).getTime();
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(xPos(lastT), yPos(lastSnap.total_value), 3, 0, Math.PI * 2);
-        ctx.fill();
-    });
-
-    // Build legend
-    const legendEl = document.getElementById('equity-legend');
-    legendEl.innerHTML = strategyNames.map((name, i) => {
-        const color = COLORS[i % COLORS.length];
-        return '<span class="legend-item"><span class="legend-dot" style="background:' + color + '"></span>' + name + '</span>';
-    }).join('');
+// ── Research ────────────────────────────────
+async function doResearch() {
+  const sym = document.getElementById('research-input').value.trim().toUpperCase();
+  if (!sym) return;
+  const r = await fetch(`/api/research/ticker/${sym}`).then(r => r.json());
+  const f = r.fundamentals || {};
+  document.getElementById('research-result').innerHTML = `
+    <div class="report">
+      <h2>${r.symbol} — ${r.company_name || 'Unknown'}</h2>
+      <div class="report-grid">
+        <div class="card">
+          <h3>Overview</h3>
+          <div class="row"><span class="label">Sector</span><span class="value">${r.sector || '—'}</span></div>
+          <div class="row"><span class="label">Price</span><span class="value">${r.price ? '$' + r.price.toFixed(2) : '—'}</span></div>
+          <div class="row"><span class="label">Market Cap</span><span class="value">${r.market_cap ? '$' + (r.market_cap/1e9).toFixed(1) + 'B' : '—'}</span></div>
+          <div class="row"><span class="label">Active</span><span class="value">${r.is_active ? 'Yes' : 'No'}</span></div>
+          <div class="row"><span class="label">Strategies</span><span class="value">${r.qualifying_strategies?.join(', ') || 'None'}</span></div>
+        </div>
+        <div class="card">
+          <h3>Scores</h3>
+          <div class="row"><span class="label">Lynch</span><span class="value">${r.lynch_score?.toFixed(1) || '—'} (${r.lynch_category || '—'})</span></div>
+          <div class="row"><span class="label">Burry</span><span class="value">${r.burry_score?.toFixed(1) || '—'}</span></div>
+          <div class="row"><span class="label">Composite</span><span class="value">${r.composite_score?.toFixed(1) || '—'}</span></div>
+        </div>
+        <div class="card">
+          <h3>Fundamentals</h3>
+          ${Object.entries(f).map(([k,v]) => `<div class="row"><span class="label">${k}</span><span class="value">${v !== null ? (typeof v === 'number' ? v.toFixed(3) : v) : '—'}</span></div>`).join('')}
+        </div>
+        <div class="card">
+          <h3>Sentiment</h3>
+          <div class="row"><span class="label">Score</span><span class="value">${r.sentiment?.composite_score?.toFixed(3) || '—'}</span></div>
+          <div class="row"><span class="label">Mentions</span><span class="value">${r.sentiment?.total_mentions || 0}</span></div>
+          <div class="row"><span class="label">Trending</span><span class="value">${r.sentiment?.is_trending ? 'Yes' : 'No'}</span></div>
+          <div class="row"><span class="label">Action</span><span class="value">${r.sentiment?.action || '—'}</span></div>
+        </div>
+        <div class="card">
+          <h3>Trade History</h3>
+          <div class="row"><span class="label">Total Trades</span><span class="value">${r.trade_count}</span></div>
+          <div class="row"><span class="label">Open</span><span class="value">${r.open_trades}</span></div>
+          <div class="row"><span class="label">Closed</span><span class="value">${r.closed_trades}</span></div>
+          <div class="row"><span class="label">Total P&L</span><span class="value ${r.total_pnl >= 0 ? 'positive' : 'negative'}">$${r.total_pnl?.toFixed(2) || '0.00'}</span></div>
+        </div>
+      </div>
+    </div>`;
 }
 
-async function loadSuggestions() {
-    const data = await fetchJSON('/api/suggestions');
-    if (!data) return;
-    document.getElementById('suggestions-count').textContent = data.count + ' suggestions';
-    const body = document.getElementById('suggestions-body');
-    if (data.count === 0) {
-        body.innerHTML = '<tr><td colspan="6" class="empty">No suggestions yet. Be the first!</td></tr>';
-        return;
-    }
-    body.innerHTML = data.suggestions.map(s => `<tr>
-        <td>${fmtDate(s.created_at)}</td>
-        <td>${badge(s.category, s.category === 'bug' ? 'sell' : s.category === 'feature' ? 'buy' : s.category === 'strategy' ? 'swing' : 'day')}</td>
-        <td><strong>${escHtml(s.title)}</strong></td>
-        <td style="white-space:normal;max-width:400px;color:var(--muted)">${escHtml(s.description || '')}</td>
-        <td><span class="suggest-status status-${s.status}">${s.status}</span></td>
-        <td><button class="delete-btn" onclick="deleteSuggestion(${s.id})" title="Delete">\u2715</button></td>
-    </tr>`).join('');
+async function loadActiveTickers() {
+  const tickers = await fetch('/api/research/active').then(r => r.json());
+  document.getElementById('active-tickers').innerHTML = tickers.length ? tickers.map(t =>
+    `<tr><td><strong>${t.symbol}</strong></td><td>${t.company_name || '—'}</td><td>${t.sector || '—'}</td>
+     <td>${t.market_cap ? '$' + (t.market_cap/1e9).toFixed(1) + 'B' : '—'}</td>
+     <td>${t.last_price ? '$' + t.last_price.toFixed(2) : '—'}</td></tr>`
+  ).join('') : '<tr><td colspan="5" class="empty">No active tickers. Run the scanner first.</td></tr>';
 }
 
-function escHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+// ── Sentiment ───────────────────────────────
+async function loadTrending() {
+  const trending = await fetch('/api/sentiment/trending').then(r => r.json());
+  document.getElementById('trending-cards').innerHTML = trending.length ? trending.map(t => `
+    <div class="card">
+      <h3>${t.symbol}</h3>
+      <div class="row"><span class="label">Source</span><span class="value">${t.source}</span></div>
+      <div class="row"><span class="label">Score</span><span class="value ${t.score > 0 ? 'positive' : t.score < 0 ? 'negative' : ''}">${t.score.toFixed(3)}</span></div>
+      <div class="row"><span class="label">Mentions</span><span class="value">${t.mention_count}</span></div>
+    </div>`).join('') : '<div class="empty">No trending tickers detected</div>';
 }
 
-async function submitSuggestion() {
-    const title = document.getElementById('suggest-title').value.trim();
-    const desc = document.getElementById('suggest-desc').value.trim();
-    const category = document.getElementById('suggest-category').value;
-    const msg = document.getElementById('suggest-msg');
-
-    if (!title) { msg.textContent = 'Please enter a title.'; msg.style.color = 'var(--red)'; return; }
-
-    const res = await fetch('/api/suggestions', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({title, description: desc, category}),
-    });
-    if (res.ok) {
-        msg.textContent = 'Submitted!'; msg.style.color = 'var(--green)';
-        document.getElementById('suggest-title').value = '';
-        document.getElementById('suggest-desc').value = '';
-        loadSuggestions();
-        setTimeout(() => msg.textContent = '', 3000);
-    } else {
-        msg.textContent = 'Error submitting.'; msg.style.color = 'var(--red)';
-    }
+async function doSentiment() {
+  const sym = document.getElementById('sentiment-input').value.trim().toUpperCase();
+  if (!sym) return;
+  const r = await fetch(`/api/sentiment/ticker/${sym}`).then(r => r.json());
+  document.getElementById('sentiment-result').innerHTML = `
+    <div class="card" style="margin-top:16px">
+      <h3>${r.symbol} Sentiment</h3>
+      <div class="row"><span class="label">Composite</span><span class="value ${r.composite_score > 0 ? 'positive' : r.composite_score < 0 ? 'negative' : ''}">${r.composite_score.toFixed(3)}</span></div>
+      <div class="row"><span class="label">Action</span><span class="value">${r.action}</span></div>
+      <div class="row"><span class="label">Mentions</span><span class="value">${r.total_mentions}</span></div>
+      <div class="row"><span class="label">Trending</span><span class="value">${r.is_trending ? 'Yes' : 'No'}</span></div>
+      ${Object.entries(r.source_scores || {}).map(([s,v]) => `<div class="row"><span class="label">${s}</span><span class="value">${v.toFixed(3)}</span></div>`).join('')}
+    </div>`;
 }
 
-async function deleteSuggestion(id) {
-    if (!confirm('Delete this suggestion?')) return;
-    await fetch('/api/suggestions/' + id, {method: 'DELETE'});
-    loadSuggestions();
+// ── Benchmarks ──────────────────────────────
+async function loadBenchmarks() {
+  const days = document.getElementById('benchmark-days').value;
+  const data = await fetch(`/api/benchmarks/comparison?days=${days}`).then(r => r.json());
+  const ctx = document.getElementById('benchmark-chart').getContext('2d');
+  if (benchmarkChart) benchmarkChart.destroy();
+  const colors = { SPY: '#3b82f6', QQQ: '#22c55e', IWM: '#eab308', DIA: '#a855f7' };
+  const datasets = Object.entries(data.indices || {}).map(([sym, vals]) => ({
+    label: sym, data: vals, borderColor: colors[sym] || '#888', borderWidth: 2, pointRadius: 0, fill: false, tension: 0.3,
+  }));
+  if (!datasets.length) { document.getElementById('benchmark-chart').parentElement.innerHTML = '<div class="empty">No benchmark data. Click "Backfill 1Y" to load historical data.</div>'; return; }
+  benchmarkChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: data.dates || [], datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { y: { ticks: { callback: v => v + '%', color: '#888' }, grid: { color: '#2a2d3a' } }, x: { ticks: { maxTicksLimit: 10, color: '#888' }, grid: { color: '#2a2d3a' } } },
+      plugins: { legend: { labels: { color: '#e0e0e0' } } },
+    },
+  });
 }
 
-let _scanPollTimer = null;
-async function runScanner() {
-    const btn = document.getElementById('scan-btn');
-    const status = document.getElementById('scan-status');
-    btn.disabled = true;
-    btn.textContent = 'Running...';
-    status.textContent = 'Scanner starting...';
-    status.style.color = 'var(--yellow)';
-
-    const res = await fetch('/api/scanner/run', {method: 'POST'});
-    const data = await res.json();
-    if (data.status === 'already_running') {
-        status.textContent = 'Already running...';
-    }
-    // Poll for completion
-    if (_scanPollTimer) clearInterval(_scanPollTimer);
-    _scanPollTimer = setInterval(async () => {
-        const st = await fetchJSON('/api/scanner/status');
-        if (!st) return;
-        if (st.running) {
-            status.textContent = st.last_result || 'Scanner running...';
-            status.style.color = 'var(--yellow)';
-        } else {
-            clearInterval(_scanPollTimer);
-            _scanPollTimer = null;
-            btn.disabled = false;
-            btn.textContent = 'Run Scanner';
-            if (st.last_error) {
-                status.textContent = 'Scan failed: ' + st.last_error;
-                status.style.color = 'var(--red)';
-            } else {
-                status.textContent = st.last_result || 'Scan complete';
-                status.style.color = 'var(--green)';
-                loadWatchlist();
-            }
-            setTimeout(() => { status.textContent = ''; }, 15000);
-        }
-    }, 3000);
+// ── Inject ───────────────────────────────────
+async function doInject() {
+  const body = {
+    symbol: document.getElementById('inject-symbol').value.trim().toUpperCase(),
+    target_strategy: document.getElementById('inject-strategy').value || null,
+    notes: document.getElementById('inject-notes').value,
+    expires_hours: parseInt(document.getElementById('inject-hours').value) || null,
+  };
+  if (!body.symbol) return;
+  await fetch('/api/inject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  document.getElementById('inject-symbol').value = '';
+  document.getElementById('inject-notes').value = '';
+  document.getElementById('inject-hours').value = '';
+  loadInjections();
 }
 
-async function loadAll() {
-    document.getElementById('last-updated').textContent = 'Updating...';
-    await Promise.all([loadStats(), loadArena(), loadWatchlist(), loadFundamentals(), loadSignals(), loadTrades(), loadEquityCurve(), loadSuggestions()]);
-    document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'}) + ' ET';
+async function loadInjections() {
+  const injs = await fetch('/api/inject').then(r => r.json());
+  document.getElementById('injections-body').innerHTML = injs.length ? injs.map(i => `
+    <tr>
+      <td><strong>${i.symbol}</strong></td><td>${i.target_strategy || 'All'}</td><td>${i.notes || '—'}</td>
+      <td>${i.expires_at ? new Date(i.expires_at).toLocaleString() : 'Never'} ${i.is_expired ? '(expired)' : ''}</td>
+      <td>${i.created_at ? new Date(i.created_at).toLocaleString() : '—'}</td>
+      <td><button onclick="removeInjection(${i.id})" style="background:var(--red);padding:4px 8px;font-size:11px">Remove</button></td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">No injections</td></tr>';
 }
 
-// Table sorting — click any column header to sort
-document.addEventListener('click', function(e) {
-    const th = e.target.closest('th');
-    if (!th) return;
-    const table = th.closest('table');
-    if (!table) return;
-    const tbody = table.querySelector('tbody');
-    if (!tbody || !tbody.rows.length) return;
-
-    const idx = Array.from(th.parentNode.children).indexOf(th);
-    const rows = Array.from(tbody.rows);
-    const currentDir = th.dataset.sortDir || 'none';
-    const newDir = currentDir === 'asc' ? 'desc' : 'asc';
-
-    // Reset all headers in this table
-    th.parentNode.querySelectorAll('th').forEach(h => {
-        h.dataset.sortDir = 'none';
-        const arrow = h.querySelector('.sort-arrow');
-        if (arrow) arrow.remove();
-    });
-
-    th.dataset.sortDir = newDir;
-    th.insertAdjacentHTML('beforeend', `<span class="sort-arrow">${newDir === 'asc' ? '\u25B2' : '\u25BC'}</span>`);
-
-    rows.sort((a, b) => {
-        let aVal = a.cells[idx]?.textContent.trim() || '';
-        let bVal = b.cells[idx]?.textContent.trim() || '';
-        // Strip $ and % and commas for numeric sort
-        const aNum = parseFloat(aVal.replace(/[$,%+R]/g, '').replace(/,/g, ''));
-        const bNum = parseFloat(bVal.replace(/[$,%+R]/g, '').replace(/,/g, ''));
-        if (!isNaN(aNum) && !isNaN(bNum)) {
-            return newDir === 'asc' ? aNum - bNum : bNum - aNum;
-        }
-        return newDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-    });
-
-    rows.forEach(row => tbody.appendChild(row));
-});
-
-// ── Arena Tab ─────────────────────────────────────────────
-
-let _selectedStrategy = null;
-
-async function loadArena() {
-    try {
-        const [status, diag] = await Promise.all([
-            (await fetch('/api/arena')).json(),
-            (await fetch('/api/diagnostics')).json().catch(() => null),
-        ]);
-
-        // Stats cards with diagnostics
-        const statsEl = document.getElementById('arena-stats');
-        const ds = status.data_source || 'unknown';
-        const lastCheck = status.last_signal_check ? new Date(status.last_signal_check).toLocaleTimeString('en-US', {timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'}) : 'never';
-        const lastResult = status.last_signal_result || '';
-
-        // Data source health dots
-        let sourceDots = '';
-        if (diag && diag.data_sources) {
-            const dot = (name, ok) => `<span style="color:${ok ? '#4ade80' : '#f87171'}" title="${name}: ${ok ? 'connected' : 'offline'}">${ok ? '\u25CF' : '\u25CB'} ${name}</span>`;
-            sourceDots = `<div class="stat-card"><div class="label">Data Sources</div><div class="value" style="font-size:12px;">${dot('Alpaca', diag.data_sources.alpaca)} ${dot('yfinance', diag.data_sources.yfinance)}</div></div>`;
-        }
-
-        const dbType = diag ? (diag.database === 'postgresql' ? 'PostgreSQL' : 'SQLite') : '';
-
-        statsEl.innerHTML = `
-            <div class="stat-card"><div class="label">Strategies</div><div class="value">${status.enabled || 0} / ${status.strategies || 0}</div></div>
-            <div class="stat-card"><div class="label">Open Positions</div><div class="value">${status.total_open_positions || 0}</div></div>
-            <div class="stat-card"><div class="label">Closed Trades</div><div class="value">${status.total_closed_trades || 0}</div></div>
-            <div class="stat-card"><div class="label">Last Signal Check</div><div class="value" style="font-size:14px;">${lastCheck}</div>${lastResult ? `<div class="label" style="font-size:11px;margin-top:2px;">${lastResult}</div>` : ''}</div>
-            ${sourceDots}
-            <div class="stat-card"><div class="label">Watchlist</div><div class="value">${diag ? diag.watchlist_count : '?'}</div></div>
-        `;
-
-        // Leaderboard
-        const lb = status.leaderboard || [];
-        const lbBody = document.querySelector('#arena-leaderboard tbody');
-        lbBody.innerHTML = lb.map(s => {
-            const retClass = s.total_return_pct >= 0 ? 'positive' : 'negative';
-            const statusText = s.is_paused ? 'Paused' : (s.enabled ? 'Active' : 'Off');
-            const statusColor = s.is_paused ? 'var(--yellow)' : (s.enabled ? 'var(--green)' : 'var(--muted)');
-            const actionBtn = s.is_paused || !s.enabled
-                ? `<button onclick="arenaResume('${s.strategy_name}')" style="background:var(--green);color:#fff;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;">Resume</button>`
-                : `<button onclick="arenaPause('${s.strategy_name}')" style="background:var(--yellow);color:#000;border:none;border-radius:4px;padding:3px 10px;cursor:pointer;font-size:11px;">Pause</button>`;
-            return `<tr style="cursor:pointer;" onclick="selectStrategy('${s.strategy_name}')">
-                <td><strong style="color:var(--blue);">${s.strategy_name}</strong></td>
-                <td>${s.version || ''}</td>
-                <td>$${(s.total_equity || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
-                <td class="${retClass}">${(s.total_return_pct || 0).toFixed(2)}%</td>
-                <td>${(s.drawdown_pct || 0).toFixed(2)}%</td>
-                <td>${s.open_positions || 0}</td>
-                <td>${s.closed_trades || 0}</td>
-                <td>${(s.win_rate || 0).toFixed(1)}%</td>
-                <td>${s.day_trades_remaining ?? '—'}</td>
-                <td style="color:${statusColor}">${statusText}</td>
-                <td onclick="event.stopPropagation();">${actionBtn}</td>
-            </tr>`;
-        }).join('') || '<tr><td colspan="11" style="text-align:center;padding:20px;color:var(--muted);">Arena not initialized — waiting for first scheduler cycle</td></tr>';
-
-        // Strategy selector buttons
-        const selector = document.getElementById('strategy-selector');
-        selector.innerHTML = lb.map(s =>
-            `<button onclick="selectStrategy('${s.strategy_name}')" style="background:${_selectedStrategy===s.strategy_name?'var(--blue)':'var(--surface)'};color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px;font-weight:${_selectedStrategy===s.strategy_name?'700':'400'};">${s.strategy_name} (${(s.total_return_pct||0).toFixed(1)}%)</button>`
-        ).join('');
-
-        // Load strategy detail if selected
-        if (_selectedStrategy) loadStrategyDetail(_selectedStrategy);
-
-    } catch(e) { console.error('Arena load error:', e); }
+async function removeInjection(id) {
+  await fetch(`/api/inject/${id}`, { method: 'DELETE' });
+  loadInjections();
 }
 
-async function selectStrategy(name) {
-    _selectedStrategy = name;
-    document.getElementById('strategy-detail').style.display = 'block';
-    loadArena();
-}
-
-async function loadStrategyDetail(name) {
-    try {
-        const [detailRes, tradesRes] = await Promise.all([
-            fetch(`/api/arena/strategy/${name}`),
-            fetch(`/api/arena/trades?strategy=${name}&limit=30`),
-        ]);
-        const detail = await detailRes.json();
-        const tradesData = await tradesRes.json();
-
-        // Open positions
-        const positions = detail.positions || {};
-        const posEntries = Object.values(positions);
-        document.getElementById('detail-positions-header').textContent =
-            `${name} — Open Positions (${posEntries.length})`;
-        const posBody = document.querySelector('#detail-positions tbody');
-        posBody.innerHTML = posEntries.map(p => {
-            const pnlClass = (p.unrealized_pnl||0) >= 0 ? 'positive' : 'negative';
-            const held = p.entry_time ? timeSince(new Date(p.entry_time)) : '—';
-            return `<tr>
-                <td><strong>${p.ticker}</strong></td>
-                <td>${p.trade_type}</td>
-                <td>${p.shares||0}</td>
-                <td>$${(p.entry_price||0).toFixed(2)}</td>
-                <td>$${(p.last_price||0).toFixed(2)}</td>
-                <td>$${(p.market_value||0).toFixed(2)}</td>
-                <td class="${pnlClass}">$${(p.unrealized_pnl||0).toFixed(2)} (${(p.unrealized_pnl_pct||0).toFixed(1)}%)</td>
-                <td>${(p.r_multiple||0).toFixed(2)}R</td>
-                <td>$${(p.stop_loss||0).toFixed(2)}</td>
-                <td>$${(p.target||0).toFixed(2)}</td>
-                <td>${p.trailing_stop ? '$'+p.trailing_stop.toFixed(2) : '—'}</td>
-                <td>${(p.confidence||0).toFixed(0)}%</td>
-                <td>${held}</td>
-            </tr>`;
-        }).join('') || '<tr><td colspan="13" style="text-align:center;padding:16px;color:var(--muted);">No open positions</td></tr>';
-
-        // Trade explanations (for open positions)
-        const explEl = document.getElementById('detail-explanations');
-        if (posEntries.length > 0) {
-            explEl.innerHTML = posEntries.map(p =>
-                `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:8px;font-family:monospace;font-size:12px;white-space:pre-line;line-height:1.6;">${p.explanation || 'No explanation available'}</div>`
-            ).join('');
-        } else {
-            explEl.innerHTML = '<div style="color:var(--muted);padding:8px;">No active trades to explain</div>';
-        }
-
-        // Closed trades
-        const trades = (tradesData.trades || []).filter(t => t.status === 'CLOSED');
-        document.getElementById('detail-trades-header').textContent =
-            `${name} — Closed Trades (${trades.length})`;
-        const tBody = document.querySelector('#detail-trades tbody');
-        tBody.innerHTML = trades.map(t => {
-            const pnl = t.pnl_dollars;
-            const pnlClass = pnl == null ? '' : (pnl >= 0 ? 'positive' : 'negative');
-            return `<tr>
-                <td><strong>${t.ticker}</strong></td>
-                <td>${t.trade_type||''}</td>
-                <td>$${(t.execution_price||0).toFixed(2)}</td>
-                <td>${t.exit_price ? '$'+t.exit_price.toFixed(2) : '—'}</td>
-                <td class="${pnlClass}">${pnl!=null ? '$'+pnl.toFixed(2) : '—'}</td>
-                <td>${t.r_multiple!=null ? t.r_multiple.toFixed(2)+'R' : '—'}</td>
-                <td>${t.exit_reason||'—'}</td>
-                <td>${t.slippage ? '$'+t.slippage.toFixed(4) : '—'}</td>
-                <td>${t.price_source||'—'}</td>
-                <td>${t.signal_overlap||0} sig / ${t.position_overlap||0} pos</td>
-            </tr>`;
-        }).join('') || '<tr><td colspan="10" style="text-align:center;padding:16px;color:var(--muted);">No closed trades yet</td></tr>';
-
-        // Also show OPEN trades from DB with explanations
-        const openTrades = (tradesData.trades || []).filter(t => t.status === 'OPEN');
-        if (openTrades.length > 0) {
-            const openRows = openTrades.map(t =>
-                `<div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:8px;font-family:monospace;font-size:12px;white-space:pre-line;line-height:1.6;">${t.explanation || 'No explanation'}</div>`
-            ).join('');
-            if (posEntries.length === 0) {
-                explEl.innerHTML = openRows;
-            }
-        }
-
-        // Audit trail
-        const audit = detail.audit_log || [];
-        const auditEl = document.getElementById('detail-audit');
-        auditEl.innerHTML = audit.slice(-10).reverse().map(a =>
-            `<div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px;margin-bottom:6px;">
-                <strong>${a.ticker}</strong> ${a.action} ${a.shares}x @ $${(a.execution_price||0).toFixed(2)}
-                <span style="color:var(--muted);margin-left:8px;">signal: $${(a.signal_price||0).toFixed(2)} | slippage: $${(a.slippage||0).toFixed(4)} | source: ${a.price_source||'?'}</span>
-                ${a.bar_data_at_decision ? `<br><span style="color:var(--muted);">Bar: O=${a.bar_data_at_decision.open?.toFixed(2)||'?'} H=${a.bar_data_at_decision.high?.toFixed(2)||'?'} L=${a.bar_data_at_decision.low?.toFixed(2)||'?'} C=${a.bar_data_at_decision.close?.toFixed(2)||'?'} V=${(a.bar_data_at_decision.volume||0).toLocaleString()}</span>` : ''}
-                ${a.market_regime ? `<br><span style="color:var(--muted);">Regime: ${a.market_regime} | Overlap: ${a.signal_overlap||0} signal, ${a.position_overlap||0} position</span>` : ''}
-            </div>`
-        ).join('') || '<div style="color:var(--muted);">No audit entries yet</div>';
-
-    } catch(e) { console.error('Strategy detail error:', e); }
-}
-
-function timeSince(date) {
-    const secs = Math.floor((new Date() - date) / 1000);
-    if (secs < 60) return secs + 's';
-    const mins = Math.floor(secs / 60);
-    if (mins < 60) return mins + 'm';
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return hrs + 'h ' + (mins % 60) + 'm';
-    return Math.floor(hrs / 24) + 'd ' + (hrs % 24) + 'h';
-}
-
-async function arenaPause(name) {
-    await fetch(`/api/arena/strategy/${name}/pause`, {method: 'POST'});
-    loadArena();
-}
-
-async function arenaResume(name) {
-    await fetch(`/api/arena/strategy/${name}/resume`, {method: 'POST'});
-    loadArena();
-}
-
-// Arena loads with loadAll() since it's the default tab
-
-loadAll();
+// ── Init ────────────────────────────────────
+checkHealth();
+loadStrategies();
 </script>
 </body>
 </html>

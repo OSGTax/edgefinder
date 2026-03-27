@@ -1,59 +1,37 @@
-#!/usr/bin/env python3
-"""
-EdgeFinder Database Setup
-=========================
-Creates the SQLite database and all tables.
+"""Initialize the EdgeFinder database.
 
-Usage: python scripts/setup_db.py
+Creates all tables from ORM models. Safe to run multiple times.
 """
 
 import sys
-import os
+sys.path.insert(0, ".")
 
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from edgefinder.db.engine import Base, get_engine
+from edgefinder.db import models  # noqa: F401 — registers all models
 
-from modules.database import init_db, Base
-from config import settings
+from rich.console import Console
+
+console = Console()
 
 
 def main():
-    print("=" * 50)
-    print("  EDGEFINDER — Database Setup")
-    print("=" * 50)
-    print()
+    console.print("[bold]EdgeFinder v2 — Database Setup[/bold]\n")
 
-    db_path = settings.DATABASE_PATH
-    os.makedirs(os.path.dirname(db_path) if os.path.dirname(db_path) else ".", exist_ok=True)
+    engine = get_engine()
+    console.print(f"Database: {engine.url}")
 
-    if os.path.exists(db_path):
-        print(f"  Database already exists at: {db_path}")
-        response = input("  Recreate from scratch? This deletes all data. [y/N]: ").strip().lower()
-        if response in ("y", "yes"):
-            os.remove(db_path)
-            print(f"  Deleted old database.")
-        else:
-            print(f"  Keeping existing database.")
-            return
+    Base.metadata.create_all(engine)
 
-    engine = init_db(db_path, echo=False)
-
-    # Verify tables
     from sqlalchemy import inspect
     inspector = inspect(engine)
     tables = inspector.get_table_names()
+    console.print(f"\n[green]{len(tables)} tables created:[/green]")
+    for table in sorted(tables):
+        cols = [c["name"] for c in inspector.get_columns(table)]
+        console.print(f"  {table}: {', '.join(cols[:5])}{'...' if len(cols) > 5 else ''}")
 
-    print(f"\n  Database created at: {db_path}")
-    print(f"  Tables created: {len(tables)}")
-    for t in tables:
-        cols = inspector.get_columns(t)
-        print(f"    • {t} ({len(cols)} columns)")
-
-    print()
-    print("  ✓ Database ready!")
-    print()
-    print("  Next: python -m pytest tests/test_scanner.py -v")
-    print()
+    console.print("\n[bold green]Database ready.[/bold green]")
+    engine.dispose()
 
 
 if __name__ == "__main__":

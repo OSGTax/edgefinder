@@ -1,261 +1,223 @@
-# EdgeFinder — Intelligent Paper Trading System
+# EdgeFinder v2 — Trading Workbench
 
 ## Project Overview
-EdgeFinder is a self-improving paper trading system that combines fundamental analysis
-(Peter Lynch + Michael Burry criteria), technical signals, and news sentiment filtering
-to simulate intelligent stock trading. It starts rule-based and graduates to ML.
+EdgeFinder is a trading workbench for strategy research, paper trading, and performance analysis.
+It combines fundamental scoring (Peter Lynch + Michael Burry), technical signal detection,
+multi-source sentiment analysis, and multi-strategy competition in isolated virtual accounts.
+
+**Key principles:**
+- Polygon.io is the sole data source (no fallback chains)
+- Every strategy gets its own isolated $5,000 virtual account
+- Every trade captures a market-wide snapshot (SPY, QQQ, IWM, DIA, VIX, sectors)
+- Per-strategy views everywhere — no aggregate P&L
+- AI meta-strategy interfaces are built in (future Phase 8)
 
 ## Architecture
 ```
-Layer 1: Fundamental Scanner  → Nightly scan, ~8000 stocks → ~50-100 candidates
-Layer 2: Technical Signal Engine → Every 15-30 min, monitors candidates for entries
-Layer 2.5: News Sentiment Gate  → Go/no-go filter before trade execution
-Layer 3: Paper Trader           → Simulated execution with risk management
-Layer 4: Trade Journal          → Logs every trade + skipped signal with full context
-Layer 5: Strategy Optimizer     → Weekly analysis, adjusts parameters
+Dashboard (FastAPI) — Research | Trades | Strategies | Benchmarks | Inject
+        |                                    |
+  Research Service              Trading Engine (Arena)
+  (per-ticker aggregation)      Executor → Virtual Accounts
+        |                                    |
+  Scanner | Sentiment | Market Snapshot | Strategies (plugins)
+        |            |           |              |
+                  Data Layer (Polygon.io)
 ```
 
 ## Tech Stack
-- Python 3.11+, FastAPI, SQLite, yfinance, pandas-ta, VADER sentiment
-- Free hosting (Render / PythonAnywhere)
-- Claude Code for strategy analysis and code generation
+- Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic
+- Polygon.io (bars, fundamentals, universe, streaming)
+- pydantic + pydantic-settings (domain models, typed config)
+- APScheduler (ET timezone scheduling)
+- SQLite (dev) / PostgreSQL (production via Render)
 
 ## Directory Structure
 ```
 edgefinder/
-├── CLAUDE.md              ← YOU ARE HERE — master instructions
-├── README.md              ← Human-readable project overview
-├── requirements.txt       ← Python dependencies
-├── setup.py               ← Package setup
+├── pyproject.toml              # Dependencies and build config
+├── alembic.ini                 # Database migration config
+├── .env                        # Polygon API key (gitignored)
 ├── config/
-│   ├── settings.py        ← All tunable parameters (thresholds, weights, etc.)
-│   └── secrets.env.example ← Template for API keys (if needed later)
-├── modules/
-│   ├── __init__.py
-│   ├── scanner.py         ← Module 1: Fundamental Scanner
-│   ├── signals.py         ← Module 2: Technical Signal Engine
-│   ├── sentiment.py       ← Module 2.5: News Sentiment Gate
-│   ├── trader.py          ← Module 3: Paper Trader
-│   ├── journal.py         ← Module 4: Trade Journal
-│   ├── optimizer.py       ← Module 5: Strategy Optimizer
-│   └── database.py        ← Database models and helpers
-├── tests/
-│   ├── __init__.py
-│   ├── test_scanner.py    ← Module 1 tests (BUILT)
-│   ├── test_signals.py    ← Module 2 tests (PLACEHOLDER)
-│   ├── test_sentiment.py  ← Module 2.5 tests (PLACEHOLDER)
-│   ├── test_trader.py     ← Module 3 tests (PLACEHOLDER)
-│   ├── test_journal.py    ← Module 4 tests (PLACEHOLDER)
-│   ├── test_optimizer.py  ← Module 5 tests (PLACEHOLDER)
-│   └── conftest.py        ← Shared test fixtures
+│   └── settings.py             # All tunable parameters (EDGEFINDER_ env prefix)
+├── edgefinder/                 # Main package
+│   ├── core/
+│   │   ├── models.py           # Pydantic domain models (Signal, Trade, MarketSnapshot, etc.)
+│   │   ├── interfaces.py       # Protocols: DataProvider, StreamProvider, SentimentProvider
+│   │   └── events.py           # In-process event bus (pub/sub)
+│   ├── data/
+│   │   ├── polygon.py          # Polygon.io REST (bars, fundamentals, universe, price)
+│   │   ├── provider.py         # CachedDataProvider wrapper
+│   │   ├── cache.py            # Filesystem cache (Parquet bars, JSON fundamentals)
+│   │   └── stream.py           # Polygon WebSocket streaming
+│   ├── db/
+│   │   ├── engine.py           # SQLAlchemy engine/session (SQLite/PostgreSQL)
+│   │   ├── models.py           # 10 ORM tables
+│   │   └── migrations/         # Alembic migrations
+│   ├── scanner/
+│   │   └── scanner.py          # Nightly fundamental scan + Lynch/Burry scoring
+│   ├── signals/
+│   │   └── engine.py           # Technical indicators + 9 signal pattern detectors
+│   ├── strategies/
+│   │   ├── base.py             # BaseStrategy ABC + StrategyRegistry
+│   │   ├── alpha.py            # Momentum/EMA day trading
+│   │   ├── bravo.py            # Mean reversion/BB swing trading
+│   │   └── charlie.py          # Deep value contrarian
+│   ├── trading/
+│   │   ├── account.py          # Per-strategy $5k virtual accounts
+│   │   ├── executor.py         # Risk-based sizing, slippage, hash chain audit
+│   │   ├── arena.py            # Multi-strategy orchestration
+│   │   └── journal.py          # Trade persistence + stats
+│   ├── market/
+│   │   ├── snapshot.py         # Captures indices/VIX/sectors at trade time
+│   │   └── benchmarks.py       # Daily index data for comparison charts
+│   ├── sentiment/
+│   │   ├── aggregator.py       # Weighted composite from all sources
+│   │   ├── reddit.py           # Reddit API (r/wallstreetbets, r/stocks)
+│   │   ├── twitter.py          # Twitter/X stub (future API integration)
+│   │   ├── news_rss.py         # RSS keyword-based sentiment
+│   │   └── provider.py         # Score-to-action mapping
+│   ├── research/
+│   │   └── research.py         # Per-ticker deep-dive aggregation
+│   └── scheduler/
+│       └── scheduler.py        # APScheduler (ET timezone)
+├── dashboard/
+│   ├── app.py                  # FastAPI application
+│   ├── dependencies.py         # DB session dependency injection
+│   ├── routers/
+│   │   ├── trades.py           # Wins/losses/open/closed, strategy-filterable
+│   │   ├── strategies.py       # Per-strategy accounts + equity curves
+│   │   ├── research.py         # Ticker reports + search
+│   │   ├── sentiment.py        # Sentiment scores + trending
+│   │   ├── benchmarks.py       # Strategy vs index comparison
+│   │   └── inject.py           # Manual ticker injection
+│   └── templates/
+│       └── index.html          # Dashboard frontend
 ├── scripts/
-│   ├── run_scanner.py     ← CLI: run nightly scan
-│   ├── run_tests.py       ← CLI: run all tests with summary
-│   ├── setup_db.py        ← CLI: initialize database
-│   └── verify_install.py  ← CLI: check all dependencies
-├── data/
-│   └── edgefinder.db      ← SQLite database (created at runtime)
-├── dashboard/             ← Web UI (Phase 5)
-└── docs/
-    └── EdgeFinder_Project_Spec.docx
+│   ├── setup_db.py             # Initialize database
+│   ├── run_scanner.py          # CLI scanner (--quick, --tickers)
+│   └── render_start.py         # Render deployment startup
+└── tests/                      # 244+ tests
 ```
 
-## Git & GitHub Workflow
-This project lives in a GitHub repo. Follow these conventions:
-
-### Branch Strategy
-```
-main              ← stable, tested, working code only
-├── module-1      ← fundamental scanner (COMPLETE)
-├── module-2      ← technical signal engine
-├── module-2.5    ← news sentiment gate
-├── module-3-4    ← paper trader + journal
-├── module-5      ← strategy optimizer
-└── dashboard     ← web UI
-```
-
-### Rules
-- **NEVER push directly to main.** Always work on a feature branch.
-- Each module gets its own branch off `main`.
-- A module branch merges to `main` ONLY after ALL its tests pass.
-- Commit messages follow: `[module-N] short description`
-  - Examples: `[module-1] fix normalization bug in Lynch scoring`
-  - Examples: `[module-2] add RSI oversold signal detection`
-- Run `python -m pytest tests/ -v -m "not integration"` before every commit.
-
-### Starting a New Module
+## Quick Start
 ```bash
-git checkout main
-git pull origin main
-git checkout -b module-2
-# ... build and test ...
-git add -A
-git commit -m "[module-2] implement technical signal engine"
-git push origin module-2
-# Create PR on GitHub → merge after review
-```
+# 1. Install
+pip install -e ".[dev]"
 
-### First-Time Setup (after cloning)
-```bash
-git clone <repo-url>
-cd edgefinder
-pip install -r requirements.txt
-python scripts/verify_install.py
+# 2. Set Polygon API key
+echo 'EDGEFINDER_POLYGON_API_KEY=your_key' > .env
+
+# 3. Setup database
 python scripts/setup_db.py
-python -m pytest tests/test_scanner.py -v
+
+# 4. Run scanner
+python scripts/run_scanner.py --quick    # 20 popular tickers
+python scripts/run_scanner.py            # Full universe
+
+# 5. Start dashboard
+uvicorn dashboard.app:app --reload
+# Visit http://localhost:8000/
+
+# 6. Run tests
+python -m pytest tests/ -v -m "not integration"
 ```
 
-## Build Order — FOLLOW THIS EXACTLY
-Each module MUST pass its tests before moving to the next.
+## API Endpoints
 
-### Phase 1: Foundation + Module 1 (Fundamental Scanner)
-1. Run `python scripts/verify_install.py` — installs and verifies all dependencies
-2. Run `python scripts/setup_db.py` — creates SQLite database
-3. Run `python -m pytest tests/test_scanner.py -v` — Module 1 tests
-4. Run `python scripts/run_scanner.py` — live scan (uses real yfinance data)
-5. Review output: does the watchlist look reasonable? (HUMAN CHECK)
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/health` | Health check |
+| GET | `/api/trades?strategy=X&status=Y` | List trades (filterable) |
+| GET | `/api/trades/stats?strategy=X` | Trade statistics |
+| GET | `/api/trades/wins` | Winning trades |
+| GET | `/api/trades/losses` | Losing trades |
+| GET | `/api/strategies` | List registered strategies |
+| GET | `/api/strategies/accounts` | Per-strategy account states |
+| GET | `/api/strategies/equity-curve?days=90` | Equity curve data |
+| GET | `/api/research/ticker/{symbol}` | Full ticker research report |
+| GET | `/api/research/search?q=X` | Search tickers |
+| GET | `/api/research/active` | Active watchlist tickers |
+| GET | `/api/sentiment/ticker/{symbol}` | Aggregated sentiment |
+| GET | `/api/sentiment/trending` | Trending tickers |
+| GET | `/api/sentiment/history/{symbol}` | Sentiment time series |
+| GET | `/api/benchmarks/comparison?days=90` | Strategy vs index data |
+| POST | `/api/benchmarks/collect` | Collect daily benchmark data |
+| POST | `/api/inject` | Inject ticker for evaluation |
+| GET | `/api/inject` | List active injections |
+| DELETE | `/api/inject/{id}` | Remove injection |
 
-### Phase 2: Module 2 (Technical Signal Engine)
-1. Build `modules/signals.py` following the spec in config/settings.py
-2. Write tests in `tests/test_signals.py`
-3. Run `python -m pytest tests/test_signals.py -v`
-4. Integration test: scanner → signals pipeline
-
-### Phase 3: Module 2.5 (News Sentiment Gate)
-1. Build `modules/sentiment.py`
-2. Write tests in `tests/test_sentiment.py`
-3. Run `python -m pytest tests/test_sentiment.py -v`
-
-### Phase 4: Modules 3-4 (Paper Trader + Journal)
-1. Build `modules/trader.py` and `modules/journal.py`
-2. Write tests
-3. Integration test: full pipeline scan → signal → sentiment → trade → log
-
-### Phase 5: Dashboard
-1. Build FastAPI backend in `dashboard/`
-2. Build lightweight frontend
-
-### Phase 6: Module 5 (Strategy Optimizer)
-1. Build `modules/optimizer.py`
-2. Requires 50+ logged trades to be meaningful
-
-## Coding Standards
-- Type hints on all functions
-- Docstrings on all public methods
-- All database operations use context managers
-- Never hardcode thresholds — always reference config/settings.py
-- Log everything with Python logging module (level=INFO default)
-- Handle yfinance failures gracefully (it WILL return None/NaN randomly)
-
-## HUMAN_ACTION_REQUIRED Convention
-Any time the human needs to do something, mark it clearly:
-```
-# ============================================================
-# HUMAN_ACTION_REQUIRED
-# What: [description of what they need to do]
-# Why: [why this can't be automated]
-# How: [step-by-step instructions]
-# ============================================================
-```
-
-## Testing Convention
-- Every module has a matching test file
-- Tests use pytest with fixtures from conftest.py
-- Mock external APIs (yfinance) in unit tests — don't hit real APIs in CI
-- Include at least one integration test per module that DOES hit real APIs
-  (marked with @pytest.mark.integration so they can be skipped)
-- Test files include a `TestResults` summary block at the bottom
-
-## Key Parameters (from config/settings.py)
-- Starting capital: $2,500
-- Max risk per trade: 2% ($50)
+## Virtual Account Rules
+- $5,000 starting capital per strategy
+- Buying power = cash only (no margin/leverage)
+- PDT mode: per-strategy toggle (3 day trades / 5 business days)
+- Max risk per trade: 2% of equity
+- Max concentration: 20% in single position
 - Max open positions: 5
-- PDT limit: 3 day trades / 5 rolling business days
-- Watchlist gate: strategy-driven (each strategy's `qualifies_stock()` decides)
-- Composite score: still computed for display/sorting (Lynch 50% + Burry 50%)
-- Fallback threshold: composite >= 60 (only used if no strategies are loaded)
+- Drawdown circuit breaker: 20%
+- Revenge trade cooldown: 30 minutes after stop-out
 
 ## Strategy Plugin Guide
-When someone says "I want to create a trading strategy" or "I'm building a strategy plugin,"
-use this section to guide them through the process.
 
-### Available Data
-The scanner collects and stores the following fundamental data for every stock that passes
-basic pre-screening (market cap, price, volume). Your strategy can use any of these fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `ticker` | str | Stock symbol (e.g., "AAPL") |
-| `company_name` | str | Company name |
-| `sector` | str | GICS sector (e.g., "Technology") |
-| `industry` | str | Industry classification |
-| `market_cap` | float | Market capitalization in dollars |
-| `price` | float | Current stock price |
-| `peg_ratio` | float | Price/Earnings-to-Growth ratio |
-| `earnings_growth` | float | Annual earnings growth rate (0.25 = 25%) |
-| `debt_to_equity` | float | Debt-to-equity ratio |
-| `revenue_growth` | float | Annual revenue growth rate |
-| `institutional_pct` | float | Institutional ownership percentage (0.45 = 45%) |
-| `lynch_score` | float | Peter Lynch composite score (0-100) |
-| `lynch_category` | str | Lynch classification: fast_grower, stalwart, turnaround, asset_play, cyclical, slow_grower |
-| `fcf_yield` | float | Free cash flow yield (0.08 = 8%) |
-| `price_to_tangible_book` | float | Price to tangible book value |
-| `short_interest` | float | Short interest as percentage of float |
-| `ev_to_ebitda` | float | Enterprise Value / EBITDA |
-| `current_ratio` | float | Current assets / Current liabilities |
-| `burry_score` | float | Michael Burry composite score (0-100) |
-| `composite_score` | float | Weighted average of Lynch + Burry scores |
-
-### How to Build a Strategy Plugin
-1. Create a file: `modules/strategies/my_strategy.py`
-2. Subclass `BaseStrategy` from `modules/strategies/base.py`
-3. Register with `@StrategyRegistry.register("my_strategy")`
-
-### Required Methods
+### Creating a Strategy
 ```python
-from modules.strategies.base import BaseStrategy, StrategyRegistry, Signal, TradeNotification
+from edgefinder.strategies.base import BaseStrategy, StrategyRegistry
+from edgefinder.core.models import Signal, TickerFundamentals
 
 @StrategyRegistry.register("my_strategy")
 class MyStrategy(BaseStrategy):
     @property
-    def name(self) -> str:
-        return "my_strategy"
+    def name(self) -> str: return "my_strategy"
 
     @property
-    def version(self) -> str:
-        return "1.0.0"
+    def version(self) -> str: return "1.0"
 
-    def init(self) -> None:
-        """Setup before trading begins."""
-        pass
+    @property
+    def preferred_signals(self) -> list[str]:
+        return ["ema_crossover_bullish", "rsi_oversold"]
 
-    def qualifies_stock(self, stock_data: dict) -> bool:
-        """Return True if this strategy wants the stock on its watchlist.
-        The scanner uses this to decide which stocks stay active.
-        stock_data contains all fields from the Available Data table above."""
-        return stock_data.get("revenue_growth", 0) >= 0.20  # example
+    def init(self) -> None: pass
 
-    def generate_signals(self, bars: dict[str, pd.DataFrame]) -> list[Signal]:
-        """Generate trading signals from OHLCV data.
-        bars: dict of ticker -> DataFrame with Open, High, Low, Close, Volume columns."""
-        return []
+    def qualifies_stock(self, fundamentals: TickerFundamentals) -> bool:
+        return (fundamentals.composite_score or 0) >= 60
 
-    def on_trade_executed(self, notification: TradeNotification) -> None:
-        """Called after a trade is opened or closed."""
-        pass
+    def generate_signals(self, ticker: str, bars) -> list[Signal]:
+        from edgefinder.signals.engine import compute_indicators, detect_signals
+        indicators = compute_indicators(bars)
+        if not indicators: return []
+        return [s for s in detect_signals(indicators, ticker)
+                if s.metadata.get("pattern") in self.preferred_signals]
+
+    def on_trade_executed(self, notification) -> None: pass
 ```
 
-### Optional Methods
-- `set_watchlist(scored_stocks: list[dict])` — receive pre-scored stocks from the scanner
-- `get_watchlist() -> list[str]` — return tickers this strategy wants data for
-- `on_market_regime_change(regime: MarketRegime)` — react to bull/bear/sideways changes
-- `on_strategy_pause(reason: str)` — handle auto-pause due to drawdown
+Then add the import to `edgefinder/strategies/__init__.py`.
 
-### Post-Build Checklist
-- [ ] Strategy file in `modules/strategies/`
-- [ ] Registered via `@StrategyRegistry.register()` decorator
-- [ ] `qualifies_stock()` returns True for stocks your strategy wants
-- [ ] `generate_signals()` returns `Signal` objects with valid stop_loss and target
-- [ ] Tests in `tests/test_<strategy_name>.py`
-- [ ] Run `python -m pytest tests/ -v -m "not integration"` — all pass
-- [ ] Strategy appears in arena when `StrategyRegistry.list_strategies()` is called
+### Available Signal Patterns
+`ema_crossover_bullish`, `ema_crossover_bearish`, `rsi_oversold`, `rsi_overbought`,
+`macd_bullish_cross`, `macd_bearish_cross`, `bb_lower_touch`, `volume_spike_bullish`,
+`volume_spike_bearish`
+
+## Key Configuration (config/settings.py)
+All parameters can be overridden via environment variables with `EDGEFINDER_` prefix.
+See `config/settings.py` for the full list. Key sections:
+- Account ($5k capital, 5 max positions, 20% concentration)
+- Risk (2% max risk, 20% drawdown breaker, 1.5 R:R minimum)
+- Scanner filters ($300M-$200B market cap, $5-$500 price)
+- Lynch scoring (6 weighted dimensions, sum to 1.0)
+- Burry scoring (5 weighted dimensions, sum to 1.0)
+- Technical signals (EMA 9/21/50/200, RSI 14, MACD 12/26/9, BB 20/2)
+- Sentiment thresholds (BLOCK at -0.5, REDUCE at -0.2, BOOST at +0.2/+0.5)
+- Scheduling (scanner 6:15 PM, signals every 15m, positions every 5m)
+- Polygon.io connection (API key, retries, timeouts)
+
+## Testing
+```bash
+python -m pytest tests/ -v -m "not integration"   # Unit tests (244+)
+python -m pytest tests/ -v -m integration          # Integration tests (hits Polygon)
+```
+
+## Git Workflow
+- Never push directly to main
+- Feature branches off main
+- Run tests before every commit
+- Commit format: `[v2] short description`
