@@ -210,7 +210,7 @@ async function loadStrategies() {
     const cls = pnl >= 0 ? 'positive' : 'negative';
     return `<div class="card">
       <h3>${a.strategy_name}</h3>
-      <div class="row"><span class="label">Cash</span><span class="value">$${a.cash_balance.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Cash</span><span class="value">$${(a.cash ?? a.cash_balance ?? 0).toFixed(2)}</span></div>
       <div class="row"><span class="label">Equity</span><span class="value">$${a.total_equity.toFixed(2)}</span></div>
       <div class="row"><span class="label">Open Value</span><span class="value">$${a.open_positions_value.toFixed(2)}</span></div>
       <div class="row"><span class="label">P&L</span><span class="value ${cls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span></div>

@@ -18,6 +18,8 @@ from dashboard.routers import benchmarks, inject, research, sentiment, strategie
 
 logger = logging.getLogger(__name__)
 
+__version__ = "2.1.0"
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -36,7 +38,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="EdgeFinder v2",
     description="Trading workbench for strategy research and paper trading",
-    version="2.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -64,4 +66,4 @@ async def dashboard(request: Request):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": __version__}
