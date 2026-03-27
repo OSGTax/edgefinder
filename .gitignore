@@ -31,6 +31,8 @@ data/*.db-shm
 data/*.db-wal
 data/*.log
 data/*.csv
+data/cache/
+*.parquet
 
 # Secrets (never commit)
 config/secrets.env
