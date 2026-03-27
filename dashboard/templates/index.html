@@ -110,11 +110,18 @@ button:hover { opacity: 0.9; }
     <button onclick="doResearch()">Research</button>
   </div>
   <div id="research-result"></div>
-  <h3 style="margin:24px 0 12px">Active Watchlist</h3>
+  <h3 style="margin:24px 0 12px">Research Watchlist <span style="font-size:12px;color:var(--muted);font-weight:400">(scanner + manual injections — click a row for details)</span></h3>
+  <div style="overflow-x:auto">
   <table>
-    <thead><tr><th>Symbol</th><th>Company</th><th>Sector</th><th>Market Cap</th><th>Price</th></tr></thead>
+    <thead><tr>
+      <th>Symbol</th><th>Company</th><th>Sector</th><th>Price</th><th>Mkt Cap</th>
+      <th>Composite</th><th>Lynch</th><th>Burry</th><th>Category</th>
+      <th>Earn Gr</th><th>Rev Gr</th><th>PEG</th>
+      <th>Strategies</th><th>Source</th>
+    </tr></thead>
     <tbody id="active-tickers"></tbody>
   </table>
+  </div>
 </div>
 
 <!-- SENTIMENT PANEL -->
@@ -314,11 +321,32 @@ async function doResearch() {
 
 async function loadActiveTickers() {
   const tickers = await fetch('/api/research/active').then(r => r.json());
-  document.getElementById('active-tickers').innerHTML = tickers.length ? tickers.map(t =>
-    `<tr><td><strong>${t.symbol}</strong></td><td>${t.company_name || '—'}</td><td>${t.sector || '—'}</td>
-     <td>${t.market_cap ? '$' + (t.market_cap/1e9).toFixed(1) + 'B' : '—'}</td>
-     <td>${t.last_price ? '$' + t.last_price.toFixed(2) : '—'}</td></tr>`
-  ).join('') : '<tr><td colspan="5" class="empty">No active tickers. Run the scanner first.</td></tr>';
+  const fmt = (v, d=1) => v != null ? v.toFixed(d) : '—';
+  const pct = v => v != null ? (v * 100).toFixed(1) + '%' : '—';
+  const scoreCls = s => s >= 60 ? 'positive' : s >= 30 ? '' : 'negative';
+  document.getElementById('active-tickers').innerHTML = tickers.length ? tickers.map(t => {
+    const strats = (t.qualifying_strategies || []).map(s =>
+      `<span class="pill open">${s}</span>`).join(' ') || '<span style="color:var(--muted)">—</span>';
+    const srcPill = t.source === 'manual' ? '<span class="pill loss">manual</span>'
+      : t.source === 'both' ? '<span class="pill win">both</span>'
+      : '<span class="pill open">scanner</span>';
+    return `<tr style="cursor:pointer" onclick="document.getElementById('research-input').value='${t.symbol}';doResearch()">
+      <td><strong>${t.symbol}</strong></td>
+      <td>${t.company_name || '—'}</td>
+      <td>${t.sector || '—'}</td>
+      <td>${t.last_price ? '$' + t.last_price.toFixed(2) : '—'}</td>
+      <td>${t.market_cap ? '$' + (t.market_cap/1e9).toFixed(1) + 'B' : '—'}</td>
+      <td class="${scoreCls(t.composite_score)}"><strong>${fmt(t.composite_score)}</strong></td>
+      <td>${fmt(t.lynch_score)}</td>
+      <td>${fmt(t.burry_score)}</td>
+      <td>${t.lynch_category || '—'}</td>
+      <td>${pct(t.earnings_growth)}</td>
+      <td>${pct(t.revenue_growth)}</td>
+      <td>${fmt(t.peg_ratio, 2)}</td>
+      <td>${strats}</td>
+      <td>${srcPill}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="14" class="empty">No tickers yet. Run the scanner or inject a ticker.</td></tr>';
 }
 
 // ── Sentiment ───────────────────────────────

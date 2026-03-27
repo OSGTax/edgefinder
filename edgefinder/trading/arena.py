@@ -82,6 +82,14 @@ class ArenaEngine:
                 continue
 
             for ticker in slot.watchlist:
+                # Skip tickers that already have an open position
+                if slot.account.get_position(ticker):
+                    logger.debug(
+                        "Strategy '%s' already has open position in %s — skipping",
+                        name, ticker,
+                    )
+                    continue
+
                 bars = self._fetch_bars(ticker)
                 if bars is None or bars.empty:
                     continue

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from edgefinder.core.interfaces import DataProvider
 from edgefinder.core.models import TickerFundamentals
-from edgefinder.db.models import Fundamental, SentimentReading, Ticker, TradeRecord
+from edgefinder.db.models import Fundamental, ManualInjection, SentimentReading, Ticker, TradeRecord
 from edgefinder.sentiment.aggregator import SentimentAggregator
 from edgefinder.signals.engine import compute_indicators
 from edgefinder.strategies.base import StrategyRegistry
@@ -103,16 +103,41 @@ class ResearchService:
                     "current_ratio": fund.current_ratio,
                 }
 
-        # Live price
-        live_price = self._provider.get_latest_price(symbol)
-        if live_price:
-            report.price = live_price
+        # Live price + fundamentals from Polygon if not in DB
+        if self._provider:
+            live_price = self._provider.get_latest_price(symbol)
+            if live_price:
+                report.price = live_price
+
+            # Fetch fundamentals live if not already in DB
+            if not report.composite_score:
+                try:
+                    fund_data = self._provider.get_fundamentals(symbol)
+                    if fund_data:
+                        report.company_name = report.company_name or fund_data.company_name
+                        report.sector = report.sector or fund_data.sector
+                        report.industry = report.industry or fund_data.industry
+                        report.market_cap = report.market_cap or fund_data.market_cap
+                        report.fundamentals = {
+                            "peg_ratio": fund_data.peg_ratio,
+                            "earnings_growth": fund_data.earnings_growth,
+                            "debt_to_equity": fund_data.debt_to_equity,
+                            "revenue_growth": fund_data.revenue_growth,
+                            "institutional_pct": fund_data.institutional_pct,
+                            "fcf_yield": fund_data.fcf_yield,
+                            "price_to_tangible_book": fund_data.price_to_tangible_book,
+                            "short_interest": fund_data.short_interest,
+                            "ev_to_ebitda": fund_data.ev_to_ebitda,
+                            "current_ratio": fund_data.current_ratio,
+                        }
+                except Exception:
+                    logger.debug("Could not fetch live fundamentals for %s", symbol)
 
         # Technical indicators
         try:
             end = date.today()
             start = end - timedelta(days=365)
-            bars = self._provider.get_bars(symbol, "day", start, end)
+            bars = self._provider.get_bars(symbol, "day", start, end) if self._provider else None
             if bars is not None and not bars.empty:
                 snapshot = compute_indicators(bars)
                 if snapshot:
@@ -173,23 +198,117 @@ class ResearchService:
         ]
 
     def get_active_tickers(self) -> list[dict]:
-        """Get all active tickers with basic info."""
-        tickers = (
-            self._session.query(Ticker)
+        """Get all research tickers: scanner-qualified + manually injected.
+
+        Returns enriched data with scores, fundamentals, and strategy qualification.
+        """
+        results: dict[str, dict] = {}
+
+        # Scanner-qualified tickers (from nightly scan)
+        rows = (
+            self._session.query(Ticker, Fundamental)
+            .outerjoin(Fundamental, Ticker.id == Fundamental.ticker_id)
             .filter(Ticker.is_active == True)
             .order_by(Ticker.symbol)
             .all()
         )
-        return [
-            {
-                "symbol": t.symbol,
-                "company_name": t.company_name,
-                "sector": t.sector,
-                "market_cap": t.market_cap,
-                "last_price": t.last_price,
-            }
-            for t in tickers
-        ]
+        for ticker, fund in rows:
+            entry = self._build_ticker_entry(ticker, fund, source="scanner")
+            results[ticker.symbol] = entry
+
+        # Manually injected tickers (non-expired)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        injections = (
+            self._session.query(ManualInjection)
+            .filter(
+                (ManualInjection.expires_at == None)
+                | (ManualInjection.expires_at > now)
+            )
+            .all()
+        )
+        for inj in injections:
+            if inj.symbol in results:
+                results[inj.symbol]["source"] = "both"
+                continue
+            # Look up ticker in DB (may have been scanned but not active)
+            ticker = self._session.query(Ticker).filter_by(symbol=inj.symbol).first()
+            fund = None
+            if ticker:
+                fund = self._session.query(Fundamental).filter_by(ticker_id=ticker.id).first()
+            entry = self._build_ticker_entry(ticker, fund, source="manual", symbol=inj.symbol)
+            results[inj.symbol] = entry
+
+        return sorted(results.values(), key=lambda x: x.get("composite_score") or 0, reverse=True)
+
+    def _build_ticker_entry(
+        self, ticker: Ticker | None, fund: Fundamental | None,
+        source: str = "scanner", symbol: str = "",
+    ) -> dict:
+        """Build an enriched ticker entry for the research table."""
+        sym = ticker.symbol if ticker else symbol
+        entry = {
+            "symbol": sym,
+            "company_name": ticker.company_name if ticker else None,
+            "sector": ticker.sector if ticker else None,
+            "market_cap": ticker.market_cap if ticker else None,
+            "last_price": ticker.last_price if ticker else None,
+            "source": source,
+            # Scores
+            "lynch_score": None,
+            "lynch_category": None,
+            "burry_score": None,
+            "composite_score": None,
+            # Key fundamentals
+            "earnings_growth": None,
+            "revenue_growth": None,
+            "peg_ratio": None,
+            "fcf_yield": None,
+            "current_ratio": None,
+            "debt_to_equity": None,
+            # Strategies
+            "qualifying_strategies": [],
+        }
+
+        if fund:
+            entry.update({
+                "lynch_score": fund.lynch_score,
+                "lynch_category": fund.lynch_category,
+                "burry_score": fund.burry_score,
+                "composite_score": fund.composite_score,
+                "earnings_growth": fund.earnings_growth,
+                "revenue_growth": fund.revenue_growth,
+                "peg_ratio": fund.peg_ratio,
+                "fcf_yield": fund.fcf_yield,
+                "current_ratio": fund.current_ratio,
+                "debt_to_equity": fund.debt_to_equity,
+            })
+
+        # Strategy qualification
+        fund_model = TickerFundamentals(
+            symbol=sym,
+            company_name=entry["company_name"],
+            sector=entry["sector"],
+            market_cap=entry["market_cap"],
+            price=entry["last_price"],
+            lynch_score=entry["lynch_score"],
+            burry_score=entry["burry_score"],
+            composite_score=entry["composite_score"],
+            earnings_growth=entry["earnings_growth"],
+            revenue_growth=entry["revenue_growth"],
+            peg_ratio=entry["peg_ratio"],
+            fcf_yield=entry["fcf_yield"],
+            current_ratio=entry["current_ratio"],
+            debt_to_equity=entry["debt_to_equity"],
+        )
+        for strategy in StrategyRegistry.get_instances():
+            try:
+                if strategy.qualifies_stock(fund_model):
+                    entry["qualifying_strategies"].append(strategy.name)
+            except Exception:
+                pass
+
+        return entry
 
     @staticmethod
     def _build_fundamentals_model(report: TickerReport) -> TickerFundamentals:

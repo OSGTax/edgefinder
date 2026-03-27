@@ -22,6 +22,7 @@ from edgefinder.db.models import (
     StrategyAccount,
     StrategySnapshot,
     Ticker,
+    TradeRecord,
 )
 from edgefinder.market.benchmarks import BenchmarkService
 from edgefinder.market.snapshot import MarketSnapshotService
@@ -76,11 +77,20 @@ def init_services() -> None:
     _arena.load_strategies()
 
     watchlist = _load_watchlist()
+    if not watchlist:
+        # First run — auto-scan to populate research tab
+        logger.info("No active tickers — running initial scan")
+        _run_initial_scan()
+        watchlist = _load_watchlist()
+
     if watchlist:
         _arena.set_global_watchlist(watchlist)
         logger.info("Watchlist set: %s", ", ".join(watchlist))
     else:
-        logger.warning("No active tickers in DB — run the scanner first")
+        logger.warning("No tickers qualified after scan")
+
+    # Restore open positions from DB into in-memory accounts
+    _restore_open_positions()
 
     # Event bus — persist trades and capture market snapshots
     _wire_event_bus()
@@ -108,6 +118,73 @@ def shutdown_services() -> None:
 
 
 # ── Watchlist ───────────────────────────────────────────
+
+
+def _restore_open_positions() -> None:
+    """Restore open positions from DB into in-memory arena accounts.
+
+    Without this, every restart resets position counts to 0, bypassing
+    max_open_positions and allowing duplicate trades.
+    """
+    if not _arena or not _session_factory:
+        return
+    session = _session_factory()
+    try:
+        from edgefinder.trading.account import Position
+
+        open_trades = (
+            session.query(TradeRecord)
+            .filter(TradeRecord.status == "OPEN")
+            .all()
+        )
+        restored = 0
+        for tr in open_trades:
+            account = _arena.get_account(tr.strategy_name)
+            if not account:
+                continue
+            # Skip if already have this position (shouldn't happen, but be safe)
+            if account.get_position(tr.symbol):
+                continue
+            position = Position(
+                symbol=tr.symbol,
+                shares=tr.shares,
+                entry_price=tr.entry_price,
+                stop_loss=tr.stop_loss,
+                target=tr.target,
+                direction=tr.direction,
+                trade_type=tr.trade_type,
+                entry_time=tr.entry_time,
+                trade_id=tr.trade_id,
+            )
+            # Add position without deducting cash again (already deducted historically)
+            account.positions.append(position)
+            account.cash -= position.cost_basis
+            restored += 1
+        if restored:
+            logger.info("Restored %d open positions from DB", restored)
+    except Exception:
+        logger.exception("Failed to restore open positions")
+    finally:
+        session.close()
+
+
+def _run_initial_scan() -> None:
+    """Run a quick scan on first startup to populate the research tab."""
+    from scripts.run_scanner import QUICK_TICKERS
+
+    session = _session_factory()
+    try:
+        scanner = FundamentalScanner(_provider, session)
+        results = scanner.run(tickers=QUICK_TICKERS)
+        qualified = sum(1 for s in results if s.qualifying_strategies)
+        logger.info(
+            "Initial scan complete: %d scored, %d qualified",
+            len(results), qualified,
+        )
+    except Exception:
+        logger.exception("Initial scan failed")
+    finally:
+        session.close()
 
 
 def _load_watchlist() -> list[str]:
