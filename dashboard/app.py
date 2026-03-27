@@ -7,14 +7,19 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 
 from dashboard.routers import benchmarks, inject, research, sentiment, strategies, trades
 
 logger = logging.getLogger(__name__)
+
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 @asynccontextmanager
@@ -46,6 +51,11 @@ app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(sentiment.router, prefix="/api/sentiment", tags=["sentiment"])
 app.include_router(benchmarks.router, prefix="/api/benchmarks", tags=["benchmarks"])
 app.include_router(inject.router, prefix="/api/inject", tags=["inject"])
+
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    return templates.TemplateResponse(request=request, name="index.html")
 
 
 @app.get("/api/health")

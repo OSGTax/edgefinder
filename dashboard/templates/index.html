@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EdgeFinder v2</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root { --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a; --text: #e0e0e0; --muted: #888; --green: #22c55e; --red: #ef4444; --blue: #3b82f6; --yellow: #eab308; --purple: #a855f7; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: var(--bg); color: var(--text); }
+.header { padding: 16px 24px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.header h1 { font-size: 20px; font-weight: 600; }
+.header .status { font-size: 12px; color: var(--muted); }
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 24px; }
+.tab { padding: 12px 20px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; font-size: 14px; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+.content { padding: 24px; max-width: 1400px; margin: 0 auto; }
+.panel { display: none; }
+.panel.active { display: block; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.card h3 { font-size: 14px; margin-bottom: 12px; color: var(--blue); }
+.card .row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+.card .label { color: var(--muted); }
+.card .value { font-weight: 600; }
+.card .value.positive { color: var(--green); }
+.card .value.negative { color: var(--red); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-weight: 500; }
+td { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+tr:hover { background: rgba(59,130,246,0.05); }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+.pill.open { background: rgba(59,130,246,0.2); color: var(--blue); }
+.pill.closed { background: rgba(136,136,136,0.2); color: var(--muted); }
+.pill.win { background: rgba(34,197,94,0.2); color: var(--green); }
+.pill.loss { background: rgba(239,68,68,0.2); color: var(--red); }
+.filter-bar { display: flex; gap: 12px; margin-bottom: 16px; align-items: center; }
+select, input, button { background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 6px; font-size: 13px; }
+button { cursor: pointer; background: var(--blue); border: none; color: white; font-weight: 600; }
+button:hover { opacity: 0.9; }
+.sub-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.sub-tab { padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; background: var(--card); border: 1px solid var(--border); }
+.sub-tab.active { background: var(--blue); border-color: var(--blue); color: white; }
+.stats-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 12px; text-align: center; }
+.stat .num { font-size: 24px; font-weight: 700; }
+.stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.research-box { display: flex; gap: 12px; margin-bottom: 24px; }
+.research-box input { flex: 1; }
+.report { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+.report h2 { margin-bottom: 16px; }
+.report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.inject-form { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.chart-container { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
+.empty { text-align: center; padding: 40px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>EdgeFinder v2</h1>
+  <div class="status" id="health-status">Connecting...</div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('strategies')">Strategies</div>
+  <div class="tab" onclick="switchTab('trades')">Trades</div>
+  <div class="tab" onclick="switchTab('research')">Research</div>
+  <div class="tab" onclick="switchTab('sentiment')">Sentiment</div>
+  <div class="tab" onclick="switchTab('benchmarks')">Benchmarks</div>
+  <div class="tab" onclick="switchTab('inject')">Inject</div>
+</div>
+
+<div class="content">
+
+<!-- STRATEGIES PANEL -->
+<div class="panel active" id="panel-strategies">
+  <h2 style="margin-bottom:16px">Strategy Accounts</h2>
+  <div class="cards" id="strategy-cards"></div>
+</div>
+
+<!-- TRADES PANEL -->
+<div class="panel" id="panel-trades">
+  <div class="filter-bar">
+    <select id="trade-strategy-filter" onchange="loadTrades()">
+      <option value="">All Strategies</option>
+    </select>
+    <div class="sub-tabs">
+      <div class="sub-tab active" onclick="setTradeFilter('all', this)">All</div>
+      <div class="sub-tab" onclick="setTradeFilter('OPEN', this)">Open</div>
+      <div class="sub-tab" onclick="setTradeFilter('wins', this)">Wins</div>
+      <div class="sub-tab" onclick="setTradeFilter('losses', this)">Losses</div>
+    </div>
+  </div>
+  <div class="stats-row" id="trade-stats"></div>
+  <table>
+    <thead>
+      <tr><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Type</th><th>Entry</th><th>Exit</th><th>Shares</th><th>P&L</th><th>R</th><th>Status</th><th>Reason</th></tr>
+    </thead>
+    <tbody id="trades-body"></tbody>
+  </table>
+</div>
+
+<!-- RESEARCH PANEL -->
+<div class="panel" id="panel-research">
+  <div class="research-box">
+    <input type="text" id="research-input" placeholder="Enter ticker symbol (e.g., AAPL)" onkeydown="if(event.key==='Enter')doResearch()">
+    <button onclick="doResearch()">Research</button>
+  </div>
+  <div id="research-result"></div>
+  <h3 style="margin:24px 0 12px">Active Watchlist</h3>
+  <table>
+    <thead><tr><th>Symbol</th><th>Company</th><th>Sector</th><th>Market Cap</th><th>Price</th></tr></thead>
+    <tbody id="active-tickers"></tbody>
+  </table>
+</div>
+
+<!-- SENTIMENT PANEL -->
+<div class="panel" id="panel-sentiment">
+  <h2 style="margin-bottom:16px">Trending Tickers</h2>
+  <div class="cards" id="trending-cards"></div>
+  <div class="research-box" style="margin-top:24px">
+    <input type="text" id="sentiment-input" placeholder="Check sentiment for ticker..." onkeydown="if(event.key==='Enter')doSentiment()">
+    <button onclick="doSentiment()">Check</button>
+  </div>
+  <div id="sentiment-result"></div>
+</div>
+
+<!-- BENCHMARKS PANEL -->
+<div class="panel" id="panel-benchmarks">
+  <div class="filter-bar">
+    <select id="benchmark-days" onchange="loadBenchmarks()">
+      <option value="30">30 Days</option>
+      <option value="90" selected>90 Days</option>
+      <option value="180">180 Days</option>
+      <option value="365">1 Year</option>
+    </select>
+    <button onclick="fetch('/api/benchmarks/collect',{method:'POST'}).then(()=>loadBenchmarks())">Collect Today</button>
+    <button onclick="fetch('/api/benchmarks/backfill?days=365',{method:'POST'}).then(()=>loadBenchmarks())">Backfill 1Y</button>
+  </div>
+  <div class="chart-container"><canvas id="benchmark-chart" height="300"></canvas></div>
+</div>
+
+<!-- INJECT PANEL -->
+<div class="panel" id="panel-inject">
+  <h2 style="margin-bottom:16px">Manual Ticker Injection</h2>
+  <div class="inject-form">
+    <input type="text" id="inject-symbol" placeholder="Symbol (e.g., GME)">
+    <select id="inject-strategy"><option value="">All Strategies</option></select>
+    <input type="text" id="inject-notes" placeholder="Notes (optional)">
+    <input type="number" id="inject-hours" placeholder="Expires in hours" style="width:140px">
+    <button onclick="doInject()">Inject</button>
+  </div>
+  <table>
+    <thead><tr><th>Symbol</th><th>Target</th><th>Notes</th><th>Expires</th><th>Created</th><th></th></tr></thead>
+    <tbody id="injections-body"></tbody>
+  </table>
+</div>
+
+</div>
+
+<script>
+let currentTradeFilter = 'all';
+let benchmarkChart = null;
+
+// ── Tab switching ───────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('panel-' + name).classList.add('active');
+  if (name === 'strategies') loadStrategies();
+  if (name === 'trades') loadTrades();
+  if (name === 'research') loadActiveTickers();
+  if (name === 'sentiment') loadTrending();
+  if (name === 'benchmarks') loadBenchmarks();
+  if (name === 'inject') loadInjections();
+}
+
+// ── Health ───────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch('/api/health');
+    const d = await r.json();
+    document.getElementById('health-status').textContent = `v${d.version} | ${d.status}`;
+    document.getElementById('health-status').style.color = '#22c55e';
+  } catch { document.getElementById('health-status').textContent = 'Disconnected'; }
+}
+
+// ── Strategies ──────────────────────────────
+async function loadStrategies() {
+  const [strats, accounts] = await Promise.all([
+    fetch('/api/strategies').then(r => r.json()),
+    fetch('/api/strategies/accounts').then(r => r.json()),
+  ]);
+  const container = document.getElementById('strategy-cards');
+  if (!accounts.length && strats.length) {
+    container.innerHTML = strats.map(s => `
+      <div class="card">
+        <h3>${s.name}</h3>
+        <div class="row"><span class="label">Class</span><span class="value">${s.class}</span></div>
+        <div class="row"><span class="label">Status</span><span class="value">No account yet</span></div>
+      </div>`).join('');
+    return;
+  }
+  container.innerHTML = accounts.map(a => {
+    const pnl = a.total_equity - a.starting_capital;
+    const cls = pnl >= 0 ? 'positive' : 'negative';
+    return `<div class="card">
+      <h3>${a.strategy_name}</h3>
+      <div class="row"><span class="label">Cash</span><span class="value">$${a.cash_balance.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Equity</span><span class="value">$${a.total_equity.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Open Value</span><span class="value">$${a.open_positions_value.toFixed(2)}</span></div>
+      <div class="row"><span class="label">P&L</span><span class="value ${cls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Drawdown</span><span class="value">${(a.drawdown_pct*100).toFixed(1)}%</span></div>
+      <div class="row"><span class="label">PDT</span><span class="value">${a.pdt_enabled ? 'Enabled' : 'Disabled'}</span></div>
+      <div class="row"><span class="label">Status</span><span class="value">${a.is_paused ? 'PAUSED' : 'Active'}</span></div>
+    </div>`;
+  }).join('');
+  // Populate filter dropdowns
+  const opts = strats.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  document.getElementById('trade-strategy-filter').innerHTML = '<option value="">All Strategies</option>' + opts;
+  document.getElementById('inject-strategy').innerHTML = '<option value="">All Strategies</option>' + opts;
+}
+
+// ── Trades ──────────────────────────────────
+function setTradeFilter(filter, el) {
+  currentTradeFilter = filter;
+  document.querySelectorAll('#panel-trades .sub-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  loadTrades();
+}
+
+async function loadTrades() {
+  const strat = document.getElementById('trade-strategy-filter').value;
+  let url, trades;
+  if (currentTradeFilter === 'wins') { url = `/api/trades/wins${strat ? '?strategy=' + strat : ''}`; }
+  else if (currentTradeFilter === 'losses') { url = `/api/trades/losses${strat ? '?strategy=' + strat : ''}`; }
+  else { url = `/api/trades?${strat ? 'strategy=' + strat + '&' : ''}${currentTradeFilter !== 'all' ? 'status=' + currentTradeFilter : ''}`; }
+  trades = await fetch(url).then(r => r.json());
+  // Stats
+  const statsUrl = `/api/trades/stats${strat ? '?strategy=' + strat : ''}`;
+  const stats = await fetch(statsUrl).then(r => r.json());
+  document.getElementById('trade-stats').innerHTML = [
+    ['Total', stats.total_trades || 0],
+    ['Wins', stats.wins || 0],
+    ['Losses', stats.losses || 0],
+    ['Win Rate', stats.win_rate ? (stats.win_rate * 100).toFixed(1) + '%' : '—'],
+    ['Total P&L', stats.total_pnl ? '$' + stats.total_pnl.toFixed(2) : '—'],
+    ['Avg R', stats.avg_r_multiple ? stats.avg_r_multiple.toFixed(2) + 'R' : '—'],
+    ['Profit Factor', stats.profit_factor ? stats.profit_factor.toFixed(2) : '—'],
+  ].map(([l, v]) => `<div class="stat"><div class="num">${v}</div><div class="lbl">${l}</div></div>`).join('');
+  // Table
+  document.getElementById('trades-body').innerHTML = trades.length ? trades.map(t => {
+    const pnlCls = (t.pnl_dollars || 0) > 0 ? 'positive' : (t.pnl_dollars || 0) < 0 ? 'negative' : '';
+    const statusCls = t.status === 'OPEN' ? 'open' : t.pnl_dollars > 0 ? 'win' : 'loss';
+    return `<tr>
+      <td><strong>${t.symbol}</strong></td><td>${t.strategy_name}</td><td>${t.direction}</td><td>${t.trade_type}</td>
+      <td>$${t.entry_price?.toFixed(2) || '—'}</td><td>${t.exit_price ? '$' + t.exit_price.toFixed(2) : '—'}</td>
+      <td>${t.shares}</td><td class="${pnlCls}">${t.pnl_dollars ? '$' + t.pnl_dollars.toFixed(2) : '—'}</td>
+      <td>${t.r_multiple ? t.r_multiple.toFixed(2) + 'R' : '—'}</td>
+      <td><span class="pill ${statusCls}">${t.status}</span></td><td>${t.exit_reason || '—'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="11" class="empty">No trades yet</td></tr>';
+}
+
+// ── Research ────────────────────────────────
+async function doResearch() {
+  const sym = document.getElementById('research-input').value.trim().toUpperCase();
+  if (!sym) return;
+  const r = await fetch(`/api/research/ticker/${sym}`).then(r => r.json());
+  const f = r.fundamentals || {};
+  document.getElementById('research-result').innerHTML = `
+    <div class="report">
+      <h2>${r.symbol} — ${r.company_name || 'Unknown'}</h2>
+      <div class="report-grid">
+        <div class="card">
+          <h3>Overview</h3>
+          <div class="row"><span class="label">Sector</span><span class="value">${r.sector || '—'}</span></div>
+          <div class="row"><span class="label">Price</span><span class="value">${r.price ? '$' + r.price.toFixed(2) : '—'}</span></div>
+          <div class="row"><span class="label">Market Cap</span><span class="value">${r.market_cap ? '$' + (r.market_cap/1e9).toFixed(1) + 'B' : '—'}</span></div>
+          <div class="row"><span class="label">Active</span><span class="value">${r.is_active ? 'Yes' : 'No'}</span></div>
+          <div class="row"><span class="label">Strategies</span><span class="value">${r.qualifying_strategies?.join(', ') || 'None'}</span></div>
+        </div>
+        <div class="card">
+          <h3>Scores</h3>
+          <div class="row"><span class="label">Lynch</span><span class="value">${r.lynch_score?.toFixed(1) || '—'} (${r.lynch_category || '—'})</span></div>
+          <div class="row"><span class="label">Burry</span><span class="value">${r.burry_score?.toFixed(1) || '—'}</span></div>
+          <div class="row"><span class="label">Composite</span><span class="value">${r.composite_score?.toFixed(1) || '—'}</span></div>
+        </div>
+        <div class="card">
+          <h3>Fundamentals</h3>
+          ${Object.entries(f).map(([k,v]) => `<div class="row"><span class="label">${k}</span><span class="value">${v !== null ? (typeof v === 'number' ? v.toFixed(3) : v) : '—'}</span></div>`).join('')}
+        </div>
+        <div class="card">
+          <h3>Sentiment</h3>
+          <div class="row"><span class="label">Score</span><span class="value">${r.sentiment?.composite_score?.toFixed(3) || '—'}</span></div>
+          <div class="row"><span class="label">Mentions</span><span class="value">${r.sentiment?.total_mentions || 0}</span></div>
+          <div class="row"><span class="label">Trending</span><span class="value">${r.sentiment?.is_trending ? 'Yes' : 'No'}</span></div>
+          <div class="row"><span class="label">Action</span><span class="value">${r.sentiment?.action || '—'}</span></div>
+        </div>
+        <div class="card">
+          <h3>Trade History</h3>
+          <div class="row"><span class="label">Total Trades</span><span class="value">${r.trade_count}</span></div>
+          <div class="row"><span class="label">Open</span><span class="value">${r.open_trades}</span></div>
+          <div class="row"><span class="label">Closed</span><span class="value">${r.closed_trades}</span></div>
+          <div class="row"><span class="label">Total P&L</span><span class="value ${r.total_pnl >= 0 ? 'positive' : 'negative'}">$${r.total_pnl?.toFixed(2) || '0.00'}</span></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function loadActiveTickers() {
+  const tickers = await fetch('/api/research/active').then(r => r.json());
+  document.getElementById('active-tickers').innerHTML = tickers.length ? tickers.map(t =>
+    `<tr><td><strong>${t.symbol}</strong></td><td>${t.company_name || '—'}</td><td>${t.sector || '—'}</td>
+     <td>${t.market_cap ? '$' + (t.market_cap/1e9).toFixed(1) + 'B' : '—'}</td>
+     <td>${t.last_price ? '$' + t.last_price.toFixed(2) : '—'}</td></tr>`
+  ).join('') : '<tr><td colspan="5" class="empty">No active tickers. Run the scanner first.</td></tr>';
+}
+
+// ── Sentiment ───────────────────────────────
+async function loadTrending() {
+  const trending = await fetch('/api/sentiment/trending').then(r => r.json());
+  document.getElementById('trending-cards').innerHTML = trending.length ? trending.map(t => `
+    <div class="card">
+      <h3>${t.symbol}</h3>
+      <div class="row"><span class="label">Source</span><span class="value">${t.source}</span></div>
+      <div class="row"><span class="label">Score</span><span class="value ${t.score > 0 ? 'positive' : t.score < 0 ? 'negative' : ''}">${t.score.toFixed(3)}</span></div>
+      <div class="row"><span class="label">Mentions</span><span class="value">${t.mention_count}</span></div>
+    </div>`).join('') : '<div class="empty">No trending tickers detected</div>';
+}
+
+async function doSentiment() {
+  const sym = document.getElementById('sentiment-input').value.trim().toUpperCase();
+  if (!sym) return;
+  const r = await fetch(`/api/sentiment/ticker/${sym}`).then(r => r.json());
+  document.getElementById('sentiment-result').innerHTML = `
+    <div class="card" style="margin-top:16px">
+      <h3>${r.symbol} Sentiment</h3>
+      <div class="row"><span class="label">Composite</span><span class="value ${r.composite_score > 0 ? 'positive' : r.composite_score < 0 ? 'negative' : ''}">${r.composite_score.toFixed(3)}</span></div>
+      <div class="row"><span class="label">Action</span><span class="value">${r.action}</span></div>
+      <div class="row"><span class="label">Mentions</span><span class="value">${r.total_mentions}</span></div>
+      <div class="row"><span class="label">Trending</span><span class="value">${r.is_trending ? 'Yes' : 'No'}</span></div>
+      ${Object.entries(r.source_scores || {}).map(([s,v]) => `<div class="row"><span class="label">${s}</span><span class="value">${v.toFixed(3)}</span></div>`).join('')}
+    </div>`;
+}
+
+// ── Benchmarks ──────────────────────────────
+async function loadBenchmarks() {
+  const days = document.getElementById('benchmark-days').value;
+  const data = await fetch(`/api/benchmarks/comparison?days=${days}`).then(r => r.json());
+  const ctx = document.getElementById('benchmark-chart').getContext('2d');
+  if (benchmarkChart) benchmarkChart.destroy();
+  const colors = { SPY: '#3b82f6', QQQ: '#22c55e', IWM: '#eab308', DIA: '#a855f7' };
+  const datasets = Object.entries(data.indices || {}).map(([sym, vals]) => ({
+    label: sym, data: vals, borderColor: colors[sym] || '#888', borderWidth: 2, pointRadius: 0, fill: false, tension: 0.3,
+  }));
+  if (!datasets.length) { document.getElementById('benchmark-chart').parentElement.innerHTML = '<div class="empty">No benchmark data. Click "Backfill 1Y" to load historical data.</div>'; return; }
+  benchmarkChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: data.dates || [], datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { y: { ticks: { callback: v => v + '%', color: '#888' }, grid: { color: '#2a2d3a' } }, x: { ticks: { maxTicksLimit: 10, color: '#888' }, grid: { color: '#2a2d3a' } } },
+      plugins: { legend: { labels: { color: '#e0e0e0' } } },
+    },
+  });
+}
+
+// ── Inject ───────────────────────────────────
+async function doInject() {
+  const body = {
+    symbol: document.getElementById('inject-symbol').value.trim().toUpperCase(),
+    target_strategy: document.getElementById('inject-strategy').value || null,
+    notes: document.getElementById('inject-notes').value,
+    expires_hours: parseInt(document.getElementById('inject-hours').value) || null,
+  };
+  if (!body.symbol) return;
+  await fetch('/api/inject', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  document.getElementById('inject-symbol').value = '';
+  document.getElementById('inject-notes').value = '';
+  document.getElementById('inject-hours').value = '';
+  loadInjections();
+}
+
+async function loadInjections() {
+  const injs = await fetch('/api/inject').then(r => r.json());
+  document.getElementById('injections-body').innerHTML = injs.length ? injs.map(i => `
+    <tr>
+      <td><strong>${i.symbol}</strong></td><td>${i.target_strategy || 'All'}</td><td>${i.notes || '—'}</td>
+      <td>${i.expires_at ? new Date(i.expires_at).toLocaleString() : 'Never'} ${i.is_expired ? '(expired)' : ''}</td>
+      <td>${i.created_at ? new Date(i.created_at).toLocaleString() : '—'}</td>
+      <td><button onclick="removeInjection(${i.id})" style="background:var(--red);padding:4px 8px;font-size:11px">Remove</button></td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">No injections</td></tr>';
+}
+
+async function removeInjection(id) {
+  await fetch(`/api/inject/${id}`, { method: 'DELETE' });
+  loadInjections();
+}
+
+// ── Init ────────────────────────────────────
+checkHealth();
+loadStrategies();
+</script>
+</body>
+</html>
