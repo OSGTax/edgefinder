@@ -77,9 +77,9 @@ def init_services() -> None:
     _arena.load_strategies()
 
     watchlist = _load_watchlist()
-    if not watchlist:
-        # First run — auto-scan to populate research tab
-        logger.info("No active tickers — running initial scan")
+    if not watchlist or not _has_fundamentals():
+        # First run or no scored data — scan to populate research tab
+        logger.info("No scored tickers — running initial scan")
         _run_initial_scan()
         watchlist = _load_watchlist()
 
@@ -197,6 +197,17 @@ def _load_watchlist() -> list[str]:
             .all()
         )
         return [row[0] for row in active]
+    finally:
+        session.close()
+
+
+def _has_fundamentals() -> bool:
+    """Check if the DB has any scored fundamental data."""
+    from edgefinder.db.models import Fundamental
+
+    session = _session_factory()
+    try:
+        return session.query(Fundamental).first() is not None
     finally:
         session.close()
 
