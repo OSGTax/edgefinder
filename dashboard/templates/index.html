@@ -55,6 +55,15 @@ button:hover { opacity: 0.9; }
 .inject-form { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 .chart-container { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 24px; }
 .empty { text-align: center; padding: 40px; color: var(--muted); }
+th.info-header, .label.info-label { cursor: pointer; position: relative; }
+th.info-header:hover, .label.info-label:hover { color: var(--blue); }
+th.info-header::after, .label.info-label::after { content: ' ?'; font-size: 10px; opacity: 0.5; }
+.tooltip-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; }
+.tooltip-overlay.active { display: flex; }
+.tooltip-box { background: var(--card); border: 1px solid var(--blue); border-radius: 8px; padding: 20px; max-width: 400px; width: 90%; }
+.tooltip-box h4 { color: var(--blue); margin-bottom: 8px; font-size: 15px; }
+.tooltip-box p { font-size: 13px; line-height: 1.5; color: var(--text); }
+.tooltip-box .close-tip { margin-top: 12px; font-size: 12px; color: var(--muted); cursor: pointer; text-align: right; }
 </style>
 </head>
 <body>
@@ -115,8 +124,13 @@ button:hover { opacity: 0.9; }
   <table>
     <thead><tr>
       <th>Symbol</th><th>Company</th><th>Sector</th><th>Price</th><th>Mkt Cap</th>
-      <th>Earn Gr</th><th>Rev Gr</th><th>PEG</th><th>D/E</th>
-      <th>FCF Yld</th><th>Cur Ratio</th><th>P/TB</th>
+      <th class="info-header" onclick="showInfo('earnings_growth')">Earn Gr</th>
+      <th class="info-header" onclick="showInfo('revenue_growth')">Rev Gr</th>
+      <th class="info-header" onclick="showInfo('peg_ratio')">PEG</th>
+      <th class="info-header" onclick="showInfo('debt_to_equity')">D/E</th>
+      <th class="info-header" onclick="showInfo('fcf_yield')">FCF Yld</th>
+      <th class="info-header" onclick="showInfo('current_ratio')">Cur Ratio</th>
+      <th class="info-header" onclick="showInfo('price_to_tangible_book')">P/TB</th>
       <th>Strategies</th><th>Source</th>
     </tr></thead>
     <tbody id="active-tickers"></tbody>
@@ -168,7 +182,70 @@ button:hover { opacity: 0.9; }
 
 </div>
 
+<div class="tooltip-overlay" id="info-overlay" onclick="if(event.target===this)closeInfo()">
+  <div class="tooltip-box">
+    <h4 id="info-title"></h4>
+    <p id="info-body"></p>
+    <div class="close-tip" onclick="closeInfo()">Close</div>
+  </div>
+</div>
+
 <script>
+const METRIC_INFO = {
+  earnings_growth: {
+    title: 'Earnings Growth',
+    body: 'Year-over-year change in net income. Calculated as (current net income - prior net income) / |prior net income|. Positive values mean the company is growing profits. A value of 25% means earnings grew by a quarter. Negative values indicate shrinking profits. Alpha strategy requires this to be positive.'
+  },
+  revenue_growth: {
+    title: 'Revenue Growth',
+    body: 'Year-over-year change in total revenue. Calculated as (current revenue - prior revenue) / |prior revenue|. Shows whether the company is selling more. High revenue growth with low earnings growth may indicate rising costs. Alpha strategy requires this to be positive.'
+  },
+  peg_ratio: {
+    title: 'PEG Ratio (Price/Earnings to Growth)',
+    body: 'The P/E ratio divided by earnings growth rate. A PEG of 1.0 means the stock is fairly valued relative to its growth. Below 1.0 suggests undervaluation — you\'re paying less per unit of growth. Above 2.0 may indicate overvaluation. Only meaningful when earnings growth is positive.'
+  },
+  debt_to_equity: {
+    title: 'Debt-to-Equity Ratio (D/E)',
+    body: 'Total liabilities divided by shareholder equity. Measures how much debt a company uses to finance its operations. Below 1.0 means more equity than debt (conservative). Above 2.0 indicates heavy leverage. Bravo strategy rejects stocks above 2.0; Charlie rejects above 3.0. Varies significantly by industry — banks and REITs naturally run higher.'
+  },
+  fcf_yield: {
+    title: 'Free Cash Flow Yield',
+    body: 'Operating cash flow divided by market cap. Shows how much actual cash the business generates relative to its price. A yield of 5% means the company generates $5 in cash for every $100 of market value. Higher is better — it means you\'re paying less for each dollar of cash flow. Charlie strategy requires this above 2%.'
+  },
+  current_ratio: {
+    title: 'Current Ratio',
+    body: 'Current assets divided by current liabilities. Measures short-term liquidity — can the company pay its bills due within a year? Above 1.0 means it can cover obligations. Below 1.0 is a warning sign for financial stress. Above 2.0 is very healthy. Bravo strategy requires this above 1.0.'
+  },
+  price_to_tangible_book: {
+    title: 'Price-to-Tangible Book (P/TB)',
+    body: 'Market cap divided by tangible book value (total assets minus total liabilities). Shows what you\'re paying relative to the company\'s hard asset value. Below 1.0 means the stock trades below its liquidation value — classic deep value territory. Above 5.0 means investors are paying mostly for intangibles like brand and growth expectations.'
+  },
+  ev_to_ebitda: {
+    title: 'EV/EBITDA',
+    body: 'Enterprise value divided by earnings before interest, taxes, depreciation, and amortization. A valuation metric that accounts for debt levels. Lower values suggest cheaper valuation. Below 8.0 is generally considered value territory. More reliable than P/E for comparing companies with different capital structures.'
+  },
+  short_interest: {
+    title: 'Short Interest',
+    body: 'Percentage of shares outstanding currently sold short. High short interest (above 15%) means many investors are betting against the stock. Can signal weakness, but also creates squeeze potential if the stock rises and shorts are forced to cover. Contrarian investors may see high short interest as an opportunity.'
+  },
+  institutional_pct: {
+    title: 'Institutional Ownership %',
+    body: 'Percentage of shares held by institutional investors (mutual funds, pension funds, hedge funds). High institutional ownership (60-80%) suggests professional validation but limited upside discovery. Very low ownership may mean underfollowed opportunity or red flags that professionals have identified.'
+  },
+};
+
+function showInfo(key) {
+  const info = METRIC_INFO[key];
+  if (!info) return;
+  document.getElementById('info-title').textContent = info.title;
+  document.getElementById('info-body').textContent = info.body;
+  document.getElementById('info-overlay').classList.add('active');
+}
+
+function closeInfo() {
+  document.getElementById('info-overlay').classList.remove('active');
+}
+
 let currentTradeFilter = 'all';
 let benchmarkChart = null;
 
@@ -218,8 +295,8 @@ async function loadStrategies() {
     return `<div class="card">
       <h3>${a.strategy_name}</h3>
       <div class="row"><span class="label">Cash</span><span class="value">$${(a.cash ?? a.cash_balance ?? 0).toFixed(2)}</span></div>
-      <div class="row"><span class="label">Equity</span><span class="value">$${a.total_equity.toFixed(2)}</span></div>
-      <div class="row"><span class="label">Open Value</span><span class="value">$${a.open_positions_value.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Securities Held</span><span class="value">$${a.open_positions_value.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Total Account Value</span><span class="value">$${a.total_equity.toFixed(2)}</span></div>
       <div class="row"><span class="label">P&L</span><span class="value ${cls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span></div>
       <div class="row"><span class="label">Drawdown</span><span class="value">${(a.drawdown_pct*100).toFixed(1)}%</span></div>
       <div class="row"><span class="label">PDT</span><span class="value">${a.pdt_enabled ? 'Enabled' : 'Disabled'}</span></div>
@@ -294,17 +371,17 @@ async function doResearch() {
         <div class="card">
           <h3>Fundamentals</h3>
           ${[
-            ['PEG Ratio', f.peg_ratio, v => v?.toFixed(2)],
-            ['Earnings Growth', f.earnings_growth, v => v != null ? (v*100).toFixed(1)+'%' : null],
-            ['Revenue Growth', f.revenue_growth, v => v != null ? (v*100).toFixed(1)+'%' : null],
-            ['Debt/Equity', f.debt_to_equity, v => v?.toFixed(2)],
-            ['Current Ratio', f.current_ratio, v => v?.toFixed(2)],
-            ['FCF Yield', f.fcf_yield, v => v != null ? (v*100).toFixed(1)+'%' : null],
-            ['P/Tangible Book', f.price_to_tangible_book, v => v?.toFixed(2)],
-            ['EV/EBITDA', f.ev_to_ebitda, v => v?.toFixed(2)],
-            ['Short Interest', f.short_interest, v => v != null ? (v*100).toFixed(1)+'%' : null],
-            ['Institutional %', f.institutional_pct, v => v != null ? (v*100).toFixed(1)+'%' : null],
-          ].map(([label, val, fmt]) => `<div class="row"><span class="label">${label}</span><span class="value">${val != null ? (fmt(val) || '—') : '—'}</span></div>`).join('')}
+            ['PEG Ratio', 'peg_ratio', f.peg_ratio, v => v?.toFixed(2)],
+            ['Earnings Growth', 'earnings_growth', f.earnings_growth, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['Revenue Growth', 'revenue_growth', f.revenue_growth, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['Debt/Equity', 'debt_to_equity', f.debt_to_equity, v => v?.toFixed(2)],
+            ['Current Ratio', 'current_ratio', f.current_ratio, v => v?.toFixed(2)],
+            ['FCF Yield', 'fcf_yield', f.fcf_yield, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['P/Tangible Book', 'price_to_tangible_book', f.price_to_tangible_book, v => v?.toFixed(2)],
+            ['EV/EBITDA', 'ev_to_ebitda', f.ev_to_ebitda, v => v?.toFixed(2)],
+            ['Short Interest', 'short_interest', f.short_interest, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['Institutional %', 'institutional_pct', f.institutional_pct, v => v != null ? (v*100).toFixed(1)+'%' : null],
+          ].map(([label, key, val, fmt]) => `<div class="row"><span class="label info-label" onclick="showInfo('${key}')">${label}</span><span class="value">${val != null ? (fmt(val) || '—') : '—'}</span></div>`).join('')}
         </div>
         <div class="card">
           <h3>Sentiment</h3>
