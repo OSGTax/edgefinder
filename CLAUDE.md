@@ -217,7 +217,6 @@ python -m pytest tests/ -v -m integration          # Integration tests (hits Pol
 ```
 
 ## Git Workflow
-- Never push directly to main
-- Feature branches off main
+- Commit and push directly to main
 - Run tests before every commit
 - Commit format: `[v2] short description`
