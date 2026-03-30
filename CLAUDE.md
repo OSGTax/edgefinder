@@ -219,4 +219,5 @@ python -m pytest tests/ -v -m integration          # Integration tests (hits Pol
 ## Git Workflow
 - Commit and push directly to main
 - Run tests before every commit
-- Commit format: `[v2] short description`
+- Commit format: `[vX.Y] short description`
+- **Version bump required**: Every merge to main that changes functionality must update `__version__` in `dashboard/app.py`. This version is displayed in the top-right corner of the dashboard via `/api/health`.
