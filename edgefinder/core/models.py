@@ -186,23 +186,17 @@ class TickerFundamentals(BaseModel):
     industry: Optional[str] = None
     market_cap: Optional[float] = None
     price: Optional[float] = None
-    # Lynch fields
+    # Fundamental ratios
     peg_ratio: Optional[float] = None
     earnings_growth: Optional[float] = None
     debt_to_equity: Optional[float] = None
     revenue_growth: Optional[float] = None
     institutional_pct: Optional[float] = None
-    # Burry fields
     fcf_yield: Optional[float] = None
     price_to_tangible_book: Optional[float] = None
     short_interest: Optional[float] = None
     ev_to_ebitda: Optional[float] = None
     current_ratio: Optional[float] = None
-    # Scores (computed by scanner)
-    lynch_score: Optional[float] = None
-    lynch_category: Optional[str] = None
-    burry_score: Optional[float] = None
-    composite_score: Optional[float] = None
     # Raw JSON for research deep-dive
     raw_data: Optional[dict] = None
 

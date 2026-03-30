@@ -1,9 +1,11 @@
-"""Alpha Strategy — Momentum / EMA Crossover day trading.
+"""Alpha Strategy — Momentum day trading.
 
-Targets fundamentally strong stocks with technical momentum.
-Qualifies: composite_score >= 60, earnings_growth > 0, PEG < 2.0
+Targets stocks with positive earnings and revenue momentum.
+Qualifies: earnings_growth > 0, revenue_growth > 0
 Signals: EMA crossovers, MACD bullish crosses, volume spikes
 Trade type: DAY
+
+NOTE: Mock framework — qualification criteria are placeholders for refinement.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ class AlphaStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "2.1"
+        return "3.0"
 
     @property
     def preferred_signals(self) -> list[str]:
@@ -38,14 +40,11 @@ class AlphaStrategy(BaseStrategy):
         pass
 
     def qualifies_stock(self, fundamentals: TickerFundamentals) -> bool:
-        composite = fundamentals.composite_score
-        if composite is None or composite < 60:
-            return False
         eg = fundamentals.earnings_growth
         if eg is None or eg <= 0:
             return False
-        peg = fundamentals.peg_ratio
-        if peg is not None and peg >= 2.0:
+        rg = fundamentals.revenue_growth
+        if rg is None or rg <= 0:
             return False
         return True
 
@@ -54,7 +53,6 @@ class AlphaStrategy(BaseStrategy):
         if indicators is None:
             return []
         all_signals = detect_signals(indicators, ticker)
-        # Filter to preferred patterns and DAY trades
         result = []
         for sig in all_signals:
             pattern = sig.metadata.get("pattern", "")

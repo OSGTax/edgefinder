@@ -31,31 +31,10 @@ def test_type_coercion(monkeypatch):
     assert isinstance(s.max_open_positions, int)
 
 
-def test_lynch_weights_sum():
-    """Lynch scoring weights should sum to 1.0."""
+def test_signal_check_interval():
+    """Signal check interval should be 5 minutes."""
     s = Settings(polygon_api_key="test")
-    total = (
-        s.lynch_peg_weight
-        + s.lynch_earnings_growth_weight
-        + s.lynch_debt_to_equity_weight
-        + s.lynch_revenue_growth_weight
-        + s.lynch_institutional_weight
-        + s.lynch_category_weight
-    )
-    assert abs(total - 1.0) < 0.001
-
-
-def test_burry_weights_sum():
-    """Burry scoring weights should sum to 1.0."""
-    s = Settings(polygon_api_key="test")
-    total = (
-        s.burry_fcf_yield_weight
-        + s.burry_price_to_tangible_book_weight
-        + s.burry_short_interest_weight
-        + s.burry_ev_to_ebitda_weight
-        + s.burry_current_ratio_weight
-    )
-    assert abs(total - 1.0) < 0.001
+    assert s.signal_check_interval_minutes == 5
 
 
 def test_cache_ttl_defaults():

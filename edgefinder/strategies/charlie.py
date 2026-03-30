@@ -1,9 +1,11 @@
-"""Charlie Strategy — Deep Value / Contrarian swing trading.
+"""Charlie Strategy — Value / Contrarian swing trading.
 
-Targets undervalued stocks with strong cash flow and manageable debt.
-Qualifies: burry_score >= 50, fcf_yield > 3%, debt_to_equity < 3.0
+Targets stocks with strong free cash flow and manageable debt.
+Qualifies: fcf_yield > 2%, debt_to_equity < 3.0
 Signals: RSI oversold, MACD bullish cross (high confidence only, >= 80)
 Trade type: SWING
+
+NOTE: Mock framework — qualification criteria are placeholders for refinement.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ class CharlieStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "2.1"
+        return "3.0"
 
     @property
     def preferred_signals(self) -> list[str]:
@@ -40,11 +42,8 @@ class CharlieStrategy(BaseStrategy):
         pass
 
     def qualifies_stock(self, fundamentals: TickerFundamentals) -> bool:
-        burry = fundamentals.burry_score
-        if burry is None or burry < 50:
-            return False
         fcf = fundamentals.fcf_yield
-        if fcf is None or fcf <= 0.03:
+        if fcf is None or fcf <= 0.02:
             return False
         dte = fundamentals.debt_to_equity
         if dte is not None and dte >= 3.0:

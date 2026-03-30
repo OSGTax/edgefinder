@@ -42,38 +42,6 @@ class Settings(BaseSettings):
     scanner_max_price: float = 500.00
     scanner_excluded_sectors: list[str] = Field(default=["Utilities"])
 
-    # ── LYNCH SCORING ────────────────────────────────
-    lynch_weight: float = 0.50
-    lynch_peg_ideal: float = 1.0
-    lynch_peg_max: float = 1.5
-    lynch_peg_weight: float = 0.25
-    lynch_earnings_growth_min: float = 0.15
-    lynch_earnings_growth_weight: float = 0.20
-    lynch_debt_to_equity_preferred: float = 0.5
-    lynch_debt_to_equity_max: float = 1.0
-    lynch_debt_to_equity_weight: float = 0.15
-    lynch_revenue_growth_min: float = 0.10
-    lynch_revenue_growth_weight: float = 0.15
-    lynch_institutional_min: float = 0.20
-    lynch_institutional_max: float = 0.70
-    lynch_institutional_weight: float = 0.10
-    lynch_category_weight: float = 0.15
-
-    # ── BURRY SCORING ────────────────────────────────
-    burry_weight: float = 0.50
-    burry_fcf_yield_strong: float = 0.08
-    burry_fcf_yield_acceptable: float = 0.05
-    burry_fcf_yield_weight: float = 0.30
-    burry_price_to_tangible_book_deep: float = 1.0
-    burry_price_to_tangible_book_value: float = 2.0
-    burry_price_to_tangible_book_weight: float = 0.25
-    burry_short_interest_contrarian: float = 0.15
-    burry_short_interest_weight: float = 0.15
-    burry_ev_to_ebitda_max: float = 8.0
-    burry_ev_to_ebitda_weight: float = 0.15
-    burry_current_ratio_min: float = 1.5
-    burry_current_ratio_weight: float = 0.15
-
     # ── SIGNALS / TECHNICAL ──────────────────────────
     signal_ema_fast_day: int = 9
     signal_ema_slow_day: int = 21
@@ -105,7 +73,7 @@ class Settings(BaseSettings):
 
     # ── SCHEDULING (ET timezone) ─────────────────────
     scanner_run_time: str = "18:15"
-    signal_check_interval_minutes: int = 15
+    signal_check_interval_minutes: int = 5
     market_open_et: str = "07:00"
     market_close_et: str = "18:00"
     position_monitor_interval_minutes: int = 5

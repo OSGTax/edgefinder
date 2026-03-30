@@ -1,4 +1,4 @@
-"""EdgeFinder v2 — Research service (replaces watchlist).
+"""EdgeFinder v2 — Research service.
 
 Aggregates fundamentals, technicals, sentiment, trade history, and
 strategy qualification into a single per-ticker report. Read-only layer.
@@ -34,11 +34,7 @@ class TickerReport:
     price: float | None = None
     is_active: bool = False
 
-    # Fundamental scores
-    lynch_score: float | None = None
-    lynch_category: str | None = None
-    burry_score: float | None = None
-    composite_score: float | None = None
+    # Fundamental ratios
     fundamentals: dict = field(default_factory=dict)
 
     # Technical indicators (latest)
@@ -86,10 +82,6 @@ class ResearchService:
 
             fund = self._session.query(Fundamental).filter_by(ticker_id=ticker.id).first()
             if fund:
-                report.lynch_score = fund.lynch_score
-                report.lynch_category = fund.lynch_category
-                report.burry_score = fund.burry_score
-                report.composite_score = fund.composite_score
                 report.fundamentals = {
                     "peg_ratio": fund.peg_ratio,
                     "earnings_growth": fund.earnings_growth,
@@ -110,7 +102,7 @@ class ResearchService:
                 report.price = live_price
 
             # Fetch fundamentals live if not already in DB
-            if not report.composite_score:
+            if not report.fundamentals:
                 try:
                     fund_data = self._provider.get_fundamentals(symbol)
                     if fund_data:
@@ -200,7 +192,7 @@ class ResearchService:
     def get_active_tickers(self) -> list[dict]:
         """Get all research tickers: scanner-qualified + manually injected.
 
-        Returns enriched data with scores, fundamentals, and strategy qualification.
+        Returns enriched data with fundamentals and strategy qualification.
         """
         results: dict[str, dict] = {}
 
@@ -231,7 +223,6 @@ class ResearchService:
             if inj.symbol in results:
                 results[inj.symbol]["source"] = "both"
                 continue
-            # Look up ticker in DB (may have been scanned but not active)
             ticker = self._session.query(Ticker).filter_by(symbol=inj.symbol).first()
             fund = None
             if ticker:
@@ -239,7 +230,7 @@ class ResearchService:
             entry = self._build_ticker_entry(ticker, fund, source="manual", symbol=inj.symbol)
             results[inj.symbol] = entry
 
-        return sorted(results.values(), key=lambda x: x.get("composite_score") or 0, reverse=True)
+        return sorted(results.values(), key=lambda x: x.get("market_cap") or 0, reverse=True)
 
     def _build_ticker_entry(
         self, ticker: Ticker | None, fund: Fundamental | None,
@@ -254,11 +245,6 @@ class ResearchService:
             "market_cap": ticker.market_cap if ticker else None,
             "last_price": ticker.last_price if ticker else None,
             "source": source,
-            # Scores
-            "lynch_score": None,
-            "lynch_category": None,
-            "burry_score": None,
-            "composite_score": None,
             # Key fundamentals
             "earnings_growth": None,
             "revenue_growth": None,
@@ -266,22 +252,22 @@ class ResearchService:
             "fcf_yield": None,
             "current_ratio": None,
             "debt_to_equity": None,
+            "price_to_tangible_book": None,
+            "ev_to_ebitda": None,
             # Strategies
             "qualifying_strategies": [],
         }
 
         if fund:
             entry.update({
-                "lynch_score": fund.lynch_score,
-                "lynch_category": fund.lynch_category,
-                "burry_score": fund.burry_score,
-                "composite_score": fund.composite_score,
                 "earnings_growth": fund.earnings_growth,
                 "revenue_growth": fund.revenue_growth,
                 "peg_ratio": fund.peg_ratio,
                 "fcf_yield": fund.fcf_yield,
                 "current_ratio": fund.current_ratio,
                 "debt_to_equity": fund.debt_to_equity,
+                "price_to_tangible_book": fund.price_to_tangible_book,
+                "ev_to_ebitda": fund.ev_to_ebitda,
             })
 
         # Strategy qualification
@@ -291,9 +277,6 @@ class ResearchService:
             sector=entry["sector"],
             market_cap=entry["market_cap"],
             price=entry["last_price"],
-            lynch_score=entry["lynch_score"],
-            burry_score=entry["burry_score"],
-            composite_score=entry["composite_score"],
             earnings_growth=entry["earnings_growth"],
             revenue_growth=entry["revenue_growth"],
             peg_ratio=entry["peg_ratio"],
@@ -319,8 +302,5 @@ class ResearchService:
             sector=report.sector,
             market_cap=report.market_cap,
             price=report.price,
-            lynch_score=report.lynch_score,
-            burry_score=report.burry_score,
-            composite_score=report.composite_score,
             **report.fundamentals,
         )

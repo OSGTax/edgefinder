@@ -69,22 +69,28 @@ def main():
     table.add_column("Symbol", style="cyan")
     table.add_column("Company", max_width=25)
     table.add_column("Sector")
-    table.add_column("Lynch", justify="right")
-    table.add_column("Burry", justify="right")
-    table.add_column("Composite", justify="right")
-    table.add_column("Category")
+    table.add_column("Earn Gr", justify="right")
+    table.add_column("Rev Gr", justify="right")
+    table.add_column("PEG", justify="right")
+    table.add_column("D/E", justify="right")
+    table.add_column("FCF Yld", justify="right")
     table.add_column("Strategies")
 
-    for stock in sorted(results, key=lambda s: s.composite_score, reverse=True):
+    def pct(v): return f"{v*100:.1f}%" if v is not None else "—"
+    def fmt(v): return f"{v:.2f}" if v is not None else "—"
+
+    for stock in sorted(results, key=lambda s: s.fundamentals.market_cap or 0, reverse=True):
+        f = stock.fundamentals
         strats = ", ".join(stock.qualifying_strategies) or "—"
         table.add_row(
             stock.symbol,
-            stock.fundamentals.company_name or "—",
-            stock.fundamentals.sector or "—",
-            f"{stock.lynch_score:.1f}",
-            f"{stock.burry_score:.1f}",
-            f"{stock.composite_score:.1f}",
-            stock.lynch_category,
+            f.company_name or "—",
+            f.sector or "—",
+            pct(f.earnings_growth),
+            pct(f.revenue_growth),
+            fmt(f.peg_ratio),
+            fmt(f.debt_to_equity),
+            pct(f.fcf_yield),
             strats,
         )
 

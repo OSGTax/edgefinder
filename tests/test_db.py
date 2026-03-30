@@ -95,30 +95,28 @@ class TestFundamental:
             symbol="GOOG",
             peg_ratio=1.2,
             earnings_growth=0.25,
-            lynch_score=75.0,
-            burry_score=60.0,
-            composite_score=67.5,
+            current_ratio=1.8,
         )
         db_session.add(fund)
         db_session.flush()
 
         result = db_session.query(Fundamental).filter_by(symbol="GOOG").first()
         assert result.peg_ratio == 1.2
-        assert result.composite_score == 67.5
+        assert result.current_ratio == 1.8
 
     def test_ticker_relationship(self, db_session):
         ticker = Ticker(symbol="TSLA")
         db_session.add(ticker)
         db_session.flush()
 
-        fund = Fundamental(ticker_id=ticker.id, symbol="TSLA", lynch_score=50.0)
+        fund = Fundamental(ticker_id=ticker.id, symbol="TSLA", fcf_yield=0.05)
         db_session.add(fund)
         db_session.flush()
 
         # Access via relationship
         db_session.refresh(ticker)
         assert ticker.fundamentals is not None
-        assert ticker.fundamentals.lynch_score == 50.0
+        assert ticker.fundamentals.fcf_yield == 0.05
 
     def test_json_raw_data_roundtrip(self, db_session):
         ticker = Ticker(symbol="META")

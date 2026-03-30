@@ -6,7 +6,7 @@ import pytest
 
 from edgefinder.core.models import TickerFundamentals
 from edgefinder.db.models import Fundamental, Ticker
-from edgefinder.scanner.scanner import FundamentalScanner, ScoredStock
+from edgefinder.scanner.scanner import FundamentalScanner, ScannedStock
 from edgefinder.strategies.base import StrategyRegistry
 
 
@@ -76,106 +76,20 @@ class TestPreScreen:
         assert scanner._passes_prescreen(fund) is True
 
 
-class TestLynchScoring:
-    def test_perfect_stock(self, scanner):
-        fund = _make_fund(
-            peg_ratio=0.8,
-            earnings_growth=0.30,
-            debt_to_equity=0.3,
-            revenue_growth=0.25,
-            institutional_pct=0.45,
-        )
-        score, cat = scanner._score_lynch(fund)
-        assert score > 80
-        assert cat == "fast_grower"
-
-    def test_terrible_stock(self, scanner):
-        fund = _make_fund(
-            peg_ratio=4.0,
-            earnings_growth=-0.10,
-            debt_to_equity=3.0,
-            revenue_growth=-0.05,
-            institutional_pct=0.90,
-        )
-        score, cat = scanner._score_lynch(fund)
-        assert score < 25
-
-    def test_missing_data_graceful(self, scanner):
-        fund = TickerFundamentals(symbol="SPARSE")
-        score, cat = scanner._score_lynch(fund)
-        assert 0 <= score <= 100
-        assert cat == "slow_grower"
-
-    def test_category_fast_grower(self, scanner):
-        fund = _make_fund(earnings_growth=0.25, revenue_growth=0.20)
-        _, cat = scanner._score_lynch(fund)
-        assert cat == "fast_grower"
-
-    def test_category_turnaround(self, scanner):
-        fund = _make_fund(earnings_growth=-0.10, debt_to_equity=1.0, revenue_growth=0.01)
-        _, cat = scanner._score_lynch(fund)
-        assert cat == "turnaround"
-
-    def test_category_stalwart(self, scanner):
-        fund = _make_fund(
-            earnings_growth=0.15, revenue_growth=0.08,
-            market_cap=50_000_000_000,
-        )
-        _, cat = scanner._score_lynch(fund)
-        assert cat == "stalwart"
-
-
-class TestBurryScoring:
-    def test_perfect_value(self, scanner):
-        fund = _make_fund(
-            fcf_yield=0.10,
-            price_to_tangible_book=0.8,
-            short_interest=0.20,
-            ev_to_ebitda=3.0,
-            current_ratio=2.5,
-        )
-        score = scanner._score_burry(fund)
-        assert score > 85
-
-    def test_no_value(self, scanner):
-        fund = _make_fund(
-            fcf_yield=-0.02,
-            price_to_tangible_book=8.0,
-            short_interest=0.01,
-            ev_to_ebitda=20.0,
-            current_ratio=0.5,
-        )
-        score = scanner._score_burry(fund)
-        assert score < 20
-
-    def test_missing_data_graceful(self, scanner):
-        fund = TickerFundamentals(symbol="SPARSE")
-        score = scanner._score_burry(fund)
-        assert 0 <= score <= 100
-
-
-class TestComposite:
-    def test_50_50_default(self, scanner):
-        result = scanner._compute_composite(80.0, 60.0)
-        assert result == 70.0
-
-
 class TestStrategyQualification:
     def test_any_strategy_qualifies(self, scanner):
-        fund = _make_fund(composite_score=75.0)
+        fund = _make_fund(earnings_growth=0.20, revenue_growth=0.15)
         qualifying = scanner._check_strategy_qualification(fund)
         assert len(qualifying) > 0
-        assert "alpha" in qualifying
 
     def test_no_strategy_qualifies(self, scanner):
         fund = TickerFundamentals(
             symbol="JUNK",
-            composite_score=10.0,
             earnings_growth=-0.50,
-            burry_score=10.0,
+            revenue_growth=-0.20,
             current_ratio=0.5,
-            short_interest=0.01,
             fcf_yield=0.01,
+            debt_to_equity=5.0,
         )
         qualifying = scanner._check_strategy_qualification(fund)
         assert len(qualifying) == 0
@@ -193,8 +107,8 @@ class TestDBPersistence:
         ticker = db_session.query(Ticker).filter_by(symbol="AAPL").first()
         fund = db_session.query(Fundamental).filter_by(ticker_id=ticker.id).first()
         assert fund is not None
-        assert fund.lynch_score is not None
-        assert fund.burry_score is not None
+        assert fund.earnings_growth is not None
+        assert fund.current_ratio is not None
 
     def test_upsert_updates_existing(self, scanner, db_session):
         scanner.run(tickers=["AAPL"])
@@ -204,14 +118,12 @@ class TestDBPersistence:
 
 
 class TestFullPipeline:
-    def test_scan_returns_scored_stocks(self, scanner):
+    def test_scan_returns_scanned_stocks(self, scanner):
         results = scanner.run(tickers=["AAPL", "MSFT"])
         assert len(results) == 2
         for stock in results:
-            assert isinstance(stock, ScoredStock)
-            assert stock.lynch_score > 0
-            assert stock.burry_score > 0
-            assert stock.composite_score > 0
+            assert isinstance(stock, ScannedStock)
+            assert stock.fundamentals.earnings_growth is not None
 
     def test_scan_publishes_event(self, scanner):
         events = []

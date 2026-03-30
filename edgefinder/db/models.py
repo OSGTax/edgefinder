@@ -61,24 +61,17 @@ class Fundamental(Base):
     ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), unique=True)
     symbol: Mapped[str] = mapped_column(String(10), index=True)
 
-    # Lynch metrics
+    # Fundamental ratios
     peg_ratio: Mapped[float | None] = mapped_column(Float)
     earnings_growth: Mapped[float | None] = mapped_column(Float)
     debt_to_equity: Mapped[float | None] = mapped_column(Float)
     revenue_growth: Mapped[float | None] = mapped_column(Float)
     institutional_pct: Mapped[float | None] = mapped_column(Float)
-    lynch_score: Mapped[float | None] = mapped_column(Float)
-    lynch_category: Mapped[str | None] = mapped_column(String(50))
-
-    # Burry metrics
     fcf_yield: Mapped[float | None] = mapped_column(Float)
     price_to_tangible_book: Mapped[float | None] = mapped_column(Float)
     short_interest: Mapped[float | None] = mapped_column(Float)
     ev_to_ebitda: Mapped[float | None] = mapped_column(Float)
     current_ratio: Mapped[float | None] = mapped_column(Float)
-    burry_score: Mapped[float | None] = mapped_column(Float)
-
-    composite_score: Mapped[float | None] = mapped_column(Float)
     raw_data: Mapped[dict | None] = mapped_column(JSON)
 
     scan_date: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -1,9 +1,11 @@
-"""Bravo Strategy — Mean Reversion / Bollinger Band swing trading.
+"""Bravo Strategy — Mean Reversion swing trading.
 
-Targets value stocks bouncing off oversold levels.
-Qualifies: burry_score >= 50, current_ratio > 1.2
+Targets stocks with solid balance sheets bouncing off oversold levels.
+Qualifies: current_ratio > 1.0, debt_to_equity < 2.0
 Signals: BB lower touch, RSI oversold
 Trade type: SWING
+
+NOTE: Mock framework — qualification criteria are placeholders for refinement.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ class BravoStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "2.1"
+        return "3.0"
 
     @property
     def preferred_signals(self) -> list[str]:
@@ -38,11 +40,11 @@ class BravoStrategy(BaseStrategy):
         pass
 
     def qualifies_stock(self, fundamentals: TickerFundamentals) -> bool:
-        burry = fundamentals.burry_score
-        if burry is None or burry < 50:
-            return False
         cr = fundamentals.current_ratio
-        if cr is None or cr <= 1.2:
+        if cr is None or cr <= 1.0:
+            return False
+        de = fundamentals.debt_to_equity
+        if de is not None and de >= 2.0:
             return False
         return True
 

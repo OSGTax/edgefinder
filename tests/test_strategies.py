@@ -54,46 +54,39 @@ class TestAlphaStrategy:
     def test_qualifies_good_stock(self):
         fund = TickerFundamentals(
             symbol="AAPL",
-            composite_score=75.0,
             earnings_growth=0.20,
-            peg_ratio=1.2,
+            revenue_growth=0.15,
         )
         strategy = StrategyRegistry.get("alpha")()
         assert strategy.qualifies_stock(fund) is True
 
-    def test_rejects_low_composite(self):
+    def test_rejects_negative_earnings(self):
         fund = TickerFundamentals(
             symbol="BAD",
-            composite_score=40.0,
-            earnings_growth=0.20,
-            peg_ratio=1.2,
-        )
-        strategy = StrategyRegistry.get("alpha")()
-        assert strategy.qualifies_stock(fund) is False
-
-    def test_rejects_negative_growth(self):
-        fund = TickerFundamentals(
-            symbol="BAD",
-            composite_score=75.0,
             earnings_growth=-0.10,
+            revenue_growth=0.15,
         )
         strategy = StrategyRegistry.get("alpha")()
         assert strategy.qualifies_stock(fund) is False
 
-    def test_rejects_high_peg(self):
+    def test_rejects_negative_revenue(self):
         fund = TickerFundamentals(
             symbol="BAD",
-            composite_score=75.0,
             earnings_growth=0.20,
-            peg_ratio=3.0,
+            revenue_growth=-0.05,
         )
+        strategy = StrategyRegistry.get("alpha")()
+        assert strategy.qualifies_stock(fund) is False
+
+    def test_rejects_missing_growth(self):
+        fund = TickerFundamentals(symbol="BAD")
         strategy = StrategyRegistry.get("alpha")()
         assert strategy.qualifies_stock(fund) is False
 
     def test_properties(self):
         s = StrategyRegistry.get("alpha")()
         assert s.name == "alpha"
-        assert s.version == "2.1"
+        assert s.version == "3.0"
         assert "ema_crossover_bullish" in s.preferred_signals
 
     def test_exit_signals(self):
@@ -106,29 +99,36 @@ class TestBravoStrategy:
     def test_qualifies_value_stock(self):
         fund = TickerFundamentals(
             symbol="VALUE",
-            burry_score=60.0,
             current_ratio=1.5,
+            debt_to_equity=1.0,
         )
         strategy = StrategyRegistry.get("bravo")()
         assert strategy.qualifies_stock(fund) is True
 
-    def test_rejects_low_burry(self):
-        fund = TickerFundamentals(
-            symbol="GROWTH",
-            burry_score=30.0,
-            current_ratio=1.5,
-        )
-        strategy = StrategyRegistry.get("bravo")()
-        assert strategy.qualifies_stock(fund) is False
-
     def test_rejects_low_current_ratio(self):
         fund = TickerFundamentals(
             symbol="RISKY",
-            burry_score=60.0,
             current_ratio=0.8,
         )
         strategy = StrategyRegistry.get("bravo")()
         assert strategy.qualifies_stock(fund) is False
+
+    def test_rejects_high_debt(self):
+        fund = TickerFundamentals(
+            symbol="LEVERAGED",
+            current_ratio=1.5,
+            debt_to_equity=3.0,
+        )
+        strategy = StrategyRegistry.get("bravo")()
+        assert strategy.qualifies_stock(fund) is False
+
+    def test_qualifies_without_debt_data(self):
+        fund = TickerFundamentals(
+            symbol="NODBT",
+            current_ratio=1.5,
+        )
+        strategy = StrategyRegistry.get("bravo")()
+        assert strategy.qualifies_stock(fund) is True
 
     def test_exit_signals(self):
         s = StrategyRegistry.get("bravo")()
@@ -139,7 +139,6 @@ class TestCharlieStrategy:
     def test_qualifies_deep_value(self):
         fund = TickerFundamentals(
             symbol="DEEP",
-            burry_score=55.0,
             fcf_yield=0.06,
             debt_to_equity=1.5,
         )
@@ -150,26 +149,15 @@ class TestCharlieStrategy:
         """Charlie should qualify stocks even when debt_to_equity is unavailable."""
         fund = TickerFundamentals(
             symbol="NODBT",
-            burry_score=55.0,
             fcf_yield=0.05,
         )
         strategy = StrategyRegistry.get("charlie")()
         assert strategy.qualifies_stock(fund) is True
 
-    def test_rejects_low_burry(self):
-        fund = TickerFundamentals(
-            symbol="WEAK",
-            burry_score=40.0,
-            fcf_yield=0.06,
-        )
-        strategy = StrategyRegistry.get("charlie")()
-        assert strategy.qualifies_stock(fund) is False
-
     def test_rejects_low_fcf(self):
         fund = TickerFundamentals(
             symbol="NOCASH",
-            burry_score=55.0,
-            fcf_yield=0.02,
+            fcf_yield=0.01,
         )
         strategy = StrategyRegistry.get("charlie")()
         assert strategy.qualifies_stock(fund) is False
@@ -177,7 +165,6 @@ class TestCharlieStrategy:
     def test_rejects_high_debt(self):
         fund = TickerFundamentals(
             symbol="LEVERAGED",
-            burry_score=55.0,
             fcf_yield=0.06,
             debt_to_equity=4.0,
         )

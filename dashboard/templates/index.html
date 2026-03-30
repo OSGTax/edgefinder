@@ -115,8 +115,8 @@ button:hover { opacity: 0.9; }
   <table>
     <thead><tr>
       <th>Symbol</th><th>Company</th><th>Sector</th><th>Price</th><th>Mkt Cap</th>
-      <th>Composite</th><th>Lynch</th><th>Burry</th><th>Category</th>
-      <th>Earn Gr</th><th>Rev Gr</th><th>PEG</th>
+      <th>Earn Gr</th><th>Rev Gr</th><th>PEG</th><th>D/E</th>
+      <th>FCF Yld</th><th>Cur Ratio</th><th>P/TB</th>
       <th>Strategies</th><th>Source</th>
     </tr></thead>
     <tbody id="active-tickers"></tbody>
@@ -292,14 +292,19 @@ async function doResearch() {
           <div class="row"><span class="label">Strategies</span><span class="value">${r.qualifying_strategies?.join(', ') || 'None'}</span></div>
         </div>
         <div class="card">
-          <h3>Scores</h3>
-          <div class="row"><span class="label">Lynch</span><span class="value">${r.lynch_score?.toFixed(1) || '—'} (${r.lynch_category || '—'})</span></div>
-          <div class="row"><span class="label">Burry</span><span class="value">${r.burry_score?.toFixed(1) || '—'}</span></div>
-          <div class="row"><span class="label">Composite</span><span class="value">${r.composite_score?.toFixed(1) || '—'}</span></div>
-        </div>
-        <div class="card">
           <h3>Fundamentals</h3>
-          ${Object.entries(f).map(([k,v]) => `<div class="row"><span class="label">${k}</span><span class="value">${v !== null ? (typeof v === 'number' ? v.toFixed(3) : v) : '—'}</span></div>`).join('')}
+          ${[
+            ['PEG Ratio', f.peg_ratio, v => v?.toFixed(2)],
+            ['Earnings Growth', f.earnings_growth, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['Revenue Growth', f.revenue_growth, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['Debt/Equity', f.debt_to_equity, v => v?.toFixed(2)],
+            ['Current Ratio', f.current_ratio, v => v?.toFixed(2)],
+            ['FCF Yield', f.fcf_yield, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['P/Tangible Book', f.price_to_tangible_book, v => v?.toFixed(2)],
+            ['EV/EBITDA', f.ev_to_ebitda, v => v?.toFixed(2)],
+            ['Short Interest', f.short_interest, v => v != null ? (v*100).toFixed(1)+'%' : null],
+            ['Institutional %', f.institutional_pct, v => v != null ? (v*100).toFixed(1)+'%' : null],
+          ].map(([label, val, fmt]) => `<div class="row"><span class="label">${label}</span><span class="value">${val != null ? (fmt(val) || '—') : '—'}</span></div>`).join('')}
         </div>
         <div class="card">
           <h3>Sentiment</h3>
@@ -323,7 +328,6 @@ async function loadActiveTickers() {
   const tickers = await fetch('/api/research/active').then(r => r.json());
   const fmt = (v, d=1) => v != null ? v.toFixed(d) : '—';
   const pct = v => v != null ? (v * 100).toFixed(1) + '%' : '—';
-  const scoreCls = s => s >= 60 ? 'positive' : s >= 30 ? '' : 'negative';
   document.getElementById('active-tickers').innerHTML = tickers.length ? tickers.map(t => {
     const strats = (t.qualifying_strategies || []).map(s =>
       `<span class="pill open">${s}</span>`).join(' ') || '<span style="color:var(--muted)">—</span>';
@@ -336,13 +340,13 @@ async function loadActiveTickers() {
       <td>${t.sector || '—'}</td>
       <td>${t.last_price ? '$' + t.last_price.toFixed(2) : '—'}</td>
       <td>${t.market_cap ? '$' + (t.market_cap/1e9).toFixed(1) + 'B' : '—'}</td>
-      <td class="${scoreCls(t.composite_score)}"><strong>${fmt(t.composite_score)}</strong></td>
-      <td>${fmt(t.lynch_score)}</td>
-      <td>${fmt(t.burry_score)}</td>
-      <td>${t.lynch_category || '—'}</td>
       <td>${pct(t.earnings_growth)}</td>
       <td>${pct(t.revenue_growth)}</td>
       <td>${fmt(t.peg_ratio, 2)}</td>
+      <td>${fmt(t.debt_to_equity, 2)}</td>
+      <td>${pct(t.fcf_yield)}</td>
+      <td>${fmt(t.current_ratio, 2)}</td>
+      <td>${fmt(t.price_to_tangible_book, 2)}</td>
       <td>${strats}</td>
       <td>${srcPill}</td>
     </tr>`;

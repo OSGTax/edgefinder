@@ -2,7 +2,7 @@
 
 ## Project Overview
 EdgeFinder is a trading workbench for strategy research, paper trading, and performance analysis.
-It combines fundamental scoring (Peter Lynch + Michael Burry), technical signal detection,
+It combines fundamental data from Polygon.io, technical signal detection,
 multi-source sentiment analysis, and multi-strategy competition in isolated virtual accounts.
 
 **Key principles:**
@@ -54,7 +54,7 @@ edgefinder/
 │   │   ├── models.py           # 10 ORM tables
 │   │   └── migrations/         # Alembic migrations
 │   ├── scanner/
-│   │   └── scanner.py          # Nightly fundamental scan + Lynch/Burry scoring
+│   │   └── scanner.py          # Nightly fundamental scan + strategy qualification
 │   ├── signals/
 │   │   └── engine.py           # Technical indicators + 9 signal pattern detectors
 │   ├── strategies/
@@ -178,7 +178,8 @@ class MyStrategy(BaseStrategy):
     def init(self) -> None: pass
 
     def qualifies_stock(self, fundamentals: TickerFundamentals) -> bool:
-        return (fundamentals.composite_score or 0) >= 60
+        # Each strategy defines its own qualification criteria
+        return (fundamentals.earnings_growth or 0) > 0
 
     def generate_signals(self, ticker: str, bars) -> list[Signal]:
         from edgefinder.signals.engine import compute_indicators, detect_signals
@@ -203,8 +204,7 @@ See `config/settings.py` for the full list. Key sections:
 - Account ($5k capital, 5 max positions, 20% concentration)
 - Risk (2% max risk, 20% drawdown breaker, 1.5 R:R minimum)
 - Scanner filters ($300M-$200B market cap, $5-$500 price)
-- Lynch scoring (6 weighted dimensions, sum to 1.0)
-- Burry scoring (5 weighted dimensions, sum to 1.0)
+- Strategy qualification (per-strategy criteria using Polygon fundamentals)
 - Technical signals (EMA 9/21/50/200, RSI 14, MACD 12/26/9, BB 20/2)
 - Sentiment thresholds (BLOCK at -0.5, REDUCE at -0.2, BOOST at +0.2/+0.5)
 - Scheduling (scanner 6:15 PM, signals every 15m, positions every 5m)
