@@ -89,7 +89,8 @@ def init_services() -> None:
     else:
         logger.warning("No tickers qualified after scan")
 
-    # Restore open positions from DB into in-memory accounts
+    # Restore account state (cash, peak equity, paused) then open positions
+    _restore_account_state()
     _restore_open_positions()
 
     # Event bus — persist trades and capture market snapshots
@@ -120,11 +121,46 @@ def shutdown_services() -> None:
 # ── Watchlist ───────────────────────────────────────────
 
 
+def _restore_account_state() -> None:
+    """Restore account cash, peak equity, and pause state from DB.
+
+    Must run BEFORE _restore_open_positions() so that the cash balance
+    reflects historical P&L, not a fresh $5,000.
+    """
+    if not _arena or not _session_factory:
+        return
+    session = _session_factory()
+    try:
+        rows = session.query(StrategyAccount).all()
+        restored = 0
+        for row in rows:
+            account = _arena.get_account(row.strategy_name)
+            if not account:
+                continue
+            account.cash = row.cash_balance
+            account.peak_equity = row.peak_equity
+            account.is_paused = row.is_paused
+            restored += 1
+            logger.info(
+                "Restored account state for '%s': cash=$%.2f, peak=$%.2f, paused=%s",
+                row.strategy_name, row.cash_balance, row.peak_equity, row.is_paused,
+            )
+        if restored:
+            logger.info("Restored account state for %d strategies", restored)
+    except Exception:
+        logger.exception("Failed to restore account state")
+    finally:
+        session.close()
+
+
 def _restore_open_positions() -> None:
     """Restore open positions from DB into in-memory arena accounts.
 
     Without this, every restart resets position counts to 0, bypassing
     max_open_positions and allowing duplicate trades.
+
+    NOTE: Does NOT deduct cash — the persisted cash balance from
+    _restore_account_state() already reflects open position costs.
     """
     if not _arena or not _session_factory:
         return
@@ -156,9 +192,8 @@ def _restore_open_positions() -> None:
                 entry_time=tr.entry_time,
                 trade_id=tr.trade_id,
             )
-            # Add position without deducting cash again (already deducted historically)
+            # Add position only — cash already reflects this from _restore_account_state()
             account.positions.append(position)
-            account.cash -= position.cost_basis
             restored += 1
         if restored:
             logger.info("Restored %d open positions from DB", restored)
