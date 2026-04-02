@@ -299,7 +299,7 @@ async function loadStrategies() {
     const unrealized = a.unrealized_pnl || 0;
     const realCls = realized >= 0 ? 'positive' : 'negative';
     const unrealCls = unrealized >= 0 ? 'positive' : 'negative';
-    const totalPnl = realized + unrealized;
+    const totalPnl = a.total_equity - a.starting_capital;
     const totalCls = totalPnl >= 0 ? 'positive' : 'negative';
     return `<div class="card">
       <h3>${a.strategy_name}</h3>

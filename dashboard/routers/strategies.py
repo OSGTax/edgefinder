@@ -62,6 +62,9 @@ def get_accounts(db: Session = Depends(get_db)):
                     else:
                         unrealized += (p["entry_price"] - price) * p["shares"]
             acct["unrealized_pnl"] = round(unrealized, 2)
+            # Adjust to show market value, not cost basis
+            acct["open_positions_value"] = round(acct["open_positions_value"] + unrealized, 2)
+            acct["total_equity"] = round(acct["cash"] + acct["open_positions_value"], 2)
             result.append(acct)
         return result
 
