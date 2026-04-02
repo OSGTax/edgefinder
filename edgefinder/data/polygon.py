@@ -109,7 +109,6 @@ class PolygonDataProvider:
                 market="stocks",
                 type="CS",
                 active=True,
-                locale="us",
                 limit=1000,
             ):
                 tickers.append(t.ticker)
