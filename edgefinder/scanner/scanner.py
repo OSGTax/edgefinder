@@ -58,11 +58,11 @@ class FundamentalScanner:
         universe = tickers or self._get_universe()
         logger.info("Scanning %d tickers (batch=%s)", len(universe), batch_index)
 
-        prescreened = self._pre_screen(universe)
-        logger.info("%d tickers passed pre-screen", len(prescreened))
+        fetched = self._fetch_fundamentals(universe)
+        logger.info("%d tickers have fundamentals", len(fetched))
 
         results: list[ScannedStock] = []
-        for fund in prescreened:
+        for fund in fetched:
             qualifying = self._check_strategy_qualification(fund)
             results.append(ScannedStock(
                 symbol=fund.symbol,
@@ -74,13 +74,13 @@ class FundamentalScanner:
 
         qualified_count = sum(1 for s in results if s.qualifying_strategies)
         logger.info(
-            "Scan complete: %d scanned, %d pre-screened, %d qualified",
-            len(universe), len(prescreened), qualified_count,
+            "Scan complete: %d scanned, %d with fundamentals, %d qualified",
+            len(universe), len(fetched), qualified_count,
         )
 
         event_bus.publish("scan.completed", {
             "total_scanned": len(universe),
-            "passed_prescreen": len(prescreened),
+            "with_fundamentals": len(fetched),
             "qualified": qualified_count,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
@@ -92,35 +92,17 @@ class FundamentalScanner:
     def _get_universe(self) -> list[str]:
         return self._provider.get_ticker_universe()
 
-    def _pre_screen(self, tickers: list[str]) -> list[TickerFundamentals]:
-        """Fetch fundamentals and filter by basic criteria."""
-        passed: list[TickerFundamentals] = []
+    def _fetch_fundamentals(self, tickers: list[str]) -> list[TickerFundamentals]:
+        """Fetch fundamentals from Polygon for all tickers. No filtering."""
+        results: list[TickerFundamentals] = []
         for ticker in tickers:
             fund = self._provider.get_fundamentals(ticker)
             if fund is None:
                 continue
-            # Polygon fundamentals don't include price — fetch it separately
             if fund.price is None:
                 fund.price = self._provider.get_latest_price(ticker)
-            if not self._passes_prescreen(fund):
-                logger.debug(
-                    "Pre-screen rejected %s (price=%s, market_cap=%s, sector=%s)",
-                    ticker, fund.price, fund.market_cap, fund.sector,
-                )
-                continue
-            passed.append(fund)
-        return passed
-
-    def _passes_prescreen(self, fund: TickerFundamentals) -> bool:
-        mc = fund.market_cap
-        if mc is None or mc < settings.scanner_min_market_cap or mc > settings.scanner_max_market_cap:
-            return False
-        price = fund.price
-        if price is None or price < settings.scanner_min_price or price > settings.scanner_max_price:
-            return False
-        if fund.sector and fund.sector in settings.scanner_excluded_sectors:
-            return False
-        return True
+            results.append(fund)
+        return results
 
     # ── Strategy Qualification ───────────────────────
 

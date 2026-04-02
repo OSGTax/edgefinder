@@ -54,28 +54,6 @@ def scanner(mock_provider, db_session):
     return FundamentalScanner(provider=mock_provider, session=db_session)
 
 
-class TestPreScreen:
-    def test_filters_low_market_cap(self, scanner):
-        fund = _make_fund(market_cap=100_000_000)
-        assert scanner._passes_prescreen(fund) is False
-
-    def test_filters_high_market_cap(self, scanner):
-        fund = _make_fund(market_cap=300_000_000_000_000)
-        assert scanner._passes_prescreen(fund) is False
-
-    def test_filters_low_price(self, scanner):
-        fund = _make_fund(price=2.0)
-        assert scanner._passes_prescreen(fund) is False
-
-    def test_filters_excluded_sector(self, scanner):
-        fund = _make_fund(sector="Utilities")
-        assert scanner._passes_prescreen(fund) is False
-
-    def test_passes_qualifying_stock(self, scanner):
-        fund = _make_fund()
-        assert scanner._passes_prescreen(fund) is True
-
-
 class TestStrategyQualification:
     def test_any_strategy_qualifies(self, scanner):
         fund = _make_fund(earnings_growth=0.20, revenue_growth=0.15)

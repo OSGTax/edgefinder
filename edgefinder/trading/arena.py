@@ -103,8 +103,6 @@ class ArenaEngine:
                     continue
 
                 for signal in signals:
-                    if signal.confidence < settings.signal_min_confidence_to_trade:
-                        continue
                     trade = slot.executor.execute_signal(signal)
                     if trade:
                         all_trades.append(trade)
