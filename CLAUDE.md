@@ -156,6 +156,21 @@ python -m pytest tests/ -v -m "not integration"
 - Drawdown circuit breaker: 20%
 - Revenge trade cooldown: 30 minutes after stop-out
 
+### Account Balance Integrity (CRITICAL)
+The trades table is the **source of truth** for all account balances. On every startup,
+`_recalculate_account_balances()` recomputes cash from trades to self-heal any corruption:
+```
+correct_cash = starting_capital + sum(closed trade P&L) - sum(open position cost basis)
+```
+**Rules for all strategies (existing and new):**
+1. Every strategy uses the same `VirtualAccount` class — no custom account logic
+2. Account state is persisted to DB immediately after every trade open/close AND on shutdown
+3. On startup, cash and realized P&L are always recalculated from the trades table
+4. Total Account Value on the dashboard = Cash + market value of positions (not cost basis)
+5. Total P&L = Total Account Value - Starting Capital (canonical formula)
+6. Realized P&L = sum of pnl_dollars from closed trades in DB
+7. Unrealized P&L = sum of (current_price - entry_price) × shares for open positions
+
 ## Strategy Plugin Guide
 
 ### Creating a Strategy

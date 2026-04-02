@@ -89,10 +89,10 @@ def init_services() -> None:
     else:
         logger.warning("No tickers qualified after scan")
 
-    # Restore account state (cash, peak equity, paused) then open positions
+    # Restore account state, open positions, then recalculate from trades (source of truth)
     _restore_account_state()
     _restore_open_positions()
-    _backfill_realized_pnl()
+    _recalculate_account_balances()
 
     # Event bus — persist trades and capture market snapshots
     _wire_event_bus()
@@ -113,6 +113,7 @@ def init_services() -> None:
 
 def shutdown_services() -> None:
     """Gracefully shut down all services."""
+    _persist_account_state()  # Save account state before shutdown
     if _scheduler:
         _scheduler.stop()
     event_bus.clear()
@@ -205,11 +206,15 @@ def _restore_open_positions() -> None:
         session.close()
 
 
-def _backfill_realized_pnl() -> None:
-    """Compute realized P&L from closed trades (source of truth).
+def _recalculate_account_balances() -> None:
+    """Recalculate cash and realized P&L from the trades table (source of truth).
 
-    Always recalculates from the trades table so it's correct even if
-    realized_pnl tracking was added after trades already closed.
+    Formula: correct_cash = starting_capital
+                          + sum(pnl_dollars for CLOSED trades)
+                          - sum(entry_price * shares for OPEN trades)
+
+    This self-heals any corruption from restarts where the DB had stale
+    cash values (e.g., positions opened after last persist but before shutdown).
     """
     if not _arena or not _session_factory:
         return
@@ -218,7 +223,12 @@ def _backfill_realized_pnl() -> None:
     session = _session_factory()
     try:
         for name in _arena.get_strategy_names():
-            total = (
+            account = _arena.get_account(name)
+            if not account:
+                continue
+
+            # Realized P&L from closed trades
+            realized = (
                 session.query(func.coalesce(func.sum(TradeRecord.pnl_dollars), 0.0))
                 .filter(
                     TradeRecord.strategy_name == name,
@@ -226,15 +236,42 @@ def _backfill_realized_pnl() -> None:
                 )
                 .scalar()
             )
-            account = _arena.get_account(name)
-            if account:
-                account.realized_pnl = round(total, 2)
-                if total != 0:
-                    logger.info(
-                        "Backfilled realized P&L for '%s': $%.2f", name, total
+
+            # Cost basis of open positions from trades table
+            open_cost = (
+                session.query(
+                    func.coalesce(
+                        func.sum(TradeRecord.entry_price * TradeRecord.shares), 0.0
                     )
+                )
+                .filter(
+                    TradeRecord.strategy_name == name,
+                    TradeRecord.status == "OPEN",
+                )
+                .scalar()
+            )
+
+            correct_cash = round(account.starting_capital + realized - open_cost, 2)
+            account.realized_pnl = round(realized, 2)
+
+            if abs(account.cash - correct_cash) > 0.01:
+                logger.warning(
+                    "Cash correction for '%s': DB had $%.2f, correct is $%.2f (diff $%.2f)",
+                    name, account.cash, correct_cash, account.cash - correct_cash,
+                )
+                account.cash = correct_cash
+
+            # Update peak equity based on corrected values
+            equity = account.total_equity
+            if equity > account.peak_equity:
+                account.peak_equity = equity
+
+            logger.info(
+                "Account '%s': cash=$%.2f, realized=$%.2f, open_cost=$%.2f",
+                name, correct_cash, realized, open_cost,
+            )
     except Exception:
-        logger.exception("Failed to backfill realized P&L")
+        logger.exception("Failed to recalculate account balances")
     finally:
         session.close()
 
@@ -330,6 +367,7 @@ def _wire_event_bus() -> None:
             logger.exception("Failed to persist opened trade %s", trade.trade_id)
         finally:
             session.close()
+        _persist_account_state()  # Save immediately so DB reflects new cash
 
     def on_trade_closed(trade):
         session = _session_factory()
@@ -346,6 +384,7 @@ def _wire_event_bus() -> None:
             logger.exception("Failed to persist closed trade %s", trade.trade_id)
         finally:
             session.close()
+        _persist_account_state()  # Save immediately so DB reflects new cash
 
     event_bus.subscribe("trade.opened", on_trade_opened)
     event_bus.subscribe("trade.closed", on_trade_closed)
