@@ -24,11 +24,46 @@ def list_strategies():
 
 @router.get("/accounts")
 def get_accounts(db: Session = Depends(get_db)):
-    """Get strategy account states — live from arena if available, else DB."""
+    """Get strategy account states — live from arena if available, else DB.
+
+    Enriches with unrealized P&L by fetching current prices for open positions.
+    """
     arena = get_arena()
     if arena:
-        # Live in-memory account state
-        return list(arena.get_all_accounts().values())
+        from dashboard.services import _provider
+        accounts = arena.get_all_accounts()
+        positions = arena.get_all_open_positions()
+
+        # Fetch live prices for all open position symbols
+        all_symbols = list({
+            p["symbol"]
+            for pos_list in positions.values()
+            for p in pos_list
+        })
+        live_prices: dict[str, float] = {}
+        if all_symbols and _provider:
+            for sym in all_symbols:
+                try:
+                    price = _provider.get_latest_price(sym)
+                    if price:
+                        live_prices[sym] = price
+                except Exception:
+                    pass
+
+        # Compute unrealized P&L per strategy
+        result = []
+        for name, acct in accounts.items():
+            unrealized = 0.0
+            for p in positions.get(name, []):
+                price = live_prices.get(p["symbol"])
+                if price:
+                    if p["direction"] == "LONG":
+                        unrealized += (price - p["entry_price"]) * p["shares"]
+                    else:
+                        unrealized += (p["entry_price"] - price) * p["shares"]
+            acct["unrealized_pnl"] = round(unrealized, 2)
+            result.append(acct)
+        return result
 
     # Fallback to DB
     accounts = db.query(StrategyAccount).all()
@@ -41,6 +76,8 @@ def get_accounts(db: Session = Depends(get_db)):
             "total_equity": a.total_equity,
             "peak_equity": a.peak_equity,
             "drawdown_pct": a.drawdown_pct,
+            "realized_pnl": a.realized_pnl or 0.0,
+            "unrealized_pnl": 0.0,
             "pdt_enabled": a.pdt_enabled,
             "is_paused": a.is_paused,
         }
