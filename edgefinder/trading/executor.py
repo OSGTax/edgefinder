@@ -32,13 +32,16 @@ class Executor:
 
         Returns None if the signal is rejected (insufficient funds, risk checks, etc.).
         """
-        # Size the position
-        shares, cost = self._size_position(signal)
+        # Apply slippage first so sizing uses the actual execution price
+        execution_price = self._apply_slippage(signal.entry_price, signal.action.value)
+
+        # Size the position using slippage-adjusted price
+        shares, cost = self._size_position(signal, execution_price)
         if shares <= 0:
             logger.debug("Signal rejected: position size is 0 for %s", signal.ticker)
             return None
 
-        # Check account rules
+        # Check account rules with actual cost
         allowed, reason = self.account.can_open_position(cost, signal.trade_type.value)
         if not allowed:
             logger.info(
@@ -46,9 +49,6 @@ class Executor:
                 self.account.strategy_name, signal.ticker, reason,
             )
             return None
-
-        # Apply slippage
-        execution_price = self._apply_slippage(signal.entry_price, signal.action.value)
 
         # Create position
         trade_id = str(uuid.uuid4())
@@ -168,15 +168,16 @@ class Executor:
 
     # ── Private ──────────────────────────────────────
 
-    def _size_position(self, signal: Signal) -> tuple[int, float]:
+    def _size_position(self, signal: Signal, execution_price: float) -> tuple[int, float]:
         """Calculate position size based on risk management.
 
+        Uses the slippage-adjusted execution_price so cost checks are accurate.
         Max risk per trade = account equity * max_risk_per_trade_pct.
         Shares = max_risk / risk_per_share.
-        Cost = shares * entry_price.
+        Cost = shares * execution_price.
         """
         if signal.shares > 0:
-            return signal.shares, signal.shares * signal.entry_price
+            return signal.shares, signal.shares * execution_price
 
         risk_per_share = signal.risk_per_share
         if risk_per_share <= 0:
@@ -186,18 +187,18 @@ class Executor:
         shares = int(max_risk / risk_per_share)
 
         # Cap by buying power
-        max_by_cash = int(self.account.buying_power / signal.entry_price)
+        max_by_cash = int(self.account.buying_power / execution_price)
         shares = min(shares, max_by_cash)
 
         # Cap by concentration
         max_concentration = self.account.total_equity * settings.max_portfolio_concentration_pct
-        max_by_concentration = int(max_concentration / signal.entry_price)
+        max_by_concentration = int(max_concentration / execution_price)
         shares = min(shares, max_by_concentration)
 
         if shares <= 0:
             return 0, 0
 
-        return shares, shares * signal.entry_price
+        return shares, shares * execution_price
 
     @staticmethod
     def _apply_slippage(price: float, action: str) -> float:

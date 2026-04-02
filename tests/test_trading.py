@@ -174,10 +174,10 @@ class TestExecutor:
         acct = VirtualAccount("alpha", starting_capital=5000.0)
         executor = Executor(acct)
         # Risk per share = 100 - 95 = $5. Max risk = 5000 * 0.02 = $100. Shares = 20.
-        # But concentration cap: 20% of $5000 = $1000 / $100 = 10 shares.
+        # But concentration cap: 20% of $5000 = $1000 / $100.05 (slippage) = 9 shares.
         signal = self._make_signal(entry_price=100.0, stop_loss=95.0)
         trade = executor.execute_signal(signal)
-        assert trade.shares == 10  # limited by concentration cap
+        assert trade.shares == 9  # limited by concentration cap (slippage-adjusted)
 
     def test_rejects_when_insufficient_funds(self):
         acct = VirtualAccount("alpha", starting_capital=50.0)

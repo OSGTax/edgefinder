@@ -119,9 +119,15 @@ th.info-header::after, .label.info-label::after { content: ' ?'; font-size: 10px
     <button onclick="doResearch()">Research</button>
   </div>
   <div id="research-result"></div>
-  <div style="display:flex;align-items:center;gap:12px;margin:24px 0 12px">
+  <div style="display:flex;align-items:center;gap:12px;margin:24px 0 12px;flex-wrap:wrap">
     <h3>Research Watchlist</h3>
-    <span style="font-size:12px;color:var(--muted)">click a row for details</span>
+    <select id="research-strategy-filter" onchange="loadActiveTickers()" style="font-size:12px;padding:4px 8px">
+      <option value="">All Strategies</option>
+      <option value="alpha">alpha</option>
+      <option value="bravo">bravo</option>
+      <option value="charlie">charlie</option>
+    </select>
+    <span style="font-size:12px;color:var(--muted)">click a row for details | click a strategy name for info</span>
     <button id="scan-btn" onclick="triggerScan()" style="margin-left:auto;font-size:12px;padding:6px 14px">Run Scanner</button>
     <span id="scan-status" style="font-size:12px;color:var(--muted)"></span>
   </div>
@@ -251,6 +257,45 @@ function closeInfo() {
   document.getElementById('info-overlay').classList.remove('active');
 }
 
+const STRATEGY_INFO = {
+  alpha: {
+    title: 'Alpha — Momentum Strategy',
+    body: `TECHNICAL: Targets stocks with positive earnings and revenue growth. Enters on EMA crossovers, MACD bullish crosses, and volume spikes. Exits on bearish EMA crossovers or bearish volume spikes. Trade type: DAY.
+
+Qualification: earnings_growth > 0 AND revenue_growth > 0.
+Preferred signals: ema_crossover_bullish, macd_bullish_cross, volume_spike_bullish.
+
+IN PLAIN ENGLISH: Alpha looks for companies that are growing their profits and sales, then buys when the stock's short-term trend turns upward. It's a momentum player — it wants stocks that are already moving up and rides the wave. It sells when the trend reverses.`
+  },
+  bravo: {
+    title: 'Bravo — Mean Reversion Strategy',
+    body: `TECHNICAL: Targets stocks with solid balance sheets (low debt, good liquidity) that have been beaten down to oversold levels. Enters on Bollinger Band lower touches and RSI oversold signals. Exits when RSI becomes overbought. Trade type: SWING.
+
+Qualification: current_ratio > 1.0 AND debt_to_equity < 2.0.
+Preferred signals: bb_lower_touch, rsi_oversold.
+
+IN PLAIN ENGLISH: Bravo is a bargain hunter. It finds financially healthy companies whose stock price has dropped too far too fast, then buys the dip expecting a bounce back. It sells once the price recovers to normal levels. Think of it as buying quality stocks "on sale."`,
+  },
+  charlie: {
+    title: 'Charlie — Value Strategy',
+    body: `TECHNICAL: Targets stocks with strong free cash flow and manageable debt. Only enters on high-confidence signals (>= 80). Uses RSI oversold and MACD bullish crosses. Exits on MACD bearish crosses. Trade type: SWING.
+
+Qualification: fcf_yield > 2% AND debt_to_equity < 3.0.
+Preferred signals: rsi_oversold, macd_bullish_cross (confidence >= 80 only).
+
+IN PLAIN ENGLISH: Charlie is the most cautious strategy. It only buys companies that generate lots of real cash relative to their stock price, and only when multiple technical indicators strongly agree it's a good entry. It's patient — it waits for high-conviction setups and avoids risky bets.`,
+  },
+};
+
+function showStrategyInfo(name) {
+  const info = STRATEGY_INFO[name];
+  if (!info) return;
+  document.getElementById('info-title').textContent = info.title;
+  document.getElementById('info-body').style.whiteSpace = 'pre-line';
+  document.getElementById('info-body').textContent = info.body;
+  document.getElementById('info-overlay').classList.add('active');
+}
+
 let currentTradeFilter = 'all';
 let benchmarkChart = null;
 
@@ -302,7 +347,7 @@ async function loadStrategies() {
     const totalPnl = a.total_equity - a.starting_capital;
     const totalCls = totalPnl >= 0 ? 'positive' : 'negative';
     return `<div class="card">
-      <h3>${a.strategy_name}</h3>
+      <h3 style="cursor:pointer" onclick="showStrategyInfo('${a.strategy_name}')">${a.strategy_name} <span style="font-size:10px;opacity:0.5">?</span></h3>
       <div class="row"><span class="label">Cash</span><span class="value">$${(a.cash ?? a.cash_balance ?? 0).toFixed(2)}</span></div>
       <div class="row"><span class="label">Securities Held</span><span class="value">$${a.open_positions_value.toFixed(2)}</span></div>
       <div class="row"><span class="label">Total Account Value</span><span class="value">$${a.total_equity.toFixed(2)}</span></div>
@@ -441,12 +486,16 @@ async function triggerScan() {
 }
 
 async function loadActiveTickers() {
-  const tickers = await fetch('/api/research/active').then(r => r.json());
+  const allTickers = await fetch('/api/research/active').then(r => r.json());
+  const stratFilter = document.getElementById('research-strategy-filter').value;
+  const tickers = stratFilter
+    ? allTickers.filter(t => (t.qualifying_strategies || []).includes(stratFilter))
+    : allTickers;
   const fmt = (v, d=1) => v != null ? v.toFixed(d) : '—';
   const pct = v => v != null ? (v * 100).toFixed(1) + '%' : '—';
   document.getElementById('active-tickers').innerHTML = tickers.length ? tickers.map(t => {
     const strats = (t.qualifying_strategies || []).map(s =>
-      `<span class="pill open">${s}</span>`).join(' ') || '<span style="color:var(--muted)">—</span>';
+      `<span class="pill open" style="cursor:pointer" onclick="event.stopPropagation();showStrategyInfo('${s}')">${s}</span>`).join(' ') || '<span style="color:var(--muted)">—</span>';
     const srcPill = t.source === 'manual' ? '<span class="pill loss">manual</span>'
       : t.source === 'both' ? '<span class="pill win">both</span>'
       : '<span class="pill open">scanner</span>';
