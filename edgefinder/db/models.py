@@ -165,6 +165,7 @@ class StrategyAccount(Base):
     total_equity: Mapped[float] = mapped_column(Float, default=5000.0)
     peak_equity: Mapped[float] = mapped_column(Float, default=5000.0)
     drawdown_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0.0)
     pdt_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_paused: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

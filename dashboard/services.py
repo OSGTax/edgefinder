@@ -140,6 +140,7 @@ def _restore_account_state() -> None:
             account.cash = row.cash_balance
             account.peak_equity = row.peak_equity
             account.is_paused = row.is_paused
+            account.realized_pnl = row.realized_pnl or 0.0
             restored += 1
             logger.info(
                 "Restored account state for '%s': cash=$%.2f, peak=$%.2f, paused=%s",
@@ -439,6 +440,7 @@ def _persist_account_state() -> None:
                 existing.total_equity = acct["total_equity"]
                 existing.peak_equity = acct["peak_equity"]
                 existing.drawdown_pct = acct["drawdown_pct"]
+                existing.realized_pnl = acct["realized_pnl"]
                 existing.is_paused = acct["is_paused"]
             else:
                 session.add(StrategyAccount(
@@ -449,6 +451,7 @@ def _persist_account_state() -> None:
                     total_equity=acct["total_equity"],
                     peak_equity=acct["peak_equity"],
                     drawdown_pct=acct["drawdown_pct"],
+                    realized_pnl=acct["realized_pnl"],
                     is_paused=acct["is_paused"],
                 ))
         session.commit()

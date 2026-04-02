@@ -106,7 +106,7 @@ th.info-header::after, .label.info-label::after { content: ' ?'; font-size: 10px
   <div class="stats-row" id="trade-stats"></div>
   <table>
     <thead>
-      <tr><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Type</th><th>Entry</th><th>Exit</th><th>Shares</th><th>P&L</th><th>R</th><th>Status</th><th>Reason</th></tr>
+      <tr><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Type</th><th>Entry</th><th>Exit</th><th>Shares</th><th>P&L</th><th>R</th><th>Status</th><th>Reason</th><th>Entry Time</th><th>Exit Time</th></tr>
     </thead>
     <tbody id="trades-body"></tbody>
   </table>
@@ -290,16 +290,19 @@ async function loadStrategies() {
     return;
   }
   container.innerHTML = accounts.map(a => {
-    const pnl = a.total_equity - a.starting_capital;
-    const cls = pnl >= 0 ? 'positive' : 'negative';
+    const realized = a.realized_pnl || 0;
+    const realCls = realized >= 0 ? 'positive' : 'negative';
+    const totalPnl = a.total_equity - a.starting_capital;
+    const totalCls = totalPnl >= 0 ? 'positive' : 'negative';
     return `<div class="card">
       <h3>${a.strategy_name}</h3>
       <div class="row"><span class="label">Cash</span><span class="value">$${(a.cash ?? a.cash_balance ?? 0).toFixed(2)}</span></div>
       <div class="row"><span class="label">Securities Held</span><span class="value">$${a.open_positions_value.toFixed(2)}</span></div>
       <div class="row"><span class="label">Total Account Value</span><span class="value">$${a.total_equity.toFixed(2)}</span></div>
-      <div class="row"><span class="label">P&L</span><span class="value ${cls}">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Realized P&L</span><span class="value ${realCls}">${realized >= 0 ? '+' : ''}$${realized.toFixed(2)}</span></div>
+      <div class="row"><span class="label">Total P&L</span><span class="value ${totalCls}">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span></div>
       <div class="row"><span class="label">Drawdown</span><span class="value">${(a.drawdown_pct*100).toFixed(1)}%</span></div>
-      <div class="row"><span class="label">PDT</span><span class="value">${a.pdt_enabled ? 'Enabled' : 'Disabled'}</span></div>
+      <div class="row"><span class="label">Positions</span><span class="value">${a.position_count || 0}</span></div>
       <div class="row"><span class="label">Status</span><span class="value">${a.is_paused ? 'PAUSED' : 'Active'}</span></div>
     </div>`;
   }).join('');
@@ -346,8 +349,10 @@ async function loadTrades() {
       <td>${t.shares}</td><td class="${pnlCls}">${t.pnl_dollars ? '$' + t.pnl_dollars.toFixed(2) : '—'}</td>
       <td>${t.r_multiple ? t.r_multiple.toFixed(2) + 'R' : '—'}</td>
       <td><span class="pill ${statusCls}">${t.status}</span></td><td>${t.exit_reason || '—'}</td>
+      <td>${t.entry_time ? new Date(t.entry_time).toLocaleString() : '—'}</td>
+      <td>${t.exit_time ? new Date(t.exit_time).toLocaleString() : '—'}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="11" class="empty">No trades yet</td></tr>';
+  }).join('') : '<tr><td colspan="13" class="empty">No trades yet</td></tr>';
 }
 
 // ── Research ────────────────────────────────

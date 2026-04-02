@@ -73,6 +73,7 @@ class VirtualAccount:
         self.pdt_enabled = pdt_enabled
         self.peak_equity = self.starting_capital
         self.is_paused = False
+        self.realized_pnl = 0.0
 
         # PDT tracking
         self._day_trades: list[datetime] = []
@@ -165,6 +166,7 @@ class VirtualAccount:
         pnl = position.unrealized_pnl(exit_price)
         proceeds = position.cost_basis + pnl
         self.cash += proceeds
+        self.realized_pnl += pnl
 
         risk_per_share = abs(position.entry_price - position.stop_loss)
         r_multiple = pnl / (risk_per_share * position.shares) if risk_per_share > 0 else 0.0
@@ -226,6 +228,7 @@ class VirtualAccount:
             "total_equity": round(self.total_equity, 2),
             "peak_equity": round(self.peak_equity, 2),
             "drawdown_pct": round(self.drawdown_pct, 4),
+            "realized_pnl": round(self.realized_pnl, 2),
             "position_count": self.position_count,
             "pdt_enabled": self.pdt_enabled,
             "is_paused": self.is_paused,
