@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     scanner_min_price: float = 5.00
     scanner_max_price: float = 500.00
     scanner_excluded_sectors: list[str] = Field(default=["Utilities"])
+    scanner_batch_count: int = 5  # one batch per weekday (Mon=0 ... Fri=4)
 
     # ── SIGNALS / TECHNICAL ──────────────────────────
     signal_ema_fast_day: int = 9
@@ -89,7 +90,7 @@ class Settings(BaseSettings):
     # ── CACHE ────────────────────────────────────────
     cache_dir: Path = Path("data/cache")
     cache_bars_ttl_minutes: dict[str, int] = Field(default={
-        "1": 5, "5": 15, "15": 30, "60": 120, "day": 1080,
+        "1": 5, "5": 5, "15": 30, "60": 120, "day": 1080,
     })
     cache_fundamentals_ttl_hours: int = 24
     cache_profile_ttl_days: int = 7

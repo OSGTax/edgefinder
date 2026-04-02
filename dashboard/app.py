@@ -18,7 +18,7 @@ from dashboard.routers import benchmarks, inject, research, sentiment, strategie
 
 logger = logging.getLogger(__name__)
 
-__version__ = "3.0.1"
+__version__ = "3.1.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))

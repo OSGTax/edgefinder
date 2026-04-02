@@ -42,10 +42,21 @@ class FundamentalScanner:
         self._provider = provider
         self._session = session
 
-    def run(self, tickers: list[str] | None = None) -> list[ScannedStock]:
-        """Execute a full scan. Optionally pass specific tickers."""
+    def run(
+        self,
+        tickers: list[str] | None = None,
+        batch_index: int | None = None,
+    ) -> list[ScannedStock]:
+        """Execute a scan. Optionally pass specific tickers and batch index.
+
+        Args:
+            tickers: Specific tickers to scan (None = full universe).
+            batch_index: Which weekly batch (0-4) this scan belongs to.
+                When set, only deactivates tickers from this batch.
+        """
+        self._batch_index = batch_index
         universe = tickers or self._get_universe()
-        logger.info("Scanning %d tickers", len(universe))
+        logger.info("Scanning %d tickers (batch=%s)", len(universe), batch_index)
 
         prescreened = self._pre_screen(universe)
         logger.info("%d tickers passed pre-screen", len(prescreened))
@@ -164,6 +175,7 @@ class FundamentalScanner:
                 ticker.market_cap = fund.market_cap
                 ticker.last_price = fund.price
                 ticker.is_active = is_active
+            ticker.scan_batch = self._batch_index
 
             # Upsert fundamental
             existing_fund = (
@@ -195,12 +207,13 @@ class FundamentalScanner:
                     if key != "ticker_id":
                         setattr(existing_fund, key, val)
 
-        # Deactivate tickers not in this scan that were previously active
-        previously_active = (
-            self._session.query(Ticker)
-            .filter(Ticker.is_active == True, Ticker.source == "scanner")
-            .all()
+        # Deactivate tickers not in this scan — scoped to this batch only
+        query = self._session.query(Ticker).filter(
+            Ticker.is_active == True, Ticker.source == "scanner"
         )
+        if self._batch_index is not None:
+            query = query.filter(Ticker.scan_batch == self._batch_index)
+        previously_active = query.all()
         for ticker in previously_active:
             if ticker.symbol not in scanned_symbols:
                 ticker.is_active = False

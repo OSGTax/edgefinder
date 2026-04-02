@@ -212,8 +212,8 @@ class ArenaEngine:
     # ── Private ──────────────────────────────────────
 
     def _fetch_bars(self, ticker: str) -> pd.DataFrame | None:
-        """Fetch 1 year of daily bars for a ticker."""
+        """Fetch 5-minute intraday bars (~7 trading days)."""
         from datetime import timedelta
         end = date.today()
-        start = end - timedelta(days=365)
-        return self._provider.get_bars(ticker, "day", start, end)
+        start = end - timedelta(days=10)
+        return self._provider.get_bars(ticker, "5", start, end)

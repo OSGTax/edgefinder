@@ -41,6 +41,7 @@ class Ticker(Base):
     last_price: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(20), default="scanner")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    scan_batch: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()

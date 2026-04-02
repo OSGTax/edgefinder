@@ -326,17 +326,45 @@ def _position_monitor_job() -> None:
 
 
 def _nightly_scan_job() -> None:
-    """Called at 6:15 PM ET on weekdays."""
+    """Called at 6:15 PM ET on weekdays.
+
+    Scans 1/5 of the stock universe each night (batched by day of week).
+    Qualified tickers accumulate across the week so the watchlist grows
+    to cover the full market over 5 trading days.
+    """
     if not _provider:
         return
+
+    batch_count = settings.scanner_batch_count
+    batch_index = datetime.now().weekday()  # Mon=0 ... Fri=4
+    if batch_index >= batch_count:
+        logger.info("Weekend — skipping nightly scan")
+        return
+
     session = _session_factory()
     try:
+        # Get full universe and slice for today's batch
+        universe = _provider.get_ticker_universe()
+        sorted_universe = sorted(universe)
+        batch = sorted_universe[batch_index::batch_count]
+
+        logger.info(
+            "Nightly scan batch %d/%d: %d tickers (of %d total)",
+            batch_index + 1, batch_count, len(batch), len(universe),
+        )
+
         scanner = FundamentalScanner(_provider, session)
-        results = scanner.run()
-        active = [s.symbol for s in results if s.qualifying_strategies]
-        if active and _arena:
-            _arena.set_global_watchlist(active)
-            logger.info("Nightly scan: %d stocks qualify, watchlist updated", len(active))
+        results = scanner.run(tickers=batch, batch_index=batch_index)
+
+        # Reload full accumulated watchlist (all batches)
+        watchlist = _load_watchlist()
+        if watchlist and _arena:
+            _arena.set_global_watchlist(watchlist)
+            logger.info(
+                "Nightly scan: %d qualified this batch, %d total active tickers",
+                sum(1 for s in results if s.qualifying_strategies),
+                len(watchlist),
+            )
         else:
             logger.info("Nightly scan: %d stocks scored, 0 qualified", len(results))
     except Exception:

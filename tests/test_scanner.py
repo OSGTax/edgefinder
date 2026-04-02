@@ -116,6 +116,35 @@ class TestDBPersistence:
         count = db_session.query(Ticker).filter_by(symbol="AAPL").count()
         assert count == 1
 
+    def test_batch_sets_scan_batch(self, scanner, db_session):
+        scanner.run(tickers=["AAPL"], batch_index=2)
+        ticker = db_session.query(Ticker).filter_by(symbol="AAPL").first()
+        assert ticker.scan_batch == 2
+
+    def test_batch_deactivation_scoped(self, scanner, db_session, mock_provider):
+        """Scanning batch 1 should not deactivate tickers from batch 0."""
+        # Batch 0: AAPL qualifies
+        scanner.run(tickers=["AAPL"], batch_index=0)
+        assert db_session.query(Ticker).filter_by(symbol="AAPL").first().is_active is True
+
+        # Batch 1: MSFT qualifies
+        scanner.run(tickers=["MSFT"], batch_index=1)
+        # AAPL should still be active (different batch)
+        assert db_session.query(Ticker).filter_by(symbol="AAPL").first().is_active is True
+        assert db_session.query(Ticker).filter_by(symbol="MSFT").first().is_active is True
+
+    def test_batch_deactivates_own_tickers(self, scanner, db_session, mock_provider):
+        """Re-scanning a batch deactivates tickers from that batch that no longer qualify."""
+        # Batch 0: AAPL qualifies
+        scanner.run(tickers=["AAPL", "GOOG"], batch_index=0)
+        assert db_session.query(Ticker).filter_by(symbol="AAPL").first().is_active is True
+        assert db_session.query(Ticker).filter_by(symbol="GOOG").first().is_active is True
+
+        # Re-scan batch 0 with only AAPL (GOOG dropped from batch)
+        scanner.run(tickers=["AAPL"], batch_index=0)
+        assert db_session.query(Ticker).filter_by(symbol="AAPL").first().is_active is True
+        assert db_session.query(Ticker).filter_by(symbol="GOOG").first().is_active is False
+
 
 class TestFullPipeline:
     def test_scan_returns_scanned_stocks(self, scanner):
