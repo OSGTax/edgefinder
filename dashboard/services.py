@@ -92,6 +92,7 @@ def init_services() -> None:
     # Restore account state (cash, peak equity, paused) then open positions
     _restore_account_state()
     _restore_open_positions()
+    _backfill_realized_pnl()
 
     # Event bus — persist trades and capture market snapshots
     _wire_event_bus()
@@ -204,14 +205,64 @@ def _restore_open_positions() -> None:
         session.close()
 
 
-def _run_initial_scan() -> None:
-    """Run a quick scan on first startup to populate the research tab."""
-    from scripts.run_scanner import QUICK_TICKERS
+def _backfill_realized_pnl() -> None:
+    """Compute realized P&L from closed trades (source of truth).
+
+    Always recalculates from the trades table so it's correct even if
+    realized_pnl tracking was added after trades already closed.
+    """
+    if not _arena or not _session_factory:
+        return
+    from sqlalchemy import func
 
     session = _session_factory()
     try:
+        for name in _arena.get_strategy_names():
+            total = (
+                session.query(func.coalesce(func.sum(TradeRecord.pnl_dollars), 0.0))
+                .filter(
+                    TradeRecord.strategy_name == name,
+                    TradeRecord.status == "CLOSED",
+                )
+                .scalar()
+            )
+            account = _arena.get_account(name)
+            if account:
+                account.realized_pnl = round(total, 2)
+                if total != 0:
+                    logger.info(
+                        "Backfilled realized P&L for '%s': $%.2f", name, total
+                    )
+    except Exception:
+        logger.exception("Failed to backfill realized P&L")
+    finally:
+        session.close()
+
+
+def _run_initial_scan() -> None:
+    """Run a real batched scan on first startup to populate the research tab.
+
+    Uses the same logic as the nightly scan — fetches the full Polygon universe,
+    picks today's batch, and scans ~1,000 tickers.
+    """
+    session = _session_factory()
+    try:
+        batch_count = settings.scanner_batch_count
+        batch_index = datetime.now().weekday()
+        if batch_index >= batch_count:
+            batch_index = 0  # Weekend fallback to Monday's batch
+
+        universe = _provider.get_ticker_universe()
+        sorted_universe = sorted(universe)
+        batch = sorted_universe[batch_index::batch_count]
+
+        logger.info(
+            "Initial scan batch %d/%d: %d tickers (of %d total)",
+            batch_index + 1, batch_count, len(batch), len(universe),
+        )
+
         scanner = FundamentalScanner(_provider, session)
-        results = scanner.run(tickers=QUICK_TICKERS)
+        results = scanner.run(tickers=batch, batch_index=batch_index)
         qualified = sum(1 for s in results if s.qualifying_strategies)
         logger.info(
             "Initial scan complete: %d scored, %d qualified",
@@ -238,12 +289,18 @@ def _load_watchlist() -> list[str]:
 
 
 def _has_fundamentals() -> bool:
-    """Check if the DB has any scored fundamental data."""
+    """Check if active tickers have fundamental data."""
     from edgefinder.db.models import Fundamental
 
     session = _session_factory()
     try:
-        return session.query(Fundamental).first() is not None
+        count = (
+            session.query(Ticker)
+            .join(Fundamental, Ticker.id == Fundamental.ticker_id)
+            .filter(Ticker.is_active == True)
+            .count()
+        )
+        return count > 0
     finally:
         session.close()
 
