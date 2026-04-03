@@ -379,10 +379,20 @@ async function loadTrades() {
   if (currentTradeFilter === 'wins') { url = `/api/trades/wins${strat ? '?strategy=' + strat : ''}`; }
   else if (currentTradeFilter === 'losses') { url = `/api/trades/losses${strat ? '?strategy=' + strat : ''}`; }
   else { url = `/api/trades?${strat ? 'strategy=' + strat + '&' : ''}${currentTradeFilter !== 'all' ? 'status=' + currentTradeFilter : ''}`; }
-  trades = await fetch(url).then(r => r.json());
+  try {
+    trades = await fetch(url).then(r => r.json());
+  } catch (e) {
+    console.error('Failed to load trades:', e);
+    document.getElementById('trades-body').innerHTML = '<tr><td colspan="14" class="empty">Failed to load trades</td></tr>';
+    return;
+  }
   // Stats
-  const statsUrl = `/api/trades/stats${strat ? '?strategy=' + strat : ''}`;
-  const stats = await fetch(statsUrl).then(r => r.json());
+  let stats = {};
+  try {
+    const statsUrl = `/api/trades/stats${strat ? '?strategy=' + strat : ''}`;
+    const statsResp = await fetch(statsUrl);
+    if (statsResp.ok) stats = await statsResp.json();
+  } catch (e) { console.error('Failed to load trade stats:', e); }
   document.getElementById('trade-stats').innerHTML = [
     ['Total', stats.total_trades || 0],
     ['Wins', stats.wins || 0],

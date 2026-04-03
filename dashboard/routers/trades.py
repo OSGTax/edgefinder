@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from dashboard.dependencies import get_db
 from dashboard.services import get_arena
 from edgefinder.trading.journal import TradeJournal
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -64,7 +68,7 @@ def _get_live_prices(symbols: list[str]) -> dict[str, float]:
             if p:
                 prices[sym] = p
         except Exception:
-            pass
+            logger.warning("Failed to fetch live price for %s", sym, exc_info=True)
     return prices
 
 

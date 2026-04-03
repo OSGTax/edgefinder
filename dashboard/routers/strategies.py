@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -9,6 +11,8 @@ from dashboard.dependencies import get_db
 from dashboard.services import get_arena, get_scheduler
 from edgefinder.db.models import StrategyAccount, StrategySnapshot
 from edgefinder.strategies.base import StrategyRegistry
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -48,7 +52,7 @@ def get_accounts(db: Session = Depends(get_db)):
                     if price:
                         live_prices[sym] = price
                 except Exception:
-                    pass
+                    logger.warning("Failed to fetch live price for %s", sym, exc_info=True)
 
         # Compute unrealized P&L per strategy
         result = []

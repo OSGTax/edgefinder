@@ -121,7 +121,7 @@ class TradeJournal:
             "total_pnl": round(total_pnl, 2),
             "avg_pnl": round(total_pnl / len(closed), 2),
             "avg_r_multiple": round(avg_r, 2),
-            "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else float("inf"),
+            "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else None,
             "largest_win": round(max((t.pnl_dollars or 0) for t in closed), 2),
             "largest_loss": round(min((t.pnl_dollars or 0) for t in closed), 2),
         }
