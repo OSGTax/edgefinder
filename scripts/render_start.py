@@ -16,6 +16,17 @@ def init_database():
     from edgefinder.db import models  # noqa: F401 — registers ORM models
     from sqlalchemy import text, inspect
 
+    # Fail fast if DATABASE_URL is missing on Render — SQLite uses ephemeral
+    # filesystem and all data (trades, accounts, research) is lost on redeploy
+    db_url = os.getenv("DATABASE_URL", "")
+    if os.getenv("RENDER") and not db_url:
+        logger.error(
+            "FATAL: DATABASE_URL is not set on Render. "
+            "Without PostgreSQL, all data will be lost on every deploy. "
+            "Create a PostgreSQL database in Render and link it to this service."
+        )
+        sys.exit(1)
+
     engine = get_engine()
     Base.metadata.create_all(engine)
 

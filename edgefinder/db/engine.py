@@ -36,6 +36,12 @@ def get_engine(url: str | None = None, echo: bool | None = None):
     is_sqlite = db_url.startswith("sqlite")
     _echo = echo if echo is not None else settings.db_echo
 
+    if is_sqlite and os.getenv("RENDER"):
+        logger.warning(
+            "WARNING: Using SQLite on Render — data WILL BE LOST on redeploy! "
+            "Set DATABASE_URL to a PostgreSQL connection string."
+        )
+
     if is_sqlite:
         kwargs: dict = {
             "echo": _echo,
