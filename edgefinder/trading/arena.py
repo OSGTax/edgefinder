@@ -41,6 +41,7 @@ class ArenaEngine:
     def __init__(self, provider: DataProvider) -> None:
         self._provider = provider
         self._slots: dict[str, StrategySlot] = {}
+        self._fundamentals_cache: dict[str, object] = {}  # ticker -> TickerFundamentals
 
     def load_strategies(self, pdt_config: dict[str, bool] | None = None) -> None:
         """Load all registered strategies into the arena.
@@ -70,6 +71,16 @@ class ArenaEngine:
         for slot in self._slots.values():
             slot.watchlist = list(tickers)
 
+    def set_fundamentals_cache(self, cache: dict) -> None:
+        """Set cached fundamentals for re-qualification checks.
+
+        Called by services.py after each scan. The cache maps
+        ticker symbol -> TickerFundamentals. Used in run_signal_check()
+        to verify a stock still qualifies before generating signals.
+        """
+        self._fundamentals_cache = cache
+        logger.info("Fundamentals cache updated: %d tickers", len(cache))
+
     def run_signal_check(self) -> list[Trade]:
         """Run signal generation for all strategies on their watchlists.
 
@@ -89,6 +100,19 @@ class ArenaEngine:
                         name, ticker,
                     )
                     continue
+
+                # Re-qualification gate: verify fundamentals still qualify
+                cached_fund = self._fundamentals_cache.get(ticker)
+                if cached_fund is not None:
+                    try:
+                        if not slot.strategy.qualifies_stock(cached_fund):
+                            logger.info(
+                                "[%s] Re-qualification failed for %s — skipping",
+                                name, ticker,
+                            )
+                            continue
+                    except Exception:
+                        pass  # qualification check failed, proceed with signal generation
 
                 bars = self._fetch_bars(ticker)
                 if bars is None or bars.empty:

@@ -287,6 +287,34 @@ class TestArena:
         trades = arena.run_signal_check()
         assert isinstance(trades, list)
 
+    def test_requalification_gate_skips_disqualified(self, mock_provider):
+        """Stocks that no longer meet fundamentals criteria are skipped."""
+        import importlib
+        from edgefinder.strategies import alpha, bravo, charlie
+        from edgefinder.strategies.base import StrategyRegistry
+        from edgefinder.core.models import TickerFundamentals
+        StrategyRegistry.clear()
+        importlib.reload(alpha)
+        importlib.reload(bravo)
+        importlib.reload(charlie)
+
+        arena = ArenaEngine(mock_provider)
+        arena.load_strategies()
+        arena.set_watchlists({"alpha": ["AAPL"]})
+
+        # Set fundamentals cache with a stock that FAILS Alpha qualification
+        # (Alpha requires earnings_growth > 0 AND revenue_growth > 0)
+        bad_fund = TickerFundamentals(
+            symbol="AAPL",
+            earnings_growth=-0.10,  # negative = fails Alpha
+            revenue_growth=-0.05,
+        )
+        arena.set_fundamentals_cache({"AAPL": bad_fund})
+
+        # Signal check should skip AAPL due to re-qualification failure
+        trades = arena.run_signal_check()
+        assert trades == []  # no trades opened
+
 
 # ── Journal Tests ────────────────────────────────────────
 

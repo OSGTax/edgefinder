@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from config.settings import settings
 from edgefinder.core.events import event_bus
+from edgefinder.core.models import TickerFundamentals
 from edgefinder.data.cache import DataCache
 from edgefinder.data.polygon import PolygonDataProvider
 from edgefinder.data.provider import CachedDataProvider
@@ -64,6 +65,7 @@ def _deferred_initial_scan() -> None:
             watchlists = _load_watchlists()
             if watchlists and _arena:
                 _arena.set_watchlists(watchlists)
+                _populate_fundamentals_cache()
                 for name, tickers in watchlists.items():
                     logger.info("Background scan: %s watchlist = %d tickers", name, len(tickers))
             else:
@@ -112,6 +114,7 @@ def init_services() -> None:
         _deferred_initial_scan()
     else:
         _arena.set_watchlists(watchlists)
+        _populate_fundamentals_cache()
         for name, tickers in watchlists.items():
             logger.info("Watchlist '%s': %d tickers", name, len(tickers))
 
@@ -387,6 +390,44 @@ def _load_watchlists() -> dict[str, list[str]]:
         session.close()
 
 
+def _populate_fundamentals_cache() -> None:
+    """Build fundamentals cache from DB and push to arena for re-qualification."""
+    if not _arena or not _session_factory:
+        return
+    from edgefinder.db.models import Fundamental
+    session = _session_factory()
+    try:
+        rows = (
+            session.query(Ticker, Fundamental)
+            .join(Fundamental, Ticker.id == Fundamental.ticker_id)
+            .filter(Ticker.is_active == True)
+            .all()
+        )
+        cache = {}
+        for ticker, fund in rows:
+            cache[ticker.symbol] = TickerFundamentals(
+                symbol=ticker.symbol,
+                company_name=ticker.company_name,
+                sector=ticker.sector,
+                market_cap=ticker.market_cap,
+                price=ticker.last_price,
+                earnings_growth=fund.earnings_growth,
+                revenue_growth=fund.revenue_growth,
+                peg_ratio=fund.peg_ratio,
+                fcf_yield=fund.fcf_yield,
+                current_ratio=fund.current_ratio,
+                debt_to_equity=fund.debt_to_equity,
+                price_to_tangible_book=fund.price_to_tangible_book,
+                ev_to_ebitda=fund.ev_to_ebitda,
+                short_interest=fund.short_interest,
+            )
+        _arena.set_fundamentals_cache(cache)
+    except Exception:
+        logger.exception("Failed to populate fundamentals cache")
+    finally:
+        session.close()
+
+
 def _has_fundamentals() -> bool:
     """Check if active tickers have fundamental data."""
     from edgefinder.db.models import Fundamental
@@ -519,6 +560,7 @@ def _nightly_scan_job() -> None:
         watchlists = _load_watchlists()
         if watchlists and _arena:
             _arena.set_watchlists(watchlists)
+            _populate_fundamentals_cache()
             total = sum(len(t) for t in watchlists.values())
             logger.info(
                 "Nightly scan: %d qualified this batch, %d total across %d strategies",
