@@ -6,6 +6,7 @@ don't need to inherit from a base class. Any object matching the shape works.
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Awaitable, Callable, Protocol, runtime_checkable
 
@@ -13,13 +14,15 @@ import pandas as pd
 
 from edgefinder.core.models import BarData, TickerFundamentals
 
+logger = logging.getLogger(__name__)
+
 
 @runtime_checkable
 class DataProvider(Protocol):
-    """Contract for all market data providers.
+    """Contract for market data + fundamentals providers.
 
-    Polygon.io is the sole implementation. The protocol exists so consuming
-    code never imports Polygon directly, and so tests can use mock providers.
+    Polygon.io is the primary implementation. DataHub wraps this with
+    supplemental enrichment from additional sources.
     """
 
     def get_bars(
@@ -54,6 +57,104 @@ class DataProvider(Protocol):
     def is_market_open(self) -> bool:
         """Whether the US equity market is currently in regular trading hours."""
         ...
+
+
+@runtime_checkable
+class SupplementalProvider(Protocol):
+    """Contract for supplemental data sources that enrich fundamentals.
+
+    Supplements fill fields that the primary provider (Polygon) doesn't
+    supply: earnings calendar, analyst ratings, insider activity, etc.
+    Each supplement enriches a TickerFundamentals in-place, filling only
+    None fields (never overwriting primary data).
+
+    To add a new data source:
+    1. Create edgefinder/data/<source>.py implementing this protocol
+    2. Add API key setting to config/settings.py
+    3. Register in DataHub via register_supplement()
+    """
+
+    @property
+    def source_name(self) -> str:
+        """Unique identifier for this source (e.g., 'finnhub', 'fmp')."""
+        ...
+
+    @property
+    def available_fields(self) -> list[str]:
+        """TickerFundamentals field names this provider can populate."""
+        ...
+
+    def enrich(self, fund: TickerFundamentals) -> None:
+        """Enrich fundamentals in-place. Fill None fields only."""
+        ...
+
+
+class DataHub:
+    """Central registry for all data providers.
+
+    Wraps a primary DataProvider (Polygon) and optional SupplementalProviders
+    (Finnhub, FMP, etc.). All existing code that takes a DataProvider works
+    with DataHub since it exposes the same interface.
+
+    Fundamentals flow:
+    1. Primary provider fetches core data (financials, ratios, company info)
+    2. Each supplement enriches with fields the primary doesn't provide
+    3. Failed supplements are logged and skipped (graceful degradation)
+    """
+
+    def __init__(self, primary: DataProvider) -> None:
+        self._primary = primary
+        self._supplements: list[SupplementalProvider] = []
+
+    def register_supplement(self, provider: SupplementalProvider) -> None:
+        """Register a supplemental data provider."""
+        self._supplements.append(provider)
+        logger.info(
+            "Registered supplement '%s' (fields: %s)",
+            provider.source_name, ", ".join(provider.available_fields),
+        )
+
+    # ── DataProvider interface (delegates to primary) ────
+
+    def get_bars(
+        self, ticker: str, timeframe: str, start: date, end: date | None = None
+    ) -> pd.DataFrame | None:
+        return self._primary.get_bars(ticker, timeframe, start, end)
+
+    def get_latest_price(self, ticker: str) -> float | None:
+        return self._primary.get_latest_price(ticker)
+
+    def get_ticker_universe(
+        self, min_market_cap: int = 0, min_volume: int = 0
+    ) -> list[str]:
+        return self._primary.get_ticker_universe(min_market_cap, min_volume)
+
+    def is_market_open(self) -> bool:
+        return self._primary.is_market_open()
+
+    def get_fundamentals(self, ticker: str) -> TickerFundamentals | None:
+        """Get fundamentals from primary, then enrich via supplements."""
+        fund = self._primary.get_fundamentals(ticker)
+        if fund is None:
+            return None
+
+        sources: dict[str, str] = {}
+        for supplement in self._supplements:
+            try:
+                supplement.enrich(fund)
+                for field_name in supplement.available_fields:
+                    if getattr(fund, field_name, None) is not None:
+                        sources[field_name] = supplement.source_name
+            except Exception:
+                logger.warning(
+                    "Supplement '%s' failed for %s — skipping",
+                    supplement.source_name, ticker, exc_info=True,
+                )
+
+        if sources:
+            fund.data_sources = sources
+
+        return fund
 
 
 @runtime_checkable

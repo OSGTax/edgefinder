@@ -161,8 +161,19 @@ class TickerFundamentals(BaseModel):
     short_interest: Optional[float] = None
     ev_to_ebitda: Optional[float] = None
     current_ratio: Optional[float] = None
+    # Earnings awareness (populated by Finnhub or estimated from Polygon)
+    last_earnings_date: Optional[str] = None  # ISO date string
+    estimated_next_earnings_date: Optional[str] = None
+    near_earnings: bool = False
+    # Analyst data (populated by supplemental providers)
+    analyst_rating: Optional[str] = None  # "buy", "hold", "sell"
+    analyst_target_price: Optional[float] = None
+    # Insider activity (populated by supplemental providers)
+    insider_buy_ratio: Optional[float] = None  # buys / (buys+sells) over 90 days
     # Raw JSON for research deep-dive
     raw_data: Optional[dict] = None
+    # Source tracking — which supplement populated which field
+    data_sources: Optional[dict] = None
 
 
 class StrategyAccountState(BaseModel):

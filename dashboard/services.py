@@ -77,7 +77,7 @@ def init_services() -> None:
     """Initialize all trading pipeline services. Called once at startup."""
     global _provider, _arena, _scheduler, _session_factory
 
-    # Data provider
+    # Data provider — DataHub wraps Polygon + optional supplements
     try:
         polygon = PolygonDataProvider()
     except ValueError:
@@ -87,7 +87,19 @@ def init_services() -> None:
         )
         return
 
-    _provider = CachedDataProvider(polygon, DataCache())
+    from edgefinder.core.interfaces import DataHub
+
+    hub = DataHub(CachedDataProvider(polygon, DataCache()))
+
+    # Register supplemental providers
+    if settings.finnhub_enabled and settings.finnhub_api_key:
+        try:
+            from edgefinder.data.finnhub import FinnhubProvider
+            hub.register_supplement(FinnhubProvider())
+        except Exception:
+            logger.warning("Finnhub provider failed to initialize — continuing without it")
+
+    _provider = hub
 
     # DB session factory
     engine = get_engine()
