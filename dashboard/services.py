@@ -42,6 +42,12 @@ _provider: CachedDataProvider | None = None
 _arena: ArenaEngine | None = None
 _scheduler: EdgeFinderScheduler | None = None
 _session_factory = None
+_plan_access: dict[str, bool] = {}
+
+
+def get_plan_access() -> dict[str, bool]:
+    """Get plan access probe results for API display."""
+    return _plan_access
 
 
 def get_arena() -> ArenaEngine | None:
@@ -91,6 +97,10 @@ def init_services() -> None:
             "Set EDGEFINDER_POLYGON_API_KEY in .env"
         )
         return
+
+    # Probe plan access — test each endpoint once to determine what's available
+    logger.info("Probing Massive API plan access...")
+    _plan_access = polygon.probe_plan_access()
 
     from edgefinder.core.interfaces import DataHub
 

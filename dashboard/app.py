@@ -65,4 +65,15 @@ async def dashboard(request: Request):
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "version": __version__}
+    from dashboard.services import get_plan_access
+    plan = get_plan_access()
+    available = sum(1 for v in plan.values() if v)
+    return {
+        "status": "ok",
+        "version": __version__,
+        "data_sources": {
+            "available": available,
+            "total": len(plan),
+            "details": plan,
+        },
+    }
