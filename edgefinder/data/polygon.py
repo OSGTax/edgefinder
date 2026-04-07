@@ -287,6 +287,33 @@ class PolygonDataProvider:
         result["change_pct"] = getattr(snapshot, "todaysChangePerc", None)
         return result
 
+    def get_all_snapshots(self) -> dict[str, float]:
+        """Get latest prices for ALL tickers in ONE API call.
+
+        Returns dict of ticker -> close price. Uses get_snapshot_all
+        which fetches the entire market in a single request.
+        """
+        snapshots = self._retry(
+            lambda: self._client.get_snapshot_all("stocks"),
+            context="get_all_snapshots",
+        )
+        if not snapshots:
+            return {}
+        prices = {}
+        for s in snapshots:
+            ticker = getattr(s, "ticker", None)
+            if not ticker:
+                continue
+            price = None
+            if s.day and s.day.close:
+                price = float(s.day.close)
+            elif s.prev_day and s.prev_day.close:
+                price = float(s.prev_day.close)
+            if price:
+                prices[ticker] = price
+        logger.info("Batch snapshot: got prices for %d tickers", len(prices))
+        return prices
+
     # ── Private: Fill TickerFundamentals from each endpoint ──
 
     def _fill_ticker_details(self, fund: TickerFundamentals) -> None:
