@@ -135,6 +135,7 @@ def init_services() -> None:
         nightly_scan_fn=_nightly_scan_job,
         benchmark_collect_fn=_benchmark_job,
         snapshot_fn=_snapshot_job,
+        sector_rotation_fn=_sector_rotation_job,
     )
     _scheduler.start()
 
@@ -594,6 +595,34 @@ def _benchmark_job() -> None:
         logger.exception("Benchmark collection failed")
     finally:
         session.close()
+
+
+# Module-level cache for latest sector rotation data (for API access)
+_sector_rotation_data: list[dict] = []
+
+
+def get_sector_rotation() -> list[dict]:
+    """Get cached sector rotation data for API endpoints."""
+    return _sector_rotation_data
+
+
+def _sector_rotation_job() -> None:
+    """Called at 4:15 PM ET on weekdays. Computes Bloomberg-style RRG."""
+    global _sector_rotation_data
+    if not _provider:
+        return
+    try:
+        from edgefinder.market.sector_rotation import SectorRotationService
+        svc = SectorRotationService(_provider)
+        rotation = svc.compute_rotation()
+        _sector_rotation_data = [r.to_dict() for r in rotation]
+        logger.info(
+            "Sector rotation updated: %d sectors, %d leading",
+            len(rotation),
+            sum(1 for r in rotation if r.quadrant == "leading"),
+        )
+    except Exception:
+        logger.exception("Sector rotation job failed")
 
 
 def _snapshot_job() -> None:

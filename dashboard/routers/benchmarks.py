@@ -47,3 +47,26 @@ def backfill(
     """Backfill historical benchmark data."""
     stored = service.backfill(days=days)
     return {"stored": stored}
+
+
+@router.get("/sectors")
+def sector_rotation():
+    """Get RRG sector rotation data.
+
+    Returns sector ETFs classified into Bloomberg-style quadrants:
+    leading, improving, weakening, lagging — with RS-Ratio and RS-Momentum.
+    """
+    from dashboard.services import get_sector_rotation
+    data = get_sector_rotation()
+    if not data:
+        # Compute on-demand if no cached data
+        try:
+            from dashboard.services import _provider
+            if _provider:
+                from edgefinder.market.sector_rotation import SectorRotationService
+                svc = SectorRotationService(_provider)
+                rotation = svc.compute_rotation()
+                data = [r.to_dict() for r in rotation]
+        except Exception:
+            pass
+    return {"sectors": data}

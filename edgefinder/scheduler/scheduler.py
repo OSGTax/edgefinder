@@ -36,6 +36,7 @@ class EdgeFinderScheduler:
         nightly_scan_fn=None,
         benchmark_collect_fn=None,
         snapshot_fn=None,
+        sector_rotation_fn=None,
     ) -> None:
         """Register all scheduled jobs.
 
@@ -103,6 +104,16 @@ class EdgeFinderScheduler:
                 replace_existing=True,
             )
             self._jobs["daily_snapshot"] = "Daily at 4:05 PM ET"
+
+        if sector_rotation_fn:
+            self._scheduler.add_job(
+                sector_rotation_fn,
+                CronTrigger(hour=16, minute=15, day_of_week="mon-fri"),
+                id="sector_rotation",
+                name="Sector Rotation (RRG)",
+                replace_existing=True,
+            )
+            self._jobs["sector_rotation"] = "Daily at 4:15 PM ET"
 
         logger.info("Scheduler configured with %d jobs", len(self._jobs))
 
