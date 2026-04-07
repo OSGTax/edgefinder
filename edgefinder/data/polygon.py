@@ -272,10 +272,13 @@ class PolygonDataProvider:
         }
 
     def _fill_growth_metrics(self, fund: TickerFundamentals) -> None:
-        """Compute YoY growth from 2 annual financial periods.
+        """Compute YoY growth and fallback ratios from raw financial statements.
 
-        The ratios API doesn't include growth rates, so we still need
-        raw financials for earnings_growth and revenue_growth.
+        Always runs (even if ratios API succeeded) because:
+        1. Ratios API doesn't include growth rates
+        2. If ratios API is plan-gated, this provides fallback for D/E, current ratio, etc.
+
+        Only fills fields that are still None (doesn't overwrite ratios API data).
         """
         financials_list = self._retry(
             lambda: list(
@@ -286,31 +289,72 @@ class PolygonDataProvider:
             ),
             context=f"financials({fund.symbol})",
         )
-        if not financials_list or len(financials_list) < 2:
+        if not financials_list:
             return
 
         curr = self._extract_financial_values(financials_list[0])
-        prev = self._extract_financial_values(financials_list[1])
-        if not curr or not prev:
+        if not curr:
             return
 
-        # Earnings growth
-        curr_ni = curr.get("net_income")
-        prev_ni = prev.get("net_income")
-        if curr_ni is not None and prev_ni is not None and prev_ni != 0:
-            fund.earnings_growth = (curr_ni - prev_ni) / abs(prev_ni)
+        # ── Fallback ratios (only if ratios API didn't populate them) ──
+        mc = fund.market_cap
 
-        # Revenue growth
-        curr_rev = curr.get("revenues")
-        prev_rev = prev.get("revenues")
-        if curr_rev is not None and prev_rev is not None and prev_rev != 0:
-            fund.revenue_growth = (curr_rev - prev_rev) / abs(prev_rev)
+        # Current ratio
+        ca = curr.get("current_assets")
+        cl = curr.get("current_liabilities")
+        if fund.current_ratio is None and ca and cl and cl != 0:
+            fund.current_ratio = ca / cl
+
+        # Debt to equity
+        tl = curr.get("total_liabilities")
+        eq = curr.get("equity")
+        if fund.debt_to_equity is None and tl and eq and eq != 0:
+            fund.debt_to_equity = tl / eq
+
+        # FCF yield
+        ocf = curr.get("operating_cash_flow")
+        if fund.fcf_yield is None and ocf is not None and mc and mc > 0:
+            fund.fcf_yield = ocf / mc
+
+        # Price to tangible book
+        ta = curr.get("total_assets")
+        tl2 = curr.get("total_liabilities")
+        if fund.price_to_tangible_book is None and ta is not None and tl2 is not None and mc:
+            tangible_book = ta - tl2
+            if tangible_book > 0:
+                fund.price_to_tangible_book = mc / tangible_book
+
+        # P/E ratio
+        ni = curr.get("net_income")
+        if fund.price_to_earnings is None and mc and ni and ni > 0:
+            fund.price_to_earnings = mc / ni
+
+        # ROE
+        if fund.return_on_equity is None and ni and eq and eq != 0:
+            fund.return_on_equity = ni / eq
+
+        # ROA
+        if fund.return_on_assets is None and ni and ta and ta != 0:
+            fund.return_on_assets = ni / ta
+
+        # ── YoY growth (always computed from 2-period comparison) ──
+        prev = self._extract_financial_values(financials_list[1]) if len(financials_list) >= 2 else {}
+
+        if prev:
+            curr_ni = curr.get("net_income")
+            prev_ni = prev.get("net_income")
+            if curr_ni is not None and prev_ni is not None and prev_ni != 0:
+                fund.earnings_growth = (curr_ni - prev_ni) / abs(prev_ni)
+
+            curr_rev = curr.get("revenues")
+            prev_rev = prev.get("revenues")
+            if curr_rev is not None and prev_rev is not None and prev_rev != 0:
+                fund.revenue_growth = (curr_rev - prev_rev) / abs(prev_rev)
 
         # PEG ratio
-        ni = curr.get("net_income")
-        if (fund.market_cap and ni and ni > 0 and
+        if (fund.peg_ratio is None and mc and ni and ni > 0 and
                 fund.earnings_growth is not None and fund.earnings_growth > 0):
-            pe_ratio = fund.market_cap / ni
+            pe_ratio = mc / ni
             fund.peg_ratio = pe_ratio / (fund.earnings_growth * 100)
 
         fund.raw_data["financials"] = curr
