@@ -33,6 +33,8 @@ def _enrich_trade(t, live_prices: dict[str, float] | None = None) -> dict:
             if cost > 0:
                 unrealized_pct = round(unrealized_pnl / cost * 100, 2)
 
+    trade_value = round(t.entry_price * t.shares, 2) if t.entry_price and t.shares else None
+
     return {
         "trade_id": t.trade_id,
         "strategy_name": t.strategy_name,
@@ -43,6 +45,7 @@ def _enrich_trade(t, live_prices: dict[str, float] | None = None) -> dict:
         "exit_price": t.exit_price,
         "current_price": current_price,
         "shares": t.shares,
+        "trade_value": trade_value,
         "stop_loss": t.stop_loss,
         "target": t.target,
         "confidence": t.confidence,

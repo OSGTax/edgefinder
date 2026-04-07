@@ -106,7 +106,7 @@ th.info-header::after, .label.info-label::after { content: ' ?'; font-size: 10px
   <div class="stats-row" id="trade-stats"></div>
   <table>
     <thead>
-      <tr><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Type</th><th>Entry</th><th>Current</th><th>Exit</th><th>Shares</th><th>P&L</th><th>R</th><th>Status</th><th>Reason</th><th>Entry Time</th><th>Exit Time</th></tr>
+      <tr><th>Symbol</th><th>Strategy</th><th>Direction</th><th>Type</th><th>Entry</th><th>Current</th><th>Exit</th><th>Shares</th><th>Trade Value</th><th>P&L</th><th>R</th><th>Status</th><th>Reason</th><th>Entry Time</th><th>Exit Time</th></tr>
     </thead>
     <tbody id="trades-body"></tbody>
   </table>
@@ -383,7 +383,7 @@ async function loadTrades() {
     trades = await fetch(url).then(r => r.json());
   } catch (e) {
     console.error('Failed to load trades:', e);
-    document.getElementById('trades-body').innerHTML = '<tr><td colspan="14" class="empty">Failed to load trades</td></tr>';
+    document.getElementById('trades-body').innerHTML = '<tr><td colspan="15" class="empty">Failed to load trades</td></tr>';
     return;
   }
   // Stats
@@ -413,13 +413,13 @@ async function loadTrades() {
       <td>$${t.entry_price?.toFixed(2) || '—'}</td>
       <td>${t.current_price ? '$' + t.current_price.toFixed(2) : '—'}</td>
       <td>${t.exit_price ? '$' + t.exit_price.toFixed(2) : '—'}</td>
-      <td>${t.shares}</td><td class="${pnlCls}">${pnlStr}${pctStr}</td>
+      <td>${t.shares}</td><td>${t.trade_value ? '$' + t.trade_value.toFixed(2) : '—'}</td><td class="${pnlCls}">${pnlStr}${pctStr}</td>
       <td>${t.r_multiple ? t.r_multiple.toFixed(2) + 'R' : '—'}</td>
       <td><span class="pill ${statusCls}">${t.status}</span></td><td>${t.exit_reason || '—'}</td>
       <td>${t.entry_time ? new Date(t.entry_time).toLocaleString() : '—'}</td>
       <td>${t.exit_time ? new Date(t.exit_time).toLocaleString() : '—'}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="14" class="empty">No trades yet</td></tr>';
+  }).join('') : '<tr><td colspan="15" class="empty">No trades yet</td></tr>';
 }
 
 // ── Research ────────────────────────────────
