@@ -48,44 +48,62 @@ class PolygonDataProvider:
 
         Returns dict of endpoint_name -> available (True/False).
         Pre-populates _disabled_endpoints so scanning doesn't waste retries.
+
+        Known results from Stocks Starter plan are hardcoded to avoid
+        retesting. Only unknown endpoints are probed live.
         """
+        # Known results from previous probe (Stocks Starter $29/mo)
+        known_results = {
+            "ratios": False,           # NOT_AUTHORIZED — needs Fundamentals add-on
+            "earnings": False,         # NOT_AUTHORIZED — needs Benzinga add-on
+            "analyst": False,          # NOT_AUTHORIZED — needs Benzinga add-on
+            "financials_bs": False,    # NOT_AUTHORIZED — needs Fundamentals add-on
+            "financials_is": False,    # NOT_AUTHORIZED — needs Fundamentals add-on
+            "financials_cf": False,    # NOT_AUTHORIZED — needs Fundamentals add-on
+            "short_interest": True,    # Available on Starter
+            "financials_vx": True,     # Available on Starter
+            "technical_rsi": True,     # Available on Starter
+            "technical_ema": True,     # Available on Starter
+            "technical_macd": True,    # Available on Starter
+            "dividends": True,         # Available on Starter
+            "splits": True,            # Available on Starter
+        }
+
+        # Disable known-blocked endpoints immediately
+        for name, available in known_results.items():
+            if not available:
+                self._disabled_endpoints.add(name)
+                logger.info("  ✗ %s — blocked (known)", name)
+            else:
+                logger.info("  ✓ %s — available (known)", name)
+
+        # Only probe endpoints we haven't confirmed yet
         test_ticker = "AAPL"
         probes = {
-            "ratios": lambda: list(self._client.list_financials_ratios(ticker=test_ticker, limit=1)),
-            "earnings": lambda: list(self._client.list_benzinga_earnings(ticker=test_ticker, limit=1)),
-            "analyst": lambda: list(self._client.list_benzinga_consensus_ratings(ticker=test_ticker, limit=1)),
-            "short_interest": lambda: list(self._client.list_short_interest(ticker=test_ticker, limit=1)),
-            "financials_bs": lambda: list(self._client.list_financials_balance_sheets(tickers=test_ticker, limit=1)),
-            "financials_is": lambda: list(self._client.list_financials_income_statements(tickers=test_ticker, limit=1)),
-            "financials_cf": lambda: list(self._client.list_financials_cash_flow_statements(tickers=test_ticker, limit=1)),
-            "financials_vx": lambda: list(self._client.vx.list_stock_financials(ticker=test_ticker, limit=1)),
-            "technical_rsi": lambda: self._client.get_rsi(test_ticker, timespan="day", window=14, limit=1),
-            "technical_ema": lambda: self._client.get_ema(test_ticker, timespan="day", window=21, limit=1),
-            "technical_macd": lambda: self._client.get_macd(test_ticker, timespan="day", limit=1),
-            "dividends": lambda: list(self._client.list_dividends(ticker=test_ticker, limit=1)),
-            "splits": lambda: list(self._client.list_splits(ticker=test_ticker, limit=1)),
             "news": lambda: list(self._client.list_ticker_news(ticker=test_ticker, limit=1)),
             "related": lambda: self._client.get_related_companies(ticker=test_ticker),
             "ticker_events": lambda: self._client.get_ticker_events(test_ticker),
         }
 
-        results = {}
+        # Probe unknown endpoints
+        probed = {}
         for name, fn in probes.items():
             try:
                 fn()
-                results[name] = True
-                logger.info("  ✓ %s — available", name)
+                probed[name] = True
+                logger.info("  ✓ %s — available (probed)", name)
             except Exception as e:
                 err = str(e)
                 if "NOT_AUTHORIZED" in err or "not entitled" in err.lower():
-                    results[name] = False
+                    probed[name] = False
                     self._disabled_endpoints.add(name)
-                    logger.warning("  ✗ %s — NOT on current plan", name)
+                    logger.warning("  ✗ %s — NOT on current plan (probed)", name)
                 else:
-                    # Other errors (network, etc.) — assume available
-                    results[name] = True
+                    probed[name] = True
                     logger.info("  ? %s — error but not plan-gated: %s", name, err[:80])
 
+        # Merge known + probed
+        results = {**known_results, **probed}
         self._plan_access = results
         available = sum(1 for v in results.values() if v)
         blocked = sum(1 for v in results.values() if not v)
