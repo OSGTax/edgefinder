@@ -387,13 +387,19 @@ class PolygonDataProvider:
         }
 
     def _fill_growth_metrics(self, fund: TickerFundamentals) -> None:
-        """Compute YoY growth and fallback ratios from raw financial statements.
+        """Derive ratios from raw SEC financial statements.
 
-        Always runs (even if ratios API succeeded) because:
-        1. Ratios API doesn't include growth rates
-        2. If ratios API is plan-gated, this provides fallback for D/E, current ratio, etc.
+        The list_financials_ratios endpoint (pre-computed P/E, D/E, ROE etc.)
+        requires the Fundamentals add-on ($29/mo). On Starter plan, the raw
+        financial statements (vx.list_stock_financials) ARE available — these
+        contain the actual SEC-filed numbers (net income, equity, assets, etc.)
+        from which ratios are derived.
 
-        Only fills fields that are still None (doesn't overwrite ratios API data).
+        This is the same source data Bloomberg uses — SEC filings.
+        Ratios are standard accounting formulas, not estimates.
+
+        Only fills fields that are still None (doesn't overwrite API data
+        if the Fundamentals add-on is eventually enabled).
         """
         financials_list = self._retry(
             lambda: list(

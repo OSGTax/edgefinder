@@ -47,39 +47,33 @@ def active_tickers(service: ResearchService = Depends(_get_research_service)):
 
 @router.post("/scan")
 def trigger_scan(db: Session = Depends(get_db)):
-    """Trigger a batched scan for today's batch. Returns scan results summary."""
-    from datetime import datetime
+    """Trigger a per-strategy scan. Returns scan results summary."""
     from config.settings import settings
-    from dashboard.services import get_arena, _provider, _load_watchlist
-    from edgefinder.scanner.scanner import FundamentalScanner
+    from dashboard.services import get_arena, _provider, _load_watchlists, _populate_fundamentals_cache
+    from edgefinder.scanner.strategy_scanner import StrategyScanner
+    from edgefinder.strategies.base import StrategyRegistry
 
     if not _provider:
         return {"error": "No Polygon API key configured"}
 
-    batch_count = settings.scanner_batch_count
-    batch_index = datetime.now().weekday()
-    if batch_index >= batch_count:
-        batch_index = 0
-
     universe = _provider.get_ticker_universe()
-    sorted_universe = sorted(universe)
-    batch = sorted_universe[batch_index::batch_count]
+    total_qualified = 0
 
-    scanner = FundamentalScanner(_provider, db)
-    results = scanner.run(tickers=batch, batch_index=batch_index)
-    qualified = sum(1 for s in results if s.qualifying_strategies)
+    for strategy in StrategyRegistry.get_instances():
+        scanner = StrategyScanner(strategy, _provider, db)
+        results = scanner.run(tickers=sorted(universe))
+        total_qualified += sum(1 for r in results if r.qualified)
 
-    # Update arena watchlist
+    # Update arena watchlists
     arena = get_arena()
     if arena:
-        watchlist = _load_watchlist()
-        if watchlist:
-            arena.set_global_watchlist(watchlist)
+        watchlists = _load_watchlists()
+        if watchlists:
+            arena.set_watchlists(watchlists)
+            _populate_fundamentals_cache()
 
     return {
-        "batch": batch_index + 1,
-        "batch_count": batch_count,
-        "scanned": len(results),
-        "qualified": qualified,
+        "scanned": len(universe),
+        "qualified": total_qualified,
         "universe_size": len(universe),
     }

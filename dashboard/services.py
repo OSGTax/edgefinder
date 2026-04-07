@@ -28,7 +28,6 @@ from edgefinder.db.models import (
 )
 from edgefinder.market.benchmarks import BenchmarkService
 from edgefinder.market.snapshot import MarketSnapshotService
-from edgefinder.scanner.scanner import FundamentalScanner  # legacy, kept for compatibility
 from edgefinder.scanner.strategy_scanner import StrategyScanner
 from edgefinder.scheduler.scheduler import EdgeFinderScheduler
 from edgefinder.trading.arena import ArenaEngine
