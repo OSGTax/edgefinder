@@ -5,17 +5,14 @@ from datetime import datetime
 from pydantic import ValidationError
 
 from edgefinder.core.models import (
-    AggregatedSentiment,
     BarData,
     Direction,
     MarketRegime,
     MarketSnapshot,
     Signal,
     SignalAction,
-    SentimentSource,
     StrategyAccountState,
     TickerFundamentals,
-    TickerSentiment,
     Trade,
     TradeStatus,
     TradeType,
@@ -141,46 +138,6 @@ class TestMarketSnapshot:
         ms = MarketSnapshot()
         assert ms.spy_price == 0.0
         assert ms.market_regime == MarketRegime.SIDEWAYS
-
-
-class TestTickerSentiment:
-    def test_score_bounds(self):
-        ts = TickerSentiment(
-            symbol="AAPL",
-            source=SentimentSource.REDDIT,
-            score=0.5,
-            mention_count=100,
-        )
-        assert ts.score == 0.5
-
-    def test_score_too_high(self):
-        with pytest.raises(ValidationError):
-            TickerSentiment(
-                symbol="AAPL",
-                source=SentimentSource.REDDIT,
-                score=1.5,
-            )
-
-    def test_score_too_low(self):
-        with pytest.raises(ValidationError):
-            TickerSentiment(
-                symbol="AAPL",
-                source=SentimentSource.TWITTER,
-                score=-1.5,
-            )
-
-
-class TestAggregatedSentiment:
-    def test_construction(self):
-        agg = AggregatedSentiment(
-            symbol="TSLA",
-            composite_score=0.3,
-            source_scores={"reddit": 0.5, "twitter": 0.1},
-            total_mentions=250,
-            is_trending=True,
-        )
-        assert agg.composite_score == 0.3
-        assert agg.total_mentions == 250
 
 
 class TestTickerFundamentals:

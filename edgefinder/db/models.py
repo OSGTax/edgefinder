@@ -209,25 +209,7 @@ class IndexDaily(Base):
     change_pct: Mapped[float] = mapped_column(Float)
 
 
-# ── 8. sentiment_readings ───────────────────────────────
-
-
-class SentimentReading(Base):
-    __tablename__ = "sentiment_readings"
-    __table_args__ = (
-        Index("idx_sentiment_symbol_ts", "symbol", "timestamp"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    symbol: Mapped[str] = mapped_column(String(10), index=True)
-    source: Mapped[str] = mapped_column(String(20))
-    score: Mapped[float] = mapped_column(Float)
-    mention_count: Mapped[int] = mapped_column(Integer, default=0)
-    is_trending: Mapped[bool] = mapped_column(Boolean, default=False)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-
-# ── 9. manual_injections ────────────────────────────────
+# ── 8. manual_injections ────────────────────────────────
 
 
 class ManualInjection(Base):

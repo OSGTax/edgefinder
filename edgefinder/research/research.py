@@ -1,6 +1,6 @@
 """EdgeFinder v2 — Research service.
 
-Aggregates fundamentals, technicals, sentiment, trade history, and
+Aggregates fundamentals, technicals, trade history, and
 strategy qualification into a single per-ticker report. Read-only layer.
 """
 
@@ -14,8 +14,7 @@ from sqlalchemy.orm import Session
 
 from edgefinder.core.interfaces import DataProvider
 from edgefinder.core.models import TickerFundamentals
-from edgefinder.db.models import Fundamental, ManualInjection, SentimentReading, Ticker, TradeRecord
-from edgefinder.sentiment.aggregator import SentimentAggregator
+from edgefinder.db.models import Fundamental, ManualInjection, Ticker, TradeRecord
 from edgefinder.signals.engine import compute_indicators
 from edgefinder.strategies.base import StrategyRegistry
 
@@ -60,11 +59,9 @@ class ResearchService:
         self,
         provider: DataProvider,
         session: Session,
-        sentiment_agg: SentimentAggregator | None = None,
     ) -> None:
         self._provider = provider
         self._session = session
-        self._sentiment = sentiment_agg or SentimentAggregator(session)
 
     def get_ticker_report(self, symbol: str) -> TickerReport:
         """One-call aggregation of everything known about a ticker."""
@@ -136,19 +133,6 @@ class ResearchService:
                     report.indicators = snapshot.to_dict()
         except Exception:
             logger.debug("Could not compute indicators for %s", symbol)
-
-        # Sentiment
-        try:
-            sent = self._sentiment.get_sentiment(symbol)
-            report.sentiment = {
-                "composite_score": sent.composite_score,
-                "source_scores": sent.source_scores,
-                "total_mentions": sent.total_mentions,
-                "is_trending": sent.is_trending,
-                "action": sent.action.value,
-            }
-        except Exception:
-            logger.debug("Could not get sentiment for %s", symbol)
 
         # Trade history
         trades = self._session.query(TradeRecord).filter_by(symbol=symbol).all()

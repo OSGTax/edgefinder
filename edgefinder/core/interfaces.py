@@ -11,7 +11,7 @@ from typing import Awaitable, Callable, Protocol, runtime_checkable
 
 import pandas as pd
 
-from edgefinder.core.models import BarData, TickerFundamentals, TickerSentiment
+from edgefinder.core.models import BarData, TickerFundamentals
 
 
 @runtime_checkable
@@ -83,19 +83,3 @@ class StreamProvider(Protocol):
         ...
 
 
-@runtime_checkable
-class SentimentProvider(Protocol):
-    """Contract for sentiment data sources (Reddit, Twitter, News)."""
-
-    @property
-    def source_name(self) -> str:
-        """Identifier for this source (e.g., 'reddit', 'twitter', 'news')."""
-        ...
-
-    def get_sentiment(self, ticker: str) -> TickerSentiment | None:
-        """Get current sentiment for a single ticker."""
-        ...
-
-    def get_trending(self) -> list[TickerSentiment]:
-        """Get tickers that are currently trending on this source."""
-        ...

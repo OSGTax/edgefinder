@@ -77,8 +77,7 @@ th.info-header::after, .label.info-label::after { content: ' ?'; font-size: 10px
   <div class="tab active" onclick="switchTab('strategies')">Strategies</div>
   <div class="tab" onclick="switchTab('trades')">Trades</div>
   <div class="tab" onclick="switchTab('research')">Research</div>
-  <div class="tab" onclick="switchTab('sentiment')">Sentiment</div>
-  <div class="tab" onclick="switchTab('benchmarks')">Benchmarks</div>
+<div class="tab" onclick="switchTab('benchmarks')">Benchmarks</div>
   <div class="tab" onclick="switchTab('inject')">Inject</div>
 </div>
 
@@ -149,16 +148,6 @@ th.info-header::after, .label.info-label::after { content: ' ?'; font-size: 10px
   </div>
 </div>
 
-<!-- SENTIMENT PANEL -->
-<div class="panel" id="panel-sentiment">
-  <h2 style="margin-bottom:16px">Trending Tickers</h2>
-  <div class="cards" id="trending-cards"></div>
-  <div class="research-box" style="margin-top:24px">
-    <input type="text" id="sentiment-input" placeholder="Check sentiment for ticker..." onkeydown="if(event.key==='Enter')doSentiment()">
-    <button onclick="doSentiment()">Check</button>
-  </div>
-  <div id="sentiment-result"></div>
-</div>
 
 <!-- BENCHMARKS PANEL -->
 <div class="panel" id="panel-benchmarks">
@@ -308,7 +297,6 @@ function switchTab(name) {
   if (name === 'strategies') loadStrategies();
   if (name === 'trades') loadTrades();
   if (name === 'research') loadActiveTickers();
-  if (name === 'sentiment') loadTrending();
   if (name === 'benchmarks') loadBenchmarks();
   if (name === 'inject') loadInjections();
 }
@@ -456,13 +444,6 @@ async function doResearch() {
           ].map(([label, key, val, fmt]) => `<div class="row"><span class="label info-label" onclick="showInfo('${key}')">${label}</span><span class="value">${val != null ? (fmt(val) || '—') : '—'}</span></div>`).join('')}
         </div>
         <div class="card">
-          <h3>Sentiment</h3>
-          <div class="row"><span class="label">Score</span><span class="value">${r.sentiment?.composite_score?.toFixed(3) || '—'}</span></div>
-          <div class="row"><span class="label">Mentions</span><span class="value">${r.sentiment?.total_mentions || 0}</span></div>
-          <div class="row"><span class="label">Trending</span><span class="value">${r.sentiment?.is_trending ? 'Yes' : 'No'}</span></div>
-          <div class="row"><span class="label">Action</span><span class="value">${r.sentiment?.action || '—'}</span></div>
-        </div>
-        <div class="card">
           <h3>Trade History</h3>
           <div class="row"><span class="label">Total Trades</span><span class="value">${r.trade_count}</span></div>
           <div class="row"><span class="label">Open</span><span class="value">${r.open_trades}</span></div>
@@ -526,33 +507,6 @@ async function loadActiveTickers() {
       <td>${srcPill}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="14" class="empty">No tickers yet. Run the scanner or inject a ticker.</td></tr>';
-}
-
-// ── Sentiment ───────────────────────────────
-async function loadTrending() {
-  const trending = await fetch('/api/sentiment/trending').then(r => r.json());
-  document.getElementById('trending-cards').innerHTML = trending.length ? trending.map(t => `
-    <div class="card">
-      <h3>${t.symbol}</h3>
-      <div class="row"><span class="label">Source</span><span class="value">${t.source}</span></div>
-      <div class="row"><span class="label">Score</span><span class="value ${t.score > 0 ? 'positive' : t.score < 0 ? 'negative' : ''}">${t.score.toFixed(3)}</span></div>
-      <div class="row"><span class="label">Mentions</span><span class="value">${t.mention_count}</span></div>
-    </div>`).join('') : '<div class="empty">No trending tickers detected</div>';
-}
-
-async function doSentiment() {
-  const sym = document.getElementById('sentiment-input').value.trim().toUpperCase();
-  if (!sym) return;
-  const r = await fetch(`/api/sentiment/ticker/${sym}`).then(r => r.json());
-  document.getElementById('sentiment-result').innerHTML = `
-    <div class="card" style="margin-top:16px">
-      <h3>${r.symbol} Sentiment</h3>
-      <div class="row"><span class="label">Composite</span><span class="value ${r.composite_score > 0 ? 'positive' : r.composite_score < 0 ? 'negative' : ''}">${r.composite_score.toFixed(3)}</span></div>
-      <div class="row"><span class="label">Action</span><span class="value">${r.action}</span></div>
-      <div class="row"><span class="label">Mentions</span><span class="value">${r.total_mentions}</span></div>
-      <div class="row"><span class="label">Trending</span><span class="value">${r.is_trending ? 'Yes' : 'No'}</span></div>
-      ${Object.entries(r.source_scores || {}).map(([s,v]) => `<div class="row"><span class="label">${s}</span><span class="value">${v.toFixed(3)}</span></div>`).join('')}
-    </div>`;
 }
 
 // ── Benchmarks ──────────────────────────────

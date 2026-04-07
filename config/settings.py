@@ -65,13 +65,6 @@ class Settings(BaseSettings):
     signal_confidence_high: int = 80
     signal_min_confidence_to_trade: int = 60
 
-    # ── SENTIMENT ────────────────────────────────────
-    sentiment_lookback_hours: int = 48
-    sentiment_strong_negative: float = -0.5
-    sentiment_mild_negative: float = -0.2
-    sentiment_mild_positive: float = 0.2
-    sentiment_strong_positive: float = 0.5
-
     # ── SCHEDULING (ET timezone) ─────────────────────
     scanner_run_time: str = "18:15"
     signal_check_interval_minutes: int = 5

@@ -49,19 +49,6 @@ class TickerSource(str, Enum):
     INJECTED = "injected"
 
 
-class SentimentSource(str, Enum):
-    REDDIT = "reddit"
-    TWITTER = "twitter"
-    NEWS = "news"
-
-
-class SentimentAction(str, Enum):
-    BLOCK = "BLOCK"
-    REDUCE_50 = "REDUCE_50"
-    PROCEED = "PROCEED"
-    CONFIDENCE_PLUS_10 = "CONFIDENCE_PLUS_10"
-    CONFIDENCE_PLUS_20 = "CONFIDENCE_PLUS_20"
-
 
 # ── Domain Models ────────────────────────────────────────
 
@@ -152,29 +139,6 @@ class MarketSnapshot(BaseModel):
     sector_performance: dict = Field(default_factory=dict)
     advance_decline_ratio: Optional[float] = None
 
-
-class TickerSentiment(BaseModel):
-    """Sentiment reading for a single ticker from a single source."""
-
-    symbol: str
-    source: SentimentSource
-    score: float = Field(ge=-1.0, le=1.0)
-    mention_count: int = 0
-    is_trending: bool = False
-    summary: Optional[str] = None
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-class AggregatedSentiment(BaseModel):
-    """Combined sentiment across all sources for a ticker."""
-
-    symbol: str
-    composite_score: float = Field(ge=-1.0, le=1.0, default=0.0)
-    source_scores: dict[str, float] = Field(default_factory=dict)
-    total_mentions: int = 0
-    is_trending: bool = False
-    action: SentimentAction = SentimentAction.PROCEED
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class TickerFundamentals(BaseModel):

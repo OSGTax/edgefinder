@@ -12,7 +12,6 @@ from edgefinder.db.models import (
     IndexDaily,
     ManualInjection,
     MarketSnapshotRecord,
-    SentimentReading,
     StrategyAccount,
     StrategyParameterLog,
     StrategySnapshot,
@@ -33,7 +32,7 @@ class TestEngine:
         expected = [
             "tickers", "fundamentals", "trades", "market_snapshots",
             "strategy_accounts", "strategy_snapshots", "index_daily",
-            "sentiment_readings", "manual_injections", "strategy_parameters",
+            "manual_injections", "strategy_parameters",
         ]
         for table in expected:
             assert table in tables, f"Missing table: {table}"
@@ -290,14 +289,6 @@ class TestOtherModels:
         db_session.add(IndexDaily(symbol="SPY", date=datetime(2024, 1, 15), close=476.0, change_pct=0.6))
         with pytest.raises(IntegrityError):
             db_session.flush()
-
-    def test_sentiment_reading(self, db_session):
-        sr = SentimentReading(symbol="AAPL", source="reddit", score=0.7, mention_count=500, is_trending=True)
-        db_session.add(sr)
-        db_session.flush()
-        result = db_session.query(SentimentReading).first()
-        assert result.score == 0.7
-        assert result.is_trending is True
 
     def test_manual_injection(self, db_session):
         inj = ManualInjection(symbol="GME", target_strategy=None, notes="Squeeze potential")

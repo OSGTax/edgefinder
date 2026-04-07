@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from edgefinder.core.models import Direction, Trade, TradeStatus, TradeType
 from edgefinder.db.models import (
-    IndexDaily, ManualInjection, SentimentReading, StrategyAccount,
+    IndexDaily, ManualInjection, StrategyAccount,
     StrategySnapshot, Ticker, TradeRecord,
 )
 
@@ -150,21 +150,6 @@ class TestResearchAPI:
         db_session.add(Ticker(symbol="MSFT", is_active=False))
         db_session.commit()
         resp = client.get("/api/research/active")
-        assert len(resp.json()) == 1
-
-
-class TestSentimentAPI:
-    def test_history_empty(self, client):
-        resp = client.get("/api/sentiment/history/AAPL")
-        assert resp.status_code == 200
-        assert resp.json() == []
-
-    def test_history_with_data(self, client, db_session):
-        db_session.add(SentimentReading(
-            symbol="AAPL", source="reddit", score=0.5, mention_count=100,
-        ))
-        db_session.commit()
-        resp = client.get("/api/sentiment/history/AAPL")
         assert len(resp.json()) == 1
 
 

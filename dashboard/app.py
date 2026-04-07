@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-from dashboard.routers import benchmarks, inject, research, sentiment, strategies, trades
+from dashboard.routers import benchmarks, inject, research, strategies, trades
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,6 @@ app.add_middleware(
 app.include_router(trades.router, prefix="/api/trades", tags=["trades"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["strategies"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
-app.include_router(sentiment.router, prefix="/api/sentiment", tags=["sentiment"])
 app.include_router(benchmarks.router, prefix="/api/benchmarks", tags=["benchmarks"])
 app.include_router(inject.router, prefix="/api/inject", tags=["inject"])
 
