@@ -98,9 +98,13 @@ def init_services() -> None:
         )
         return
 
-    # Probe plan access — test each endpoint once to determine what's available
-    logger.info("Probing Massive API plan access...")
-    _plan_access = polygon.probe_plan_access()
+    # Probe plan access in background — don't block server startup
+    import threading
+    def _probe():
+        global _plan_access
+        logger.info("Probing Massive API plan access...")
+        _plan_access = polygon.probe_plan_access()
+    threading.Thread(target=_probe, daemon=True, name="plan-probe").start()
 
     from edgefinder.core.interfaces import DataHub
 
