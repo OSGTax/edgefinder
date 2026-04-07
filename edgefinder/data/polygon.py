@@ -35,9 +35,12 @@ class PolygonDataProvider:
             raise ValueError(
                 "Polygon API key required. Set EDGEFINDER_POLYGON_API_KEY in .env"
             )
-        self._client = RESTClient(api_key=key)
+        self._client = RESTClient(api_key=key, num_pools=4, retries=0)
         self._max_retries = settings.polygon_max_retries
         self._retry_delay = settings.polygon_retry_delay
+        # Track which endpoints are not authorized on this plan
+        # to avoid wasting retries on every ticker
+        self._disabled_endpoints: set[str] = set()
 
     # ── Core DataProvider Methods ────────────────────
 
@@ -496,11 +499,28 @@ class PolygonDataProvider:
     # ── Private helpers ──────────────────────────────
 
     def _retry(self, fn, context: str = "") -> Any:
-        """Retry a function with exponential backoff."""
+        """Retry a function with exponential backoff.
+
+        Auto-disables endpoints that return NOT_AUTHORIZED to avoid
+        wasting retries on every ticker for plan-gated features.
+        """
+        # Check if this endpoint type is already known to be unauthorized
+        endpoint_type = context.split("(")[0] if "(" in context else context
+        if endpoint_type in self._disabled_endpoints:
+            return None
+
         for attempt in range(self._max_retries):
             try:
                 return fn()
             except Exception as e:
+                err_str = str(e)
+                # Detect plan-gated endpoints and disable them permanently
+                if "NOT_AUTHORIZED" in err_str or "not entitled" in err_str.lower():
+                    logger.warning(
+                        "%s not available on current plan — disabling for this session", endpoint_type
+                    )
+                    self._disabled_endpoints.add(endpoint_type)
+                    return None
                 if attempt == self._max_retries - 1:
                     logger.error("%s failed after %d retries: %s", context, self._max_retries, e)
                     return None
