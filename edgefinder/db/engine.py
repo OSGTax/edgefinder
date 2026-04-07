@@ -19,6 +19,14 @@ class Base(DeclarativeBase):
     pass
 
 
+def _ensure_ssl(url: str) -> str:
+    """Append sslmode=require to PostgreSQL URLs that don't already specify it."""
+    if "sslmode" in url:
+        return url
+    separator = "&" if "?" in url else "?"
+    return url + separator + "sslmode=require"
+
+
 def get_engine(url: str | None = None, echo: bool | None = None):
     """Create SQLAlchemy engine.
 
@@ -26,10 +34,15 @@ def get_engine(url: str | None = None, echo: bool | None = None):
     1. Explicit url parameter
     2. DATABASE_URL env var (Render provides this)
     3. settings.database_url (defaults to SQLite)
+
+    Supabase notes:
+    - Use the Transaction mode pooler URL (port 6543) from your dashboard
+    - SSL is enforced automatically (sslmode=require appended if missing)
+    - pool_recycle handles Supavisor retiring idle connections
     """
     db_url = url or os.getenv("DATABASE_URL", "") or settings.database_url
 
-    # Render uses postgres:// but SQLAlchemy 2.x requires postgresql://
+    # Render/Supabase may use postgres:// but SQLAlchemy 2.x requires postgresql://
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
@@ -59,12 +72,20 @@ def get_engine(url: str | None = None, echo: bool | None = None):
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
     else:
+        # Enforce SSL for all PostgreSQL connections (Supabase requires it)
+        db_url = _ensure_ssl(db_url)
+
+        is_supabase = "pooler.supabase.com" in db_url
+        if is_supabase:
+            logger.info("Supabase pooler detected — using pool_recycle=%ds", settings.db_pool_recycle)
+
         engine = create_engine(
             db_url,
             echo=_echo,
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,
+            pool_recycle=settings.db_pool_recycle,
         )
 
     logger.info("Database engine created: %s", "SQLite" if is_sqlite else "PostgreSQL")

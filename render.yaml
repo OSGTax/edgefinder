@@ -10,4 +10,4 @@ services:
       - key: EDGEFINDER_POLYGON_API_KEY
         sync: false
       - key: DATABASE_URL
-        sync: false  # Set manually — use Neon (free) or any PostgreSQL provider
+        sync: false  # Supabase pooler URL: postgresql://postgres.[ref]:[pass]@aws-0-[region].pooler.supabase.com:6543/postgres

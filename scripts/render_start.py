@@ -22,8 +22,9 @@ def init_database():
     if os.getenv("RENDER") and not db_url:
         logger.error(
             "FATAL: DATABASE_URL is not set on Render. "
-            "Without PostgreSQL, all data will be lost on every deploy. "
-            "Create a PostgreSQL database in Render and link it to this service."
+            "Without PostgreSQL, all data will be lost on every deploy.\n"
+            "Set DATABASE_URL in Render Environment to your Supabase pooler URL:\n"
+            "  postgresql://postgres.[ref]:[pass]@aws-0-[region].pooler.supabase.com:6543/postgres"
         )
         sys.exit(1)
 

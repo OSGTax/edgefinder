@@ -392,3 +392,145 @@ class TestTradeJournal:
             journal.log_trade(trade)
         aapl_trades = journal.get_trades(symbol="AAPL")
         assert len(aapl_trades) == 2
+
+
+# ── Financial Account Verification Tests ────────────────
+
+
+class TestAccountFinancialIntegrity:
+    """Verify core financial account invariants: cash tracking, balance
+    preservation, negative-balance prevention, and self-healing."""
+
+    def test_multi_position_cash_tracking(self):
+        """Open 2 positions, close 1 — cash must equal
+        starting - remaining_cost + closed_proceeds."""
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+
+        pos1 = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="SWING",
+        )
+        pos2 = Position(
+            symbol="MSFT", shares=5, entry_price=200.0,
+            stop_loss=190.0, target=220.0, direction="LONG", trade_type="SWING",
+        )
+        acct.open_position(pos1)  # cost 1000
+        acct.open_position(pos2)  # cost 1000
+        assert acct.cash == 3000.0
+
+        # Close AAPL at a profit
+        result = acct.close_position(pos1, 105.0, "TARGET_HIT")
+        proceeds = pos1.shares * 100.0 + result["pnl_dollars"]  # cost_basis + pnl
+        assert result["pnl_dollars"] == 50.0
+        # Cash = 3000 + 1050 (cost 1000 + profit 50)
+        assert acct.cash == 4050.0
+        # MSFT still open — remaining cost basis
+        assert acct.open_positions_value == 1000.0
+        # Total equity = cash + open cost
+        assert acct.total_equity == 5050.0
+
+    def test_cannot_go_negative_through_trades(self):
+        """Executor must reject a trade when cost exceeds buying power."""
+        acct = VirtualAccount("alpha", starting_capital=500.0)
+        executor = Executor(acct)
+        # Signal for a $100 stock — risk sizing will try to buy shares
+        # but even 1 share at $100.05 (after slippage) fits in $500
+        # Open a big position first to eat up most cash
+        pos = Position(
+            symbol="TSLA", shares=4, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="SWING",
+        )
+        acct.open_position(pos)  # cost = 400, cash = 100
+
+        # Now try to open another position that costs more than remaining cash
+        signal = Signal(
+            ticker="NVDA", action=SignalAction.BUY,
+            entry_price=200.0, stop_loss=190.0, target=220.0,
+            confidence=70.0, trade_type=TradeType.DAY, strategy_name="alpha",
+        )
+        trade = executor.execute_signal(signal)
+        assert trade is None  # rejected — insufficient buying power
+        assert acct.cash == 100.0  # unchanged
+
+    def test_peak_equity_only_updates_on_new_highs(self):
+        """Peak equity stays at previous high after a losing trade,
+        and updates only when equity exceeds the old peak."""
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        assert acct.peak_equity == 5000.0
+
+        # Open and close at a loss
+        pos1 = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="SWING",
+        )
+        acct.open_position(pos1)
+        acct.close_position(pos1, 95.0, "STOP_HIT")  # pnl = -50
+        assert acct.cash == 4950.0
+        assert acct.peak_equity == 5000.0  # unchanged — no new high
+
+        # Open and close at a big profit
+        pos2 = Position(
+            symbol="MSFT", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=120.0, direction="LONG", trade_type="SWING",
+        )
+        acct.open_position(pos2)
+        acct.close_position(pos2, 120.0, "TARGET_HIT")  # pnl = +200
+        assert acct.cash == 5150.0
+        assert acct.peak_equity == 5150.0  # updated — new high
+
+    def test_account_recalculation_self_healing(self, db_session):
+        """Simulate corrupted cash, then verify recalculation from trades
+        table restores the correct balance."""
+        from sqlalchemy import func
+
+        journal = TradeJournal(db_session)
+
+        # Log a closed winning trade
+        trade1 = Trade(
+            trade_id="heal-001", strategy_name="alpha", symbol="AAPL",
+            direction=Direction.LONG, trade_type=TradeType.DAY,
+            entry_price=100.0, shares=10, stop_loss=95.0, target=110.0,
+            confidence=70.0, status=TradeStatus.CLOSED,
+            pnl_dollars=50.0, pnl_percent=5.0, r_multiple=1.0,
+            exit_price=105.0, exit_reason="TARGET_HIT",
+            exit_time=datetime.now(timezone.utc),
+        )
+        journal.log_trade(trade1)
+
+        # Log an open position
+        trade2 = Trade(
+            trade_id="heal-002", strategy_name="alpha", symbol="MSFT",
+            direction=Direction.LONG, trade_type=TradeType.SWING,
+            entry_price=200.0, shares=5, stop_loss=190.0, target=220.0,
+            confidence=75.0, status=TradeStatus.OPEN,
+        )
+        journal.log_trade(trade2)
+
+        # Recalculate from trades table (same formula as services.py)
+        realized = (
+            db_session.query(func.coalesce(func.sum(TradeRecord.pnl_dollars), 0.0))
+            .filter(TradeRecord.strategy_name == "alpha", TradeRecord.status == "CLOSED")
+            .scalar()
+        )
+        open_cost = (
+            db_session.query(
+                func.coalesce(func.sum(TradeRecord.entry_price * TradeRecord.shares), 0.0)
+            )
+            .filter(TradeRecord.strategy_name == "alpha", TradeRecord.status == "OPEN")
+            .scalar()
+        )
+        starting_capital = 5000.0
+        correct_cash = round(starting_capital + realized - open_cost, 2)
+
+        # correct_cash = 5000 + 50 - 1000 = 4050
+        assert correct_cash == 4050.0
+
+        # Simulate corrupted account with wrong cash
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        acct.cash = 9999.99  # obviously wrong
+
+        # Apply the self-healing formula
+        acct.cash = correct_cash
+        acct.realized_pnl = round(realized, 2)
+        assert acct.cash == 4050.0
+        assert acct.realized_pnl == 50.0

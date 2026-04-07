@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     db_echo: bool = False
     db_pool_size: int = 5
     db_max_overflow: int = 10
+    db_pool_recycle: int = 300  # seconds; Supabase Supavisor retires idle connections
 
     # ── SLIPPAGE MODEL ───────────────────────────────
     slippage_base_rate: float = 0.0005
