@@ -49,6 +49,13 @@ class IndicatorSnapshot:
     volume_ratio: float | None = None
     recent_low: float | None = None
     recent_high: float | None = None
+    # New indicators (Phase 5)
+    adx: float | None = None
+    plus_di: float | None = None
+    minus_di: float | None = None
+    stoch_rsi_k: float | None = None
+    stoch_rsi_d: float | None = None
+    williams_r: float | None = None
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if v is not None}
@@ -110,6 +117,78 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.S
     return _ema(tr, period)
 
 
+def _adx(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Average Directional Index with +DI and -DI.
+
+    ADX measures trend strength (not direction). ADX > 25 = strong trend.
+    +DI > -DI = bullish trend. -DI > +DI = bearish trend.
+    """
+    prev_high = high.shift(1)
+    prev_low = low.shift(1)
+
+    # Directional movement
+    plus_dm = (high - prev_high).clip(lower=0)
+    minus_dm = (prev_low - low).clip(lower=0)
+
+    # Zero out when the other is larger
+    plus_dm = plus_dm.where(plus_dm > minus_dm, 0)
+    minus_dm = minus_dm.where(minus_dm > plus_dm, 0)
+
+    # True range
+    prev_close = close.shift(1)
+    tr = pd.concat(
+        [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
+        axis=1,
+    ).max(axis=1)
+
+    # Smoothed with Wilder's method (same as RSI smoothing)
+    atr_smooth = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    plus_dm_smooth = plus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    minus_dm_smooth = minus_dm.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+    # Directional indicators
+    plus_di = 100 * (plus_dm_smooth / atr_smooth.replace(0, float("nan")))
+    minus_di = 100 * (minus_dm_smooth / atr_smooth.replace(0, float("nan")))
+
+    # DX and ADX
+    di_sum = plus_di + minus_di
+    dx = 100 * ((plus_di - minus_di).abs() / di_sum.replace(0, float("nan")))
+    adx = dx.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+    return adx, plus_di, minus_di
+
+
+def _stochastic_rsi(
+    close: pd.Series, rsi_period: int, k_period: int, d_period: int
+) -> tuple[pd.Series, pd.Series]:
+    """Stochastic RSI — applies stochastic oscillator to RSI values.
+
+    StochRSI K < 20 = oversold. K > 80 = overbought.
+    K crossing above D from oversold = bullish signal.
+    """
+    rsi = _rsi(close, rsi_period)
+    rsi_min = rsi.rolling(window=rsi_period).min()
+    rsi_max = rsi.rolling(window=rsi_period).max()
+    rsi_range = rsi_max - rsi_min
+    stoch_rsi = ((rsi - rsi_min) / rsi_range.replace(0, float("nan"))) * 100
+    k = stoch_rsi.rolling(window=k_period).mean()
+    d = k.rolling(window=d_period).mean()
+    return k, d
+
+
+def _williams_r(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Series:
+    """Williams %R — momentum indicator, range -100 to 0.
+
+    %R < -80 = oversold. %R > -20 = overbought.
+    """
+    highest = high.rolling(window=period).max()
+    lowest = low.rolling(window=period).min()
+    wr = -100 * ((highest - close) / (highest - lowest).replace(0, float("nan")))
+    return wr
+
+
 # ── Main compute function ───────────────────────────────
 
 
@@ -156,6 +235,20 @@ def compute_indicators(df: pd.DataFrame) -> IndicatorSnapshot | None:
     # ATR
     atr = _atr(high, low, close, settings.signal_atr_period)
 
+    # ADX (trend strength)
+    adx_series, plus_di_series, minus_di_series = _adx(
+        high, low, close, settings.signal_adx_period
+    )
+
+    # Stochastic RSI
+    stoch_k, stoch_d = _stochastic_rsi(
+        close, settings.signal_stoch_rsi_period,
+        settings.signal_stoch_rsi_k, settings.signal_stoch_rsi_d,
+    )
+
+    # Williams %R
+    williams = _williams_r(high, low, close, settings.signal_williams_r_period)
+
     # Volume
     vol_avg = volume.rolling(window=settings.signal_volume_avg_period).mean()
     vol_ratio = volume / vol_avg.replace(0, float("nan"))
@@ -187,6 +280,12 @@ def compute_indicators(df: pd.DataFrame) -> IndicatorSnapshot | None:
         volume_ratio=float(vol_ratio.iloc[-1]) if not pd.isna(vol_ratio.iloc[-1]) else None,
         recent_low=float(recent_low),
         recent_high=float(recent_high),
+        adx=float(adx_series.iloc[-1]) if not pd.isna(adx_series.iloc[-1]) else None,
+        plus_di=float(plus_di_series.iloc[-1]) if not pd.isna(plus_di_series.iloc[-1]) else None,
+        minus_di=float(minus_di_series.iloc[-1]) if not pd.isna(minus_di_series.iloc[-1]) else None,
+        stoch_rsi_k=float(stoch_k.iloc[-1]) if not pd.isna(stoch_k.iloc[-1]) else None,
+        stoch_rsi_d=float(stoch_d.iloc[-1]) if not pd.isna(stoch_d.iloc[-1]) else None,
+        williams_r=float(williams.iloc[-1]) if not pd.isna(williams.iloc[-1]) else None,
     )
 
 

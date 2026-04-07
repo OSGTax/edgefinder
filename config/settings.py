@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     signal_bb_period: int = 20
     signal_bb_std: float = 2.0
     signal_bb_squeeze_threshold: float = 0.04
+    signal_adx_period: int = 14
+    signal_adx_strong_trend: float = 25.0
+    signal_stoch_rsi_period: int = 14
+    signal_stoch_rsi_k: int = 3
+    signal_stoch_rsi_d: int = 3
+    signal_williams_r_period: int = 14
     signal_atr_period: int = 14
     signal_confidence_low: int = 40
     signal_confidence_moderate: int = 60

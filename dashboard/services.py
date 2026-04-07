@@ -28,7 +28,8 @@ from edgefinder.db.models import (
 )
 from edgefinder.market.benchmarks import BenchmarkService
 from edgefinder.market.snapshot import MarketSnapshotService
-from edgefinder.scanner.scanner import FundamentalScanner
+from edgefinder.scanner.scanner import FundamentalScanner  # legacy, kept for compatibility
+from edgefinder.scanner.strategy_scanner import StrategyScanner
 from edgefinder.scheduler.scheduler import EdgeFinderScheduler
 from edgefinder.trading.arena import ArenaEngine
 from edgefinder.trading.journal import TradeJournal
@@ -306,38 +307,41 @@ def _recalculate_account_balances() -> None:
 
 
 def _run_initial_scan() -> None:
-    """Run a real batched scan on first startup to populate the research tab.
+    """Run per-strategy scans on first startup to populate watchlists.
 
-    Uses the same logic as the nightly scan — fetches the full Polygon universe,
-    picks today's batch, and scans ~1,000 tickers.
+    Each strategy runs its own complete scan with full data access:
+    fundamentals + daily technicals + relative strength.
     """
-    session = _session_factory()
-    try:
-        batch_count = settings.scanner_batch_count
-        batch_index = datetime.now().weekday()
-        if batch_index >= batch_count:
-            batch_index = 0  # Weekend fallback to Monday's batch
+    batch_count = settings.scanner_batch_count
+    batch_index = datetime.now().weekday()
+    if batch_index >= batch_count:
+        batch_index = 0
 
-        universe = _provider.get_ticker_universe()
-        sorted_universe = sorted(universe)
-        batch = sorted_universe[batch_index::batch_count]
+    universe = _provider.get_ticker_universe()
+    sorted_universe = sorted(universe)
+    batch = sorted_universe[batch_index::batch_count]
 
-        logger.info(
-            "Initial scan batch %d/%d: %d tickers (of %d total)",
-            batch_index + 1, batch_count, len(batch), len(universe),
-        )
+    logger.info(
+        "Initial scan batch %d/%d: %d tickers (of %d total)",
+        batch_index + 1, batch_count, len(batch), len(universe),
+    )
 
-        scanner = FundamentalScanner(_provider, session)
-        results = scanner.run(tickers=batch, batch_index=batch_index)
-        qualified = sum(1 for s in results if s.qualifying_strategies)
-        logger.info(
-            "Initial scan complete: %d scored, %d qualified",
-            len(results), qualified,
-        )
-    except Exception:
-        logger.exception("Initial scan failed")
-    finally:
-        session.close()
+    from edgefinder.strategies.base import StrategyRegistry
+
+    for strategy in StrategyRegistry.get_instances():
+        session = _session_factory()
+        try:
+            scanner = StrategyScanner(strategy, _provider, session)
+            results = scanner.run(tickers=batch, batch_index=batch_index)
+            qualified = sum(1 for r in results if r.qualified)
+            logger.info(
+                "Initial scan [%s]: %d scored, %d qualified",
+                strategy.name, len(results), qualified,
+            )
+        except Exception:
+            logger.exception("Initial scan failed for strategy '%s'", strategy.name)
+        finally:
+            session.close()
 
 
 def _load_watchlist() -> list[str]:
@@ -528,12 +532,13 @@ def _position_monitor_job() -> None:
 def _nightly_scan_job() -> None:
     """Called at 6:15 PM ET on weekdays.
 
-    Scans 1/5 of the stock universe each night (batched by day of week).
-    Qualified tickers accumulate across the week so the watchlist grows
-    to cover the full market over 5 trading days.
+    Runs per-strategy scans: each strategy independently scans its batch
+    of tickers with full data access (fundamentals + technicals + RS).
     """
     if not _provider:
         return
+
+    from edgefinder.strategies.base import StrategyRegistry
 
     batch_count = settings.scanner_batch_count
     batch_index = datetime.now().weekday()  # Mon=0 ... Fri=4
@@ -541,40 +546,39 @@ def _nightly_scan_job() -> None:
         logger.info("Weekend — skipping nightly scan")
         return
 
-    session = _session_factory()
-    try:
-        # Get full universe and slice for today's batch
-        universe = _provider.get_ticker_universe()
-        sorted_universe = sorted(universe)
-        batch = sorted_universe[batch_index::batch_count]
+    universe = _provider.get_ticker_universe()
+    sorted_universe = sorted(universe)
+    batch = sorted_universe[batch_index::batch_count]
 
+    logger.info(
+        "Nightly scan batch %d/%d: %d tickers (of %d total)",
+        batch_index + 1, batch_count, len(batch), len(universe),
+    )
+
+    for strategy in StrategyRegistry.get_instances():
+        session = _session_factory()
+        try:
+            scanner = StrategyScanner(strategy, _provider, session)
+            scanner.run(tickers=batch, batch_index=batch_index)
+        except Exception:
+            logger.exception("Nightly scan failed for strategy '%s'", strategy.name)
+        finally:
+            session.close()
+
+    # Reload per-strategy watchlists
+    watchlists = _load_watchlists()
+    if watchlists and _arena:
+        _arena.set_watchlists(watchlists)
+        _populate_fundamentals_cache()
+        total = sum(len(t) for t in watchlists.values())
         logger.info(
-            "Nightly scan batch %d/%d: %d tickers (of %d total)",
-            batch_index + 1, batch_count, len(batch), len(universe),
+            "Nightly scan complete: %d total tickers across %d strategies",
+            total, len(watchlists),
         )
-
-        scanner = FundamentalScanner(_provider, session)
-        results = scanner.run(tickers=batch, batch_index=batch_index)
-
-        # Reload per-strategy watchlists (all batches accumulated)
-        watchlists = _load_watchlists()
-        if watchlists and _arena:
-            _arena.set_watchlists(watchlists)
-            _populate_fundamentals_cache()
-            total = sum(len(t) for t in watchlists.values())
-            logger.info(
-                "Nightly scan: %d qualified this batch, %d total across %d strategies",
-                sum(1 for s in results if s.qualifying_strategies),
-                total, len(watchlists),
-            )
-            for name, tickers in watchlists.items():
-                logger.info("  %s: %d tickers", name, len(tickers))
-        else:
-            logger.info("Nightly scan: %d stocks scored, 0 qualified", len(results))
-    except Exception:
-        logger.exception("Nightly scan failed")
-    finally:
-        session.close()
+        for name, tickers in watchlists.items():
+            logger.info("  %s: %d tickers", name, len(tickers))
+    else:
+        logger.info("Nightly scan: 0 qualified across all strategies")
 
 
 def _benchmark_job() -> None:
