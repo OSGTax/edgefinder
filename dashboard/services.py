@@ -312,20 +312,26 @@ def _run_initial_scan() -> None:
 
     Each strategy runs its own complete scan with full data access:
     fundamentals + daily technicals + relative strength.
+
+    With scanner_full_universe=True (default on unlimited API plan),
+    scans the entire universe. Otherwise falls back to 1/5 batching.
     """
-    batch_count = settings.scanner_batch_count
-    batch_index = datetime.now().weekday()
-    if batch_index >= batch_count:
-        batch_index = 0
-
     universe = _provider.get_ticker_universe()
-    sorted_universe = sorted(universe)
-    batch = sorted_universe[batch_index::batch_count]
 
-    logger.info(
-        "Initial scan batch %d/%d: %d tickers (of %d total)",
-        batch_index + 1, batch_count, len(batch), len(universe),
-    )
+    if settings.scanner_full_universe:
+        tickers = sorted(universe)
+        batch_index = None
+        logger.info("Initial scan: full universe (%d tickers)", len(tickers))
+    else:
+        batch_count = settings.scanner_batch_count
+        batch_index = datetime.now().weekday()
+        if batch_index >= batch_count:
+            batch_index = 0
+        tickers = sorted(universe)[batch_index::batch_count]
+        logger.info(
+            "Initial scan batch %d/%d: %d tickers (of %d total)",
+            batch_index + 1, batch_count, len(tickers), len(universe),
+        )
 
     from edgefinder.strategies.base import StrategyRegistry
 
@@ -333,7 +339,7 @@ def _run_initial_scan() -> None:
         session = _session_factory()
         try:
             scanner = StrategyScanner(strategy, _provider, session)
-            results = scanner.run(tickers=batch, batch_index=batch_index)
+            results = scanner.run(tickers=tickers, batch_index=batch_index)
             qualified = sum(1 for r in results if r.qualified)
             logger.info(
                 "Initial scan [%s]: %d scored, %d qualified",
@@ -533,34 +539,44 @@ def _position_monitor_job() -> None:
 def _nightly_scan_job() -> None:
     """Called at 6:15 PM ET on weekdays.
 
-    Runs per-strategy scans: each strategy independently scans its batch
-    of tickers with full data access (fundamentals + technicals + RS).
+    Runs per-strategy scans: each strategy independently scans its universe
+    with full data access (fundamentals + technicals + RS).
+
+    With scanner_full_universe=True, scans the entire universe every night.
+    Otherwise falls back to 1/5 batching (Mon=batch 0 ... Fri=batch 4).
     """
     if not _provider:
         return
 
     from edgefinder.strategies.base import StrategyRegistry
 
-    batch_count = settings.scanner_batch_count
-    batch_index = datetime.now().weekday()  # Mon=0 ... Fri=4
-    if batch_index >= batch_count:
+    weekday = datetime.now().weekday()
+    if weekday >= 5:
         logger.info("Weekend — skipping nightly scan")
         return
 
     universe = _provider.get_ticker_universe()
-    sorted_universe = sorted(universe)
-    batch = sorted_universe[batch_index::batch_count]
 
-    logger.info(
-        "Nightly scan batch %d/%d: %d tickers (of %d total)",
-        batch_index + 1, batch_count, len(batch), len(universe),
-    )
+    if settings.scanner_full_universe:
+        tickers = sorted(universe)
+        batch_index = None
+        logger.info("Nightly scan: full universe (%d tickers)", len(tickers))
+    else:
+        batch_count = settings.scanner_batch_count
+        batch_index = weekday
+        if batch_index >= batch_count:
+            batch_index = 0
+        tickers = sorted(universe)[batch_index::batch_count]
+        logger.info(
+            "Nightly scan batch %d/%d: %d tickers (of %d total)",
+            batch_index + 1, batch_count, len(tickers), len(universe),
+        )
 
     for strategy in StrategyRegistry.get_instances():
         session = _session_factory()
         try:
             scanner = StrategyScanner(strategy, _provider, session)
-            scanner.run(tickers=batch, batch_index=batch_index)
+            scanner.run(tickers=tickers, batch_index=batch_index)
         except Exception:
             logger.exception("Nightly scan failed for strategy '%s'", strategy.name)
         finally:
