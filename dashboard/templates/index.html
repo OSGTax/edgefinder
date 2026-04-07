@@ -219,7 +219,7 @@ button:hover{background:var(--dim-amber)}
 <!-- FULL WIDTH: SCREENER / TERMINAL -->
 <div class="pnl full" id="pnl-screener">
   <div class="pnl-hdr">SCREENER
-    <select id="research-strategy-filter" onchange="loadActiveTickers()" style="margin-left:8px;font-size:10px;padding:1px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border)">
+    <select id="research-strategy-filter" onchange="renderScreener()" style="margin-left:8px;font-size:10px;padding:1px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border)">
       <option value="">All Strategies</option><option value="alpha">alpha</option><option value="bravo">bravo</option><option value="charlie">charlie</option>
     </select>
     <button id="scan-btn" onclick="triggerScan()" style="font-size:10px;padding:1px 6px;margin-left:8px">SCAN</button>
@@ -248,6 +248,9 @@ button:hover{background:var(--dim-amber)}
       <th onclick="sortScreener('return_on_assets')">ROA</th>
       <th onclick="sortScreener('dividend_yield')">DivY</th>
       <th onclick="sortScreener('short_interest')">SI%</th>
+      <th onclick="sortScreener('days_to_cover')">DTC</th>
+      <th onclick="sortScreener('dividend_amount')">Div$</th>
+      <th onclick="sortScreener('news_sentiment')">News</th>
       <th>Strats</th>
     </tr></thead><tbody id="active-tickers"></tbody></table>
   </div>
@@ -502,6 +505,18 @@ function sortScreener(col) {
   if (screenerSortCol === col) { screenerSortAsc = !screenerSortAsc; }
   else { screenerSortCol = col; screenerSortAsc = false; }
   renderScreener();
+  // Update sort indicator on headers
+  document.querySelectorAll('#screener-table th').forEach(th => {
+    th.style.color = '';
+    th.textContent = th.textContent.replace(/ [▲▼]$/, '');
+  });
+  const headers = document.querySelectorAll('#screener-table th');
+  headers.forEach(th => {
+    if (th.onclick && th.onclick.toString().includes(`'${col}'`)) {
+      th.style.color = '#fff';
+      th.textContent += screenerSortAsc ? ' ▲' : ' ▼';
+    }
+  });
 }
 
 function renderScreener() {
@@ -539,9 +554,12 @@ function renderScreener() {
       <td>${pct(t.return_on_assets)}</td>
       <td>${pct(t.dividend_yield)}</td>
       <td>${pct(t.short_interest)}</td>
+      <td>${fmt(t.days_to_cover,1)}</td>
+      <td>${t.dividend_amount?'$'+t.dividend_amount.toFixed(2):'—'}</td>
+      <td>${t.news_sentiment?'<span class="news-tag '+(t.news_sentiment)+'">'+t.news_sentiment+'</span>':'—'}</td>
       <td>${strats}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="18" class="empty">No tickers. Run scanner.</td></tr>';
+  }).join('') : '<tr><td colspan="21" class="empty">No tickers. Run scanner.</td></tr>';
 }
 
 async function loadActiveTickers() {
@@ -609,38 +627,48 @@ async function loadPositions() {
 // ── News Feed ──────────────────────────────
 async function loadNews() {
   try {
-    // Get open positions to fetch news for held stocks
     const posData = await fetch('/api/strategies/positions').then(r=>r.json()).catch(()=>({}));
     const symbols = new Set();
     for (const positions of Object.values(posData)) {
       for (const p of positions) symbols.add(p.symbol);
     }
+    // Also add top screener stocks if no positions
+    if (symbols.size === 0 && screenerData.length > 0) {
+      screenerData.slice(0, 5).forEach(t => symbols.add(t.symbol));
+    }
     if (symbols.size === 0) {
-      document.getElementById('news-feed').innerHTML = '<div class="empty">No positions — news will appear for held stocks</div>';
+      document.getElementById('news-feed').innerHTML = '<div class="empty">No data yet</div>';
       return;
     }
-    // Fetch research for each held stock to get news from raw_data
-    let newsItems = [];
-    for (const sym of [...symbols].slice(0, 5)) {
+    let allNews = [];
+    for (const sym of [...symbols].slice(0, 8)) {
       try {
         const r = await fetch(`/api/research/ticker/${sym}`).then(r=>r.json());
-        const fundamentals = r.fundamentals || {};
-        // Check if we have news sentiment
-        if (r.fundamentals) {
-          newsItems.push({
+        const f = r.fundamentals || {};
+        const headlines = f.news_headlines || [];
+        for (const h of headlines) {
+          allNews.push({
             symbol: sym,
-            sentiment: fundamentals.news_sentiment || null,
-            company: r.company_name || sym,
+            title: h.title || 'No title',
+            url: h.url || null,
+            published: h.published || null,
+            sentiment: f.news_sentiment || null,
           });
+        }
+        // If no headlines but we have sentiment, show that
+        if (!headlines.length && f.news_sentiment) {
+          allNews.push({ symbol: sym, title: r.company_name || sym, url: null, sentiment: f.news_sentiment });
         }
       } catch {}
     }
-    document.getElementById('news-feed').innerHTML = newsItems.length ? newsItems.map(n => {
+    document.getElementById('news-feed').innerHTML = allNews.length ? allNews.slice(0, 15).map(n => {
       const tag = n.sentiment ? `<span class="news-tag ${n.sentiment}">${n.sentiment}</span>` : '';
+      const link = n.url ? `<a href="${n.url}" target="_blank" rel="noopener" style="color:var(--text);text-decoration:none">${n.title}</a>` : n.title;
+      const time = n.published ? `<span class="meta">${estTime(n.published)}</span>` : '';
       return `<div class="news-item">
-        <span class="headline"><strong>${n.symbol}</strong> — ${n.company}${tag}</span>
+        <strong style="color:var(--amber)">${n.symbol}</strong> ${link}${tag} ${time}
       </div>`;
-    }).join('') : '<div class="empty">No news data available</div>';
+    }).join('') : '<div class="empty">No news articles available</div>';
   } catch { document.getElementById('news-feed').innerHTML = '<div class="empty">—</div>'; }
 }
 
@@ -698,9 +726,12 @@ async function openDetail(sym) {
         <div class="detail-row"><span class="lbl">Target Price</span><span class="val">${f.analyst_target_price?'$'+f.analyst_target_price.toFixed(2):'—'}</span></div>
         <div class="detail-row"><span class="lbl">Buy/Hold/Sell</span><span class="val">${f.analyst_buy_count||0}/${f.analyst_hold_count||0}/${f.analyst_sell_count||0}</span></div>
       </div>
-      <div class="detail-section"><h3>News Sentiment</h3>
+      <div class="detail-section"><h3>News</h3>
         <div class="detail-row"><span class="lbl">Sentiment</span><span class="val">${f.news_sentiment?'<span class="news-tag '+f.news_sentiment+'">'+f.news_sentiment+'</span>':'—'}</span></div>
-        <div class="detail-row"><span class="lbl">Recent Articles</span><span class="val">${f.recent_news_count||0}</span></div>
+        ${(f.news_headlines||[]).map(h => `<div style="margin:4px 0;font-size:10px">
+          ${h.url?'<a href="'+h.url+'" target="_blank" rel="noopener" style="color:var(--text)">'+h.title+'</a>':h.title}
+          <span style="color:var(--muted);font-size:9px">${h.published?estTime(h.published):''}</span>
+        </div>`).join('') || '<div style="font-size:10px;color:var(--muted)">No articles</div>'}
       </div>
       <div class="detail-section"><h3>Trade History</h3>
         <div class="detail-row"><span class="lbl">Total Trades</span><span class="val">${r.trade_count}</span></div>

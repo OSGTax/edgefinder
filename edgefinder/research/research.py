@@ -79,18 +79,21 @@ class ResearchService:
 
             fund = self._session.query(Fundamental).filter_by(ticker_id=ticker.id).first()
             if fund:
-                report.fundamentals = {
-                    "peg_ratio": fund.peg_ratio,
-                    "earnings_growth": fund.earnings_growth,
-                    "debt_to_equity": fund.debt_to_equity,
-                    "revenue_growth": fund.revenue_growth,
-                    "institutional_pct": fund.institutional_pct,
-                    "fcf_yield": fund.fcf_yield,
-                    "price_to_tangible_book": fund.price_to_tangible_book,
-                    "short_interest": fund.short_interest,
-                    "ev_to_ebitda": fund.ev_to_ebitda,
-                    "current_ratio": fund.current_ratio,
-                }
+                report.fundamentals = {}
+                for attr in ("peg_ratio", "earnings_growth", "debt_to_equity",
+                             "revenue_growth", "institutional_pct", "fcf_yield",
+                             "price_to_tangible_book", "short_interest", "ev_to_ebitda",
+                             "current_ratio", "price_to_earnings", "price_to_book",
+                             "return_on_equity", "return_on_assets", "dividend_yield",
+                             "free_cash_flow", "quick_ratio", "short_shares",
+                             "days_to_cover", "dividend_amount", "ex_dividend_date",
+                             "news_sentiment"):
+                    val = getattr(fund, attr, None)
+                    if val is not None:
+                        report.fundamentals[attr] = val
+                # Include news headlines from raw_data
+                if fund.raw_data and "news" in fund.raw_data:
+                    report.fundamentals["news_headlines"] = fund.raw_data["news"]
 
         # Live price + fundamentals from Polygon if not in DB
         if self._provider:
