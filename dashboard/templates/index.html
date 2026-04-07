@@ -109,6 +109,35 @@ button:hover{background:var(--dim-amber)}
 .info-box h4{color:var(--amber);font-size:12px;margin-bottom:6px}
 .info-box p{font-size:11px;line-height:1.5;color:var(--text)}
 .info-box .close-tip{margin-top:8px;font-size:10px;color:var(--muted);cursor:pointer;text-align:right}
+/* Detail slide-out */
+.detail-overlay{display:none;position:fixed;top:0;right:0;bottom:0;width:420px;background:var(--panel);border-left:2px solid var(--amber);z-index:150;overflow-y:auto;padding:12px;box-shadow:-4px 0 20px rgba(0,0,0,0.5)}
+.detail-overlay.active{display:block}
+.detail-overlay .close-btn{position:absolute;top:8px;right:10px;color:var(--amber);cursor:pointer;font-size:14px;font-weight:700}
+.detail-overlay h2{color:var(--amber);font-size:14px;margin-bottom:4px}
+.detail-overlay .subtitle{color:var(--muted);font-size:11px;margin-bottom:10px}
+.detail-section{border:1px solid var(--border);padding:8px;margin-bottom:8px}
+.detail-section h3{color:var(--amber);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px}
+.detail-row{display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px}
+.detail-row .lbl{color:var(--muted)}
+.detail-row .val{font-weight:600}
+/* News items */
+.news-item{border-bottom:1px solid var(--border);padding:4px 0;font-size:11px}
+.news-item .headline{color:var(--text)}
+.news-item .meta{color:var(--muted);font-size:10px;margin-top:2px}
+.news-tag{font-size:9px;font-weight:700;padding:1px 3px;margin-left:4px}
+.news-tag.positive{background:var(--dim-green);color:var(--green)}
+.news-tag.negative{background:var(--dim-red);color:var(--red)}
+.news-tag.neutral{background:rgba(100,100,100,0.15);color:var(--muted)}
+/* Heatmap */
+.heatmap{display:flex;flex-wrap:wrap;gap:4px}
+.heat-cell{padding:4px 8px;font-size:10px;font-weight:700;text-align:center;min-width:60px;border:1px solid var(--border)}
+.heat-cell .sym{font-size:11px}
+.heat-cell .pnl{font-size:10px}
+/* Live price flash */
+@keyframes flash-green{0%{background:var(--dim-green)}100%{background:transparent}}
+@keyframes flash-red{0%{background:var(--dim-red)}100%{background:transparent}}
+.flash-up{animation:flash-green 0.5s ease-out}
+.flash-down{animation:flash-red 0.5s ease-out}
 /* Scrollbar */
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:var(--bg)}
@@ -152,6 +181,20 @@ button:hover{background:var(--dim-amber)}
   <div class="pnl-body">
     <div class="sector-grid" id="sector-grid"></div>
   </div>
+</div>
+
+<!-- LEFT: POSITIONS HEATMAP -->
+<div class="pnl" id="pnl-positions">
+  <div class="pnl-hdr">POSITIONS <span class="muted" id="pos-count"></span></div>
+  <div class="pnl-body">
+    <div class="heatmap" id="positions-heatmap"></div>
+  </div>
+</div>
+
+<!-- RIGHT: NEWS FEED -->
+<div class="pnl" id="pnl-news">
+  <div class="pnl-hdr">NEWS <span class="muted">from portfolio holdings</span></div>
+  <div class="pnl-body" id="news-feed" style="max-height:200px"></div>
 </div>
 
 <!-- FULL WIDTH: TRADES -->
@@ -242,6 +285,12 @@ button:hover{background:var(--dim-amber)}
 
 </div><!-- /grid -->
 
+<!-- TICKER DETAIL SLIDE-OUT -->
+<div class="detail-overlay" id="detail-panel">
+  <span class="close-btn" onclick="closeDetail()">✕</span>
+  <div id="detail-content"></div>
+</div>
+
 <!-- INFO OVERLAY -->
 <div class="info-overlay" id="info-overlay" onclick="if(event.target===this)closeInfo()">
   <div class="info-box">
@@ -313,7 +362,10 @@ document.getElementById('cmd-input').addEventListener('keydown', e => {
   // Default: treat as ticker symbol
   doResearch(v);
 });
-document.addEventListener('keydown', e => { if (e.key === '/' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); document.getElementById('cmd-input').focus(); }});
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement.tagName !== 'INPUT') { e.preventDefault(); document.getElementById('cmd-input').focus(); }
+  if (e.key === 'Escape') { closeDetail(); closeInfo(); }
+});
 
 // ── Ticker Tape ────────────────────────────
 async function updateTape() {
@@ -431,37 +483,7 @@ async function loadTrades() {
 async function doResearch(sym) {
   sym = sym || document.getElementById('cmd-input').value.trim().toUpperCase();
   if (!sym) return;
-  const r = await fetch(`/api/research/ticker/${sym}`).then(r=>r.json());
-  const f = r.fundamentals||{};
-  const fmt = (v,d=2) => v!=null?v.toFixed(d):'—';
-  const pct = v => v!=null?(v*100).toFixed(1)+'%':'—';
-  document.getElementById('research-result').innerHTML = `
-    <div class="report">
-      <h2>${r.symbol} — ${r.company_name||'Unknown'}</h2>
-      <div class="report-grid">
-        <div class="rcard"><h3>Overview</h3>
-          <div class="row"><span class="lbl">Sector</span><span class="val">${r.sector||'—'}</span></div>
-          <div class="row"><span class="lbl">Price</span><span class="val">${r.price?'$'+r.price.toFixed(2):'—'}</span></div>
-          <div class="row"><span class="lbl">Mkt Cap</span><span class="val">${r.market_cap?'$'+(r.market_cap/1e9).toFixed(1)+'B':'—'}</span></div>
-          <div class="row"><span class="lbl">Strategies</span><span class="val">${r.qualifying_strategies?.join(', ')||'None'}</span></div>
-        </div>
-        <div class="rcard"><h3>Fundamentals</h3>
-          <div class="row"><span class="lbl">Earn Gr</span><span class="val">${pct(f.earnings_growth)}</span></div>
-          <div class="row"><span class="lbl">Rev Gr</span><span class="val">${pct(f.revenue_growth)}</span></div>
-          <div class="row"><span class="lbl">D/E</span><span class="val">${fmt(f.debt_to_equity)}</span></div>
-          <div class="row"><span class="lbl">Cur Ratio</span><span class="val">${fmt(f.current_ratio)}</span></div>
-          <div class="row"><span class="lbl">FCF Yld</span><span class="val">${pct(f.fcf_yield)}</span></div>
-          <div class="row"><span class="lbl">PEG</span><span class="val">${fmt(f.peg_ratio)}</span></div>
-          <div class="row"><span class="lbl">EV/EBITDA</span><span class="val">${fmt(f.ev_to_ebitda)}</span></div>
-        </div>
-        <div class="rcard"><h3>Trades</h3>
-          <div class="row"><span class="lbl">Total</span><span class="val">${r.trade_count}</span></div>
-          <div class="row"><span class="lbl">Open</span><span class="val">${r.open_trades}</span></div>
-          <div class="row"><span class="lbl">Closed</span><span class="val">${r.closed_trades}</span></div>
-          <div class="row"><span class="lbl">P&L</span><span class="val ${(r.total_pnl||0)>=0?'pos':'neg'}">$${(r.total_pnl||0).toFixed(2)}</span></div>
-        </div>
-      </div>
-    </div>`;
+  openDetail(sym);
 }
 
 async function triggerScan() {
@@ -561,14 +583,144 @@ async function loadInjections() {
 }
 async function removeInjection(id){await fetch(`/api/inject/${id}`,{method:'DELETE'});loadInjections();}
 
+// ── Positions Heatmap ──────────────────────
+async function loadPositions() {
+  try {
+    const data = await fetch('/api/strategies/positions').then(r=>r.json()).catch(()=>({}));
+    let total = 0;
+    let html = '';
+    for (const [strat, positions] of Object.entries(data)) {
+      for (const p of positions) {
+        total++;
+        // Estimate P&L from entry vs current (if we have current price from tape)
+        const bg = 'var(--dim-amber)';
+        html += `<div class="heat-cell" style="background:${bg};cursor:pointer" onclick="doResearch('${p.symbol}')">
+          <div class="sym">${p.symbol}</div>
+          <div class="pnl" style="color:var(--muted)">${strat} ${p.shares}sh</div>
+          <div style="font-size:9px;color:var(--muted)">$${p.entry_price?.toFixed(2)||'—'}</div>
+        </div>`;
+      }
+    }
+    document.getElementById('pos-count').textContent = `${total} open`;
+    document.getElementById('positions-heatmap').innerHTML = html || '<div class="empty">No open positions</div>';
+  } catch { document.getElementById('positions-heatmap').innerHTML = '<div class="empty">—</div>'; }
+}
+
+// ── News Feed ──────────────────────────────
+async function loadNews() {
+  try {
+    // Get open positions to fetch news for held stocks
+    const posData = await fetch('/api/strategies/positions').then(r=>r.json()).catch(()=>({}));
+    const symbols = new Set();
+    for (const positions of Object.values(posData)) {
+      for (const p of positions) symbols.add(p.symbol);
+    }
+    if (symbols.size === 0) {
+      document.getElementById('news-feed').innerHTML = '<div class="empty">No positions — news will appear for held stocks</div>';
+      return;
+    }
+    // Fetch research for each held stock to get news from raw_data
+    let newsItems = [];
+    for (const sym of [...symbols].slice(0, 5)) {
+      try {
+        const r = await fetch(`/api/research/ticker/${sym}`).then(r=>r.json());
+        const fundamentals = r.fundamentals || {};
+        // Check if we have news sentiment
+        if (r.fundamentals) {
+          newsItems.push({
+            symbol: sym,
+            sentiment: fundamentals.news_sentiment || null,
+            company: r.company_name || sym,
+          });
+        }
+      } catch {}
+    }
+    document.getElementById('news-feed').innerHTML = newsItems.length ? newsItems.map(n => {
+      const tag = n.sentiment ? `<span class="news-tag ${n.sentiment}">${n.sentiment}</span>` : '';
+      return `<div class="news-item">
+        <span class="headline"><strong>${n.symbol}</strong> — ${n.company}${tag}</span>
+      </div>`;
+    }).join('') : '<div class="empty">No news data available</div>';
+  } catch { document.getElementById('news-feed').innerHTML = '<div class="empty">—</div>'; }
+}
+
+// ── Ticker Detail Slide-Out ────────────────
+function closeDetail() { document.getElementById('detail-panel').classList.remove('active'); }
+
+async function openDetail(sym) {
+  const panel = document.getElementById('detail-panel');
+  const content = document.getElementById('detail-content');
+  content.innerHTML = '<div class="empty">Loading...</div>';
+  panel.classList.add('active');
+
+  try {
+    const r = await fetch(`/api/research/ticker/${sym}`).then(r=>r.json());
+    const f = r.fundamentals || {};
+    const fmt = (v,d=2) => v!=null ? v.toFixed(d) : '—';
+    const pct = v => v!=null ? (v*100).toFixed(1)+'%' : '—';
+    const mc = v => v!=null ? '$'+(v/1e9).toFixed(1)+'B' : '—';
+
+    content.innerHTML = `
+      <h2>${r.symbol}</h2>
+      <div class="subtitle">${r.company_name||'Unknown'} — ${r.sector||'—'} | ${r.price?'$'+r.price.toFixed(2):'—'} | ${mc(r.market_cap)}</div>
+      <div class="detail-section"><h3>Strategies</h3>
+        <div style="margin-bottom:4px">${(r.qualifying_strategies||[]).map(s=>`<span class="pill open">${s}</span>`).join(' ')||'<span style="color:var(--muted)">None</span>'}</div>
+      </div>
+      <div class="detail-section"><h3>Valuation</h3>
+        <div class="detail-row"><span class="lbl">P/E</span><span class="val">${fmt(f.price_to_earnings,1)}</span></div>
+        <div class="detail-row"><span class="lbl">P/B</span><span class="val">${fmt(f.price_to_book,1)}</span></div>
+        <div class="detail-row"><span class="lbl">P/TB</span><span class="val">${fmt(f.price_to_tangible_book,1)}</span></div>
+        <div class="detail-row"><span class="lbl">EV/EBITDA</span><span class="val">${fmt(f.ev_to_ebitda,1)}</span></div>
+        <div class="detail-row"><span class="lbl">PEG</span><span class="val">${fmt(f.peg_ratio,2)}</span></div>
+        <div class="detail-row"><span class="lbl">Div Yield</span><span class="val">${pct(f.dividend_yield)}</span></div>
+      </div>
+      <div class="detail-section"><h3>Growth & Profitability</h3>
+        <div class="detail-row"><span class="lbl">Earnings Gr</span><span class="val ${(f.earnings_growth||0)>0?'pos':'neg'}">${pct(f.earnings_growth)}</span></div>
+        <div class="detail-row"><span class="lbl">Revenue Gr</span><span class="val ${(f.revenue_growth||0)>0?'pos':'neg'}">${pct(f.revenue_growth)}</span></div>
+        <div class="detail-row"><span class="lbl">ROE</span><span class="val">${pct(f.return_on_equity)}</span></div>
+        <div class="detail-row"><span class="lbl">ROA</span><span class="val">${pct(f.return_on_assets)}</span></div>
+        <div class="detail-row"><span class="lbl">FCF Yield</span><span class="val">${pct(f.fcf_yield)}</span></div>
+      </div>
+      <div class="detail-section"><h3>Financial Health</h3>
+        <div class="detail-row"><span class="lbl">Debt/Equity</span><span class="val">${fmt(f.debt_to_equity,2)}</span></div>
+        <div class="detail-row"><span class="lbl">Current Ratio</span><span class="val">${fmt(f.current_ratio,2)}</span></div>
+        <div class="detail-row"><span class="lbl">Quick Ratio</span><span class="val">${fmt(f.quick_ratio,2)}</span></div>
+        <div class="detail-row"><span class="lbl">Short Interest</span><span class="val">${pct(f.short_interest)}</span></div>
+      </div>
+      <div class="detail-section"><h3>Earnings</h3>
+        <div class="detail-row"><span class="lbl">Last Earnings</span><span class="val">${f.last_earnings_date||'—'}</span></div>
+        <div class="detail-row"><span class="lbl">Next Earnings</span><span class="val">${f.estimated_next_earnings_date||'—'}</span></div>
+        <div class="detail-row"><span class="lbl">EPS Surprise</span><span class="val">${f.eps_surprise_pct!=null?f.eps_surprise_pct.toFixed(1)+'%':'—'}</span></div>
+        <div class="detail-row"><span class="lbl">Near Earnings</span><span class="val">${f.near_earnings?'⚠ YES':'No'}</span></div>
+      </div>
+      <div class="detail-section"><h3>Analyst Consensus</h3>
+        <div class="detail-row"><span class="lbl">Rating</span><span class="val ${f.analyst_rating==='buy'?'pos':f.analyst_rating==='sell'?'neg':''}">${(f.analyst_rating||'—').toUpperCase()}</span></div>
+        <div class="detail-row"><span class="lbl">Target Price</span><span class="val">${f.analyst_target_price?'$'+f.analyst_target_price.toFixed(2):'—'}</span></div>
+        <div class="detail-row"><span class="lbl">Buy/Hold/Sell</span><span class="val">${f.analyst_buy_count||0}/${f.analyst_hold_count||0}/${f.analyst_sell_count||0}</span></div>
+      </div>
+      <div class="detail-section"><h3>News Sentiment</h3>
+        <div class="detail-row"><span class="lbl">Sentiment</span><span class="val">${f.news_sentiment?'<span class="news-tag '+f.news_sentiment+'">'+f.news_sentiment+'</span>':'—'}</span></div>
+        <div class="detail-row"><span class="lbl">Recent Articles</span><span class="val">${f.recent_news_count||0}</span></div>
+      </div>
+      <div class="detail-section"><h3>Trade History</h3>
+        <div class="detail-row"><span class="lbl">Total Trades</span><span class="val">${r.trade_count}</span></div>
+        <div class="detail-row"><span class="lbl">Open / Closed</span><span class="val">${r.open_trades} / ${r.closed_trades}</span></div>
+        <div class="detail-row"><span class="lbl">Total P&L</span><span class="val ${(r.total_pnl||0)>=0?'pos':'neg'}">$${(r.total_pnl||0).toFixed(2)}</span></div>
+      </div>
+    `;
+  } catch(e) { content.innerHTML = '<div class="empty">Failed to load data</div>'; }
+}
+
 // ── Init & Auto-refresh ────────────────────
 async function init() {
-  await Promise.all([updateTape(), loadStrategies(), loadSectors(), loadTrades(), loadActiveTickers(), loadBenchmarks()]);
+  await Promise.all([updateTape(), loadStrategies(), loadSectors(), loadPositions(), loadNews(), loadTrades(), loadActiveTickers(), loadBenchmarks()]);
 }
 init();
 setInterval(updateTape, 30000);
 setInterval(loadSectors, 60000);
-setInterval(()=>{ loadStrategies(); loadTrades(); }, 60000);
+setInterval(()=>{ loadStrategies(); loadTrades(); loadPositions(); }, 60000);
+// Refresh screener prices every 30s (lightweight — uses cached data)
+setInterval(loadActiveTickers, 30000);
 </script>
 </body>
 </html>
