@@ -60,27 +60,64 @@ def get_scheduler() -> EdgeFinderScheduler | None:
 # ── Initialization ──────────────────────────────────────
 
 
+QUICK_START_TICKERS = [
+    "AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA", "BRK.B",
+    "JPM", "V", "JNJ", "WMT", "PG", "MA", "HD", "UNH", "DIS", "BAC",
+    "XOM", "ABBV", "PFE", "COST", "MRK", "AVGO", "KO", "PEP", "TMO",
+    "CSCO", "ABT", "ADBE", "CRM", "NKE", "INTC", "AMD", "QCOM", "TXN",
+    "LOW", "NFLX", "AMGN", "GS", "CAT", "BLK", "SYK", "ISRG", "DE",
+    "LRCX", "AMAT", "MU", "MRVL", "NOW",
+]
+
+
 def _deferred_initial_scan() -> None:
-    """Run initial scan in background thread so the web server can start immediately."""
+    """Run initial scan in background: quick-start batch first, then full universe."""
     import threading
 
     def _scan():
         try:
-            logger.info("Background initial scan starting...")
+            # Phase 1: Quick-start with top 50 liquid stocks so trading begins fast
+            logger.info("Quick-start scan: %d tickers...", len(QUICK_START_TICKERS))
+            _run_scan_batch(QUICK_START_TICKERS)
+            watchlists = _load_watchlists()
+            if watchlists and _arena:
+                _arena.set_watchlists(watchlists)
+                _populate_fundamentals_cache()
+                for name, tickers in watchlists.items():
+                    logger.info("Quick-start: %s = %d tickers", name, len(tickers))
+            logger.info("Quick-start complete — strategies can now trade")
+
+            # Phase 2: Full universe scan (takes much longer)
+            logger.info("Starting full universe scan...")
             _run_initial_scan()
             watchlists = _load_watchlists()
             if watchlists and _arena:
                 _arena.set_watchlists(watchlists)
                 _populate_fundamentals_cache()
                 for name, tickers in watchlists.items():
-                    logger.info("Background scan: %s watchlist = %d tickers", name, len(tickers))
-            else:
-                logger.warning("No tickers qualified after background scan")
+                    logger.info("Full scan: %s = %d tickers", name, len(tickers))
         except Exception:
             logger.exception("Background initial scan failed")
 
     thread = threading.Thread(target=_scan, daemon=True, name="initial-scan")
     thread.start()
+
+
+def _run_scan_batch(tickers: list[str]) -> None:
+    """Run per-strategy scan on a specific list of tickers."""
+    from edgefinder.strategies.base import StrategyRegistry
+
+    for strategy in StrategyRegistry.get_instances():
+        session = _session_factory()
+        try:
+            scanner = StrategyScanner(strategy, _provider, session)
+            results = scanner.run(tickers=tickers)
+            qualified = sum(1 for r in results if r.qualified)
+            logger.info("[%s] batch scan: %d qualified of %d", strategy.name, qualified, len(results))
+        except Exception:
+            logger.exception("Batch scan failed for '%s'", strategy.name)
+        finally:
+            session.close()
 
 
 def init_services() -> None:
@@ -305,15 +342,31 @@ def _recalculate_account_balances() -> None:
                 )
                 account.cash = correct_cash
 
-            # CRITICAL: if cash is negative, account is over-leveraged — pause it
+            # CRITICAL: if cash is negative, account is over-leveraged
+            # Auto-reset: close all open trades in DB and restart fresh
             if account.cash < 0:
                 logger.error(
-                    "CRITICAL: '%s' has negative cash $%.2f (open_cost=$%.2f > capital+realized=$%.2f). "
-                    "Pausing account. This likely means positions were opened under the old "
-                    "global watchlist bug. Close positions manually or reset the account.",
-                    name, account.cash, open_cost, account.starting_capital + realized,
+                    "CRITICAL: '%s' has negative cash $%.2f — auto-resetting account. "
+                    "Marking all open trades as CANCELLED and resetting to $%.2f.",
+                    name, account.cash, account.starting_capital,
                 )
-                account.is_paused = True
+                # Cancel all open trades for this strategy
+                open_trades = (
+                    session.query(TradeRecord)
+                    .filter(TradeRecord.strategy_name == name, TradeRecord.status == "OPEN")
+                    .all()
+                )
+                for trade in open_trades:
+                    trade.status = "CANCELLED"
+                    trade.exit_reason = "ACCOUNT_RESET"
+                session.commit()
+                # Reset account
+                account.cash = account.starting_capital
+                account.positions.clear()
+                account.realized_pnl = round(realized, 2)
+                account.is_paused = False
+                account.peak_equity = account.starting_capital
+                logger.info("Account '%s' reset to $%.2f", name, account.starting_capital)
 
             # Update peak equity based on corrected values
             equity = account.total_equity

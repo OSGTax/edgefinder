@@ -47,33 +47,40 @@ def active_tickers(service: ResearchService = Depends(_get_research_service)):
 
 @router.post("/scan")
 def trigger_scan(db: Session = Depends(get_db)):
-    """Trigger a per-strategy scan. Returns scan results summary."""
-    from config.settings import settings
-    from dashboard.services import get_arena, _provider, _load_watchlists, _populate_fundamentals_cache
+    """Trigger a per-strategy scan in the background. Returns immediately."""
+    import threading
+    from dashboard.services import _provider, _session_factory, _load_watchlists, _populate_fundamentals_cache, get_arena
     from edgefinder.scanner.strategy_scanner import StrategyScanner
     from edgefinder.strategies.base import StrategyRegistry
 
     if not _provider:
         return {"error": "No Polygon API key configured"}
+    if not _session_factory:
+        return {"error": "Database not initialized"}
 
-    universe = _provider.get_ticker_universe()
-    total_qualified = 0
+    def _run_scan():
+        import logging
+        logger = logging.getLogger(__name__)
+        universe = _provider.get_ticker_universe()
+        logger.info("Manual scan triggered: %d tickers", len(universe))
+        for strategy in StrategyRegistry.get_instances():
+            session = _session_factory()
+            try:
+                scanner = StrategyScanner(strategy, _provider, session)
+                results = scanner.run(tickers=sorted(universe))
+                qualified = sum(1 for r in results if r.qualified)
+                logger.info("Manual scan [%s]: %d qualified", strategy.name, qualified)
+            except Exception:
+                logger.exception("Manual scan failed for %s", strategy.name)
+            finally:
+                session.close()
+        arena = get_arena()
+        if arena:
+            watchlists = _load_watchlists()
+            if watchlists:
+                arena.set_watchlists(watchlists)
+                _populate_fundamentals_cache()
+        logger.info("Manual scan complete")
 
-    for strategy in StrategyRegistry.get_instances():
-        scanner = StrategyScanner(strategy, _provider, db)
-        results = scanner.run(tickers=sorted(universe))
-        total_qualified += sum(1 for r in results if r.qualified)
-
-    # Update arena watchlists
-    arena = get_arena()
-    if arena:
-        watchlists = _load_watchlists()
-        if watchlists:
-            arena.set_watchlists(watchlists)
-            _populate_fundamentals_cache()
-
-    return {
-        "scanned": len(universe),
-        "qualified": total_qualified,
-        "universe_size": len(universe),
-    }
+    threading.Thread(target=_run_scan, daemon=True, name="manual-scan").start()
+    return {"status": "scanning", "message": "Scan started in background. Data will appear as tickers are processed."}

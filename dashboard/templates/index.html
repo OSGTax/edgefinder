@@ -491,9 +491,19 @@ async function doResearch(sym) {
 
 async function triggerScan() {
   const btn=document.getElementById('scan-btn'), st=document.getElementById('scan-status');
-  btn.disabled=true; btn.textContent='...';
-  try { const d=await fetch('/api/research/scan',{method:'POST'}).then(r=>r.json()); st.textContent=d.error||`${d.qualified} qualified`; loadActiveTickers(); }
-  catch(e) { st.textContent='Failed'; }
+  btn.disabled=true; btn.textContent='SCANNING...';
+  try {
+    const d=await fetch('/api/research/scan',{method:'POST'}).then(r=>r.json());
+    st.textContent=d.error||d.message||'Scan running in background';
+    // Refresh screener data periodically while scan runs
+    st.textContent += ' (refreshing every 30s)';
+    let refreshCount = 0;
+    const refreshInterval = setInterval(()=>{
+      loadActiveTickers();
+      refreshCount++;
+      if (refreshCount >= 20) clearInterval(refreshInterval); // stop after 10 min
+    }, 30000);
+  } catch(e) { st.textContent='Failed: '+e.message; }
   btn.disabled=false; btn.textContent='SCAN';
 }
 
