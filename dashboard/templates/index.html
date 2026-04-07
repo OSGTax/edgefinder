@@ -62,7 +62,8 @@ body{font-family:Consolas,'Courier New',monospace;background:var(--bg);color:var
 .quad.unknown{background:rgba(100,100,100,0.1);color:var(--muted)}
 /* Tables */
 table{width:100%;border-collapse:collapse;font-size:11px}
-th{text-align:left;padding:4px 6px;color:var(--amber);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel)}
+th{text-align:left;padding:4px 6px;color:var(--amber);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--panel);cursor:pointer;user-select:none;white-space:nowrap}
+th:hover{color:#fff}
 td{padding:3px 6px;border-bottom:1px solid rgba(26,29,42,0.5)}
 tr:hover{background:rgba(255,153,0,0.03)}
 .pos{color:var(--green)}.neg{color:var(--red)}
@@ -153,12 +154,11 @@ button:hover{background:var(--dim-amber)}
   </div>
 </div>
 
-<!-- LEFT: TRADES -->
-<div class="pnl" id="pnl-trades">
-  <div class="pnl-hdr">TRADES</div>
-  <div class="fbar">
-    <select id="trade-strategy-filter" onchange="loadTrades()"><option value="">All</option></select>
-    <div style="display:flex;gap:2px">
+<!-- FULL WIDTH: TRADES -->
+<div class="pnl full" id="pnl-trades">
+  <div class="pnl-hdr">TRADES
+    <select id="trade-strategy-filter" onchange="loadTrades()" style="margin-left:8px;font-size:10px;padding:1px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border)"><option value="">All</option></select>
+    <div style="display:flex;gap:2px;margin-left:8px">
       <div class="sub-tab active" onclick="setTradeFilter('all',this)">All</div>
       <div class="sub-tab" onclick="setTradeFilter('OPEN',this)">Open</div>
       <div class="sub-tab" onclick="setTradeFilter('wins',this)">Wins</div>
@@ -166,31 +166,47 @@ button:hover{background:var(--dim-amber)}
     </div>
   </div>
   <div class="stats-row" id="trade-stats"></div>
-  <div class="pnl-body" style="padding:0">
+  <div class="pnl-body" style="padding:0;max-height:250px">
     <table><thead>
       <tr><th>Sym</th><th>Strat</th><th>Dir</th><th>Entry$</th><th>Cur$</th><th>Shrs</th><th>Value</th><th>P&L</th><th>R</th><th>Status</th><th>Reason</th><th>Entry Time</th><th>Exit Time</th></tr>
     </thead><tbody id="trades-body"></tbody></table>
   </div>
 </div>
 
-<!-- RIGHT: RESEARCH -->
-<div class="pnl" id="pnl-research">
-  <div class="pnl-hdr">RESEARCH <span class="muted">type ticker in command bar</span></div>
-  <div class="pnl-body">
-    <div id="research-result"></div>
-    <div style="display:flex;align-items:center;gap:6px;margin:8px 0 4px;flex-wrap:wrap">
-      <span style="color:var(--amber);font-weight:700;font-size:10px">WATCHLIST</span>
-      <select id="research-strategy-filter" onchange="loadActiveTickers()" style="font-size:10px;padding:2px 4px">
-        <option value="">All</option><option value="alpha">alpha</option><option value="bravo">bravo</option><option value="charlie">charlie</option>
-      </select>
-      <button id="scan-btn" onclick="triggerScan()" style="font-size:10px;padding:2px 6px;margin-left:auto">SCAN</button>
-      <span id="scan-status" style="font-size:10px;color:var(--muted)"></span>
-    </div>
-    <div style="overflow-y:auto;max-height:300px">
-    <table><thead><tr>
-      <th>Sym</th><th>Company</th><th>Sector</th><th>Price</th><th>MktCap</th><th>EG</th><th>RG</th><th>D/E</th><th>FCF</th><th>Strats</th>
+<!-- FULL WIDTH: SCREENER / TERMINAL -->
+<div class="pnl full" id="pnl-screener">
+  <div class="pnl-hdr">SCREENER
+    <select id="research-strategy-filter" onchange="loadActiveTickers()" style="margin-left:8px;font-size:10px;padding:1px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border)">
+      <option value="">All Strategies</option><option value="alpha">alpha</option><option value="bravo">bravo</option><option value="charlie">charlie</option>
+    </select>
+    <button id="scan-btn" onclick="triggerScan()" style="font-size:10px;padding:1px 6px;margin-left:8px">SCAN</button>
+    <span id="scan-status" style="font-size:10px;color:var(--muted);margin-left:4px"></span>
+    <span class="muted" style="margin-left:auto">click column to sort | click row for details</span>
+  </div>
+  <!-- Single-ticker detail (shown when you look up a ticker via command bar) -->
+  <div id="research-result"></div>
+  <!-- Full screener table -->
+  <div class="pnl-body" style="padding:0;max-height:400px">
+    <table id="screener-table"><thead><tr>
+      <th onclick="sortScreener('symbol')">Sym</th>
+      <th onclick="sortScreener('company_name')">Company</th>
+      <th onclick="sortScreener('sector')">Sector</th>
+      <th onclick="sortScreener('last_price')">Price</th>
+      <th onclick="sortScreener('market_cap')">MktCap</th>
+      <th onclick="sortScreener('earnings_growth')">EG%</th>
+      <th onclick="sortScreener('revenue_growth')">RG%</th>
+      <th onclick="sortScreener('peg_ratio')">PEG</th>
+      <th onclick="sortScreener('debt_to_equity')">D/E</th>
+      <th onclick="sortScreener('current_ratio')">CurR</th>
+      <th onclick="sortScreener('fcf_yield')">FCF%</th>
+      <th onclick="sortScreener('price_to_earnings')">P/E</th>
+      <th onclick="sortScreener('price_to_book')">P/B</th>
+      <th onclick="sortScreener('return_on_equity')">ROE</th>
+      <th onclick="sortScreener('return_on_assets')">ROA</th>
+      <th onclick="sortScreener('dividend_yield')">DivY</th>
+      <th onclick="sortScreener('short_interest')">SI%</th>
+      <th>Strats</th>
     </tr></thead><tbody id="active-tickers"></tbody></table>
-    </div>
   </div>
 </div>
 
@@ -456,23 +472,59 @@ async function triggerScan() {
   btn.disabled=false; btn.textContent='SCAN';
 }
 
-async function loadActiveTickers() {
-  const all = await fetch('/api/research/active').then(r=>r.json()).catch(()=>[]);
+let screenerData = [];
+let screenerSortCol = 'market_cap';
+let screenerSortAsc = false;
+
+function sortScreener(col) {
+  if (screenerSortCol === col) { screenerSortAsc = !screenerSortAsc; }
+  else { screenerSortCol = col; screenerSortAsc = false; }
+  renderScreener();
+}
+
+function renderScreener() {
   const sf = document.getElementById('research-strategy-filter').value;
-  const tickers = sf ? all.filter(t=>(t.qualifying_strategies||[]).includes(sf)) : all;
+  let tickers = sf ? screenerData.filter(t=>(t.qualifying_strategies||[]).includes(sf)) : [...screenerData];
+  // Sort
+  tickers.sort((a,b) => {
+    let va = a[screenerSortCol], vb = b[screenerSortCol];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === 'string') return screenerSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    return screenerSortAsc ? va - vb : vb - va;
+  });
   const fmt=(v,d=1)=>v!=null?v.toFixed(d):'—';
   const pct=v=>v!=null?(v*100).toFixed(1)+'%':'—';
+  const mc=v=>v!=null?'$'+(v/1e9).toFixed(1)+'B':'—';
   document.getElementById('active-tickers').innerHTML = tickers.length ? tickers.map(t => {
-    const strats=(t.qualifying_strategies||[]).map(s=>`<span class="pill open" style="cursor:pointer" onclick="event.stopPropagation();showStrategyInfo('${s}')">${s}</span>`).join(' ')||'—';
+    const strats=(t.qualifying_strategies||[]).map(s=>`<span class="pill open" onclick="event.stopPropagation();showStrategyInfo('${s}')">${s}</span>`).join(' ')||'—';
     return `<tr style="cursor:pointer" onclick="doResearch('${t.symbol}')">
-      <td><strong>${t.symbol}</strong></td><td style="max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.company_name||'—'}</td>
-      <td>${t.sector||'—'}</td><td>${t.last_price?'$'+t.last_price.toFixed(2):'—'}</td>
-      <td>${t.market_cap?'$'+(t.market_cap/1e9).toFixed(1)+'B':'—'}</td>
-      <td>${pct(t.earnings_growth)}</td><td>${pct(t.revenue_growth)}</td>
-      <td>${fmt(t.debt_to_equity,2)}</td><td>${pct(t.fcf_yield)}</td>
+      <td><strong>${t.symbol}</strong></td>
+      <td style="max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.company_name||'—'}</td>
+      <td style="max-width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.sector||'—'}</td>
+      <td>${t.last_price?'$'+t.last_price.toFixed(2):'—'}</td>
+      <td>${mc(t.market_cap)}</td>
+      <td class="${(t.earnings_growth||0)>0?'pos':(t.earnings_growth||0)<0?'neg':''}">${pct(t.earnings_growth)}</td>
+      <td class="${(t.revenue_growth||0)>0?'pos':(t.revenue_growth||0)<0?'neg':''}">${pct(t.revenue_growth)}</td>
+      <td>${fmt(t.peg_ratio,1)}</td>
+      <td>${fmt(t.debt_to_equity,1)}</td>
+      <td>${fmt(t.current_ratio,1)}</td>
+      <td>${pct(t.fcf_yield)}</td>
+      <td>${fmt(t.price_to_earnings,1)}</td>
+      <td>${fmt(t.price_to_book,1)}</td>
+      <td>${pct(t.return_on_equity)}</td>
+      <td>${pct(t.return_on_assets)}</td>
+      <td>${pct(t.dividend_yield)}</td>
+      <td>${pct(t.short_interest)}</td>
       <td>${strats}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="10" class="empty">No tickers. Run scanner.</td></tr>';
+  }).join('') : '<tr><td colspan="18" class="empty">No tickers. Run scanner.</td></tr>';
+}
+
+async function loadActiveTickers() {
+  screenerData = await fetch('/api/research/active').then(r=>r.json()).catch(()=>[]);
+  renderScreener();
 }
 
 // ── Benchmarks ─────────────────────────────

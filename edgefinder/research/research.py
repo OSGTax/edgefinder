@@ -229,30 +229,30 @@ class ResearchService:
             "market_cap": ticker.market_cap if ticker else None,
             "last_price": ticker.last_price if ticker else None,
             "source": source,
-            # Key fundamentals
-            "earnings_growth": None,
-            "revenue_growth": None,
-            "peg_ratio": None,
-            "fcf_yield": None,
-            "current_ratio": None,
-            "debt_to_equity": None,
-            "price_to_tangible_book": None,
-            "ev_to_ebitda": None,
+            # Fundamentals
+            "earnings_growth": None, "revenue_growth": None,
+            "peg_ratio": None, "fcf_yield": None,
+            "current_ratio": None, "debt_to_equity": None,
+            "price_to_tangible_book": None, "ev_to_ebitda": None,
+            "price_to_earnings": None, "price_to_book": None,
+            "return_on_equity": None, "return_on_assets": None,
+            "dividend_yield": None, "free_cash_flow": None,
+            "short_interest": None, "quick_ratio": None,
             # Strategies
             "qualifying_strategies": [],
         }
 
         if fund:
-            entry.update({
-                "earnings_growth": fund.earnings_growth,
-                "revenue_growth": fund.revenue_growth,
-                "peg_ratio": fund.peg_ratio,
-                "fcf_yield": fund.fcf_yield,
-                "current_ratio": fund.current_ratio,
-                "debt_to_equity": fund.debt_to_equity,
-                "price_to_tangible_book": fund.price_to_tangible_book,
-                "ev_to_ebitda": fund.ev_to_ebitda,
-            })
+            for attr in ("earnings_growth", "revenue_growth", "peg_ratio",
+                         "fcf_yield", "current_ratio", "debt_to_equity",
+                         "price_to_tangible_book", "ev_to_ebitda",
+                         "price_to_earnings", "price_to_book",
+                         "return_on_equity", "return_on_assets",
+                         "dividend_yield", "free_cash_flow",
+                         "short_interest", "quick_ratio"):
+                val = getattr(fund, attr, None)
+                if val is not None:
+                    entry[attr] = val
 
         # Strategy qualification
         fund_model = TickerFundamentals(
