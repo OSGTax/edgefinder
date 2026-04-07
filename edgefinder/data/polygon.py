@@ -1,7 +1,7 @@
-"""EdgeFinder v2 — Polygon.io data provider implementation.
+"""EdgeFinder v2 — Massive (formerly Polygon.io) data provider implementation.
 
-This is the sole market data source. Covers: bars, fundamentals,
-ticker universe, latest prices, and market status.
+This is the primary market data source. Covers: bars, fundamentals,
+ticker universe, latest prices, market status, and Benzinga partner data.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
-from polygon import RESTClient
+from massive import RESTClient
 
 from config.settings import settings
 from edgefinder.core.models import TickerFundamentals
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class PolygonDataProvider:
-    """Polygon.io implementation of the DataProvider protocol."""
+    """Massive (Polygon.io) implementation of the DataProvider protocol."""
 
     def __init__(self, api_key: str | None = None) -> None:
         key = api_key or settings.polygon_api_key

@@ -1,4 +1,4 @@
-"""Tests for edgefinder/data/polygon.py (mocked HTTP)."""
+"""Tests for edgefinder/data/polygon.py — Massive (formerly Polygon.io) provider (mocked HTTP)."""
 
 from datetime import date, datetime
 from unittest.mock import MagicMock, patch

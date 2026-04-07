@@ -65,9 +65,7 @@ class Settings(BaseSettings):
     signal_confidence_high: int = 80
     signal_min_confidence_to_trade: int = 60
 
-    # ── SUPPLEMENTAL DATA (Finnhub) ────────────────
-    finnhub_api_key: str = ""
-    finnhub_enabled: bool = False
+    # ── EARNINGS ─────────────────────────────────────
     earnings_blackout_days: int = 5
 
     # ── SCHEDULING (ET timezone) ─────────────────────

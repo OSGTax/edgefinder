@@ -91,13 +91,7 @@ def init_services() -> None:
 
     hub = DataHub(CachedDataProvider(polygon, DataCache()))
 
-    # Register supplemental providers
-    if settings.finnhub_enabled and settings.finnhub_api_key:
-        try:
-            from edgefinder.data.finnhub import FinnhubProvider
-            hub.register_supplement(FinnhubProvider())
-        except Exception:
-            logger.warning("Finnhub provider failed to initialize — continuing without it")
+    # Future: register supplemental providers here via hub.register_supplement()
 
     _provider = hub
 
