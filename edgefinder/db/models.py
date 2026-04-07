@@ -236,3 +236,27 @@ class StrategyParameterLog(Base):
     new_value: Mapped[str | None] = mapped_column(String(200))
     changed_by: Mapped[str] = mapped_column(String(30))
     changed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 11. ticker_strategy_qualifications ─────────────────
+
+
+class TickerStrategyQualification(Base):
+    """Per-strategy qualification for each ticker.
+
+    Tracks which strategies each stock qualifies for, with an optional
+    composite score (0-100) for ranked watchlist generation.
+    """
+    __tablename__ = "ticker_strategy_qualifications"
+    __table_args__ = (
+        UniqueConstraint("ticker_id", "strategy_name", name="uq_ticker_strategy"),
+        Index("idx_tsq_strategy_qualified", "strategy_name", "qualified"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker_id: Mapped[int] = mapped_column(Integer, ForeignKey("tickers.id"))
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    strategy_name: Mapped[str] = mapped_column(String(50), index=True)
+    qualified: Mapped[bool] = mapped_column(Boolean, default=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    scan_date: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

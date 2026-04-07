@@ -22,6 +22,7 @@ from edgefinder.db.models import (
     StrategyAccount,
     StrategySnapshot,
     Ticker,
+    TickerStrategyQualification,
     TradeRecord,
 )
 from edgefinder.market.benchmarks import BenchmarkService
@@ -60,10 +61,11 @@ def _deferred_initial_scan() -> None:
         try:
             logger.info("Background initial scan starting...")
             _run_initial_scan()
-            watchlist = _load_watchlist()
-            if watchlist and _arena:
-                _arena.set_global_watchlist(watchlist)
-                logger.info("Watchlist set from background scan: %s", ", ".join(watchlist))
+            watchlists = _load_watchlists()
+            if watchlists and _arena:
+                _arena.set_watchlists(watchlists)
+                for name, tickers in watchlists.items():
+                    logger.info("Background scan: %s watchlist = %d tickers", name, len(tickers))
             else:
                 logger.warning("No tickers qualified after background scan")
         except Exception:
@@ -103,14 +105,15 @@ def init_services() -> None:
     _arena = ArenaEngine(_provider)
     _arena.load_strategies()
 
-    watchlist = _load_watchlist()
-    if not watchlist or not _has_fundamentals():
+    watchlists = _load_watchlists()
+    if not watchlists or not _has_fundamentals():
         # First run or no scored data — scan in background so server starts fast
         logger.info("No scored tickers — launching background initial scan")
         _deferred_initial_scan()
     else:
-        _arena.set_global_watchlist(watchlist)
-        logger.info("Watchlist set: %s", ", ".join(watchlist))
+        _arena.set_watchlists(watchlists)
+        for name, tickers in watchlists.items():
+            logger.info("Watchlist '%s': %d tickers", name, len(tickers))
 
     # Restore account state, open positions, then recalculate from trades (source of truth)
     _restore_account_state()
@@ -335,7 +338,11 @@ def _run_initial_scan() -> None:
 
 
 def _load_watchlist() -> list[str]:
-    """Load active tickers from DB (populated by scanner)."""
+    """Load active tickers from DB (populated by scanner).
+
+    Legacy function — used by /api/research/active endpoint.
+    For strategy-specific watchlists, use _load_watchlists().
+    """
     session = _session_factory()
     try:
         active = (
@@ -344,6 +351,34 @@ def _load_watchlist() -> list[str]:
             .all()
         )
         return [row[0] for row in active]
+    finally:
+        session.close()
+
+
+def _load_watchlists() -> dict[str, list[str]]:
+    """Load per-strategy qualified tickers from DB.
+
+    Returns dict mapping strategy_name -> list of qualified ticker symbols.
+    Each strategy only sees stocks that passed its own qualifies_stock() check.
+    """
+    session = _session_factory()
+    try:
+        rows = (
+            session.query(
+                TickerStrategyQualification.strategy_name,
+                TickerStrategyQualification.symbol,
+            )
+            .filter(TickerStrategyQualification.qualified == True)
+            .order_by(
+                TickerStrategyQualification.strategy_name,
+                TickerStrategyQualification.score.desc().nullslast(),
+            )
+            .all()
+        )
+        result: dict[str, list[str]] = {}
+        for strategy_name, symbol in rows:
+            result.setdefault(strategy_name, []).append(symbol)
+        return result
     finally:
         session.close()
 
@@ -476,15 +511,18 @@ def _nightly_scan_job() -> None:
         scanner = FundamentalScanner(_provider, session)
         results = scanner.run(tickers=batch, batch_index=batch_index)
 
-        # Reload full accumulated watchlist (all batches)
-        watchlist = _load_watchlist()
-        if watchlist and _arena:
-            _arena.set_global_watchlist(watchlist)
+        # Reload per-strategy watchlists (all batches accumulated)
+        watchlists = _load_watchlists()
+        if watchlists and _arena:
+            _arena.set_watchlists(watchlists)
+            total = sum(len(t) for t in watchlists.values())
             logger.info(
-                "Nightly scan: %d qualified this batch, %d total active tickers",
+                "Nightly scan: %d qualified this batch, %d total across %d strategies",
                 sum(1 for s in results if s.qualifying_strategies),
-                len(watchlist),
+                total, len(watchlists),
             )
+            for name, tickers in watchlists.items():
+                logger.info("  %s: %d tickers", name, len(tickers))
         else:
             logger.info("Nightly scan: %d stocks scored, 0 qualified", len(results))
     except Exception:

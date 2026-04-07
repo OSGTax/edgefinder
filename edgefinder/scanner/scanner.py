@@ -17,7 +17,7 @@ from config.settings import settings
 from edgefinder.core.events import event_bus
 from edgefinder.core.interfaces import DataProvider
 from edgefinder.core.models import TickerFundamentals
-from edgefinder.db.models import Fundamental, Ticker
+from edgefinder.db.models import Fundamental, Ticker, TickerStrategyQualification
 from edgefinder.strategies.base import StrategyRegistry
 
 logger = logging.getLogger(__name__)
@@ -188,6 +188,28 @@ class FundamentalScanner:
                 for key, val in fund_data.items():
                     if key != "ticker_id":
                         setattr(existing_fund, key, val)
+
+            # Upsert per-strategy qualifications
+            all_strategy_names = StrategyRegistry.list_names()
+            for strat_name in all_strategy_names:
+                qualified = strat_name in stock.qualifying_strategies
+                existing_qual = (
+                    self._session.query(TickerStrategyQualification)
+                    .filter_by(ticker_id=ticker.id, strategy_name=strat_name)
+                    .first()
+                )
+                now = datetime.now(timezone.utc)
+                if existing_qual is None:
+                    self._session.add(TickerStrategyQualification(
+                        ticker_id=ticker.id,
+                        symbol=stock.symbol,
+                        strategy_name=strat_name,
+                        qualified=qualified,
+                        scan_date=now,
+                    ))
+                else:
+                    existing_qual.qualified = qualified
+                    existing_qual.scan_date = now
 
         # Deactivate tickers not in this scan — scoped to this batch only
         query = self._session.query(Ticker).filter(

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from edgefinder.core.models import TickerFundamentals
-from edgefinder.db.models import Fundamental, Ticker
+from edgefinder.db.models import Fundamental, Ticker, TickerStrategyQualification
 from edgefinder.scanner.scanner import FundamentalScanner, ScannedStock
 from edgefinder.strategies.base import StrategyRegistry
 
@@ -122,6 +122,50 @@ class TestDBPersistence:
         scanner.run(tickers=["AAPL"], batch_index=0)
         assert db_session.query(Ticker).filter_by(symbol="AAPL").first().is_active is True
         assert db_session.query(Ticker).filter_by(symbol="GOOG").first().is_active is False
+
+
+class TestPerStrategyQualifications:
+    """Tests for per-strategy qualification persistence (Phase 2 fix)."""
+
+    def test_qualifications_saved_per_strategy(self, scanner, db_session):
+        """Each strategy gets its own qualification row per ticker."""
+        scanner.run(tickers=["AAPL"])
+        quals = db_session.query(TickerStrategyQualification).filter_by(symbol="AAPL").all()
+        strategy_names = {q.strategy_name for q in quals}
+        # Should have a row for each registered strategy
+        assert "alpha" in strategy_names
+        assert "bravo" in strategy_names
+        assert "charlie" in strategy_names
+
+    def test_qualified_flag_varies_by_strategy(self, scanner, db_session, mock_provider):
+        """A stock may qualify for some strategies but not others."""
+        # Stock with positive earnings/revenue but bad current_ratio — qualifies for Alpha, not Bravo
+        mock_provider.get_fundamentals.side_effect = lambda t: _make_fund(
+            t,
+            earnings_growth=0.20, revenue_growth=0.15,
+            current_ratio=0.5,  # too low for Bravo
+            fcf_yield=0.005,    # too low for Charlie
+            debt_to_equity=4.0, # too high for Bravo and Charlie
+        )
+        scanner.run(tickers=["AAPL"])
+
+        alpha_qual = db_session.query(TickerStrategyQualification).filter_by(
+            symbol="AAPL", strategy_name="alpha"
+        ).first()
+        bravo_qual = db_session.query(TickerStrategyQualification).filter_by(
+            symbol="AAPL", strategy_name="bravo"
+        ).first()
+
+        assert alpha_qual.qualified is True
+        assert bravo_qual.qualified is False
+
+    def test_upsert_updates_qualification(self, scanner, db_session):
+        """Re-scanning a ticker updates existing qualification rows."""
+        scanner.run(tickers=["AAPL"])
+        scanner.run(tickers=["AAPL"])
+        # Should still have exactly one row per strategy, not duplicates
+        count = db_session.query(TickerStrategyQualification).filter_by(symbol="AAPL").count()
+        assert count == 3  # one per strategy (alpha, bravo, charlie)
 
 
 class TestFullPipeline:
