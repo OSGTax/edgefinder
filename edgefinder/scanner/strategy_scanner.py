@@ -83,13 +83,13 @@ class StrategyScanner:
         start = end - timedelta(days=60)
         spy_bars = self._provider.get_bars("SPY", "day", start, end)
 
-        # Build profiles and qualify
+        # PASS 1: Fast qualification (1 API call per ticker — fundamentals only)
         results: list[ScanResult] = []
         total = len(universe)
         for i, ticker in enumerate(universe):
-            if (i + 1) % 10 == 0 or i == 0:
-                logger.info("[%s] Scanning %d/%d: %s", self._strategy.name, i + 1, total, ticker)
-            profile = self._build_profile(ticker, spy_bars, start, end)
+            if (i + 1) % 25 == 0 or i == 0:
+                logger.info("[%s] Qualifying %d/%d", self._strategy.name, i + 1, total)
+            profile = self._build_profile(ticker, spy_bars, start, end, enrich=False)
             if profile.fundamentals is None:
                 continue
 
@@ -100,8 +100,32 @@ class StrategyScanner:
                 qualified=qualified,
             ))
 
-        # Score qualifying stocks
+        qualified_results = [r for r in results if r.qualified]
+        logger.info("[%s] Pass 1 done: %d qualified of %d. Enriching...",
+                    self._strategy.name, len(qualified_results), len(results))
+
+        # PASS 2: Enrich ONLY qualifying stocks (bars + indicators + RS)
+        for i, r in enumerate(qualified_results):
+            if (i + 1) % 10 == 0 or i == 0:
+                logger.info("[%s] Enriching %d/%d: %s", self._strategy.name, i + 1, len(qualified_results), r.symbol)
+            r.profile = self._build_profile(r.symbol, spy_bars, start, end, enrich=True)
+
+        # Fetch technicals ONLY for qualifying stocks (saves hundreds of API calls)
         qualifying = [r for r in results if r.qualified]
+        if qualifying and hasattr(self._provider, 'get_technical_rsi'):
+            logger.info("[%s] Fetching technicals for %d qualified stocks", self._strategy.name, len(qualifying))
+            # Access raw provider through DataHub/Cache layers
+            raw_provider = self._provider
+            while hasattr(raw_provider, '_primary'):
+                raw_provider = raw_provider._primary
+            while hasattr(raw_provider, '_provider'):
+                raw_provider = raw_provider._provider
+            if hasattr(raw_provider, '_fill_technicals'):
+                for r in qualifying:
+                    if r.profile.fundamentals:
+                        raw_provider._fill_technicals(r.profile.fundamentals)
+
+        # Score qualifying stocks
         if qualifying and self._strategy.scoring_profile:
             profiles = [r.profile for r in qualifying]
             stats = compute_universe_stats(profiles, self._strategy.scoring_profile.factors)
@@ -131,31 +155,36 @@ class StrategyScanner:
         spy_bars,
         start: date,
         end: date,
+        enrich: bool = False,
     ) -> StockProfile:
-        """Build complete StockProfile: fundamentals + daily indicators + RS."""
-        # Fundamentals with full refresh (quarterly data like financials, dividends)
+        """Build StockProfile for a ticker.
+
+        With enrich=False (default): Only fetches fundamentals (1 API call).
+        With enrich=True: Also fetches daily bars, computes indicators + RS.
+        """
+        # Fundamentals (1 API call for ticker details, + quarterly on full_refresh)
         fund = self._provider.get_fundamentals(ticker, full_refresh=True)
 
-        # Daily bars for technical indicators
-        bars = self._provider.get_bars(ticker, "day", start, end)
         indicators = None
-        if bars is not None and not bars.empty:
-            indicators = compute_indicators(bars)
-
-        # Relative strength vs SPY
         rs_spy = None
-        if bars is not None and spy_bars is not None:
-            rs_spy = compute_relative_strength(bars, spy_bars)
-
-        # Relative strength vs sector ETF
         rs_sector = None
         sector_etf = None
-        if fund and fund.sector:
-            sector_etf = get_sector_etf(fund.sector)
-            if sector_etf and bars is not None:
-                sector_bars = self._provider.get_bars(sector_etf, "day", start, end)
-                if sector_bars is not None:
-                    rs_sector = compute_relative_strength(bars, sector_bars)
+
+        if enrich and fund:
+            # Daily bars for indicators + RS (1 API call, cached)
+            bars = self._provider.get_bars(ticker, "day", start, end)
+            if bars is not None and not bars.empty:
+                indicators = compute_indicators(bars)
+
+                if spy_bars is not None:
+                    rs_spy = compute_relative_strength(bars, spy_bars)
+
+                if fund.sector:
+                    sector_etf = get_sector_etf(fund.sector)
+                    if sector_etf:
+                        sector_bars = self._provider.get_bars(sector_etf, "day", start, end)
+                        if sector_bars is not None:
+                            rs_sector = compute_relative_strength(bars, sector_bars)
 
         return StockProfile(
             symbol=ticker,
