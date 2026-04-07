@@ -13,6 +13,7 @@ from __future__ import annotations
 import pandas as pd
 
 from edgefinder.core.models import Signal, TickerFundamentals
+from edgefinder.scanner.scoring import ScoringFactor, ScoringProfile
 from edgefinder.signals.engine import compute_indicators, detect_signals
 from edgefinder.strategies.base import BaseStrategy, StrategyRegistry, TradeNotification
 
@@ -28,7 +29,7 @@ class CharlieStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "3.0"
+        return "4.0"
 
     @property
     def preferred_signals(self) -> list[str]:
@@ -37,6 +38,21 @@ class CharlieStrategy(BaseStrategy):
     @property
     def exit_signals(self) -> list[str]:
         return ["macd_bearish_cross"]
+
+    @property
+    def scoring_profile(self) -> ScoringProfile:
+        """Deep value: favors high cash flow, low debt, cheap valuation, dividend income."""
+        return ScoringProfile(
+            factors=[
+                ScoringFactor("fcf_yield", 0.25, "high"),
+                ScoringFactor("free_cash_flow", 0.15, "high"),
+                ScoringFactor("debt_to_equity", 0.20, "low"),
+                ScoringFactor("price_to_free_cash_flow", 0.15, "low"),
+                ScoringFactor("ev_to_ebitda", 0.10, "low"),
+                ScoringFactor("dividend_yield", 0.15, "high"),
+            ],
+            top_n=50,
+        )
 
     def init(self) -> None:
         pass

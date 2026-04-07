@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     scanner_max_price: float = 500.00
     scanner_excluded_sectors: list[str] = Field(default=["Utilities"])
     scanner_batch_count: int = 5  # one batch per weekday (Mon=0 ... Fri=4)
+    scanner_max_watchlist_per_strategy: int = 50  # top N scored stocks per strategy
 
     # ── SIGNALS / TECHNICAL ──────────────────────────
     signal_ema_fast_day: int = 9

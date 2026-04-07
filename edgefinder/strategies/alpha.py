@@ -13,6 +13,7 @@ from __future__ import annotations
 import pandas as pd
 
 from edgefinder.core.models import Signal, TickerFundamentals
+from edgefinder.scanner.scoring import ScoringFactor, ScoringProfile
 from edgefinder.signals.engine import compute_indicators, detect_signals
 from edgefinder.strategies.base import BaseStrategy, StrategyRegistry, TradeNotification
 
@@ -26,7 +27,7 @@ class AlphaStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "3.0"
+        return "4.0"
 
     @property
     def preferred_signals(self) -> list[str]:
@@ -35,6 +36,21 @@ class AlphaStrategy(BaseStrategy):
     @property
     def exit_signals(self) -> list[str]:
         return ["ema_crossover_bearish", "volume_spike_bearish"]
+
+    @property
+    def scoring_profile(self) -> ScoringProfile:
+        """Momentum strategy: favors high growth, strong earnings beats, analyst support."""
+        return ScoringProfile(
+            factors=[
+                ScoringFactor("earnings_growth", 0.25, "high"),
+                ScoringFactor("revenue_growth", 0.25, "high"),
+                ScoringFactor("eps_surprise_pct", 0.15, "high"),
+                ScoringFactor("return_on_equity", 0.15, "high"),
+                ScoringFactor("peg_ratio", 0.10, "low"),
+                ScoringFactor("ev_to_ebitda", 0.10, "low"),
+            ],
+            top_n=50,
+        )
 
     def init(self) -> None:
         pass

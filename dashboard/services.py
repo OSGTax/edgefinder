@@ -356,11 +356,13 @@ def _load_watchlist() -> list[str]:
 
 
 def _load_watchlists() -> dict[str, list[str]]:
-    """Load per-strategy qualified tickers from DB.
+    """Load per-strategy qualified tickers from DB, ranked by score.
 
     Returns dict mapping strategy_name -> list of qualified ticker symbols.
     Each strategy only sees stocks that passed its own qualifies_stock() check.
+    Lists are ordered by score (highest first) and capped at top N per strategy.
     """
+    max_per_strategy = settings.scanner_max_watchlist_per_strategy
     session = _session_factory()
     try:
         rows = (
@@ -377,7 +379,9 @@ def _load_watchlists() -> dict[str, list[str]]:
         )
         result: dict[str, list[str]] = {}
         for strategy_name, symbol in rows:
-            result.setdefault(strategy_name, []).append(symbol)
+            tickers = result.setdefault(strategy_name, [])
+            if len(tickers) < max_per_strategy:
+                tickers.append(symbol)
         return result
     finally:
         session.close()

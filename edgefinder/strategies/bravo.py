@@ -13,6 +13,7 @@ from __future__ import annotations
 import pandas as pd
 
 from edgefinder.core.models import Signal, TickerFundamentals
+from edgefinder.scanner.scoring import ScoringFactor, ScoringProfile
 from edgefinder.signals.engine import compute_indicators, detect_signals
 from edgefinder.strategies.base import BaseStrategy, StrategyRegistry, TradeNotification
 
@@ -26,7 +27,7 @@ class BravoStrategy(BaseStrategy):
 
     @property
     def version(self) -> str:
-        return "3.0"
+        return "4.0"
 
     @property
     def preferred_signals(self) -> list[str]:
@@ -35,6 +36,21 @@ class BravoStrategy(BaseStrategy):
     @property
     def exit_signals(self) -> list[str]:
         return ["rsi_overbought"]
+
+    @property
+    def scoring_profile(self) -> ScoringProfile:
+        """Mean reversion: favors strong balance sheets, low leverage, low valuation."""
+        return ScoringProfile(
+            factors=[
+                ScoringFactor("current_ratio", 0.20, "high"),
+                ScoringFactor("quick_ratio", 0.15, "high"),
+                ScoringFactor("debt_to_equity", 0.20, "low"),
+                ScoringFactor("price_to_book", 0.20, "low"),
+                ScoringFactor("short_interest", 0.10, "low"),
+                ScoringFactor("dividend_yield", 0.15, "high"),
+            ],
+            top_n=50,
+        )
 
     def init(self) -> None:
         pass

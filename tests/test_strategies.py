@@ -86,7 +86,7 @@ class TestAlphaStrategy:
     def test_properties(self):
         s = StrategyRegistry.get("alpha")()
         assert s.name == "alpha"
-        assert s.version == "3.0"
+        assert s.version == "4.0"
         assert "ema_crossover_bullish" in s.preferred_signals
 
     def test_exit_signals(self):

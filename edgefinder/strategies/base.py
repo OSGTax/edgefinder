@@ -67,6 +67,15 @@ class BaseStrategy(ABC):
     # ── Optional hooks (default no-ops) ──────────────
 
     @property
+    def scoring_profile(self):
+        """Override to enable scored ranking for this strategy.
+
+        Return a ScoringProfile with weighted factors. If None (default),
+        the scanner uses binary qualification only (score = 100 if qualifies, 0 if not).
+        """
+        return None
+
+    @property
     def exit_signals(self) -> list[str]:
         """Bearish signal patterns that trigger early exits on open positions.
 

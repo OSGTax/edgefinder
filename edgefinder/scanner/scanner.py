@@ -18,6 +18,7 @@ from edgefinder.core.events import event_bus
 from edgefinder.core.interfaces import DataProvider
 from edgefinder.core.models import TickerFundamentals
 from edgefinder.db.models import Fundamental, Ticker, TickerStrategyQualification
+from edgefinder.scanner.scoring import compute_score, compute_universe_stats
 from edgefinder.strategies.base import StrategyRegistry
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ class ScannedStock:
     symbol: str
     fundamentals: TickerFundamentals
     qualifying_strategies: list[str] = field(default_factory=list)
+    scores: dict[str, float] = field(default_factory=dict)  # strategy_name -> score (0-100)
 
 
 class FundamentalScanner:
@@ -69,6 +71,9 @@ class FundamentalScanner:
                 fundamentals=fund,
                 qualifying_strategies=qualifying,
             ))
+
+        # Compute per-strategy scores for qualifying stocks
+        self._compute_scores(results)
 
         self._save_to_db(results)
 
@@ -119,6 +124,55 @@ class FundamentalScanner:
                     strategy.name, fund.symbol,
                 )
         return qualifying
+
+    # ── Scoring ──────────────────────────────────────
+
+    @staticmethod
+    def _compute_scores(results: list[ScannedStock]) -> None:
+        """Compute per-strategy scores for all qualifying stocks.
+
+        Uses each strategy's scoring_profile to produce a 0-100 composite score.
+        Modifies results in-place, setting scores[strategy_name] = score.
+        """
+        strategies = StrategyRegistry.get_instances()
+
+        for strategy in strategies:
+            profile = strategy.scoring_profile
+            if profile is None:
+                # No scoring profile — use binary: 100 if qualifies, skip if not
+                for stock in results:
+                    if strategy.name in stock.qualifying_strategies:
+                        stock.scores[strategy.name] = 100.0
+                continue
+
+            # Collect all qualifying stocks for this strategy
+            qualifying_funds = [
+                stock.fundamentals
+                for stock in results
+                if strategy.name in stock.qualifying_strategies
+            ]
+
+            if not qualifying_funds:
+                continue
+
+            # Compute universe stats for normalization
+            stats = compute_universe_stats(qualifying_funds, profile.factors)
+
+            # Score each qualifying stock
+            for stock in results:
+                if strategy.name not in stock.qualifying_strategies:
+                    continue
+                score = compute_score(stock.fundamentals, profile, stats)
+                stock.scores[strategy.name] = score
+
+            scored_count = sum(
+                1 for s in results if strategy.name in s.scores and s.scores[strategy.name] > 0
+            )
+            logger.info(
+                "Scored %d stocks for strategy '%s' (top score: %.1f)",
+                scored_count, strategy.name,
+                max((s.scores.get(strategy.name, 0) for s in results), default=0),
+            )
 
     # ── DB Persistence ───────────────────────────────
 
@@ -189,10 +243,11 @@ class FundamentalScanner:
                     if key != "ticker_id":
                         setattr(existing_fund, key, val)
 
-            # Upsert per-strategy qualifications
+            # Upsert per-strategy qualifications with scores
             all_strategy_names = StrategyRegistry.list_names()
             for strat_name in all_strategy_names:
                 qualified = strat_name in stock.qualifying_strategies
+                score = stock.scores.get(strat_name)
                 existing_qual = (
                     self._session.query(TickerStrategyQualification)
                     .filter_by(ticker_id=ticker.id, strategy_name=strat_name)
@@ -205,10 +260,12 @@ class FundamentalScanner:
                         symbol=stock.symbol,
                         strategy_name=strat_name,
                         qualified=qualified,
+                        score=score,
                         scan_date=now,
                     ))
                 else:
                     existing_qual.qualified = qualified
+                    existing_qual.score = score
                     existing_qual.scan_date = now
 
         # Deactivate tickers not in this scan — scoped to this batch only
