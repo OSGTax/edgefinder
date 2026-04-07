@@ -44,8 +44,8 @@ class DataProvider(Protocol):
         """Get the most recent trade/quote price."""
         ...
 
-    def get_fundamentals(self, ticker: str) -> TickerFundamentals | None:
-        """Get fundamental data (financials, sector, market cap, etc.)."""
+    def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
+        """Get fundamental data. full_refresh=True fetches quarterly data too."""
         ...
 
     def get_ticker_universe(
@@ -132,9 +132,9 @@ class DataHub:
     def is_market_open(self) -> bool:
         return self._primary.is_market_open()
 
-    def get_fundamentals(self, ticker: str) -> TickerFundamentals | None:
+    def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
         """Get fundamentals from primary, then enrich via supplements."""
-        fund = self._primary.get_fundamentals(ticker)
+        fund = self._primary.get_fundamentals(ticker, full_refresh=full_refresh)
         if fund is None:
             return None
 

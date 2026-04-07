@@ -48,6 +48,13 @@ def init_database():
         ("fundamentals", "dividend_amount", "FLOAT"),
         ("fundamentals", "ex_dividend_date", "VARCHAR(20)"),
         ("fundamentals", "news_sentiment", "VARCHAR(20)"),
+        # Technical indicators from Massive API
+        ("fundamentals", "rsi_14", "FLOAT"),
+        ("fundamentals", "ema_21", "FLOAT"),
+        ("fundamentals", "sma_50", "FLOAT"),
+        ("fundamentals", "macd_value", "FLOAT"),
+        ("fundamentals", "macd_signal", "FLOAT"),
+        ("fundamentals", "macd_histogram", "FLOAT"),
     ]
     inspector = inspect(engine)
     with engine.begin() as conn:

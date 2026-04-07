@@ -133,8 +133,8 @@ class StrategyScanner:
         end: date,
     ) -> StockProfile:
         """Build complete StockProfile: fundamentals + daily indicators + RS."""
-        # Fundamentals (from Massive: ratios, earnings, analyst, short interest, etc.)
-        fund = self._provider.get_fundamentals(ticker)
+        # Fundamentals with full refresh (quarterly data like financials, dividends)
+        fund = self._provider.get_fundamentals(ticker, full_refresh=True)
 
         # Daily bars for technical indicators
         bars = self._provider.get_bars(ticker, "day", start, end)
@@ -256,6 +256,13 @@ class StrategyScanner:
                 ex_dividend_date=fund.ex_dividend_date,
                 # News sentiment
                 news_sentiment=fund.news_sentiment,
+                # Technical indicators (from Massive API)
+                rsi_14=fund.rsi_14,
+                ema_21=fund.ema_21,
+                sma_50=fund.sma_50,
+                macd_value=fund.macd_value,
+                macd_signal=fund.macd_signal,
+                macd_histogram=fund.macd_histogram,
                 # Raw data
                 raw_data=fund.raw_data,
                 scan_date=datetime.now(timezone.utc),

@@ -211,7 +211,7 @@ class TestGetFundamentals:
         )
         client.vx.list_stock_financials.return_value = [current, previous]
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result is not None
         assert result.company_name == "Apple Inc."
         assert result.market_cap == 3_000_000_000_000
@@ -239,7 +239,7 @@ class TestGetFundamentals:
         client.vx.list_stock_financials.return_value = []
         client.list_benzinga_earnings.return_value = _make_earnings_mock()
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result.last_earnings_date == "2024-01-25"
         assert result.estimated_next_earnings_date is not None
         assert result.eps_surprise_pct == 5.2
@@ -252,7 +252,7 @@ class TestGetFundamentals:
         client.vx.list_stock_financials.return_value = []
         client.list_benzinga_consensus_ratings.return_value = [_make_consensus_mock()]
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result.analyst_rating == "buy"
         assert result.analyst_target_price == 225.0
         assert result.analyst_buy_count == 35  # 15 strong_buy + 20 buy
@@ -270,7 +270,7 @@ class TestGetFundamentals:
         si.days_to_cover = 2.5
         client.list_short_interest.return_value = [si]
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result.short_shares == 200_000_000
         assert result.days_to_cover == 2.5
 
@@ -281,7 +281,7 @@ class TestGetFundamentals:
         client.list_financials_ratios.return_value = [_make_ratios_mock()]
         client.vx.list_stock_financials.return_value = [_make_financials_mock()]
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result.earnings_growth is None
         assert result.revenue_growth is None
         # Pre-computed ratios still work
@@ -299,7 +299,7 @@ class TestGetFundamentals:
         previous = _make_financials_mock(revenues=0, net_income=0)
         client.vx.list_stock_financials.return_value = [current, previous]
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result is not None
         assert result.earnings_growth is None  # prev_ni == 0 → skipped
         assert result.revenue_growth is None   # prev_rev == 0 → skipped
@@ -309,7 +309,7 @@ class TestGetFundamentals:
         client.get_ticker_details.side_effect = Exception("fail")
         client.list_financials_ratios.side_effect = Exception("fail")
         client.vx.list_stock_financials.return_value = []
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result is not None
         assert result.symbol == "AAPL"
 
@@ -323,7 +323,7 @@ class TestGetFundamentals:
         # Consensus still works
         client.list_benzinga_consensus_ratings.return_value = [_make_consensus_mock()]
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result.company_name == "Apple Inc."
         assert result.current_ratio == 0.93  # from ratios
         assert result.earnings_growth is None  # financials failed
@@ -356,7 +356,7 @@ class TestGetFundamentals:
 
         client.list_ticker_news.return_value = [article1, article2]
 
-        result = p.get_fundamentals("AAPL")
+        result = p.get_fundamentals("AAPL", full_refresh=True)
         assert result.news_sentiment == "positive"
         assert result.recent_news_count == 2
 

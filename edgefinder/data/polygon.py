@@ -179,42 +179,44 @@ class PolygonDataProvider:
             return float(snapshot.prev_day.close)
         return None
 
-    def get_fundamentals(self, ticker: str) -> TickerFundamentals | None:
-        """Get comprehensive fundamentals from multiple Massive endpoints.
+    def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
+        """Get fundamentals from Massive endpoints.
 
-        Combines: ticker details, pre-computed ratios, raw financials (for YoY growth),
-        Benzinga earnings calendar, analyst consensus, short interest, dividends,
-        related companies, and news sentiment.
+        Data refresh tiers:
+        - ALWAYS: ticker details (fast, cached), short interest
+        - full_refresh=True ONLY: raw financials, dividends, news, related
+          (these change quarterly at most — don't refetch every scan)
+
+        Call with full_refresh=True on first scan or weekly nightly scan.
+        Call with full_refresh=False on regular signal checks.
         """
         fund = TickerFundamentals(symbol=ticker)
         fund.raw_data = {}
 
-        # 1. Ticker details (sector, market cap, company info)
+        # Always fetch (fast, rarely changes but needed for sector/market_cap)
         self._fill_ticker_details(fund)
 
-        # 2. Pre-computed financial ratios (replaces manual calculation)
-        self._fill_ratios(fund)
-
-        # 3. Raw financials for YoY growth (ratios API doesn't include growth rates)
-        self._fill_growth_metrics(fund)
-
-        # 4. Benzinga earnings calendar
-        self._fill_earnings(fund)
-
-        # 5. Benzinga analyst consensus
-        self._fill_analyst_consensus(fund)
-
-        # 6. Short interest
+        # Always fetch (changes bi-monthly)
         self._fill_short_interest(fund)
 
-        # 7. Dividends
-        self._fill_dividends(fund)
+        # Technical indicators from Massive (included in Starter plan)
+        self._fill_technicals(fund)
 
-        # 8. Related companies
-        self._fill_related_companies(fund)
+        # Pre-computed ratios (blocked on Starter, but try anyway — auto-disables)
+        self._fill_ratios(fund)
 
-        # 9. News with sentiment
-        self._fill_news_sentiment(fund)
+        if full_refresh:
+            # Quarterly data — only fetch on full refresh
+            self._fill_growth_metrics(fund)
+
+            # Blocked on Starter but try — auto-disables
+            self._fill_earnings(fund)
+            self._fill_analyst_consensus(fund)
+
+            # Quarterly/annual data
+            self._fill_dividends(fund)
+            self._fill_related_companies(fund)
+            self._fill_news_sentiment(fund)
 
         return fund
 
@@ -315,6 +317,34 @@ class PolygonDataProvider:
         return prices
 
     # ── Private: Fill TickerFundamentals from each endpoint ──
+
+    def _fill_technicals(self, fund: TickerFundamentals) -> None:
+        """Fill technical indicators from Massive's pre-computed API.
+
+        These are REAL data from Massive, not computed locally.
+        Included in Stocks Starter plan.
+        """
+        # RSI 14-day
+        rsi = self.get_technical_rsi(fund.symbol, "day", 14)
+        if rsi is not None:
+            fund.rsi_14 = round(rsi, 2)
+
+        # EMA 21-day
+        ema = self.get_technical_ema(fund.symbol, "day", 21)
+        if ema is not None:
+            fund.ema_21 = round(ema, 2)
+
+        # SMA 50-day
+        sma = self.get_technical_sma(fund.symbol, "day", 50)
+        if sma is not None:
+            fund.sma_50 = round(sma, 2)
+
+        # MACD
+        macd = self.get_technical_macd(fund.symbol, "day")
+        if macd:
+            fund.macd_value = round(macd["value"], 4) if macd.get("value") is not None else None
+            fund.macd_signal = round(macd["signal"], 4) if macd.get("signal") is not None else None
+            fund.macd_histogram = round(macd["histogram"], 4) if macd.get("histogram") is not None else None
 
     def _fill_ticker_details(self, fund: TickerFundamentals) -> None:
         """Fill company info from ticker details endpoint."""

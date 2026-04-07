@@ -94,6 +94,14 @@ class Fundamental(Base):
     # News sentiment
     news_sentiment: Mapped[str | None] = mapped_column(String(20))
 
+    # Technical indicators (from Massive API)
+    rsi_14: Mapped[float | None] = mapped_column(Float)
+    ema_21: Mapped[float | None] = mapped_column(Float)
+    sma_50: Mapped[float | None] = mapped_column(Float)
+    macd_value: Mapped[float | None] = mapped_column(Float)
+    macd_signal: Mapped[float | None] = mapped_column(Float)
+    macd_histogram: Mapped[float | None] = mapped_column(Float)
+
     raw_data: Mapped[dict | None] = mapped_column(JSON)
 
     scan_date: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

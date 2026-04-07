@@ -41,11 +41,12 @@ class CachedDataProvider:
         # Prices must always be fresh — never cached
         return self._provider.get_latest_price(ticker)
 
-    def get_fundamentals(self, ticker: str) -> TickerFundamentals | None:
-        cached = self._cache.get_fundamentals(ticker)
-        if cached is not None:
-            return cached
-        result = self._provider.get_fundamentals(ticker)
+    def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
+        if not full_refresh:
+            cached = self._cache.get_fundamentals(ticker)
+            if cached is not None:
+                return cached
+        result = self._provider.get_fundamentals(ticker, full_refresh=full_refresh)
         if result is not None:
             self._cache.store_fundamentals(ticker, result)
         return result

@@ -209,6 +209,14 @@ class TickerFundamentals(BaseModel):
     # ── Related companies (from Massive related API) ──
     related_tickers: Optional[list] = None
 
+    # ── Technical indicators (from Massive API) ──
+    rsi_14: Optional[float] = None
+    ema_21: Optional[float] = None
+    sma_50: Optional[float] = None
+    macd_value: Optional[float] = None
+    macd_signal: Optional[float] = None
+    macd_histogram: Optional[float] = None
+
     # ── Raw data + source tracking ──
     raw_data: Optional[dict] = None
     # Source tracking — which supplement populated which field

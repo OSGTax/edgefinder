@@ -244,6 +244,9 @@ class ResearchService:
             "short_shares": None, "days_to_cover": None,
             "dividend_amount": None, "ex_dividend_date": None,
             "news_sentiment": None,
+            # Technical indicators (from Massive)
+            "rsi_14": None, "ema_21": None, "sma_50": None,
+            "macd_value": None, "macd_signal": None, "macd_histogram": None,
             # Strategies
             "qualifying_strategies": [],
         }
@@ -258,7 +261,9 @@ class ResearchService:
                          "short_interest", "quick_ratio",
                          "short_shares", "days_to_cover",
                          "dividend_amount", "ex_dividend_date",
-                         "news_sentiment"):
+                         "news_sentiment",
+                         "rsi_14", "ema_21", "sma_50",
+                         "macd_value", "macd_signal", "macd_histogram"):
                 val = getattr(fund, attr, None)
                 if val is not None:
                     entry[attr] = val

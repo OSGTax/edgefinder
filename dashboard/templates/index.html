@@ -251,6 +251,10 @@ button:hover{background:var(--dim-amber)}
       <th onclick="sortScreener('days_to_cover')">DTC</th>
       <th onclick="sortScreener('dividend_amount')">Div$</th>
       <th onclick="sortScreener('news_sentiment')">News</th>
+      <th onclick="sortScreener('rsi_14')">RSI</th>
+      <th onclick="sortScreener('ema_21')">EMA21</th>
+      <th onclick="sortScreener('sma_50')">SMA50</th>
+      <th onclick="sortScreener('macd_histogram')">MACD</th>
       <th>Strats</th>
     </tr></thead><tbody id="active-tickers"></tbody></table>
   </div>
@@ -567,9 +571,13 @@ function renderScreener() {
       <td>${fmt(t.days_to_cover,1)}</td>
       <td>${t.dividend_amount?'$'+t.dividend_amount.toFixed(2):'—'}</td>
       <td>${t.news_sentiment?'<span class="news-tag '+(t.news_sentiment)+'">'+t.news_sentiment+'</span>':'—'}</td>
+      <td class="${(t.rsi_14||50)<30?'pos':(t.rsi_14||50)>70?'neg':''}">${fmt(t.rsi_14,0)}</td>
+      <td>${t.ema_21?'$'+t.ema_21.toFixed(2):'—'}</td>
+      <td>${t.sma_50?'$'+t.sma_50.toFixed(2):'—'}</td>
+      <td class="${(t.macd_histogram||0)>0?'pos':(t.macd_histogram||0)<0?'neg':''}">${fmt(t.macd_histogram,3)}</td>
       <td>${strats}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="21" class="empty">No tickers. Run scanner.</td></tr>';
+  }).join('') : '<tr><td colspan="25" class="empty">No tickers. Run scanner.</td></tr>';
 }
 
 async function loadActiveTickers() {
