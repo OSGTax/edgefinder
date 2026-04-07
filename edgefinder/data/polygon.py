@@ -197,16 +197,15 @@ class PolygonDataProvider:
         self._fill_ticker_details(fund)
 
         if full_refresh:
-            # TIER 2: Full scan data (quarterly — 3 calls)
+            # Real data from Massive (Starter plan)
             self._fill_growth_metrics(fund)
             self._fill_short_interest(fund)
+            self._fill_technicals(fund)
             self._fill_dividends(fund)
-
-            # TIER 3: Enrichment data (2 calls — nice to have)
             self._fill_news_sentiment(fund)
             self._fill_related_companies(fund)
 
-            # TIER 4: Blocked endpoints — auto-disable, zero cost
+            # Blocked endpoints — auto-disable, zero cost
             self._fill_ratios(fund)
             self._fill_earnings(fund)
             self._fill_analyst_consensus(fund)

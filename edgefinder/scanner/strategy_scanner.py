@@ -104,29 +104,15 @@ class StrategyScanner:
         logger.info("[%s] Pass 1 done: %d qualified of %d. Enriching...",
                     self._strategy.name, len(qualified_results), len(results))
 
-        # PASS 2: Enrich ONLY qualifying stocks (bars + indicators + RS)
+        # PASS 2: Enrich ONLY qualifying stocks with full data
+        # (full_refresh=True → financials, technicals, short interest, dividends, news)
         for i, r in enumerate(qualified_results):
             if (i + 1) % 10 == 0 or i == 0:
                 logger.info("[%s] Enriching %d/%d: %s", self._strategy.name, i + 1, len(qualified_results), r.symbol)
             r.profile = self._build_profile(r.symbol, spy_bars, start, end, enrich=True)
 
-        # Fetch technicals ONLY for qualifying stocks (saves hundreds of API calls)
-        qualifying = [r for r in results if r.qualified]
-        if qualifying and hasattr(self._provider, 'get_technical_rsi'):
-            logger.info("[%s] Fetching technicals for %d qualified stocks", self._strategy.name, len(qualifying))
-            # Access raw provider through DataHub/Cache layers
-            raw_provider = self._provider
-            while hasattr(raw_provider, '_primary'):
-                raw_provider = raw_provider._primary
-            while hasattr(raw_provider, '_provider'):
-                raw_provider = raw_provider._provider
-            if hasattr(raw_provider, '_fill_technicals'):
-                for r in qualifying:
-                    if r.profile.fundamentals:
-                        raw_provider._fill_technicals(r.profile.fundamentals)
-
         # Score qualifying stocks
-        if qualifying and self._strategy.scoring_profile:
+        if qualified_results and self._strategy.scoring_profile:
             profiles = [r.profile for r in qualifying]
             stats = compute_universe_stats(profiles, self._strategy.scoring_profile.factors)
             for r in qualifying:
@@ -162,8 +148,9 @@ class StrategyScanner:
         With enrich=False (default): Only fetches fundamentals (1 API call).
         With enrich=True: Also fetches daily bars, computes indicators + RS.
         """
-        # Fundamentals (1 API call for ticker details, + quarterly on full_refresh)
-        fund = self._provider.get_fundamentals(ticker, full_refresh=True)
+        # enrich=False → just ticker_details (1 call, fast qualification)
+        # enrich=True → full data: financials, technicals, short interest, dividends, news
+        fund = self._provider.get_fundamentals(ticker, full_refresh=enrich)
 
         indicators = None
         rs_spy = None
@@ -215,8 +202,8 @@ class StrategyScanner:
 
         for result in results:
             fund = result.profile.fundamentals
-            if fund is None:
-                continue
+            if fund is None or fund.company_name is None:
+                continue  # Skip empty/failed API fetches
             scanned_symbols.add(result.symbol)
 
             # Upsert ticker

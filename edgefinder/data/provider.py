@@ -47,7 +47,8 @@ class CachedDataProvider:
             if cached is not None:
                 return cached
         result = self._provider.get_fundamentals(ticker, full_refresh=full_refresh)
-        if result is not None:
+        # Only cache if we got meaningful data (not empty/failed)
+        if result is not None and result.company_name is not None:
             self._cache.store_fundamentals(ticker, result)
         return result
 
