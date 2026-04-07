@@ -62,7 +62,7 @@ class Fundamental(Base):
     ticker_id: Mapped[int] = mapped_column(ForeignKey("tickers.id"), unique=True)
     symbol: Mapped[str] = mapped_column(String(10), index=True)
 
-    # Fundamental ratios
+    # Core ratios (computed from raw financials)
     peg_ratio: Mapped[float | None] = mapped_column(Float)
     earnings_growth: Mapped[float | None] = mapped_column(Float)
     debt_to_equity: Mapped[float | None] = mapped_column(Float)
@@ -73,6 +73,27 @@ class Fundamental(Base):
     short_interest: Mapped[float | None] = mapped_column(Float)
     ev_to_ebitda: Mapped[float | None] = mapped_column(Float)
     current_ratio: Mapped[float | None] = mapped_column(Float)
+
+    # Extended ratios
+    price_to_earnings: Mapped[float | None] = mapped_column(Float)
+    price_to_book: Mapped[float | None] = mapped_column(Float)
+    return_on_equity: Mapped[float | None] = mapped_column(Float)
+    return_on_assets: Mapped[float | None] = mapped_column(Float)
+    dividend_yield: Mapped[float | None] = mapped_column(Float)
+    free_cash_flow: Mapped[float | None] = mapped_column(Float)
+    quick_ratio: Mapped[float | None] = mapped_column(Float)
+
+    # Short interest details
+    short_shares: Mapped[int | None] = mapped_column(Integer)
+    days_to_cover: Mapped[float | None] = mapped_column(Float)
+
+    # Dividends
+    dividend_amount: Mapped[float | None] = mapped_column(Float)
+    ex_dividend_date: Mapped[str | None] = mapped_column(String(20))
+
+    # News sentiment
+    news_sentiment: Mapped[str | None] = mapped_column(String(20))
+
     raw_data: Mapped[dict | None] = mapped_column(JSON)
 
     scan_date: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

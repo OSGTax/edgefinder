@@ -226,6 +226,7 @@ class StrategyScanner:
             fund_data = dict(
                 ticker_id=ticker.id,
                 symbol=result.symbol,
+                # Core ratios
                 peg_ratio=fund.peg_ratio,
                 earnings_growth=fund.earnings_growth,
                 debt_to_equity=fund.debt_to_equity,
@@ -236,6 +237,23 @@ class StrategyScanner:
                 short_interest=fund.short_interest,
                 ev_to_ebitda=fund.ev_to_ebitda,
                 current_ratio=fund.current_ratio,
+                # Extended ratios
+                price_to_earnings=fund.price_to_earnings,
+                price_to_book=fund.price_to_book,
+                return_on_equity=fund.return_on_equity,
+                return_on_assets=fund.return_on_assets,
+                dividend_yield=fund.dividend_yield,
+                free_cash_flow=fund.free_cash_flow,
+                quick_ratio=fund.quick_ratio,
+                # Short interest details
+                short_shares=fund.short_shares,
+                days_to_cover=fund.days_to_cover,
+                # Dividends
+                dividend_amount=fund.dividend_amount,
+                ex_dividend_date=fund.ex_dividend_date,
+                # News sentiment
+                news_sentiment=fund.news_sentiment,
+                # Raw data
                 raw_data=fund.raw_data,
                 scan_date=datetime.now(timezone.utc),
             )

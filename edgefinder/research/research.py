@@ -229,7 +229,7 @@ class ResearchService:
             "market_cap": ticker.market_cap if ticker else None,
             "last_price": ticker.last_price if ticker else None,
             "source": source,
-            # Fundamentals
+            # Fundamentals (all available fields)
             "earnings_growth": None, "revenue_growth": None,
             "peg_ratio": None, "fcf_yield": None,
             "current_ratio": None, "debt_to_equity": None,
@@ -238,6 +238,9 @@ class ResearchService:
             "return_on_equity": None, "return_on_assets": None,
             "dividend_yield": None, "free_cash_flow": None,
             "short_interest": None, "quick_ratio": None,
+            "short_shares": None, "days_to_cover": None,
+            "dividend_amount": None, "ex_dividend_date": None,
+            "news_sentiment": None,
             # Strategies
             "qualifying_strategies": [],
         }
@@ -249,7 +252,10 @@ class ResearchService:
                          "price_to_earnings", "price_to_book",
                          "return_on_equity", "return_on_assets",
                          "dividend_yield", "free_cash_flow",
-                         "short_interest", "quick_ratio"):
+                         "short_interest", "quick_ratio",
+                         "short_shares", "days_to_cover",
+                         "dividend_amount", "ex_dividend_date",
+                         "news_sentiment"):
                 val = getattr(fund, attr, None)
                 if val is not None:
                     entry[attr] = val

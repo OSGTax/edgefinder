@@ -35,6 +35,19 @@ def init_database():
     migrations = [
         ("strategy_accounts", "realized_pnl", "FLOAT DEFAULT 0.0"),
         ("tickers", "scan_batch", "INTEGER"),
+        # Extended fundamentals columns (Phase 1 data expansion)
+        ("fundamentals", "price_to_earnings", "FLOAT"),
+        ("fundamentals", "price_to_book", "FLOAT"),
+        ("fundamentals", "return_on_equity", "FLOAT"),
+        ("fundamentals", "return_on_assets", "FLOAT"),
+        ("fundamentals", "dividend_yield", "FLOAT"),
+        ("fundamentals", "free_cash_flow", "FLOAT"),
+        ("fundamentals", "quick_ratio", "FLOAT"),
+        ("fundamentals", "short_shares", "INTEGER"),
+        ("fundamentals", "days_to_cover", "FLOAT"),
+        ("fundamentals", "dividend_amount", "FLOAT"),
+        ("fundamentals", "ex_dividend_date", "VARCHAR(20)"),
+        ("fundamentals", "news_sentiment", "VARCHAR(20)"),
     ]
     inspector = inspect(engine)
     with engine.begin() as conn:
