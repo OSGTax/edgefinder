@@ -52,6 +52,27 @@ def get_scheduler() -> EdgeFinderScheduler | None:
 # ── Initialization ──────────────────────────────────────
 
 
+def _deferred_initial_scan() -> None:
+    """Run initial scan in background thread so the web server can start immediately."""
+    import threading
+
+    def _scan():
+        try:
+            logger.info("Background initial scan starting...")
+            _run_initial_scan()
+            watchlist = _load_watchlist()
+            if watchlist and _arena:
+                _arena.set_global_watchlist(watchlist)
+                logger.info("Watchlist set from background scan: %s", ", ".join(watchlist))
+            else:
+                logger.warning("No tickers qualified after background scan")
+        except Exception:
+            logger.exception("Background initial scan failed")
+
+    thread = threading.Thread(target=_scan, daemon=True, name="initial-scan")
+    thread.start()
+
+
 def init_services() -> None:
     """Initialize all trading pipeline services. Called once at startup."""
     global _provider, _arena, _scheduler, _session_factory
@@ -78,16 +99,12 @@ def init_services() -> None:
 
     watchlist = _load_watchlist()
     if not watchlist or not _has_fundamentals():
-        # First run or no scored data — scan to populate research tab
-        logger.info("No scored tickers — running initial scan")
-        _run_initial_scan()
-        watchlist = _load_watchlist()
-
-    if watchlist:
+        # First run or no scored data — scan in background so server starts fast
+        logger.info("No scored tickers — launching background initial scan")
+        _deferred_initial_scan()
+    else:
         _arena.set_global_watchlist(watchlist)
         logger.info("Watchlist set: %s", ", ".join(watchlist))
-    else:
-        logger.warning("No tickers qualified after scan")
 
     # Restore account state, open positions, then recalculate from trades (source of truth)
     _restore_account_state()
