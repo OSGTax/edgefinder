@@ -14,6 +14,14 @@ def provider():
     with patch("edgefinder.data.polygon.RESTClient") as mock_cls:
         mock_client = MagicMock()
         mock_cls.return_value = mock_client
+        # Default all new endpoints to return empty/None so tests don't break
+        mock_client.list_financials_ratios.return_value = []
+        mock_client.list_benzinga_earnings.return_value = []
+        mock_client.list_benzinga_consensus_ratings.return_value = []
+        mock_client.list_short_interest.return_value = []
+        mock_client.list_dividends.return_value = []
+        mock_client.get_related_companies.return_value = []
+        mock_client.list_ticker_news.return_value = []
         p = PolygonDataProvider(api_key="test_key")
         p._client = mock_client
         yield p, mock_client
@@ -95,7 +103,42 @@ def _make_details_mock():
     details.homepage_url = "https://apple.com"
     details.locale = "us"
     details.primary_exchange = "XNAS"
+    details.category = "Technology"
+    details.cik = "0000320193"
+    details.share_class_shares_outstanding = 15_000_000_000
+    details.weighted_shares_outstanding = 15_200_000_000
     return details
+
+
+def _make_ratios_mock(**overrides):
+    r = MagicMock()
+    defaults = {
+        "price": 200.0,
+        "market_cap": 3_000_000_000_000,
+        "average_volume": 50_000_000,
+        "earnings_per_share": 6.50,
+        "price_to_earnings": 30.7,
+        "price_to_book": 48.5,
+        "price_to_sales": 7.8,
+        "price_to_cash_flow": 25.2,
+        "price_to_free_cash_flow": 28.1,
+        "dividend_yield": 0.005,
+        "return_on_assets": 0.28,
+        "return_on_equity": 1.56,
+        "debt_to_equity": 1.87,
+        "current": 0.93,  # current ratio
+        "quick": 0.85,
+        "cash": 0.35,
+        "ev_to_sales": 8.1,
+        "ev_to_ebitda": 24.5,
+        "enterprise_value": 3_100_000_000_000,
+        "free_cash_flow": 110_000_000_000,
+    }
+    defaults.update(overrides)
+    for k, v in defaults.items():
+        setattr(r, k, v)
+    r.__annotations__ = {k: type(v) for k, v in defaults.items()}
+    return r
 
 
 def _make_financials_mock(
@@ -122,10 +165,45 @@ def _make_financials_mock(
     return fin
 
 
+def _make_earnings_mock(ticker="AAPL"):
+    past = MagicMock()
+    past.date = "2024-01-25"
+    past.ticker = ticker
+    past.eps_surprise_percent = 5.2
+    past.revenue_surprise_percent = 2.1
+    past.estimated_eps = 2.10
+    past.actual_eps = 2.18
+    past.__annotations__ = {"date": str, "ticker": str, "eps_surprise_percent": float,
+                            "revenue_surprise_percent": float, "estimated_eps": float, "actual_eps": float}
+
+    future = MagicMock()
+    future.date = "2099-04-28"  # far future so it's always "next"
+    future.ticker = ticker
+    future.estimated_eps = 2.35
+    future.eps_surprise_percent = None
+    future.revenue_surprise_percent = None
+    future.__annotations__ = {"date": str, "ticker": str, "estimated_eps": float}
+    return [past, future]
+
+
+def _make_consensus_mock():
+    c = MagicMock()
+    c.strong_buy_ratings = 15
+    c.buy_ratings = 20
+    c.hold_ratings = 8
+    c.sell_ratings = 2
+    c.strong_sell_ratings = 1
+    c.consensus_price_target = 225.0
+    c.consensus_rating = "Buy"
+    return c
+
+
 class TestGetFundamentals:
-    def test_returns_fundamentals(self, provider):
+    def test_returns_fundamentals_with_ratios(self, provider):
+        """Full fundamentals with pre-computed ratios from Massive."""
         p, client = provider
         client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
 
         current = _make_financials_mock()
         previous = _make_financials_mock(
@@ -137,40 +215,85 @@ class TestGetFundamentals:
         assert result is not None
         assert result.company_name == "Apple Inc."
         assert result.market_cap == 3_000_000_000_000
-        assert result.current_ratio is not None
-        assert result.debt_to_equity is not None
-        assert result.raw_data is not None
-        # Derived metrics from 2-period comparison
+        # Pre-computed ratios from Massive
+        assert result.current_ratio == 0.93
+        assert result.debt_to_equity == 1.87
+        assert result.price_to_earnings == 30.7
+        assert result.return_on_equity == 1.56
+        assert result.ev_to_ebitda == 24.5
+        assert result.free_cash_flow == 110_000_000_000
+        assert result.dividend_yield == 0.005
+        # Growth from raw financials
         assert result.earnings_growth == pytest.approx(
             (95e9 - 80e9) / 80e9, rel=1e-4
         )
         assert result.revenue_growth == pytest.approx(
             (380e9 - 340e9) / 340e9, rel=1e-4
         )
-        assert result.fcf_yield == pytest.approx(110e9 / 3e12, rel=1e-4)
-        assert result.price_to_tangible_book == pytest.approx(
-            3e12 / (350e9 - 280e9), rel=1e-4
-        )
-        assert result.peg_ratio is not None
 
-    def test_single_period_no_growth(self, provider):
-        """With only 1 period, growth metrics are None but others still work."""
+    def test_earnings_data_populated(self, provider):
+        """Benzinga earnings calendar data is populated."""
         p, client = provider
         client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
+        client.vx.list_stock_financials.return_value = []
+        client.list_benzinga_earnings.return_value = _make_earnings_mock()
+
+        result = p.get_fundamentals("AAPL")
+        assert result.last_earnings_date == "2024-01-25"
+        assert result.estimated_next_earnings_date is not None
+        assert result.eps_surprise_pct == 5.2
+
+    def test_analyst_consensus_populated(self, provider):
+        """Benzinga analyst consensus data is populated."""
+        p, client = provider
+        client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
+        client.vx.list_stock_financials.return_value = []
+        client.list_benzinga_consensus_ratings.return_value = [_make_consensus_mock()]
+
+        result = p.get_fundamentals("AAPL")
+        assert result.analyst_rating == "buy"
+        assert result.analyst_target_price == 225.0
+        assert result.analyst_buy_count == 35  # 15 strong_buy + 20 buy
+        assert result.analyst_sell_count == 3   # 2 sell + 1 strong_sell
+
+    def test_short_interest_populated(self, provider):
+        """Short interest data is populated."""
+        p, client = provider
+        client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
+        client.vx.list_stock_financials.return_value = []
+
+        si = MagicMock()
+        si.short_interest = 200_000_000
+        si.days_to_cover = 2.5
+        client.list_short_interest.return_value = [si]
+
+        result = p.get_fundamentals("AAPL")
+        assert result.short_shares == 200_000_000
+        assert result.days_to_cover == 2.5
+
+    def test_single_period_no_growth(self, provider):
+        """With only 1 period, growth metrics are None but ratios still work."""
+        p, client = provider
+        client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
         client.vx.list_stock_financials.return_value = [_make_financials_mock()]
 
         result = p.get_fundamentals("AAPL")
         assert result.earnings_growth is None
         assert result.revenue_growth is None
-        # Single-period metrics still derived
-        assert result.fcf_yield is not None
-        assert result.price_to_tangible_book is not None
-        assert result.current_ratio is not None
+        # Pre-computed ratios still work
+        assert result.current_ratio == 0.93
+        assert result.price_to_earnings == 30.7
+        assert result.free_cash_flow == 110_000_000_000
 
     def test_zero_denominator_safety(self, provider):
         """Division by zero in previous period should not crash."""
         p, client = provider
         client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
 
         current = _make_financials_mock()
         previous = _make_financials_mock(revenues=0, net_income=0)
@@ -184,10 +307,58 @@ class TestGetFundamentals:
     def test_api_error_returns_basic(self, provider):
         p, client = provider
         client.get_ticker_details.side_effect = Exception("fail")
+        client.list_financials_ratios.side_effect = Exception("fail")
         client.vx.list_stock_financials.return_value = []
         result = p.get_fundamentals("AAPL")
         assert result is not None
         assert result.symbol == "AAPL"
+
+    def test_graceful_degradation(self, provider):
+        """If some endpoints fail, others still populate data."""
+        p, client = provider
+        client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
+        client.vx.list_stock_financials.side_effect = Exception("fail")
+        client.list_benzinga_earnings.side_effect = Exception("fail")
+        # Consensus still works
+        client.list_benzinga_consensus_ratings.return_value = [_make_consensus_mock()]
+
+        result = p.get_fundamentals("AAPL")
+        assert result.company_name == "Apple Inc."
+        assert result.current_ratio == 0.93  # from ratios
+        assert result.earnings_growth is None  # financials failed
+        assert result.analyst_rating == "buy"  # consensus worked
+
+    def test_news_sentiment(self, provider):
+        """News with AI insights populates sentiment."""
+        p, client = provider
+        client.get_ticker_details.return_value = _make_details_mock()
+        client.list_financials_ratios.return_value = [_make_ratios_mock()]
+        client.vx.list_stock_financials.return_value = []
+
+        article1 = MagicMock()
+        article1.title = "Apple beats estimates"
+        article1.published_utc = "2024-01-25T16:00:00Z"
+        article1.article_url = "https://example.com/1"
+        insight1 = MagicMock()
+        insight1.ticker = "AAPL"
+        insight1.sentiment = "positive"
+        article1.insights = [insight1]
+
+        article2 = MagicMock()
+        article2.title = "Apple faces headwinds"
+        article2.published_utc = "2024-01-24T10:00:00Z"
+        article2.article_url = "https://example.com/2"
+        insight2 = MagicMock()
+        insight2.ticker = "AAPL"
+        insight2.sentiment = "positive"
+        article2.insights = [insight2]
+
+        client.list_ticker_news.return_value = [article1, article2]
+
+        result = p.get_fundamentals("AAPL")
+        assert result.news_sentiment == "positive"
+        assert result.recent_news_count == 2
 
 
 class TestGetTickerUniverse:

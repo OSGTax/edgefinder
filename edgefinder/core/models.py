@@ -150,27 +150,66 @@ class TickerFundamentals(BaseModel):
     industry: Optional[str] = None
     market_cap: Optional[float] = None
     price: Optional[float] = None
-    # Fundamental ratios
+
+    # ── Core ratios (from Massive pre-computed ratios API) ──
     peg_ratio: Optional[float] = None
     earnings_growth: Optional[float] = None
     debt_to_equity: Optional[float] = None
     revenue_growth: Optional[float] = None
-    institutional_pct: Optional[float] = None
     fcf_yield: Optional[float] = None
     price_to_tangible_book: Optional[float] = None
-    short_interest: Optional[float] = None
     ev_to_ebitda: Optional[float] = None
     current_ratio: Optional[float] = None
-    # Earnings awareness (populated by Finnhub or estimated from Polygon)
-    last_earnings_date: Optional[str] = None  # ISO date string
+    # Extended ratios
+    price_to_earnings: Optional[float] = None
+    price_to_book: Optional[float] = None
+    price_to_sales: Optional[float] = None
+    price_to_free_cash_flow: Optional[float] = None
+    dividend_yield: Optional[float] = None
+    return_on_assets: Optional[float] = None
+    return_on_equity: Optional[float] = None
+    enterprise_value: Optional[float] = None
+    free_cash_flow: Optional[float] = None
+    quick_ratio: Optional[float] = None
+    ev_to_sales: Optional[float] = None
+    earnings_per_share: Optional[float] = None
+
+    # ── Short interest (from Massive short interest API) ──
+    short_interest: Optional[float] = None  # as fraction of shares outstanding
+    short_shares: Optional[int] = None
+    days_to_cover: Optional[float] = None
+
+    # ── Institutional / insider ──
+    institutional_pct: Optional[float] = None
+    insider_buy_ratio: Optional[float] = None
+
+    # ── Earnings (from Massive Benzinga earnings API) ──
+    last_earnings_date: Optional[str] = None
     estimated_next_earnings_date: Optional[str] = None
     near_earnings: bool = False
-    # Analyst data (populated by supplemental providers)
+    eps_surprise_pct: Optional[float] = None
+    revenue_surprise_pct: Optional[float] = None
+    estimated_eps: Optional[float] = None
+
+    # ── Analyst consensus (from Massive Benzinga ratings API) ──
     analyst_rating: Optional[str] = None  # "buy", "hold", "sell"
     analyst_target_price: Optional[float] = None
-    # Insider activity (populated by supplemental providers)
-    insider_buy_ratio: Optional[float] = None  # buys / (buys+sells) over 90 days
-    # Raw JSON for research deep-dive
+    analyst_buy_count: Optional[int] = None
+    analyst_hold_count: Optional[int] = None
+    analyst_sell_count: Optional[int] = None
+
+    # ── Dividends (from Massive dividends API) ──
+    dividend_amount: Optional[float] = None
+    ex_dividend_date: Optional[str] = None
+
+    # ── News sentiment (from Massive news + AI insights) ──
+    news_sentiment: Optional[str] = None  # "positive", "negative", "neutral"
+    recent_news_count: Optional[int] = None
+
+    # ── Related companies (from Massive related API) ──
+    related_tickers: Optional[list] = None
+
+    # ── Raw data + source tracking ──
     raw_data: Optional[dict] = None
     # Source tracking — which supplement populated which field
     data_sources: Optional[dict] = None
