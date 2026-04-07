@@ -306,6 +306,16 @@ def _recalculate_account_balances() -> None:
                 )
                 account.cash = correct_cash
 
+            # CRITICAL: if cash is negative, account is over-leveraged — pause it
+            if account.cash < 0:
+                logger.error(
+                    "CRITICAL: '%s' has negative cash $%.2f (open_cost=$%.2f > capital+realized=$%.2f). "
+                    "Pausing account. This likely means positions were opened under the old "
+                    "global watchlist bug. Close positions manually or reset the account.",
+                    name, account.cash, open_cost, account.starting_capital + realized,
+                )
+                account.is_paused = True
+
             # Update peak equity based on corrected values
             equity = account.total_equity
             if equity > account.peak_equity:

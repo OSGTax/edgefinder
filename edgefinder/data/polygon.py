@@ -35,7 +35,7 @@ class PolygonDataProvider:
             raise ValueError(
                 "Polygon API key required. Set EDGEFINDER_POLYGON_API_KEY in .env"
             )
-        self._client = RESTClient(api_key=key, num_pools=4, retries=0)
+        self._client = RESTClient(api_key=key, num_pools=20, retries=0)
         self._max_retries = settings.polygon_max_retries
         self._retry_delay = settings.polygon_retry_delay
         # Track which endpoints are not authorized on this plan
