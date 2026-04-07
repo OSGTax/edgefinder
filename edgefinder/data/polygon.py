@@ -67,6 +67,9 @@ class PolygonDataProvider:
             "technical_macd": True,    # Available on Starter
             "dividends": True,         # Available on Starter
             "splits": True,            # Available on Starter
+            "news": True,              # Available on Starter (confirmed from API calls)
+            "related": True,           # Available on Starter
+            "ticker_events": True,     # Available on Starter
         }
 
         # Disable known-blocked endpoints immediately
@@ -77,33 +80,8 @@ class PolygonDataProvider:
             else:
                 logger.info("  ✓ %s — available (known)", name)
 
-        # Only probe endpoints we haven't confirmed yet
-        test_ticker = "AAPL"
-        probes = {
-            "news": lambda: list(self._client.list_ticker_news(ticker=test_ticker, limit=1)),
-            "related": lambda: self._client.get_related_companies(ticker=test_ticker),
-            "ticker_events": lambda: self._client.get_ticker_events(test_ticker),
-        }
-
-        # Probe unknown endpoints
-        probed = {}
-        for name, fn in probes.items():
-            try:
-                fn()
-                probed[name] = True
-                logger.info("  ✓ %s — available (probed)", name)
-            except Exception as e:
-                err = str(e)
-                if "NOT_AUTHORIZED" in err or "not entitled" in err.lower():
-                    probed[name] = False
-                    self._disabled_endpoints.add(name)
-                    logger.warning("  ✗ %s — NOT on current plan (probed)", name)
-                else:
-                    probed[name] = True
-                    logger.info("  ? %s — error but not plan-gated: %s", name, err[:80])
-
-        # Merge known + probed
-        results = {**known_results, **probed}
+        # All endpoints now known — no live probing needed
+        results = dict(known_results)
         self._plan_access = results
         available = sum(1 for v in results.values() if v)
         blocked = sum(1 for v in results.values() if not v)
@@ -617,10 +595,10 @@ class PolygonDataProvider:
             fund.related_tickers = [related.ticker]
 
     def _fill_news_sentiment(self, fund: TickerFundamentals) -> None:
-        """Fill news sentiment from Polygon's ticker news with AI insights."""
+        """Fill news sentiment from Massive's ticker news with AI insights."""
         news_list = self._retry(
             lambda: list(self._client.list_ticker_news(
-                ticker=fund.symbol, limit=10,
+                ticker=fund.symbol, limit=5,
             )),
             context=f"news({fund.symbol})",
         )

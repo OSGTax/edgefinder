@@ -85,7 +85,10 @@ class StrategyScanner:
 
         # Build profiles and qualify
         results: list[ScanResult] = []
-        for ticker in universe:
+        total = len(universe)
+        for i, ticker in enumerate(universe):
+            if (i + 1) % 10 == 0 or i == 0:
+                logger.info("[%s] Scanning %d/%d: %s", self._strategy.name, i + 1, total, ticker)
             profile = self._build_profile(ticker, spy_bars, start, end)
             if profile.fundamentals is None:
                 continue
