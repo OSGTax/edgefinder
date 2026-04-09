@@ -26,10 +26,14 @@ class StrategySlot:
 
     def __init__(self, strategy: BaseStrategy, pdt_enabled: bool = False) -> None:
         self.strategy = strategy
+        # Check for per-strategy risk config
+        risk_config = getattr(strategy, "risk_config", None) or {}
         self.account = VirtualAccount(
             strategy_name=strategy.name,
             starting_capital=settings.starting_capital,
             pdt_enabled=pdt_enabled,
+            max_risk_pct=risk_config.get("max_risk_pct"),
+            max_concentration_pct=risk_config.get("max_concentration_pct"),
         )
         self.executor = Executor(self.account)
         self.watchlist: list[str] = []

@@ -52,6 +52,11 @@ class AlphaStrategy(BaseStrategy):
             top_n=50,
         )
 
+    @property
+    def risk_config(self) -> dict:
+        """Conservative momentum — 2% risk, 20% concentration."""
+        return {"max_risk_pct": 0.02, "max_concentration_pct": 0.20}
+
     def init(self) -> None:
         pass
 

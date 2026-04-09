@@ -65,6 +65,8 @@ class VirtualAccount:
         strategy_name: str,
         starting_capital: float | None = None,
         pdt_enabled: bool = False,
+        max_risk_pct: float | None = None,
+        max_concentration_pct: float | None = None,
     ) -> None:
         self.strategy_name = strategy_name
         self.starting_capital = starting_capital or settings.starting_capital
@@ -74,6 +76,9 @@ class VirtualAccount:
         self.peak_equity = self.starting_capital
         self.is_paused = False
         self.realized_pnl = 0.0
+        # Per-strategy risk overrides (None = use global settings)
+        self.max_risk_pct = max_risk_pct
+        self.max_concentration_pct = max_concentration_pct
 
         # PDT tracking
         self._day_trades: list[datetime] = []

@@ -220,7 +220,7 @@ button:hover{background:var(--dim-amber)}
 <div class="pnl full" id="pnl-screener">
   <div class="pnl-hdr">SCREENER
     <select id="research-strategy-filter" onchange="renderScreener()" style="margin-left:8px;font-size:10px;padding:1px 4px;background:var(--bg);color:var(--text);border:1px solid var(--border)">
-      <option value="">All Strategies</option><option value="alpha">alpha</option><option value="bravo">bravo</option><option value="charlie">charlie</option>
+      <option value="">All Strategies</option><option value="alpha">alpha</option><option value="bravo">bravo</option><option value="charlie">charlie</option><option value="degenerate">degenerate</option>
     </select>
     <button id="scan-btn" onclick="triggerScan()" style="font-size:10px;padding:1px 6px;margin-left:8px">SCAN</button>
     <span id="scan-status" style="font-size:10px;color:var(--muted);margin-left:4px"></span>
@@ -324,6 +324,7 @@ const STRATEGY_INFO = {
   alpha: { title: 'ALPHA — Momentum', body: 'Targets positive earnings + revenue growth. Enters on EMA crossovers, MACD bullish crosses, volume spikes. Scores on: earnings growth, revenue growth, EPS surprise, ROE, PEG, EV/EBITDA. Trade type: DAY.' },
   bravo: { title: 'BRAVO — Mean Reversion', body: 'Targets strong balance sheets at oversold levels. Enters on BB lower touch, RSI oversold. Scores on: current ratio, quick ratio, D/E, P/B, short interest, dividend yield. Trade type: SWING.' },
   charlie: { title: 'CHARLIE — Deep Value', body: 'Targets high FCF yield with manageable debt. High-confidence entries only (>=80). Scores on: FCF yield, free cash flow, D/E, P/FCF, EV/EBITDA, dividend yield. Trade type: SWING.' },
+  degenerate: { title: 'DEGENERATE — High Risk Momentum', body: 'TECHNICAL: Calculated high-risk plays targeting volatile stocks. Accepts ALL signal types with no confidence floor. 10% equity risk per trade (5x normal), 50% max concentration (2.5x normal). Qualifies stocks with any growth signal, positive cash flow, OR high short interest (>5%) for squeeze potential.\n\nIN PLAIN ENGLISH: The wildcard. While other strategies are cautious with small positions, Degenerate swings big on anything showing momentum or squeeze potential. It will have the biggest wins AND biggest losses. It exists to show what aggressive trading looks like — and to teach you what risk really means through its results.' },
 };
 
 function showInfo(key) {

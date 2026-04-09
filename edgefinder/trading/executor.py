@@ -183,15 +183,18 @@ class Executor:
         if risk_per_share <= 0:
             return 0, 0
 
-        max_risk = self.account.total_equity * settings.max_risk_per_trade_pct
+        # Per-strategy risk config (set via strategy.risk_config)
+        risk_pct = self.account.max_risk_pct or 0.02  # fallback 2%
+        max_risk = self.account.total_equity * risk_pct
         shares = int(max_risk / risk_per_share)
 
         # Cap by buying power
         max_by_cash = int(self.account.buying_power / execution_price)
         shares = min(shares, max_by_cash)
 
-        # Cap by concentration
-        max_concentration = self.account.total_equity * settings.max_portfolio_concentration_pct
+        # Cap by concentration (per-strategy)
+        conc_pct = self.account.max_concentration_pct or 0.20  # fallback 20%
+        max_concentration = self.account.total_equity * conc_pct
         max_by_concentration = int(max_concentration / execution_price)
         shares = min(shares, max_by_concentration)
 
