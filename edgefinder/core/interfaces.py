@@ -54,6 +54,13 @@ class DataProvider(Protocol):
         """Return a list of ticker symbols meeting criteria."""
         ...
 
+    def get_all_snapshots(self) -> dict[str, float]:
+        """Get latest prices for ALL tickers in one API call.
+
+        Returns dict of ticker -> close price.
+        """
+        ...
+
     def is_market_open(self) -> bool:
         """Whether the US equity market is currently in regular trading hours."""
         ...
@@ -128,6 +135,9 @@ class DataHub:
         self, min_market_cap: int = 0, min_volume: int = 0
     ) -> list[str]:
         return self._primary.get_ticker_universe(min_market_cap, min_volume)
+
+    def get_all_snapshots(self) -> dict[str, float]:
+        return self._primary.get_all_snapshots()
 
     def is_market_open(self) -> bool:
         return self._primary.is_market_open()

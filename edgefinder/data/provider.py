@@ -63,5 +63,9 @@ class CachedDataProvider:
             self._cache.store_universe(result)
         return result
 
+    def get_all_snapshots(self) -> dict[str, float]:
+        # Prices must always be fresh — never cached
+        return self._provider.get_all_snapshots()
+
     def is_market_open(self) -> bool:
         return self._provider.is_market_open()

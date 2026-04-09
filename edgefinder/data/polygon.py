@@ -183,11 +183,14 @@ class PolygonDataProvider:
         """Get fundamentals from Massive endpoints.
 
         Data tiers:
-        - TIER 1 (always, 2-3 calls): ticker details + SEC financials + price.
+        - TIER 1 (always, 2 calls): ticker details + SEC financials.
           Provides company info AND all qualification fields (earnings_growth,
           current_ratio, debt_to_equity, fcf_yield, etc.).
         - TIER 2 (full_refresh only, ~6 calls): technicals, short interest,
           dividends, news, related, plus blocked endpoints that auto-disable.
+
+        Price is NOT fetched here — use get_all_snapshots() for bulk pricing
+        or get_latest_price() for single-ticker.
 
         Call with full_refresh=True during Pass 2 enrichment.
         Call with full_refresh=False during Pass 1 qualification.
@@ -195,12 +198,11 @@ class PolygonDataProvider:
         fund = TickerFundamentals(symbol=ticker)
         fund.raw_data = {}
 
-        # TIER 1: Company info + financial ratios (2-3 calls)
+        # TIER 1: Company info + financial ratios (2 calls)
         # Both are needed for qualification — strategies check earnings_growth,
         # current_ratio, fcf_yield etc. which come from SEC financials.
         self._fill_ticker_details(fund)
         self._fill_growth_metrics(fund)
-        self._fill_price(fund)
 
         if full_refresh:
             # TIER 2: Enrichment data (only for qualified stocks)
@@ -342,19 +344,6 @@ class PolygonDataProvider:
             fund.macd_value = round(macd["value"], 4) if macd.get("value") is not None else None
             fund.macd_signal = round(macd["signal"], 4) if macd.get("signal") is not None else None
             fund.macd_histogram = round(macd["histogram"], 4) if macd.get("histogram") is not None else None
-
-    def _fill_price(self, fund: TickerFundamentals) -> None:
-        """Fill current price from snapshot endpoint (1 call)."""
-        snapshot = self._retry(
-            lambda: self._client.get_snapshot_ticker("stocks", fund.symbol),
-            context=f"snapshot({fund.symbol})",
-        )
-        if not snapshot:
-            return
-        if snapshot.day and snapshot.day.close:
-            fund.price = float(snapshot.day.close)
-        elif snapshot.prev_day and snapshot.prev_day.close:
-            fund.price = float(snapshot.prev_day.close)
 
     def _fill_ticker_details(self, fund: TickerFundamentals) -> None:
         """Fill company info from ticker details endpoint."""

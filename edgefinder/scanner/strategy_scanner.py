@@ -83,7 +83,7 @@ class StrategyScanner:
         start = end - timedelta(days=60)
         spy_bars = self._provider.get_bars("SPY", "day", start, end)
 
-        # PASS 1: Fast qualification (1 API call per ticker — fundamentals only)
+        # PASS 1: Fast qualification (2 API calls per ticker: ticker_details + financials)
         results: list[ScanResult] = []
         total = len(universe)
         for i, ticker in enumerate(universe):
@@ -105,11 +105,18 @@ class StrategyScanner:
                     self._strategy.name, len(qualified_results), len(results))
 
         # PASS 2: Enrich ONLY qualifying stocks with full data
-        # (full_refresh=True → financials, technicals, short interest, dividends, news)
+        # (full_refresh=True → technicals, short interest, dividends, news)
         for i, r in enumerate(qualified_results):
             if (i + 1) % 10 == 0 or i == 0:
                 logger.info("[%s] Enriching %d/%d: %s", self._strategy.name, i + 1, len(qualified_results), r.symbol)
             r.profile = self._build_profile(r.symbol, spy_bars, start, end, enrich=True)
+
+        # Bulk price fetch — 1 API call for ALL tickers instead of N calls
+        prices = self._provider.get_all_snapshots()
+        if prices:
+            for r in results:
+                if r.profile.fundamentals and r.symbol in prices:
+                    r.profile.fundamentals.price = prices[r.symbol]
 
         # Score qualifying stocks
         if qualified_results and self._strategy.scoring_profile:
@@ -145,11 +152,11 @@ class StrategyScanner:
     ) -> StockProfile:
         """Build StockProfile for a ticker.
 
-        With enrich=False (default): Only fetches fundamentals (1 API call).
+        With enrich=False (default): Fetches fundamentals (2 API calls: details + financials).
         With enrich=True: Also fetches daily bars, computes indicators + RS.
         """
-        # enrich=False → just ticker_details (1 call, fast qualification)
-        # enrich=True → full data: financials, technicals, short interest, dividends, news
+        # enrich=False → ticker_details + growth_metrics (2 calls, provides qualification data)
+        # enrich=True → adds: technicals, short interest, dividends, news, bars, RS
         fund = self._provider.get_fundamentals(ticker, full_refresh=enrich)
 
         indicators = None
@@ -288,6 +295,15 @@ class StrategyScanner:
                 scan_date=datetime.now(timezone.utc),
             )
 
+            # TIER 1 fields — always safe to update (from ticker_details + growth_metrics)
+            tier1_fields = {
+                "symbol", "peg_ratio", "earnings_growth", "debt_to_equity",
+                "revenue_growth", "fcf_yield", "price_to_tangible_book",
+                "ev_to_ebitda", "current_ratio", "price_to_earnings",
+                "price_to_book", "return_on_equity", "return_on_assets",
+                "scan_date",
+            }
+
             if existing_fund is None:
                 self._session.add(Fundamental(**fund_data))
             elif result.qualified:
@@ -297,12 +313,10 @@ class StrategyScanner:
                         setattr(existing_fund, key, val)
             else:
                 # Non-qualified: only update TIER 1 fields (ratios from SEC
-                # financials). Never overwrite existing TIER 2 data with None.
-                for key, val in fund_data.items():
-                    if key == "ticker_id":
-                        continue
-                    if val is not None or getattr(existing_fund, key, None) is None:
-                        setattr(existing_fund, key, val)
+                # financials). Never touch TIER 2 data (technicals, news, etc.)
+                for key in tier1_fields:
+                    if key in fund_data:
+                        setattr(existing_fund, key, fund_data[key])
 
             # ── Upsert strategy qualification ──
             existing_qual = (
@@ -325,17 +339,18 @@ class StrategyScanner:
                 existing_qual.score = result.score if result.qualified else None
                 existing_qual.scan_date = now
 
-        # Deactivate tickers not qualified by ANY strategy.
-        # A ticker stays active if at least one strategy qualifies it.
-        for symbol in scanned_symbols:
-            ticker = self._session.query(Ticker).filter_by(symbol=symbol).first()
-            if ticker and ticker.is_active:
-                any_qualified = (
-                    self._session.query(TickerStrategyQualification)
-                    .filter_by(ticker_id=ticker.id, qualified=True)
-                    .first()
-                )
-                if not any_qualified:
-                    ticker.is_active = False
+        # Bulk deactivation: set is_active=False for scanned tickers that
+        # aren't qualified by ANY strategy (1 query instead of N).
+        if scanned_symbols:
+            qualified_ticker_ids = (
+                self._session.query(TickerStrategyQualification.ticker_id)
+                .filter(TickerStrategyQualification.qualified == True)
+                .subquery()
+            )
+            self._session.query(Ticker).filter(
+                Ticker.symbol.in_(scanned_symbols),
+                Ticker.is_active == True,
+                ~Ticker.id.in_(qualified_ticker_ids),
+            ).update({"is_active": False}, synchronize_session="fetch")
 
         self._session.commit()

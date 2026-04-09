@@ -64,15 +64,6 @@ def init_database():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
                 logger.info("Added column %s.%s", table, column)
 
-        # Re-activate tickers that have fundamentals but were deactivated by old scans
-        result = conn.execute(text("""
-            UPDATE tickers SET is_active = true
-            WHERE id IN (SELECT ticker_id FROM fundamentals)
-            AND is_active = false AND source = 'scanner'
-        """))
-        if result.rowcount > 0:
-            logger.info("Re-activated %d tickers with fundamentals", result.rowcount)
-
     logger.info("Database tables verified/created")
     engine.dispose()
 
