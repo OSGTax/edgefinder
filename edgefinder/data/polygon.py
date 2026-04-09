@@ -14,7 +14,10 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
-from massive import RESTClient
+try:
+    from massive import RESTClient
+except ImportError:
+    from polygon import RESTClient
 
 from config.settings import settings
 from edgefinder.core.models import TickerFundamentals
