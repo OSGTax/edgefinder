@@ -186,6 +186,8 @@ def init_services() -> None:
         benchmark_collect_fn=_benchmark_job,
         snapshot_fn=_snapshot_job,
         sector_rotation_fn=_sector_rotation_job,
+        news_accumulate_fn=_news_accumulate_job,
+        dividend_split_fn=_dividend_split_job,
     )
     _scheduler.start()
 
@@ -548,6 +550,10 @@ def _wire_event_bus() -> None:
 
             journal = TradeJournal(session)
             journal.log_trade(trade)
+
+            # Capture rich trade context from DB (no extra API calls)
+            _capture_trade_context(session, trade)
+
             logger.info(
                 "[%s] Trade opened: %s %s @ $%.2f (snapshot #%d)",
                 trade.strategy_name, trade.direction.value,
@@ -580,12 +586,102 @@ def _wire_event_bus() -> None:
     event_bus.subscribe("trade.closed", on_trade_closed)
 
 
+def _capture_trade_context(session, trade) -> None:
+    """Capture rich market context at trade time for later AI analysis.
+
+    Pulls from DB (pre-accumulated data) — no extra API calls.
+    """
+    from edgefinder.db.models import TickerNews, TickerDividend, TradeContext
+
+    try:
+        # Recent news for this ticker (from accumulated DB)
+        news_rows = (
+            session.query(TickerNews)
+            .filter_by(symbol=trade.symbol)
+            .order_by(TickerNews.id.desc())
+            .limit(5)
+            .all()
+        )
+        recent_news = [
+            {"title": n.title, "published": n.published_utc, "publisher": n.publisher_name}
+            for n in news_rows
+        ]
+
+        # Upcoming dividends
+        divs = (
+            session.query(TickerDividend)
+            .filter_by(symbol=trade.symbol)
+            .order_by(TickerDividend.id.desc())
+            .limit(3)
+            .all()
+        )
+        dividends = [
+            {"ex_date": d.ex_dividend_date, "amount": d.cash_amount}
+            for d in divs
+        ]
+
+        # Sector rotation data (if available)
+        sector_prices = {}
+        if _sector_rotation_data:
+            sector_prices = {r["symbol"]: r.get("quadrant") for r in _sector_rotation_data}
+
+        # Related tickers (from cached fundamentals if available)
+        related = None
+        if hasattr(trade, "technical_signals") and trade.technical_signals:
+            related = trade.technical_signals.get("related_tickers")
+
+        context = TradeContext(
+            trade_id=trade.trade_id,
+            recent_news=recent_news,
+            sector_prices=sector_prices,
+            related_tickers=related,
+            short_interest=None,  # populated from fundamentals if available
+            dividends=dividends,
+            indicators=trade.technical_signals,
+        )
+        session.add(context)
+        session.commit()
+    except Exception:
+        logger.debug("Trade context capture failed for %s", trade.trade_id)
+
+
+# ── Market Holiday Check ───────────────────────────────
+
+_holidays_cache: list[str] = []  # cached list of holiday date strings
+_holidays_last_refresh: float = 0
+
+
+def _is_market_holiday() -> bool:
+    """Check if today is a market holiday. Refreshes cache weekly."""
+    import time
+    global _holidays_cache, _holidays_last_refresh
+
+    now = time.time()
+    if not _holidays_cache or (now - _holidays_last_refresh) > 604800:  # 7 days
+        if _provider:
+            try:
+                holidays = _provider.get_market_holidays()
+                _holidays_cache = [
+                    h["date"] for h in holidays
+                    if h.get("status") == "closed"
+                ]
+                _holidays_last_refresh = now
+            except Exception:
+                pass
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    return today_str in _holidays_cache
+
+
 # ── Scheduler Job Callbacks ─────────────────────────────
 
 
 def _signal_check_job() -> None:
-    """Called every 15 min during market hours."""
+    """Called every 5 min during market hours. Skips market holidays."""
     if not _arena:
+        return
+    if _is_market_holiday():
+        logger.debug("Signal check skipped — market holiday")
         return
     try:
         trades = _arena.run_signal_check()
@@ -598,8 +694,11 @@ def _signal_check_job() -> None:
 
 
 def _position_monitor_job() -> None:
-    """Called every 5 min during market hours."""
+    """Called every 5 min during market hours. Skips market holidays."""
     if not _arena:
+        return
+    if _is_market_holiday():
+        logger.debug("Position monitor skipped — market holiday")
         return
     try:
         closed = _arena.check_positions()
@@ -715,6 +814,31 @@ def _sector_rotation_job() -> None:
         )
     except Exception:
         logger.exception("Sector rotation job failed")
+
+
+def _news_accumulate_job() -> None:
+    """Called hourly during market hours. Accumulates news into DB."""
+    if not _provider or not _session_factory:
+        return
+    try:
+        from edgefinder.data.accumulator import DataAccumulator
+        acc = DataAccumulator(_provider, _session_factory)
+        acc.accumulate_news()
+    except Exception:
+        logger.exception("News accumulation job failed")
+
+
+def _dividend_split_job() -> None:
+    """Called at 6:30 PM ET on weekdays. Accumulates dividends and splits."""
+    if not _provider or not _session_factory:
+        return
+    try:
+        from edgefinder.data.accumulator import DataAccumulator
+        acc = DataAccumulator(_provider, _session_factory)
+        acc.accumulate_dividends()
+        acc.accumulate_splits()
+    except Exception:
+        logger.exception("Dividend/split accumulation job failed")
 
 
 def _snapshot_job() -> None:

@@ -289,3 +289,85 @@ class TickerStrategyQualification(Base):
     qualified: Mapped[bool] = mapped_column(Boolean, default=False)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     scan_date: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 12. ticker_news ────────────────────────────────────
+
+
+class TickerNews(Base):
+    """News articles for tickers, accumulated over time."""
+
+    __tablename__ = "ticker_news"
+    __table_args__ = (
+        UniqueConstraint("symbol", "title", "published_utc", name="uq_ticker_news"),
+        Index("idx_ticker_news_symbol", "symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10))
+    title: Mapped[str] = mapped_column(String(500))
+    author: Mapped[str | None] = mapped_column(String(200))
+    published_utc: Mapped[str | None] = mapped_column(String(30))
+    article_url: Mapped[str | None] = mapped_column(String(500))
+    description: Mapped[str | None] = mapped_column(Text)
+    publisher_name: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 13. ticker_dividends ───────────────────────────────
+
+
+class TickerDividend(Base):
+    """Dividend history for tickers."""
+
+    __tablename__ = "ticker_dividends"
+    __table_args__ = (
+        UniqueConstraint("symbol", "ex_dividend_date", name="uq_ticker_dividend"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    ex_dividend_date: Mapped[str] = mapped_column(String(20))
+    pay_date: Mapped[str | None] = mapped_column(String(20))
+    cash_amount: Mapped[float | None] = mapped_column(Float)
+    declaration_date: Mapped[str | None] = mapped_column(String(20))
+    frequency: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 14. ticker_splits ──────────────────────────────────
+
+
+class TickerSplit(Base):
+    """Stock split history for tickers."""
+
+    __tablename__ = "ticker_splits"
+    __table_args__ = (
+        UniqueConstraint("symbol", "execution_date", name="uq_ticker_split"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    execution_date: Mapped[str] = mapped_column(String(20))
+    split_from: Mapped[int | None] = mapped_column(Integer)
+    split_to: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 15. trade_context ──────────────────────────────────
+
+
+class TradeContext(Base):
+    """Rich market context captured at trade time for later AI analysis."""
+
+    __tablename__ = "trade_context"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    trade_id: Mapped[str] = mapped_column(String(36), ForeignKey("trades.trade_id"), unique=True)
+    recent_news: Mapped[dict | None] = mapped_column(JSON)
+    sector_prices: Mapped[dict | None] = mapped_column(JSON)
+    related_tickers: Mapped[dict | None] = mapped_column(JSON)
+    short_interest: Mapped[dict | None] = mapped_column(JSON)
+    dividends: Mapped[dict | None] = mapped_column(JSON)
+    indicators: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -276,6 +276,91 @@ class PolygonDataProvider:
             })
         return result
 
+    def get_news(self, ticker: str, limit: int = 10) -> list[dict]:
+        """Get recent news articles for a ticker."""
+        try:
+            articles = []
+            for a in self._client.list_ticker_news(ticker=ticker, limit=limit):
+                articles.append({
+                    "title": getattr(a, "title", None),
+                    "author": getattr(a, "author", None),
+                    "published_utc": getattr(a, "published_utc", None),
+                    "article_url": getattr(a, "article_url", None),
+                    "description": getattr(a, "description", None),
+                    "publisher": getattr(getattr(a, "publisher", None), "name", None),
+                    "tickers": getattr(a, "tickers", []),
+                })
+                if len(articles) >= limit:
+                    break
+            return articles
+        except Exception as e:
+            logger.warning("get_news(%s) failed: %s", ticker, e)
+            return []
+
+    def get_dividends(self, ticker: str, limit: int = 20) -> list[dict]:
+        """Get dividend history for a ticker."""
+        try:
+            dividends = []
+            for d in self._client.list_dividends(ticker=ticker, limit=limit):
+                dividends.append({
+                    "ex_dividend_date": getattr(d, "ex_dividend_date", None),
+                    "pay_date": getattr(d, "pay_date", None),
+                    "cash_amount": getattr(d, "cash_amount", None),
+                    "declaration_date": getattr(d, "declaration_date", None),
+                    "frequency": getattr(d, "frequency", None),
+                })
+                if len(dividends) >= limit:
+                    break
+            return dividends
+        except Exception as e:
+            logger.warning("get_dividends(%s) failed: %s", ticker, e)
+            return []
+
+    def get_splits(self, ticker: str, limit: int = 10) -> list[dict]:
+        """Get stock split history for a ticker."""
+        try:
+            splits = []
+            for s in self._client.list_splits(ticker=ticker, limit=limit):
+                splits.append({
+                    "execution_date": getattr(s, "execution_date", None),
+                    "split_from": getattr(s, "split_from", None),
+                    "split_to": getattr(s, "split_to", None),
+                })
+                if len(splits) >= limit:
+                    break
+            return splits
+        except Exception as e:
+            logger.warning("get_splits(%s) failed: %s", ticker, e)
+            return []
+
+    def get_related(self, ticker: str) -> list[str]:
+        """Get related company tickers."""
+        result = self._retry(
+            lambda: self._client.get_related_companies(ticker),
+            context=f"get_related({ticker})",
+        )
+        if not result:
+            return []
+        return [getattr(r, "ticker", None) for r in result if getattr(r, "ticker", None)]
+
+    def get_short_interest(self, ticker: str, limit: int = 5) -> list[dict]:
+        """Get recent short interest data for a ticker."""
+        try:
+            records = []
+            for s in self._client.list_short_interest(ticker=ticker, limit=limit):
+                records.append({
+                    "settlement_date": getattr(s, "settlement_date", None),
+                    "short_interest": getattr(s, "short_interest", None),
+                    "avg_daily_volume": getattr(s, "avg_daily_volume", None),
+                    "days_to_cover": getattr(s, "days_to_cover", None),
+                })
+                if len(records) >= limit:
+                    break
+            return records
+        except Exception as e:
+            logger.warning("get_short_interest(%s) failed: %s", ticker, e)
+            return []
+
     def get_snapshot_enriched(self, ticker: str) -> dict | None:
         """Get full snapshot data (day OHLCV, prev day, bid/ask, change %)."""
         snapshot = self._retry(

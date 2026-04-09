@@ -756,6 +756,23 @@ async function openDetail(sym) {
         <div class="detail-row"><span class="lbl">Open / Closed</span><span class="val">${r.open_trades} / ${r.closed_trades}</span></div>
         <div class="detail-row"><span class="lbl">Total P&L</span><span class="val ${(r.total_pnl||0)>=0?'pos':'neg'}">$${(r.total_pnl||0).toFixed(2)}</span></div>
       </div>
+      <div class="detail-section"><h3>Dividends</h3>
+        ${(r.dividends||[]).length ? (r.dividends||[]).map(d => `<div class="detail-row">
+          <span class="lbl">Ex: ${d.ex_date||'—'}</span>
+          <span class="val">${d.amount?'$'+d.amount.toFixed(4):'—'} ${d.frequency==4?'(quarterly)':d.frequency==12?'(monthly)':d.frequency==2?'(semi-annual)':d.frequency==1?'(annual)':''}</span>
+        </div>`).join('') : '<div style="font-size:10px;color:var(--muted)">No dividend data yet</div>'}
+      </div>
+      <div class="detail-section"><h3>Stock Splits</h3>
+        ${(r.splits||[]).length ? (r.splits||[]).map(s => `<div class="detail-row">
+          <span class="lbl">${s.date||'—'}</span>
+          <span class="val">${s.from}:${s.to}</span>
+        </div>`).join('') : '<div style="font-size:10px;color:var(--muted)">No split history</div>'}
+      </div>
+      <div class="detail-section"><h3>Related Tickers</h3>
+        ${(r.related_tickers||[]).length ? (r.related_tickers||[]).map(t =>
+          `<span class="pill" style="cursor:pointer;margin:2px" onclick="document.getElementById('research-input').value='${t}';doResearch()">${t}</span>`
+        ).join('') : '<div style="font-size:10px;color:var(--muted)">No related tickers</div>'}
+      </div>
     `;
   } catch(e) { content.innerHTML = '<div class="empty">Failed to load data</div>'; }
 }

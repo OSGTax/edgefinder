@@ -37,6 +37,8 @@ class EdgeFinderScheduler:
         benchmark_collect_fn=None,
         snapshot_fn=None,
         sector_rotation_fn=None,
+        news_accumulate_fn=None,
+        dividend_split_fn=None,
     ) -> None:
         """Register all scheduled jobs.
 
@@ -114,6 +116,26 @@ class EdgeFinderScheduler:
                 replace_existing=True,
             )
             self._jobs["sector_rotation"] = "Daily at 4:15 PM ET"
+
+        if news_accumulate_fn:
+            self._scheduler.add_job(
+                news_accumulate_fn,
+                CronTrigger(minute="30", hour="9-16", day_of_week="mon-fri"),
+                id="news_accumulate",
+                name="News Accumulation",
+                replace_existing=True,
+            )
+            self._jobs["news_accumulate"] = "Hourly 9:30 AM - 4:30 PM ET"
+
+        if dividend_split_fn:
+            self._scheduler.add_job(
+                dividend_split_fn,
+                CronTrigger(hour=18, minute=30, day_of_week="mon-fri"),
+                id="dividend_split",
+                name="Dividends & Splits",
+                replace_existing=True,
+            )
+            self._jobs["dividend_split"] = "Daily at 6:30 PM ET"
 
         logger.info("Scheduler configured with %d jobs", len(self._jobs))
 

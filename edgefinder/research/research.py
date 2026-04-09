@@ -51,6 +51,12 @@ class TickerReport:
     # Strategy qualification
     qualifying_strategies: list[str] = field(default_factory=list)
 
+    # Enriched data (from accumulated DB)
+    recent_news: list[dict] = field(default_factory=list)
+    dividends: list[dict] = field(default_factory=list)
+    splits: list[dict] = field(default_factory=list)
+    related_tickers: list[str] = field(default_factory=list)
+
 
 class ResearchService:
     """Aggregates all data sources for per-ticker research."""
@@ -143,6 +149,68 @@ class ResearchService:
         report.open_trades = sum(1 for t in trades if t.status == "OPEN")
         report.closed_trades = sum(1 for t in trades if t.status == "CLOSED")
         report.total_pnl = sum(t.pnl_dollars or 0 for t in trades if t.status == "CLOSED")
+
+        # Enriched data from accumulated DB tables
+        try:
+            from edgefinder.db.models import TickerNews, TickerDividend, TickerSplit
+            news_rows = (
+                self._session.query(TickerNews)
+                .filter_by(symbol=symbol)
+                .order_by(TickerNews.id.desc())
+                .limit(10)
+                .all()
+            )
+            report.recent_news = [
+                {
+                    "title": n.title,
+                    "published": n.published_utc,
+                    "url": n.article_url,
+                    "publisher": n.publisher_name,
+                }
+                for n in news_rows
+            ]
+
+            div_rows = (
+                self._session.query(TickerDividend)
+                .filter_by(symbol=symbol)
+                .order_by(TickerDividend.id.desc())
+                .limit(10)
+                .all()
+            )
+            report.dividends = [
+                {
+                    "ex_date": d.ex_dividend_date,
+                    "pay_date": d.pay_date,
+                    "amount": d.cash_amount,
+                    "frequency": d.frequency,
+                }
+                for d in div_rows
+            ]
+
+            split_rows = (
+                self._session.query(TickerSplit)
+                .filter_by(symbol=symbol)
+                .order_by(TickerSplit.id.desc())
+                .limit(5)
+                .all()
+            )
+            report.splits = [
+                {
+                    "date": s.execution_date,
+                    "from": s.split_from,
+                    "to": s.split_to,
+                }
+                for s in split_rows
+            ]
+        except Exception:
+            logger.debug("Could not load enriched data for %s", symbol)
+
+        # Related tickers
+        if self._provider:
+            try:
+                report.related_tickers = self._provider.get_related(symbol)
+            except Exception:
+                pass
 
         # Strategy qualification
         fund_model = self._build_fundamentals_model(report)
