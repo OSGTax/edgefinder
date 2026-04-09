@@ -124,9 +124,6 @@ class VirtualAccount:
         if cost > self.buying_power:
             return False, f"Insufficient buying power: need ${cost:.2f}, have ${self.buying_power:.2f}"
 
-        if self.position_count >= settings.max_open_positions:
-            return False, f"Max positions reached ({settings.max_open_positions})"
-
         if self.drawdown_pct >= settings.drawdown_circuit_breaker_pct:
             self.is_paused = True
             return False, f"Drawdown circuit breaker triggered ({self.drawdown_pct:.1%})"

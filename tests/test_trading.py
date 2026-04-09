@@ -56,18 +56,6 @@ class TestVirtualAccount:
         assert allowed is False
         assert "Insufficient" in reason
 
-    def test_max_positions(self):
-        acct = VirtualAccount("alpha")
-        for i in range(5):
-            pos = Position(
-                symbol=f"T{i}", shares=1, entry_price=10.0,
-                stop_loss=9.0, target=12.0, direction="LONG", trade_type="SWING",
-            )
-            acct.open_position(pos)
-        allowed, reason = acct.can_open_position(10.0)
-        assert allowed is False
-        assert "Max positions" in reason
-
     def test_drawdown_circuit_breaker(self):
         acct = VirtualAccount("alpha", starting_capital=5000.0)
         acct.cash = 3500.0  # 30% drawdown

@@ -45,8 +45,8 @@ class DegenerateStrategy(BaseStrategy):
     def risk_config(self) -> dict:
         """Override default risk limits for aggressive trading."""
         return {
-            "max_risk_pct": 0.10,          # 10% equity per trade (5x normal)
-            "max_concentration_pct": 0.50,  # 50% in single position (2.5x normal)
+            "max_risk_pct": 0.20,          # 20% equity per trade (10x normal)
+            "max_concentration_pct": 1.00,  # 100% — can go all-in on one position
         }
 
     @property
