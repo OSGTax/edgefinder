@@ -60,10 +60,21 @@ class TestGetBars:
 
 
 class TestGetLatestPrice:
-    def test_always_calls_provider(self, cached_provider, mock_provider):
+    def test_calls_provider_on_miss(self, cached_provider, mock_provider):
+        from edgefinder.data import provider as provider_mod
+        provider_mod._PRICE_CACHE.clear()
         mock_provider.get_latest_price.return_value = 155.50
         assert cached_provider.get_latest_price("AAPL") == 155.50
         mock_provider.get_latest_price.assert_called_once_with("AAPL")
+
+    def test_returns_cached_on_hit(self, cached_provider, mock_provider):
+        from edgefinder.data import provider as provider_mod
+        provider_mod._PRICE_CACHE.clear()
+        mock_provider.get_latest_price.return_value = 155.50
+        cached_provider.get_latest_price("AAPL")
+        cached_provider.get_latest_price("AAPL")
+        # Should only call provider once — second call hits cache
+        mock_provider.get_latest_price.assert_called_once()
 
 
 class TestGetFundamentals:

@@ -62,32 +62,25 @@ class TestGetBars:
 
 
 class TestGetLatestPrice:
-    def test_returns_day_close(self, provider):
+    def test_returns_previous_close(self, provider):
         p, client = provider
-        snapshot = MagicMock()
-        snapshot.day = MagicMock()
-        snapshot.day.close = 155.50
-        snapshot.prev_day = None
-        client.get_snapshot_ticker.return_value = snapshot
+        agg = MagicMock()
+        agg.close = 155.50
+        client.get_previous_close_agg.return_value = [agg]
 
         price = p.get_latest_price("AAPL")
         assert price == 155.50
 
-    def test_falls_back_to_prev_day(self, provider):
+    def test_empty_result_returns_none(self, provider):
         p, client = provider
-        snapshot = MagicMock()
-        snapshot.day = MagicMock()
-        snapshot.day.close = None
-        snapshot.prev_day = MagicMock()
-        snapshot.prev_day.close = 154.00
-        client.get_snapshot_ticker.return_value = snapshot
+        client.get_previous_close_agg.return_value = []
 
         price = p.get_latest_price("AAPL")
-        assert price == 154.00
+        assert price is None
 
     def test_api_error_returns_none(self, provider):
         p, client = provider
-        client.get_snapshot_ticker.side_effect = Exception("fail")
+        client.get_previous_close_agg.side_effect = Exception("fail")
         assert p.get_latest_price("AAPL") is None
 
 

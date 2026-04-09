@@ -166,17 +166,21 @@ class PolygonDataProvider:
         return self._aggs_to_dataframe(aggs)
 
     def get_latest_price(self, ticker: str) -> float | None:
-        """Get latest price via snapshot endpoint."""
-        snapshot = self._retry(
-            lambda: self._client.get_snapshot_ticker("stocks", ticker),
+        """Get latest price using previous close (Starter plan compatible).
+
+        Uses get_previous_close_agg which is available on all Polygon plans.
+        Note: data is 15-minute delayed on the Starter plan.
+        """
+        result = self._retry(
+            lambda: self._client.get_previous_close_agg(ticker),
             context=f"get_latest_price({ticker})",
         )
-        if not snapshot:
+        if not result:
             return None
-        if snapshot.day and snapshot.day.close:
-            return float(snapshot.day.close)
-        if snapshot.prev_day and snapshot.prev_day.close:
-            return float(snapshot.prev_day.close)
+        # get_previous_close_agg returns a list of agg objects
+        for agg in result:
+            if agg.close:
+                return float(agg.close)
         return None
 
     def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:

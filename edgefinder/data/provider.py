@@ -6,6 +6,7 @@ delegates to underlying provider on miss, stores results.
 
 from __future__ import annotations
 
+import time
 from datetime import date
 
 import pandas as pd
@@ -13,6 +14,10 @@ import pandas as pd
 from edgefinder.core.interfaces import DataProvider
 from edgefinder.core.models import TickerFundamentals
 from edgefinder.data.cache import DataCache
+
+# In-memory price cache with TTL (avoids redundant API calls during position checks)
+_PRICE_CACHE: dict[str, tuple[float, float]] = {}  # ticker -> (price, timestamp)
+_PRICE_CACHE_TTL = 120  # 2 minutes
 
 
 class CachedDataProvider:
@@ -38,8 +43,19 @@ class CachedDataProvider:
         return df
 
     def get_latest_price(self, ticker: str) -> float | None:
-        # Prices must always be fresh — never cached
-        return self._provider.get_latest_price(ticker)
+        """Get latest price with 2-minute in-memory cache.
+
+        Prevents redundant API calls when check_positions() loops over
+        multiple tickers within seconds.
+        """
+        now = time.time()
+        cached = _PRICE_CACHE.get(ticker)
+        if cached and (now - cached[1]) < _PRICE_CACHE_TTL:
+            return cached[0]
+        price = self._provider.get_latest_price(ticker)
+        if price is not None:
+            _PRICE_CACHE[ticker] = (price, now)
+        return price
 
     def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
         if not full_refresh:
