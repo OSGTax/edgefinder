@@ -113,14 +113,14 @@ class StrategyScanner:
 
         # Score qualifying stocks
         if qualified_results and self._strategy.scoring_profile:
-            profiles = [r.profile for r in qualifying]
+            profiles = [r.profile for r in qualified_results]
             stats = compute_universe_stats(profiles, self._strategy.scoring_profile.factors)
-            for r in qualifying:
+            for r in qualified_results:
                 r.score = compute_score(r.profile, self._strategy.scoring_profile, stats)
 
-        elif qualifying:
+        elif qualified_results:
             # No scoring profile — all qualifying stocks get score 100
-            for r in qualifying:
+            for r in qualified_results:
                 r.score = 100.0
 
         # Persist to DB
@@ -197,7 +197,13 @@ class StrategyScanner:
             return False
 
     def _persist(self, results: list[ScanResult], batch_index: int | None) -> None:
-        """Persist scan results to DB for this strategy."""
+        """Persist scan results to DB for this strategy.
+
+        Qualified tickers get full data written (TIER 1 + TIER 2).
+        Non-qualified tickers get TIER 1 data (company info + ratios) and
+        qualification status, but never overwrite existing TIER 2 fields
+        (technicals, news, short interest) with None.
+        """
         scanned_symbols = set()
 
         for result in results:
@@ -206,13 +212,12 @@ class StrategyScanner:
                 continue  # Skip empty/failed API fetches
             scanned_symbols.add(result.symbol)
 
-            # Upsert ticker
+            # ── Upsert ticker ──
             ticker = (
                 self._session.query(Ticker)
                 .filter_by(symbol=result.symbol)
                 .first()
             )
-            is_active_for_any = result.qualified  # at minimum this strategy
             if ticker is None:
                 ticker = Ticker(
                     symbol=result.symbol,
@@ -222,30 +227,33 @@ class StrategyScanner:
                     market_cap=fund.market_cap,
                     last_price=fund.price,
                     source="scanner",
-                    is_active=is_active_for_any,
+                    is_active=result.qualified,
                 )
                 self._session.add(ticker)
                 self._session.flush()
             else:
+                # Always update company info + price (TIER 1 data)
                 ticker.company_name = fund.company_name or ticker.company_name
                 ticker.sector = fund.sector or ticker.sector
                 ticker.industry = fund.industry or ticker.industry
                 ticker.market_cap = fund.market_cap or ticker.market_cap
                 ticker.last_price = fund.price or ticker.last_price
-                if is_active_for_any:
+                if result.qualified:
                     ticker.is_active = True
             ticker.scan_batch = batch_index
 
-            # Upsert fundamental
+            # ── Upsert fundamental ──
             existing_fund = (
                 self._session.query(Fundamental)
                 .filter_by(ticker_id=ticker.id)
                 .first()
             )
+
+            # All fields available from the scan (TIER 1 + TIER 2 if enriched)
             fund_data = dict(
                 ticker_id=ticker.id,
                 symbol=result.symbol,
-                # Core ratios
+                # Core ratios (from TIER 1: _fill_growth_metrics)
                 peg_ratio=fund.peg_ratio,
                 earnings_growth=fund.earnings_growth,
                 debt_to_equity=fund.debt_to_equity,
@@ -253,10 +261,9 @@ class StrategyScanner:
                 institutional_pct=fund.institutional_pct,
                 fcf_yield=fund.fcf_yield,
                 price_to_tangible_book=fund.price_to_tangible_book,
-                short_interest=fund.short_interest,
                 ev_to_ebitda=fund.ev_to_ebitda,
                 current_ratio=fund.current_ratio,
-                # Extended ratios
+                # Extended ratios (from TIER 1: _fill_growth_metrics)
                 price_to_earnings=fund.price_to_earnings,
                 price_to_book=fund.price_to_book,
                 return_on_equity=fund.return_on_equity,
@@ -264,33 +271,40 @@ class StrategyScanner:
                 dividend_yield=fund.dividend_yield,
                 free_cash_flow=fund.free_cash_flow,
                 quick_ratio=fund.quick_ratio,
-                # Short interest details
+                # TIER 2 fields (only populated for enriched/qualified tickers)
+                short_interest=fund.short_interest,
                 short_shares=fund.short_shares,
                 days_to_cover=fund.days_to_cover,
-                # Dividends
                 dividend_amount=fund.dividend_amount,
                 ex_dividend_date=fund.ex_dividend_date,
-                # News sentiment
                 news_sentiment=fund.news_sentiment,
-                # Technical indicators (from Massive API)
                 rsi_14=fund.rsi_14,
                 ema_21=fund.ema_21,
                 sma_50=fund.sma_50,
                 macd_value=fund.macd_value,
                 macd_signal=fund.macd_signal,
                 macd_histogram=fund.macd_histogram,
-                # Raw data
                 raw_data=fund.raw_data,
                 scan_date=datetime.now(timezone.utc),
             )
+
             if existing_fund is None:
                 self._session.add(Fundamental(**fund_data))
-            else:
+            elif result.qualified:
+                # Qualified: full overwrite with enriched TIER 1 + TIER 2 data
                 for key, val in fund_data.items():
                     if key != "ticker_id":
                         setattr(existing_fund, key, val)
+            else:
+                # Non-qualified: only update TIER 1 fields (ratios from SEC
+                # financials). Never overwrite existing TIER 2 data with None.
+                for key, val in fund_data.items():
+                    if key == "ticker_id":
+                        continue
+                    if val is not None or getattr(existing_fund, key, None) is None:
+                        setattr(existing_fund, key, val)
 
-            # Upsert strategy qualification with score
+            # ── Upsert strategy qualification ──
             existing_qual = (
                 self._session.query(TickerStrategyQualification)
                 .filter_by(ticker_id=ticker.id, strategy_name=self._strategy.name)
@@ -310,5 +324,18 @@ class StrategyScanner:
                 existing_qual.qualified = result.qualified
                 existing_qual.score = result.score if result.qualified else None
                 existing_qual.scan_date = now
+
+        # Deactivate tickers not qualified by ANY strategy.
+        # A ticker stays active if at least one strategy qualifies it.
+        for symbol in scanned_symbols:
+            ticker = self._session.query(Ticker).filter_by(symbol=symbol).first()
+            if ticker and ticker.is_active:
+                any_qualified = (
+                    self._session.query(TickerStrategyQualification)
+                    .filter_by(ticker_id=ticker.id, qualified=True)
+                    .first()
+                )
+                if not any_qualified:
+                    ticker.is_active = False
 
         self._session.commit()

@@ -182,30 +182,35 @@ class PolygonDataProvider:
     def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
         """Get fundamentals from Massive endpoints.
 
-        Data refresh tiers:
-        - ALWAYS: ticker details (fast, cached), short interest
-        - full_refresh=True ONLY: raw financials, dividends, news, related
-          (these change quarterly at most — don't refetch every scan)
+        Data tiers:
+        - TIER 1 (always, 2-3 calls): ticker details + SEC financials + price.
+          Provides company info AND all qualification fields (earnings_growth,
+          current_ratio, debt_to_equity, fcf_yield, etc.).
+        - TIER 2 (full_refresh only, ~6 calls): technicals, short interest,
+          dividends, news, related, plus blocked endpoints that auto-disable.
 
-        Call with full_refresh=True on first scan or weekly nightly scan.
-        Call with full_refresh=False on regular signal checks.
+        Call with full_refresh=True during Pass 2 enrichment.
+        Call with full_refresh=False during Pass 1 qualification.
         """
         fund = TickerFundamentals(symbol=ticker)
         fund.raw_data = {}
 
-        # TIER 1: Always fetch (1 call — fast, needed for qualification)
+        # TIER 1: Company info + financial ratios (2-3 calls)
+        # Both are needed for qualification — strategies check earnings_growth,
+        # current_ratio, fcf_yield etc. which come from SEC financials.
         self._fill_ticker_details(fund)
+        self._fill_growth_metrics(fund)
+        self._fill_price(fund)
 
         if full_refresh:
-            # Real data from Massive (Starter plan)
-            self._fill_growth_metrics(fund)
+            # TIER 2: Enrichment data (only for qualified stocks)
             self._fill_short_interest(fund)
             self._fill_technicals(fund)
             self._fill_dividends(fund)
             self._fill_news_sentiment(fund)
             self._fill_related_companies(fund)
 
-            # Blocked endpoints — auto-disable, zero cost
+            # Blocked on Starter plan — auto-disable, zero cost
             self._fill_ratios(fund)
             self._fill_earnings(fund)
             self._fill_analyst_consensus(fund)
@@ -337,6 +342,19 @@ class PolygonDataProvider:
             fund.macd_value = round(macd["value"], 4) if macd.get("value") is not None else None
             fund.macd_signal = round(macd["signal"], 4) if macd.get("signal") is not None else None
             fund.macd_histogram = round(macd["histogram"], 4) if macd.get("histogram") is not None else None
+
+    def _fill_price(self, fund: TickerFundamentals) -> None:
+        """Fill current price from snapshot endpoint (1 call)."""
+        snapshot = self._retry(
+            lambda: self._client.get_snapshot_ticker("stocks", fund.symbol),
+            context=f"snapshot({fund.symbol})",
+        )
+        if not snapshot:
+            return
+        if snapshot.day and snapshot.day.close:
+            fund.price = float(snapshot.day.close)
+        elif snapshot.prev_day and snapshot.prev_day.close:
+            fund.price = float(snapshot.prev_day.close)
 
     def _fill_ticker_details(self, fund: TickerFundamentals) -> None:
         """Fill company info from ticker details endpoint."""
