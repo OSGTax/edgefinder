@@ -174,6 +174,11 @@ def init_services() -> None:
     _restore_open_positions()
     _recalculate_account_balances()
 
+    # Persist any corrections from _recalculate_account_balances back to DB
+    # (cash adjustments, auto-unpause, etc.) so they survive even if no trades
+    # fire before the next restart.
+    _persist_account_state()
+
     # Diagnostic: log final account state for each strategy after restore + recalc
     if _arena:
         for name in _arena.get_strategy_names():
@@ -386,6 +391,22 @@ def _recalculate_account_balances() -> None:
             equity = account.total_equity
             if equity > account.peak_equity:
                 account.peak_equity = equity
+
+            # Auto-unpause heuristic: if an account is paused but its drawdown
+            # is well below the circuit breaker (< half the threshold), the
+            # pause is stale (recovered, or set by an old bug that no longer
+            # applies). Clear it so the strategy can resume trading. Always
+            # log a WARNING so this is visible — never silent.
+            unpause_threshold = settings.drawdown_circuit_breaker_pct / 2
+            if account.is_paused and account.drawdown_pct < unpause_threshold:
+                logger.warning(
+                    "Auto-unpausing '%s': drawdown %.1f%% is below threshold %.1f%% "
+                    "(half of %.1f%% circuit breaker). Account had been paused "
+                    "but has since recovered.",
+                    name, account.drawdown_pct * 100, unpause_threshold * 100,
+                    settings.drawdown_circuit_breaker_pct * 100,
+                )
+                account.is_paused = False
 
             logger.info(
                 "Account '%s': cash=$%.2f, realized=$%.2f, open_cost=$%.2f",
