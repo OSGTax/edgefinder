@@ -15,6 +15,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from dashboard.routers import benchmarks, inject, research, strategies, trades
+from edgefinder.core.logging_config import configure_logging
+
+configure_logging()
 
 logger = logging.getLogger(__name__)
 

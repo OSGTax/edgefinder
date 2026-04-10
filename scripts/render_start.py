@@ -6,7 +6,9 @@ import sys
 
 sys.path.insert(0, ".")
 
-logging.basicConfig(level=logging.INFO)
+from edgefinder.core.logging_config import configure_logging
+
+configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
