@@ -174,6 +174,18 @@ def init_services() -> None:
     _restore_open_positions()
     _recalculate_account_balances()
 
+    # Diagnostic: log final account state for each strategy after restore + recalc
+    if _arena:
+        for name in _arena.get_strategy_names():
+            account = _arena.get_account(name)
+            if account:
+                logger.info(
+                    "Startup state [%s]: cash=$%.2f, positions=%d, paused=%s, "
+                    "drawdown=%.1f%%, peak_equity=$%.2f",
+                    name, account.cash, len(account.positions), account.is_paused,
+                    account.drawdown_pct * 100, account.peak_equity,
+                )
+
     # Event bus — persist trades and capture market snapshots
     _wire_event_bus()
 
@@ -679,16 +691,17 @@ def _is_market_holiday() -> bool:
 def _signal_check_job() -> None:
     """Called every 5 min during market hours. Skips market holidays."""
     if not _arena:
+        logger.warning("Signal check skipped: arena not initialized")
         return
     if _is_market_holiday():
-        logger.debug("Signal check skipped — market holiday")
+        logger.info("Signal check skipped — market holiday")
         return
     try:
         trades = _arena.run_signal_check()
         if trades:
             logger.info("Signal check: %d trades opened", len(trades))
         else:
-            logger.debug("Signal check: no new trades")
+            logger.info("Signal check: no new trades")
     except Exception:
         logger.exception("Signal check failed")
 

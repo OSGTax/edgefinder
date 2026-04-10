@@ -92,9 +92,29 @@ class ArenaEngine:
         """
         all_trades: list[Trade] = []
 
+        logger.info(
+            "Signal check starting: %d slots, fundamentals_cache=%d",
+            len(self._slots), len(self._fundamentals_cache),
+        )
+
         for name, slot in self._slots.items():
             if slot.account.is_paused:
+                logger.info(
+                    "[%s] slot paused — skipping (cash=$%.2f, drawdown=%.1f%%)",
+                    name, slot.account.cash, slot.account.drawdown_pct * 100,
+                )
                 continue
+
+            logger.info(
+                "[%s] watchlist=%d tickers, open_positions=%d",
+                name, len(slot.watchlist), len(slot.account.positions),
+            )
+
+            evaluated = 0
+            bars_missing = 0
+            signals_generated = 0
+            opened_here = 0
+            requalif_failed = 0
 
             for ticker in slot.watchlist:
                 # Skip tickers that already have an open position
@@ -105,21 +125,28 @@ class ArenaEngine:
                     )
                     continue
 
+                evaluated += 1
+
                 # Re-qualification gate: verify fundamentals still qualify
                 cached_fund = self._fundamentals_cache.get(ticker)
                 if cached_fund is not None:
                     try:
                         if not slot.strategy.qualifies_stock(cached_fund):
-                            logger.info(
+                            requalif_failed += 1
+                            logger.debug(
                                 "[%s] Re-qualification failed for %s — skipping",
                                 name, ticker,
                             )
                             continue
                     except Exception:
-                        pass  # qualification check failed, proceed with signal generation
+                        logger.exception(
+                            "[%s] Re-qualification raised for %s — proceeding anyway",
+                            name, ticker,
+                        )
 
                 bars = self._fetch_bars(ticker)
                 if bars is None or bars.empty:
+                    bars_missing += 1
                     continue
 
                 try:
@@ -130,14 +157,28 @@ class ArenaEngine:
                     )
                     continue
 
+                signals_generated += len(signals)
+
                 for signal in signals:
                     trade = slot.executor.execute_signal(signal)
                     if trade:
                         all_trades.append(trade)
+                        opened_here += 1
                         slot.strategy.on_trade_executed(
                             TradeNotification(trade=trade, event="opened")
                         )
 
+            logger.info(
+                "[%s] signal check done: evaluated=%d, requalif_failed=%d, "
+                "bars_missing=%d, signals_generated=%d, trades_opened=%d",
+                name, evaluated, requalif_failed,
+                bars_missing, signals_generated, opened_here,
+            )
+
+        logger.info(
+            "Signal check complete: %d trades opened across %d strategies",
+            len(all_trades), len(self._slots),
+        )
         return all_trades
 
     def check_positions(self) -> list[Trade]:
