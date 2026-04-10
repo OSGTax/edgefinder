@@ -27,13 +27,30 @@ class Executor:
         self._sequence_num = 0
         self._prev_hash = ""
 
-    def execute_signal(self, signal: Signal) -> Trade | None:
+    def execute_signal(
+        self,
+        signal: Signal,
+        fresh_price: float | None = None,
+    ) -> Trade | None:
         """Execute a signal: size, slippage, open position, return Trade.
+
+        Args:
+            signal: The signal to execute. signal.entry_price is the close
+                of the bar where the pattern was detected — usually a few
+                minutes stale by the time we get here.
+            fresh_price: If provided, use this as the base execution price
+                instead of signal.entry_price. The arena fetches a fresh
+                quote at execution time so the entry is anchored to the
+                current market price (not the historical pattern bar),
+                which keeps entry/exit price sources consistent and
+                prevents instant target-hits driven by timeframe mismatch.
 
         Returns None if the signal is rejected (insufficient funds, risk checks, etc.).
         """
+        # Use fresh market price if available, fall back to the pattern bar close
+        base_price = fresh_price if fresh_price is not None else signal.entry_price
         # Apply slippage first so sizing uses the actual execution price
-        execution_price = self._apply_slippage(signal.entry_price, signal.action.value)
+        execution_price = self._apply_slippage(base_price, signal.action.value)
 
         # Size the position using slippage-adjusted price
         shares, cost = self._size_position(signal, execution_price)

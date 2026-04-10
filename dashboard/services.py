@@ -172,6 +172,7 @@ def init_services() -> None:
     # Restore account state, open positions, then recalculate from trades (source of truth)
     _restore_account_state()
     _restore_open_positions()
+    _restore_close_cooldowns()
     _recalculate_account_balances()
 
     # Persist any corrections from _recalculate_account_balances back to DB
@@ -302,6 +303,64 @@ def _restore_open_positions() -> None:
             logger.info("Restored %d open positions from DB", restored)
     except Exception:
         logger.exception("Failed to restore open positions")
+    finally:
+        session.close()
+
+
+def _restore_close_cooldowns() -> None:
+    """Restore per-ticker re-entry cooldowns from the trades table.
+
+    The in-memory _last_close_per_ticker map is wiped on every restart,
+    which previously allowed the signal check to immediately reopen a
+    ticker after a deploy interrupted an active cooldown. This rebuilds
+    the map from the most recent CLOSED trade per (strategy, symbol)
+    so cooldowns survive restarts.
+
+    Only loads closes within the cooldown window — older closes are
+    irrelevant since their cooldown has already expired.
+    """
+    if not _arena or not _session_factory:
+        return
+    from datetime import timedelta
+    from sqlalchemy import func
+
+    session = _session_factory()
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=settings.ticker_reentry_cooldown_minutes
+        )
+        # Get the most recent close per (strategy_name, symbol) since cutoff
+        rows = (
+            session.query(
+                TradeRecord.strategy_name,
+                TradeRecord.symbol,
+                func.max(TradeRecord.exit_time).label("last_exit"),
+            )
+            .filter(
+                TradeRecord.status == "CLOSED",
+                TradeRecord.exit_time.is_not(None),
+                TradeRecord.exit_time >= cutoff,
+            )
+            .group_by(TradeRecord.strategy_name, TradeRecord.symbol)
+            .all()
+        )
+        restored = 0
+        for strategy_name, symbol, last_exit in rows:
+            account = _arena.get_account(strategy_name)
+            if not account:
+                continue
+            # Ensure tz-aware UTC for comparison with datetime.now(timezone.utc)
+            if last_exit.tzinfo is None:
+                last_exit = last_exit.replace(tzinfo=timezone.utc)
+            account._last_close_per_ticker[symbol] = last_exit
+            restored += 1
+        if restored:
+            logger.info(
+                "Restored %d re-entry cooldowns from trades table (cutoff=%dm)",
+                restored, settings.ticker_reentry_cooldown_minutes,
+            )
+    except Exception:
+        logger.exception("Failed to restore close cooldowns")
     finally:
         session.close()
 

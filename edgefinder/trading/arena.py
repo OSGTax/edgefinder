@@ -159,8 +159,20 @@ class ArenaEngine:
 
                 signals_generated += len(signals)
 
+                # Fetch fresh market price ONCE per ticker (cached for the
+                # next ~30s in the provider's in-memory price cache). This
+                # anchors execution to the current price source rather than
+                # the historical pattern bar's close, which keeps signal
+                # entry and position-monitor exit on the same data source.
+                fresh_price = None
+                if signals:
+                    try:
+                        fresh_price = self._provider.get_latest_price(ticker)
+                    except Exception:
+                        logger.exception("get_latest_price failed for %s", ticker)
+
                 for signal in signals:
-                    trade = slot.executor.execute_signal(signal)
+                    trade = slot.executor.execute_signal(signal, fresh_price=fresh_price)
                     if trade:
                         all_trades.append(trade)
                         opened_here += 1
