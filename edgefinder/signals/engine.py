@@ -355,6 +355,18 @@ def detect_signals(indicators: IndicatorSnapshot, ticker: str) -> list[Signal]:
 # ── Individual pattern detectors ─────────────────────────
 
 
+def _min_target_pct(trade_type: TradeType) -> float:
+    """Minimum target distance as a fraction of entry price.
+
+    Floors the ATR-based target so trades aim for substantive wins instead
+    of micro-moves driven by tiny intraday ATR (e.g., NVDA 5-min ATR is
+    ~$0.77 → 0.4% target on a stock that moves multiple percent per day).
+    """
+    if trade_type == TradeType.DAY:
+        return settings.signal_min_target_pct_day
+    return settings.signal_min_target_pct_swing
+
+
 def _make_buy_signal(
     ticker: str,
     timestamp: datetime,
@@ -370,7 +382,8 @@ def _make_buy_signal(
     atr_val = atr or close * 0.02  # fallback 2%
     stop = (recent_low or close) - 0.5 * atr_val
     risk = close - stop
-    target = close + max(2.0 * risk, atr_val)
+    min_target_dist = close * _min_target_pct(trade_type)
+    target = close + max(2.0 * risk, atr_val, min_target_dist)
     return Signal(
         ticker=ticker,
         action=SignalAction.BUY,
@@ -400,7 +413,8 @@ def _make_sell_signal(
     atr_val = atr or close * 0.02
     stop = (recent_high or close) + 0.5 * atr_val
     risk = stop - close
-    target = close - max(2.0 * risk, atr_val)
+    min_target_dist = close * _min_target_pct(trade_type)
+    target = close - max(2.0 * risk, atr_val, min_target_dist)
     return Signal(
         ticker=ticker,
         action=SignalAction.SELL,

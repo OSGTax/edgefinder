@@ -86,6 +86,11 @@ class VirtualAccount:
         # Revenge trade cooldown
         self._last_stop_out: datetime | None = None
 
+        # Per-ticker re-entry cooldown — prevents instant rebuy after a close.
+        # Maps symbol -> close timestamp. Checked in can_open_position via
+        # the (cost, trade_type, symbol) overload below.
+        self._last_close_per_ticker: dict[str, datetime] = {}
+
     # ── Properties ───────────────────────────────────
 
     @property
@@ -116,7 +121,12 @@ class VirtualAccount:
 
     # ── Account Checks ───────────────────────────────
 
-    def can_open_position(self, cost: float, trade_type: str = "SWING") -> tuple[bool, str]:
+    def can_open_position(
+        self,
+        cost: float,
+        trade_type: str = "SWING",
+        symbol: str | None = None,
+    ) -> tuple[bool, str]:
         """Check if a new position can be opened. Returns (allowed, reason)."""
         if self.is_paused:
             return False, "Account is paused"
@@ -134,7 +144,22 @@ class VirtualAccount:
         if self._is_revenge_trade():
             return False, "Revenge trade cooldown active"
 
+        # Per-ticker re-entry cooldown: prevents the position monitor from
+        # closing a winning trade and the next signal check immediately
+        # reopening the same ticker (which produced the NVDA infinite-loop
+        # phantom-wins bug under stale-bar conditions).
+        if symbol and self._is_in_reentry_cooldown(symbol):
+            cooldown = settings.ticker_reentry_cooldown_minutes
+            return False, f"Ticker {symbol} in re-entry cooldown ({cooldown}m after last close)"
+
         return True, "OK"
+
+    def _is_in_reentry_cooldown(self, symbol: str) -> bool:
+        last_close = self._last_close_per_ticker.get(symbol)
+        if last_close is None:
+            return False
+        cooldown = timedelta(minutes=settings.ticker_reentry_cooldown_minutes)
+        return datetime.now(timezone.utc) - last_close < cooldown
 
     def _can_day_trade(self) -> bool:
         """Check PDT compliance: max 3 day trades per 5 rolling business days."""
@@ -187,6 +212,9 @@ class VirtualAccount:
         # Track stop-outs for revenge trade cooldown
         if reason in ("STOP_HIT", "STOP_LOSS"):
             self._last_stop_out = datetime.now(timezone.utc)
+
+        # Per-ticker re-entry cooldown: gates the next open on this symbol
+        self._last_close_per_ticker[position.symbol] = datetime.now(timezone.utc)
 
         logger.info(
             "[%s] Closed %s %s: %d shares @ $%.2f | P&L: $%.2f (%.1fR) | Reason: %s",

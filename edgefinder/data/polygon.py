@@ -169,18 +169,52 @@ class PolygonDataProvider:
         return self._aggs_to_dataframe(aggs)
 
     def get_latest_price(self, ticker: str) -> float | None:
-        """Get latest price using previous close (Starter plan compatible).
+        """Get latest price using the most recent intraday bar.
 
-        Uses get_previous_close_agg which is available on all Polygon plans.
-        Note: data is 15-minute delayed on the Starter plan.
+        Previously this used `get_previous_close_agg` which returns YESTERDAY's
+        daily close — that caused position monitor to compare entry prices
+        from today's stale bars against yesterday's close, producing
+        infinite-loop phantom wins on frozen data.
+
+        Now uses `get_aggs` for the most recent 1-minute bar over the last
+        2 trading days. On the Starter plan this is 15-min delayed but at
+        least it's TODAY's data when available, and consistent with the
+        same `get_aggs` source the signal engine uses.
+
+        Falls back to previous_close_agg only if no intraday bars are
+        available (e.g., for tickers with no recent activity).
         """
+        end = date.today()
+        start = end - timedelta(days=3)  # 3-day window covers weekends/holidays
+        try:
+            aggs = self._retry(
+                lambda: list(
+                    self._client.get_aggs(
+                        ticker=ticker,
+                        multiplier=1,
+                        timespan="minute",
+                        from_=start.isoformat(),
+                        to=end.isoformat(),
+                        limit=50000,
+                    )
+                ),
+                context=f"get_latest_price({ticker})",
+            )
+            if aggs:
+                # Last bar is the most recent (15-min delayed on Starter plan)
+                last = aggs[-1]
+                if last.close:
+                    return float(last.close)
+        except Exception:
+            logger.exception("get_latest_price intraday fetch failed for %s", ticker)
+
+        # Fallback: previous day's close (for tickers with no intraday data)
         result = self._retry(
             lambda: self._client.get_previous_close_agg(ticker),
-            context=f"get_latest_price({ticker})",
+            context=f"get_latest_price({ticker}) fallback",
         )
         if not result:
             return None
-        # get_previous_close_agg returns a list of agg objects
         for agg in result:
             if agg.close:
                 return float(agg.close)

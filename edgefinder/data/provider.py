@@ -16,8 +16,10 @@ from edgefinder.core.models import TickerFundamentals
 from edgefinder.data.cache import DataCache
 
 # In-memory price cache with TTL (avoids redundant API calls during position checks)
+# Kept short so consecutive position-monitor cycles get fresh data — only meant
+# to dedupe calls within a single check_positions sweep, not across sweeps.
 _PRICE_CACHE: dict[str, tuple[float, float]] = {}  # ticker -> (price, timestamp)
-_PRICE_CACHE_TTL = 120  # 2 minutes
+_PRICE_CACHE_TTL = 30  # 30 seconds
 
 
 class CachedDataProvider:

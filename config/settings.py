@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     max_same_sector_positions: int = 3
     trailing_stop_activation_r: float = 1.0
     trailing_stop_trail_r: float = 2.0
+    # Per-ticker re-entry cooldown after closing a position. Prevents the
+    # signal check from immediately reopening the same ticker after a close.
+    ticker_reentry_cooldown_minutes: int = 30
+    # Minimum target distance as a percentage of entry price. Floors the
+    # ATR-based target so trades aim for substantive wins instead of
+    # micro-moves driven by tiny intraday ATR.
+    signal_min_target_pct_day: float = 0.01    # 1% min target for DAY trades
+    signal_min_target_pct_swing: float = 0.02  # 2% min target for SWING trades
 
     # ── SCANNER FILTERS ──────────────────────────────
     scanner_min_market_cap: int = 300_000_000
@@ -93,8 +101,11 @@ class Settings(BaseSettings):
 
     # ── CACHE ────────────────────────────────────────
     cache_dir: Path = Path("data/cache")
+    # Intraday TTLs are deliberately shorter than the signal-check interval
+    # (5 min) so each signal check fetches fresh bars instead of returning
+    # the same parquet file barely-not-yet-expired from the previous cycle.
     cache_bars_ttl_minutes: dict[str, int] = Field(default={
-        "1": 5, "5": 5, "15": 30, "60": 120, "day": 1080,
+        "1": 1, "5": 1, "15": 5, "60": 30, "day": 1080,
     })
     cache_fundamentals_ttl_hours: int = 24
     cache_profile_ttl_days: int = 7

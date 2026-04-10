@@ -42,7 +42,9 @@ class Executor:
             return None
 
         # Check account rules with actual cost
-        allowed, reason = self.account.can_open_position(cost, signal.trade_type.value)
+        allowed, reason = self.account.can_open_position(
+            cost, signal.trade_type.value, symbol=signal.ticker,
+        )
         if not allowed:
             logger.info(
                 "[%s] Signal rejected for %s: %s",
