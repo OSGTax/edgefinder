@@ -136,6 +136,16 @@ class DataHub:
     ) -> list[str]:
         return self._primary.get_ticker_universe(min_market_cap, min_volume)
 
+    def get_top_dollar_volume_tickers(
+        self,
+        top_n: int = 1000,
+        min_price: float = 5.0,
+        max_price: float = 500.0,
+    ) -> list[str]:
+        return self._primary.get_top_dollar_volume_tickers(
+            top_n=top_n, min_price=min_price, max_price=max_price,
+        )
+
     def get_all_snapshots(self) -> dict[str, float]:
         return self._primary.get_all_snapshots()
 
