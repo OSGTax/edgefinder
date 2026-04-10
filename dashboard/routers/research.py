@@ -47,10 +47,13 @@ def active_tickers(service: ResearchService = Depends(_get_research_service)):
 
 @router.post("/scan")
 def trigger_scan(db: Session = Depends(get_db)):
-    """Trigger a per-strategy scan in the background. Returns immediately."""
+    """Trigger a unified scan in the background. Returns immediately."""
     import threading
-    from dashboard.services import _provider, _session_factory, _load_watchlists, _populate_fundamentals_cache, get_arena
-    from edgefinder.scanner.strategy_scanner import StrategyScanner
+    from dashboard.services import (
+        _provider, _session_factory, _load_watchlists,
+        _populate_fundamentals_cache, _resolve_scan_universe, get_arena,
+    )
+    from edgefinder.scanner.unified_scanner import UnifiedScanner
     from edgefinder.strategies.base import StrategyRegistry
 
     if not _provider:
@@ -61,19 +64,19 @@ def trigger_scan(db: Session = Depends(get_db)):
     def _run_scan():
         import logging
         logger = logging.getLogger(__name__)
-        universe = _provider.get_ticker_universe()
-        logger.info("Manual scan triggered: %d tickers", len(universe))
-        for strategy in StrategyRegistry.get_instances():
-            session = _session_factory()
-            try:
-                scanner = StrategyScanner(strategy, _provider, session)
-                results = scanner.run(tickers=sorted(universe))
-                qualified = sum(1 for r in results if r.qualified)
-                logger.info("Manual scan [%s]: %d qualified", strategy.name, qualified)
-            except Exception:
-                logger.exception("Manual scan failed for %s", strategy.name)
-            finally:
-                session.close()
+
+        tickers = _resolve_scan_universe()
+        logger.info("Manual scan triggered: %d tickers", len(tickers))
+
+        strategies = list(StrategyRegistry.get_instances())
+        scanner = UnifiedScanner(strategies, _provider, _session_factory)
+        try:
+            summary = scanner.run(tickers)
+            logger.info("Manual scan results: %s", summary)
+        except Exception:
+            logger.exception("Manual scan failed")
+            return
+
         arena = get_arena()
         if arena:
             watchlists = _load_watchlists()
@@ -83,4 +86,4 @@ def trigger_scan(db: Session = Depends(get_db)):
         logger.info("Manual scan complete")
 
     threading.Thread(target=_run_scan, daemon=True, name="manual-scan").start()
-    return {"status": "scanning", "message": "Scan started in background. Data will appear as tickers are processed."}
+    return {"status": "scanning", "message": "Unified scan started in background."}

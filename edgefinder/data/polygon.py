@@ -278,6 +278,77 @@ class PolygonDataProvider:
         logger.info("Fetched %d tickers from Massive universe", len(tickers))
         return tickers
 
+    def get_top_dollar_volume_tickers(
+        self,
+        top_n: int = 1000,
+        min_price: float = 5.0,
+        max_price: float = 500.0,
+    ) -> list[str]:
+        """Pre-filter the universe to the top N most-liquid stocks by
+        dollar volume (yesterday's volume × yesterday's close).
+
+        Uses get_grouped_daily_aggs which returns OHLCV for the entire
+        US stock market in a SINGLE API call. Massively cheaper than
+        fetching 5000+ ticker_details upfront.
+
+        Args:
+            top_n: Number of top stocks to return (sorted by dollar volume desc).
+            min_price: Drop bars where close < this (penny stocks, illiquid).
+            max_price: Drop bars where close > this (BRK.A-style outliers).
+
+        Returns:
+            Sorted list of top-N ticker symbols. Empty list on API failure.
+        """
+        # Use the most recent trading day. Walk back up to 7 days to handle
+        # weekends, holidays, and Polygon's data availability lag.
+        for days_back in range(1, 8):
+            target_date = (date.today() - timedelta(days=days_back)).isoformat()
+            try:
+                aggs = self._retry(
+                    lambda d=target_date: list(
+                        self._client.get_grouped_daily_aggs(d)
+                    ),
+                    context=f"get_grouped_daily_aggs({target_date})",
+                )
+            except Exception:
+                logger.exception("get_grouped_daily_aggs failed for %s", target_date)
+                continue
+            if aggs:
+                logger.info(
+                    "Grouped daily aggs: got %d bars for %s",
+                    len(aggs), target_date,
+                )
+                break
+        else:
+            logger.error("get_top_dollar_volume_tickers: no aggs in last 7 days")
+            return []
+
+        # Compute dollar volume per ticker, filter by price band
+        scored: list[tuple[str, float]] = []
+        for bar in aggs:
+            symbol = getattr(bar, "ticker", None)
+            close = getattr(bar, "close", None)
+            volume = getattr(bar, "volume", None)
+            if not symbol or close is None or volume is None:
+                continue
+            if close < min_price or close > max_price:
+                continue
+            # Skip non-common-stock tickers (warrants, units, ETFs cluttering)
+            # by simple heuristic: skip anything containing a dot, hyphen, or W
+            # suffix that suggests warrant/preferred/unit class
+            if any(c in symbol for c in (".", "/", "=")):
+                continue
+            dollar_vol = float(close) * float(volume)
+            scored.append((symbol, dollar_vol))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        top = [s for s, _ in scored[:top_n]]
+        logger.info(
+            "Top dollar-volume universe: %d tickers (filtered from %d bars)",
+            len(top), len(aggs),
+        )
+        return top
+
     def is_market_open(self) -> bool:
         """Check market status."""
         status = self._retry(

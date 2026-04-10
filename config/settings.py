@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     scanner_batch_count: int = 5  # one batch per weekday (Mon=0 ... Fri=4)
     scanner_full_universe: bool = True  # scan all tickers nightly (unlimited API plan)
     scanner_max_watchlist_per_strategy: int = 50  # top N scored stocks per strategy
+    # Unified scanner pre-filter: top N stocks by yesterday's dollar volume
+    # (volume * close). Cuts the universe from ~5000 common stocks to the
+    # most liquid names that strategies actually trade.
+    scanner_max_universe_size: int = 1000
+    # Concurrent fetches in UnifiedScanner Pass 1. Polygon Starter plan
+    # is "unlimited" calls so 10 workers ~10x the throughput of sequential.
+    scanner_concurrent_workers: int = 10
+    # Commit cadence for incremental persistence — survives mid-scan deploys.
+    scanner_commit_batch_size: int = 100
 
     # ── SIGNALS / TECHNICAL ──────────────────────────
     signal_ema_fast_day: int = 9

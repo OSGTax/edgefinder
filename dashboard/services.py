@@ -477,48 +477,53 @@ def _recalculate_account_balances() -> None:
         session.close()
 
 
-def _run_initial_scan() -> None:
-    """Run per-strategy scans on first startup to populate watchlists.
+def _resolve_scan_universe() -> list[str]:
+    """Resolve the universe to scan, applying the dollar-volume pre-filter.
 
-    Each strategy runs its own complete scan with full data access:
-    fundamentals + daily technicals + relative strength.
-
-    With scanner_full_universe=True (default on unlimited API plan),
-    scans the entire universe. Otherwise falls back to 1/5 batching.
+    Tries get_top_dollar_volume_tickers first (top N most-liquid by
+    yesterday's volume * close, 1 API call). Falls back to the full
+    common-stock universe if the grouped daily aggs call fails.
     """
-    universe = _provider.get_ticker_universe()
-
-    if settings.scanner_full_universe:
-        tickers = sorted(universe)
-        batch_index = None
-        logger.info("Initial scan: full universe (%d tickers)", len(tickers))
-    else:
-        batch_count = settings.scanner_batch_count
-        batch_index = datetime.now().weekday()
-        if batch_index >= batch_count:
-            batch_index = 0
-        tickers = sorted(universe)[batch_index::batch_count]
-        logger.info(
-            "Initial scan batch %d/%d: %d tickers (of %d total)",
-            batch_index + 1, batch_count, len(tickers), len(universe),
+    try:
+        top = _provider.get_top_dollar_volume_tickers(
+            top_n=settings.scanner_max_universe_size,
+            min_price=settings.scanner_min_price,
+            max_price=settings.scanner_max_price,
         )
+    except Exception:
+        logger.exception("Dollar-volume pre-filter failed, falling back to full universe")
+        top = []
 
+    if top:
+        return top
+
+    logger.warning(
+        "Dollar-volume universe was empty — falling back to get_ticker_universe"
+    )
+    return sorted(_provider.get_ticker_universe())
+
+
+def _run_initial_scan() -> None:
+    """Run unified scan on first startup to populate watchlists.
+
+    Uses UnifiedScanner: fetches each ticker's fundamentals ONCE and
+    qualifies against all 4 strategies in parallel. Pre-filtered to the
+    top N most-liquid stocks by dollar volume to keep total scan time
+    in the seconds-to-minutes range instead of hours.
+    """
+    from edgefinder.scanner.unified_scanner import UnifiedScanner
     from edgefinder.strategies.base import StrategyRegistry
 
-    for strategy in StrategyRegistry.get_instances():
-        session = _session_factory()
-        try:
-            scanner = StrategyScanner(strategy, _provider, session)
-            results = scanner.run(tickers=tickers, batch_index=batch_index)
-            qualified = sum(1 for r in results if r.qualified)
-            logger.info(
-                "Initial scan [%s]: %d scored, %d qualified",
-                strategy.name, len(results), qualified,
-            )
-        except Exception:
-            logger.exception("Initial scan failed for strategy '%s'", strategy.name)
-        finally:
-            session.close()
+    tickers = _resolve_scan_universe()
+    logger.info("Initial scan: %d tickers (top dollar-volume universe)", len(tickers))
+
+    strategies = list(StrategyRegistry.get_instances())
+    scanner = UnifiedScanner(strategies, _provider, _session_factory)
+    try:
+        summary = scanner.run(tickers)
+        logger.info("Initial scan results: %s", summary)
+    except Exception:
+        logger.exception("Initial scan failed")
 
 
 def _load_watchlist() -> list[str]:
@@ -807,15 +812,15 @@ def _position_monitor_job() -> None:
 def _nightly_scan_job() -> None:
     """Called at 6:15 PM ET on weekdays.
 
-    Runs per-strategy scans: each strategy independently scans its universe
-    with full data access (fundamentals + technicals + RS).
-
-    With scanner_full_universe=True, scans the entire universe every night.
-    Otherwise falls back to 1/5 batching (Mon=batch 0 ... Fri=batch 4).
+    Runs the unified scanner: fetches each ticker's fundamentals once and
+    qualifies against all 4 strategies in parallel. Pre-filtered to top
+    N most-liquid by dollar volume so the full nightly scan completes
+    in seconds instead of hours.
     """
     if not _provider:
         return
 
+    from edgefinder.scanner.unified_scanner import UnifiedScanner
     from edgefinder.strategies.base import StrategyRegistry
 
     weekday = datetime.now().weekday()
@@ -823,34 +828,19 @@ def _nightly_scan_job() -> None:
         logger.info("Weekend — skipping nightly scan")
         return
 
-    universe = _provider.get_ticker_universe()
+    tickers = _resolve_scan_universe()
+    logger.info("Nightly scan: %d tickers (top dollar-volume universe)", len(tickers))
 
-    if settings.scanner_full_universe:
-        tickers = sorted(universe)
-        batch_index = None
-        logger.info("Nightly scan: full universe (%d tickers)", len(tickers))
-    else:
-        batch_count = settings.scanner_batch_count
-        batch_index = weekday
-        if batch_index >= batch_count:
-            batch_index = 0
-        tickers = sorted(universe)[batch_index::batch_count]
-        logger.info(
-            "Nightly scan batch %d/%d: %d tickers (of %d total)",
-            batch_index + 1, batch_count, len(tickers), len(universe),
-        )
+    strategies = list(StrategyRegistry.get_instances())
+    scanner = UnifiedScanner(strategies, _provider, _session_factory)
+    try:
+        summary = scanner.run(tickers)
+        logger.info("Nightly scan results: %s", summary)
+    except Exception:
+        logger.exception("Nightly scan failed")
+        return
 
-    for strategy in StrategyRegistry.get_instances():
-        session = _session_factory()
-        try:
-            scanner = StrategyScanner(strategy, _provider, session)
-            scanner.run(tickers=tickers, batch_index=batch_index)
-        except Exception:
-            logger.exception("Nightly scan failed for strategy '%s'", strategy.name)
-        finally:
-            session.close()
-
-    # Reload per-strategy watchlists
+    # Reload per-strategy watchlists into the live arena
     watchlists = _load_watchlists()
     if watchlists and _arena:
         _arena.set_watchlists(watchlists)
@@ -860,8 +850,8 @@ def _nightly_scan_job() -> None:
             "Nightly scan complete: %d total tickers across %d strategies",
             total, len(watchlists),
         )
-        for name, tickers in watchlists.items():
-            logger.info("  %s: %d tickers", name, len(tickers))
+        for name, tickers_for_strategy in watchlists.items():
+            logger.info("  %s: %d tickers", name, len(tickers_for_strategy))
     else:
         logger.info("Nightly scan: 0 qualified across all strategies")
 

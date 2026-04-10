@@ -21,7 +21,7 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 
-__version__ = "4.4.4"
+__version__ = "4.5.0"
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
