@@ -131,8 +131,20 @@ class VirtualAccount:
         if self.is_paused:
             return False, "Account is paused"
 
+        # Max open positions hard limit
+        if self.position_count >= settings.max_open_positions:
+            return False, f"Max open positions reached ({settings.max_open_positions})"
+
+        # Duplicate ticker check — only one position per symbol at a time
+        if symbol and self.get_position(symbol):
+            return False, f"Already have open position in {symbol}"
+
         if cost > self.buying_power:
             return False, f"Insufficient buying power: need ${cost:.2f}, have ${self.buying_power:.2f}"
+
+        # Ensure cash won't go negative
+        if self.cash - cost < 0:
+            return False, f"Would result in negative cash: ${self.cash:.2f} - ${cost:.2f}"
 
         if self.drawdown_pct >= settings.drawdown_circuit_breaker_pct:
             self.is_paused = True

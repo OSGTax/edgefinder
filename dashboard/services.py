@@ -423,31 +423,51 @@ def _recalculate_account_balances() -> None:
                 )
                 account.cash = correct_cash
 
-            # CRITICAL: if cash is negative, account is over-leveraged
-            # Auto-reset: close all open trades in DB and restart fresh
+            # CRITICAL: if cash is negative, account is over-leveraged.
+            # Cancel excess positions (newest first) until cash is non-negative,
+            # rather than nuking the entire account.
             if account.cash < 0:
                 logger.error(
-                    "CRITICAL: '%s' has negative cash $%.2f — auto-resetting account. "
-                    "Marking all open trades as CANCELLED and resetting to $%.2f.",
-                    name, account.cash, account.starting_capital,
+                    "CRITICAL: '%s' has negative cash $%.2f — cancelling excess positions",
+                    name, account.cash,
                 )
-                # Cancel all open trades for this strategy
+                # Get open trades ordered newest first (cancel most recent)
                 open_trades = (
                     session.query(TradeRecord)
                     .filter(TradeRecord.strategy_name == name, TradeRecord.status == "OPEN")
+                    .order_by(TradeRecord.entry_time.desc())
                     .all()
                 )
+                cancelled = 0
+                recalc_cash = correct_cash
                 for trade in open_trades:
+                    if recalc_cash >= 0:
+                        break
                     trade.status = "CANCELLED"
-                    trade.exit_reason = "ACCOUNT_RESET"
+                    trade.exit_reason = "NEGATIVE_CASH_CORRECTION"
+                    trade_cost = trade.entry_price * trade.shares
+                    recalc_cash += trade_cost
+                    cancelled += 1
+                    logger.warning(
+                        "Cancelled %s %s (cost $%.2f) to recover cash",
+                        name, trade.symbol, trade_cost,
+                    )
                 session.commit()
-                # Reset account
-                account.cash = account.starting_capital
-                account.positions.clear()
-                account.realized_pnl = round(realized, 2)
-                account.is_paused = False
-                account.peak_equity = account.starting_capital
-                logger.info("Account '%s' reset to $%.2f", name, account.starting_capital)
+
+                # Remove cancelled positions from in-memory account
+                cancelled_ids = {
+                    t.trade_id for t in open_trades
+                    if t.status == "CANCELLED"
+                }
+                account.positions = [
+                    p for p in account.positions
+                    if p.trade_id not in cancelled_ids
+                ]
+                account.cash = recalc_cash
+                logger.info(
+                    "Account '%s': cancelled %d excess positions, cash now $%.2f",
+                    name, cancelled, recalc_cash,
+                )
 
             # Update peak equity based on corrected values
             equity = account.total_equity

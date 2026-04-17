@@ -179,6 +179,7 @@ class ArenaEngine:
                         slot.strategy.on_trade_executed(
                             TradeNotification(trade=trade, event="opened")
                         )
+                        break  # one position per ticker per signal check
 
             logger.info(
                 "[%s] signal check done: evaluated=%d, requalif_failed=%d, "
