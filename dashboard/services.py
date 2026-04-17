@@ -169,6 +169,9 @@ def init_services() -> None:
         for name, tickers in watchlists.items():
             logger.info("Watchlist '%s': %d tickers", name, len(tickers))
 
+    # Wire Echo meta-strategy with a DB session so it can learn from history
+    _wire_echo_strategy()
+
     # Restore account state, open positions, then recalculate from trades (source of truth)
     _restore_account_state()
     _restore_open_positions()
@@ -631,6 +634,24 @@ def _has_fundamentals() -> bool:
         session.close()
 
 
+# ── Echo Meta-Strategy Wiring ──────────────────────────
+
+
+def _wire_echo_strategy() -> None:
+    """Give Echo a DB session so it can query trade history for learning."""
+    if not _arena or not _session_factory:
+        return
+    strategy = _arena.get_strategy("echo")
+    if strategy is None:
+        return
+    try:
+        session = _session_factory()
+        strategy.set_db_session(session)
+        logger.info("Echo meta-strategy wired with DB session")
+    except Exception:
+        logger.exception("Failed to wire Echo strategy")
+
+
 # ── Event Bus Wiring ────────────────────────────────────
 
 
@@ -770,6 +791,29 @@ def _is_market_holiday() -> bool:
     return today_str in _holidays_cache
 
 
+# ── Market Snapshot Broadcasting ──────────────────────
+
+
+def _broadcast_snapshot_to_strategies() -> None:
+    """Capture a market snapshot and broadcast to all strategies.
+
+    This keeps Echo (and any future strategies that use on_market_snapshot)
+    aware of the current market regime before each signal check.
+    """
+    if not _arena or not _provider:
+        return
+    try:
+        session = _session_factory()
+        try:
+            svc = MarketSnapshotService(_provider, session)
+            snapshot = svc.capture()
+            _arena.broadcast_market_snapshot(snapshot)
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("Failed to broadcast market snapshot to strategies")
+
+
 # ── Scheduler Job Callbacks ─────────────────────────────
 
 
@@ -782,6 +826,9 @@ def _signal_check_job() -> None:
         logger.info("Signal check skipped — market holiday")
         return
     try:
+        # Broadcast market snapshot to all strategies (feeds Echo's regime tracker)
+        _broadcast_snapshot_to_strategies()
+
         trades = _arena.run_signal_check()
         if trades:
             logger.info("Signal check: %d trades opened", len(trades))

@@ -262,6 +262,21 @@ class ArenaEngine:
 
         return all_closed
 
+    def broadcast_market_snapshot(self, snapshot) -> None:
+        """Forward a market snapshot to all strategies that implement on_market_snapshot."""
+        for name, slot in self._slots.items():
+            try:
+                slot.strategy.on_market_snapshot(snapshot)
+            except Exception:
+                logger.exception(
+                    "Strategy '%s' failed on_market_snapshot", name
+                )
+
+    def get_strategy(self, name: str) -> BaseStrategy | None:
+        """Get a strategy instance by name."""
+        slot = self._slots.get(name)
+        return slot.strategy if slot else None
+
     def get_strategy_names(self) -> list[str]:
         return list(self._slots.keys())
 

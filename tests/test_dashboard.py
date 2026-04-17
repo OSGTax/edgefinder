@@ -1,6 +1,7 @@
 """Tests for dashboard API endpoints."""
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,8 +24,10 @@ def client(db_engine, db_session):
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as c:
-        yield c
+    with patch("dashboard.services.init_services"), \
+         patch("dashboard.services.shutdown_services"):
+        with TestClient(app) as c:
+            yield c
     app.dependency_overrides.clear()
 
 
