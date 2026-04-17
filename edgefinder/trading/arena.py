@@ -97,6 +97,13 @@ class ArenaEngine:
             len(self._slots), len(self._fundamentals_cache),
         )
 
+        paused_count = sum(1 for s in self._slots.values() if s.account.is_paused)
+        if self._slots and paused_count == len(self._slots):
+            logger.warning(
+                "All %d strategy accounts are paused — no trades will be opened",
+                len(self._slots),
+            )
+
         for name, slot in self._slots.items():
             if slot.account.is_paused:
                 logger.info(
@@ -147,6 +154,7 @@ class ArenaEngine:
                 bars = self._fetch_bars(ticker)
                 if bars is None or bars.empty:
                     bars_missing += 1
+                    logger.debug("[%s] bars missing for %s", name, ticker)
                     continue
 
                 try:
@@ -187,6 +195,28 @@ class ArenaEngine:
                 name, evaluated, requalif_failed,
                 bars_missing, signals_generated, opened_here,
             )
+
+            # Attribution warnings for zero-trade slots — attributes a halt to
+            # data layer, re-qualification, or execution-gate from logs alone.
+            if evaluated > 0 and bars_missing == evaluated:
+                logger.warning(
+                    "[%s] no bars returned for any of %d tickers — "
+                    "suspect data provider failure",
+                    name, evaluated,
+                )
+            elif evaluated > 0 and requalif_failed == evaluated:
+                logger.warning(
+                    "[%s] re-qualification failed for all %d tickers — "
+                    "suspect fundamentals-cache wipe",
+                    name, evaluated,
+                )
+            elif signals_generated > 0 and opened_here == 0:
+                logger.warning(
+                    "[%s] %d signals generated but no trades opened — "
+                    "rejected at execution (see per-signal INFO logs: "
+                    "size=0, min-cost, account gates)",
+                    name, signals_generated,
+                )
 
         logger.info(
             "Signal check complete: %d trades opened across %d strategies",
