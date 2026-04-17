@@ -679,35 +679,61 @@ def _wire_event_bus() -> None:
     """Subscribe to trade events for persistence."""
 
     def on_trade_opened(trade):
+        # Snapshot commits independently — the trade row needs its FK and
+        # an orphan snapshot is harmless if the atomic write below fails.
+        snapshot_id = None
+        try:
+            snap_session = _session_factory()
+            try:
+                snapshot_svc = MarketSnapshotService(_provider, snap_session)
+                snapshot_id = snapshot_svc.capture_and_persist()
+                trade.market_snapshot_id = snapshot_id
+            finally:
+                snap_session.close()
+        except Exception:
+            logger.exception("Failed to capture market snapshot for %s", trade.trade_id)
+
+        # Atomic: trade row + account-state row commit together. Without
+        # this, a crash between the two writes leaves the DB with a trade
+        # whose cost was never deducted from cash_balance; on restart,
+        # _recalculate_account_balances then self-heals by cancelling an
+        # arbitrary newest position.
         session = _session_factory()
         try:
-            # Capture market snapshot and link to trade
-            snapshot_svc = MarketSnapshotService(_provider, session)
-            snapshot_id = snapshot_svc.capture_and_persist()
-            trade.market_snapshot_id = snapshot_id
-
             journal = TradeJournal(session)
-            journal.log_trade(trade)
+            journal.log_trade(trade, commit=False)
+            _persist_account_state(
+                session=session,
+                strategy_name=trade.strategy_name,
+                commit=False,
+            )
+            session.commit()
 
-            # Capture rich trade context from DB (no extra API calls)
             _capture_trade_context(session, trade)
-
             logger.info(
-                "[%s] Trade opened: %s %s @ $%.2f (snapshot #%d)",
+                "[%s] Trade opened: %s %s @ $%.2f (snapshot #%s)",
                 trade.strategy_name, trade.direction.value,
-                trade.symbol, trade.entry_price, snapshot_id,
+                trade.symbol, trade.entry_price,
+                snapshot_id if snapshot_id is not None else "n/a",
             )
         except Exception:
+            session.rollback()
             logger.exception("Failed to persist opened trade %s", trade.trade_id)
         finally:
             session.close()
-        _persist_account_state()  # Save immediately so DB reflects new cash
 
     def on_trade_closed(trade):
+        # Atomic: trade update + account-state update commit together.
         session = _session_factory()
         try:
             journal = TradeJournal(session)
-            journal.log_trade(trade)
+            journal.log_trade(trade, commit=False)
+            _persist_account_state(
+                session=session,
+                strategy_name=trade.strategy_name,
+                commit=False,
+            )
+            session.commit()
             logger.info(
                 "[%s] Trade closed: %s %s @ $%.2f — P&L $%.2f (%s)",
                 trade.strategy_name, trade.direction.value,
@@ -715,10 +741,10 @@ def _wire_event_bus() -> None:
                 trade.pnl_dollars or 0, trade.exit_reason or "manual",
             )
         except Exception:
+            session.rollback()
             logger.exception("Failed to persist closed trade %s", trade.trade_id)
         finally:
             session.close()
-        _persist_account_state()  # Save immediately so DB reflects new cash
 
     event_bus.subscribe("trade.opened", on_trade_opened)
     event_bus.subscribe("trade.closed", on_trade_closed)
@@ -1023,13 +1049,33 @@ def _snapshot_job() -> None:
     _persist_account_state()
 
 
-def _persist_account_state() -> None:
-    """Sync in-memory arena accounts to the strategy_accounts DB table."""
+def _persist_account_state(
+    session=None,
+    strategy_name: str | None = None,
+    commit: bool = True,
+) -> None:
+    """Sync in-memory arena accounts to the strategy_accounts DB table.
+
+    When called with a caller-owned session and commit=False, the writes
+    are staged only — the caller is responsible for commit and close.
+    Used by the event handlers so a trade row and its account-state
+    update land in the same atomic transaction.
+    """
     if not _arena:
         return
-    session = _session_factory()
+    owned_session = session is None
+    if owned_session:
+        if not _session_factory:
+            return
+        session = _session_factory()
     try:
         accounts = _arena.get_all_accounts()
+        if strategy_name is not None:
+            accounts = (
+                {strategy_name: accounts[strategy_name]}
+                if strategy_name in accounts
+                else {}
+            )
         for name, acct in accounts.items():
             existing = (
                 session.query(StrategyAccount)
@@ -1056,8 +1102,12 @@ def _persist_account_state() -> None:
                     realized_pnl=acct["realized_pnl"],
                     is_paused=acct["is_paused"],
                 ))
-        session.commit()
+        if commit:
+            session.commit()
     except Exception:
         logger.exception("Failed to persist account state")
+        if commit and owned_session:
+            session.rollback()
     finally:
-        session.close()
+        if owned_session:
+            session.close()
