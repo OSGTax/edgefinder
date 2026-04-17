@@ -24,8 +24,13 @@ class TradeJournal:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def log_trade(self, trade: Trade) -> None:
-        """Persist a trade (open or closed) to the database."""
+    def log_trade(self, trade: Trade, commit: bool = True) -> None:
+        """Persist a trade (open or closed) to the database.
+
+        Pass commit=False when the caller wants to batch this write with
+        other updates (e.g. the account-state row) into a single atomic
+        transaction.
+        """
         existing = (
             self._session.query(TradeRecord)
             .filter_by(trade_id=trade.trade_id)
@@ -71,7 +76,8 @@ class TradeJournal:
             )
             self._session.add(record)
 
-        self._session.commit()
+        if commit:
+            self._session.commit()
 
     def get_trades(
         self,
