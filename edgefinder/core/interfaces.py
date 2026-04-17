@@ -152,6 +152,30 @@ class DataHub:
     def is_market_open(self) -> bool:
         return self._primary.is_market_open()
 
+    def get_news(self, ticker: str, limit: int = 10) -> list[dict]:
+        """Delegate news fetch to primary provider."""
+        if hasattr(self._primary, "get_news"):
+            return self._primary.get_news(ticker, limit)
+        return []
+
+    def get_dividends(self, ticker: str, limit: int = 20) -> list[dict]:
+        """Delegate dividend fetch to primary provider."""
+        if hasattr(self._primary, "get_dividends"):
+            return self._primary.get_dividends(ticker, limit)
+        return []
+
+    def get_splits(self, ticker: str, limit: int = 10) -> list[dict]:
+        """Delegate split fetch to primary provider."""
+        if hasattr(self._primary, "get_splits"):
+            return self._primary.get_splits(ticker, limit)
+        return []
+
+    def get_market_holidays(self) -> list[dict]:
+        """Delegate market holidays fetch to primary provider."""
+        if hasattr(self._primary, "get_market_holidays"):
+            return self._primary.get_market_holidays()
+        return []
+
     def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
         """Get fundamentals from primary, then enrich via supplements."""
         fund = self._primary.get_fundamentals(ticker, full_refresh=full_refresh)

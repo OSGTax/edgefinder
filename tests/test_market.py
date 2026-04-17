@@ -22,12 +22,27 @@ class TestMarketSnapshotService:
         provider = MagicMock()
         prices = {
             "SPY": 450.0, "QQQ": 380.0, "IWM": 200.0, "DIA": 350.0,
-            "VIX": 18.0,
+            "VIXY": 18.0,
             "XLK": 180.0, "XLF": 38.0, "XLE": 85.0, "XLV": 140.0,
             "XLI": 105.0, "XLP": 75.0, "XLY": 170.0, "XLU": 65.0,
             "XLRE": 38.0, "XLC": 72.0, "XLB": 82.0,
         }
         provider.get_latest_price.side_effect = lambda s: prices.get(s)
+        # Mock get_bars to return 2 daily bars for change % computation
+        def mock_bars(ticker, timeframe, start, end=None):
+            price = prices.get(ticker)
+            if price is None:
+                return None
+            prev_price = price * 0.99  # 1% up from previous close
+            dates = pd.date_range("2026-04-15", periods=2, freq="D")
+            return pd.DataFrame({
+                "open": [prev_price, price],
+                "high": [prev_price + 1, price + 1],
+                "low": [prev_price - 1, price - 1],
+                "close": [prev_price, price],
+                "volume": [1000000, 1000000],
+            }, index=dates)
+        provider.get_bars.side_effect = mock_bars
         return provider
 
     @pytest.fixture
@@ -39,6 +54,7 @@ class TestMarketSnapshotService:
         assert snap.spy_price == 450.0
         assert snap.qqq_price == 380.0
         assert snap.vix_level == 18.0
+        assert snap.spy_change_pct != 0.0  # should be ~1%
         assert "XLK" in snap.sector_performance
 
     def test_capture_and_persist(self, service, db_session):
@@ -55,16 +71,36 @@ class TestMarketSnapshotService:
 
     def test_regime_bull_low_vix(self, db_session):
         provider = MagicMock()
-        prices = {"SPY": 450.0, "QQQ": 380.0, "IWM": 200.0, "DIA": 350.0, "VIX": 12.0}
+        prices = {"SPY": 450.0, "QQQ": 380.0, "IWM": 200.0, "DIA": 350.0, "VIXY": 12.0}
         provider.get_latest_price.side_effect = lambda s: prices.get(s)
+        # 1% up day triggers bull with low VIX
+        def mock_bars(ticker, timeframe, start, end=None):
+            price = prices.get(ticker)
+            if price is None:
+                return None
+            prev = price * 0.99
+            dates = pd.date_range("2026-04-15", periods=2, freq="D")
+            return pd.DataFrame({"open": [prev, price], "high": [prev+1, price+1],
+                "low": [prev-1, price-1], "close": [prev, price], "volume": [1e6, 1e6]}, index=dates)
+        provider.get_bars.side_effect = mock_bars
         service = MarketSnapshotService(provider, db_session)
         snap = service.capture()
         assert snap.market_regime == MarketRegime.BULL
 
     def test_regime_bear_high_vix(self, db_session):
         provider = MagicMock()
-        prices = {"SPY": 380.0, "QQQ": 300.0, "IWM": 160.0, "DIA": 290.0, "VIX": 35.0}
+        prices = {"SPY": 380.0, "QQQ": 300.0, "IWM": 160.0, "DIA": 290.0, "VIXY": 35.0}
         provider.get_latest_price.side_effect = lambda s: prices.get(s)
+        # -2% down day + high VIX = bear
+        def mock_bars(ticker, timeframe, start, end=None):
+            price = prices.get(ticker)
+            if price is None:
+                return None
+            prev = price * 1.02  # price fell 2% from prev
+            dates = pd.date_range("2026-04-15", periods=2, freq="D")
+            return pd.DataFrame({"open": [prev, price], "high": [prev+1, price+1],
+                "low": [prev-1, price-1], "close": [prev, price], "volume": [1e6, 1e6]}, index=dates)
+        provider.get_bars.side_effect = mock_bars
         service = MarketSnapshotService(provider, db_session)
         snap = service.capture()
         assert snap.market_regime == MarketRegime.BEAR

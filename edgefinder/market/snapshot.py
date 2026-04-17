@@ -8,7 +8,7 @@ to the exact market conditions when it was executed.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,10 @@ from edgefinder.core.models import MarketRegime, MarketSnapshot
 from edgefinder.db.models import MarketSnapshotRecord
 
 logger = logging.getLogger(__name__)
+
+# VIX proxy ETF — I:VIX requires an index add-on on Polygon.
+# VIXY closely tracks VIX and is available on all plans.
+VIX_PROXY = "VIXY"
 
 
 class MarketSnapshotService:
@@ -30,14 +34,19 @@ class MarketSnapshotService:
     def capture(self) -> MarketSnapshot:
         """Fetch current state of indices, VIX, and sector ETFs.
 
-        Returns a MarketSnapshot domain object and persists to DB.
+        Computes daily change % from bars (prev close vs current close)
+        since the snapshot endpoint requires a higher-tier plan.
         """
         index_prices = {}
+        index_changes = {}
         for symbol in settings.index_symbols:
-            price = self._provider.get_latest_price(symbol)
+            price, change = self._get_price_and_change(symbol)
             index_prices[symbol] = price
+            index_changes[symbol] = change
 
-        vix = self._provider.get_latest_price(settings.vix_symbol)
+        # VIX level from proxy ETF (VIXY tracks VIX, available on Starter)
+        vix_price = self._provider.get_latest_price(VIX_PROXY)
+        vix_level = vix_price if vix_price is not None else 0.0
 
         sector_perf = {}
         for etf in settings.sector_etfs:
@@ -50,20 +59,21 @@ class MarketSnapshotService:
         iwm_price = index_prices.get("IWM") or 0.0
         dia_price = index_prices.get("DIA") or 0.0
 
-        # Determine market regime from SPY behavior
-        regime = self._determine_regime(spy_price)
+        spy_chg = index_changes.get("SPY", 0.0)
+
+        regime = self._determine_regime(vix_level, spy_chg)
 
         snapshot = MarketSnapshot(
             timestamp=datetime.now(timezone.utc),
             spy_price=spy_price,
-            spy_change_pct=0.0,  # Filled by benchmarks service with daily data
+            spy_change_pct=spy_chg,
             qqq_price=qqq_price,
-            qqq_change_pct=0.0,
+            qqq_change_pct=index_changes.get("QQQ", 0.0),
             iwm_price=iwm_price,
-            iwm_change_pct=0.0,
+            iwm_change_pct=index_changes.get("IWM", 0.0),
             dia_price=dia_price,
-            dia_change_pct=0.0,
-            vix_level=vix or 0.0,
+            dia_change_pct=index_changes.get("DIA", 0.0),
+            vix_level=vix_level,
             market_regime=regime,
             sector_performance=sector_perf,
         )
@@ -91,8 +101,9 @@ class MarketSnapshotService:
         self._session.add(record)
         self._session.commit()
         logger.info(
-            "Market snapshot captured: SPY=$%.2f VIX=%.1f regime=%s",
-            snapshot.spy_price, snapshot.vix_level, snapshot.market_regime.value,
+            "Market snapshot captured: SPY=$%.2f (%.2f%%) VIX=%.1f regime=%s",
+            snapshot.spy_price, snapshot.spy_change_pct,
+            snapshot.vix_level, snapshot.market_regime.value,
         )
         return record.id
 
@@ -104,18 +115,42 @@ class MarketSnapshotService:
             .first()
         )
 
-    def _determine_regime(self, spy_price: float) -> MarketRegime:
-        """Simple regime detection based on VIX and recent snapshots.
+    def _get_price_and_change(self, symbol: str) -> tuple[float | None, float]:
+        """Get current price and daily change % for a symbol.
 
-        - VIX > 30: BEAR
-        - VIX < 15: BULL
+        Computes change from the last two daily bars since the snapshot
+        endpoint (which includes todaysChangePerc) is not available on
+        the Starter plan.
+        """
+        try:
+            end = date.today()
+            start = end - timedelta(days=5)
+            bars = self._provider.get_bars(symbol, "day", start, end)
+            if bars is not None and len(bars) >= 2:
+                curr_close = float(bars["close"].iloc[-1])
+                prev_close = float(bars["close"].iloc[-2])
+                if prev_close > 0:
+                    change_pct = (curr_close - prev_close) / prev_close * 100
+                    return curr_close, round(change_pct, 2)
+                return curr_close, 0.0
+            elif bars is not None and len(bars) == 1:
+                return float(bars["close"].iloc[-1]), 0.0
+        except Exception:
+            logger.debug("Failed to get bars for %s, falling back to get_latest_price", symbol)
+
+        # Fallback: just get price, no change
+        price = self._provider.get_latest_price(symbol)
+        return price, 0.0
+
+    def _determine_regime(self, vix_level: float, spy_change_pct: float) -> MarketRegime:
+        """Regime detection from VIX level and SPY daily change.
+
+        - VIX > 30 or SPY < -1%: BEAR
+        - VIX < 18 and SPY > 0.3%: BULL
         - Otherwise: SIDEWAYS
         """
-        latest = self.get_latest()
-        vix = self._provider.get_latest_price(settings.vix_symbol) or 20.0
-
-        if vix > 30:
+        if vix_level > 30 or spy_change_pct < -1.0:
             return MarketRegime.BEAR
-        if vix < 15:
+        if vix_level < 18 and spy_change_pct > 0.3:
             return MarketRegime.BULL
         return MarketRegime.SIDEWAYS

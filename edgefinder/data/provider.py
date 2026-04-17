@@ -98,3 +98,15 @@ class CachedDataProvider:
 
     def is_market_open(self) -> bool:
         return self._provider.is_market_open()
+
+    def get_news(self, ticker: str, limit: int = 10) -> list[dict]:
+        return self._provider.get_news(ticker, limit)
+
+    def get_dividends(self, ticker: str, limit: int = 20) -> list[dict]:
+        return self._provider.get_dividends(ticker, limit)
+
+    def get_splits(self, ticker: str, limit: int = 10) -> list[dict]:
+        return self._provider.get_splits(ticker, limit)
+
+    def get_market_holidays(self) -> list[dict]:
+        return self._provider.get_market_holidays()

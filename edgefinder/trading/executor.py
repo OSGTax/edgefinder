@@ -220,7 +220,17 @@ class Executor:
         if shares <= 0:
             return 0, 0
 
-        return shares, shares * execution_price
+        # Minimum position cost — reject micro-positions that waste a slot
+        cost = shares * execution_price
+        min_cost = self.account.starting_capital * 0.01  # 1% of starting capital ($50)
+        if cost < min_cost:
+            logger.debug(
+                "Position too small: %d shares @ $%.2f = $%.2f (min $%.2f)",
+                shares, execution_price, cost, min_cost,
+            )
+            return 0, 0
+
+        return shares, cost
 
     @staticmethod
     def _apply_slippage(price: float, action: str) -> float:
