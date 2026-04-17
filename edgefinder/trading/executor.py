@@ -224,8 +224,9 @@ class Executor:
         cost = shares * execution_price
         min_cost = self.account.starting_capital * 0.01  # 1% of starting capital ($50)
         if cost < min_cost:
-            logger.debug(
-                "Position too small: %d shares @ $%.2f = $%.2f (min $%.2f)",
+            logger.info(
+                "[%s] Position too small for %s: %d shares @ $%.2f = $%.2f (min $%.2f)",
+                self.account.strategy_name, signal.ticker,
                 shares, execution_price, cost, min_cost,
             )
             return 0, 0
