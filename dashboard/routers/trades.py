@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -11,7 +13,19 @@ from dashboard.dependencies import get_db
 from dashboard.services import get_arena
 from edgefinder.trading.journal import TradeJournal
 
+ET = ZoneInfo("America/New_York")
+
 logger = logging.getLogger(__name__)
+
+
+def _to_et(dt: datetime | None) -> str | None:
+    """Convert a datetime to US/Eastern ISO string."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ET).isoformat()
+
 
 router = APIRouter()
 
@@ -54,8 +68,8 @@ def _enrich_trade(t, live_prices: dict[str, float] | None = None) -> dict:
         "pnl_percent": t.pnl_percent if t.status == "CLOSED" else unrealized_pct,
         "r_multiple": t.r_multiple,
         "exit_reason": t.exit_reason,
-        "entry_time": t.entry_time.isoformat() if t.entry_time else None,
-        "exit_time": t.exit_time.isoformat() if t.exit_time else None,
+        "entry_time": _to_et(t.entry_time),
+        "exit_time": _to_et(t.exit_time),
     }
 
 
