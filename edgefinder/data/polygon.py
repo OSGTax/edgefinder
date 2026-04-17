@@ -47,44 +47,89 @@ class PolygonDataProvider:
         self._plan_access: dict[str, bool] = {}
 
     def probe_plan_access(self) -> dict[str, bool]:
-        """Test each endpoint once at startup to determine plan access.
+        """Test each endpoint LIVE at startup to determine plan access.
 
         Returns dict of endpoint_name -> available (True/False).
         Pre-populates _disabled_endpoints so scanning doesn't waste retries.
 
-        Known results from Stocks Starter plan are hardcoded to avoid
-        retesting. Only unknown endpoints are probed live.
+        Every endpoint is probed with a real API call using AAPL as the
+        test ticker. This detects plan upgrades/downgrades automatically.
         """
-        # Known results from previous probe (Stocks Starter $29/mo)
-        known_results = {
-            "ratios": False,           # NOT_AUTHORIZED — needs Fundamentals add-on
-            "earnings": False,         # NOT_AUTHORIZED — needs Benzinga add-on
-            "analyst": False,          # NOT_AUTHORIZED — needs Benzinga add-on
-            "financials_bs": False,    # NOT_AUTHORIZED — needs Fundamentals add-on
-            "financials_is": False,    # NOT_AUTHORIZED — needs Fundamentals add-on
-            "financials_cf": False,    # NOT_AUTHORIZED — needs Fundamentals add-on
-            "short_interest": True,    # Available on Starter
-            "financials_vx": True,     # Available on Starter
-            "technical_rsi": True,     # Available on Starter
-            "technical_ema": True,     # Available on Starter
-            "technical_macd": True,    # Available on Starter
-            "dividends": True,         # Available on Starter
-            "splits": True,            # Available on Starter
-            "news": True,              # Available on Starter (confirmed from API calls)
-            "related": True,           # Available on Starter
-            "ticker_events": True,     # Available on Starter
+        test_ticker = "AAPL"
+        today = date.today()
+
+        def _first(iterator):
+            """Consume only the first result from a paginated iterator."""
+            return next(iter(iterator))
+
+        probes = {
+            "ratios": lambda: _first(self._client.list_financials_ratios(
+                ticker=test_ticker, limit=1,
+            )),
+            "earnings": lambda: _first(self._client.list_benzinga_earnings(
+                ticker=test_ticker,
+                date_gte=(today - timedelta(days=90)).isoformat(),
+                date_lte=(today + timedelta(days=90)).isoformat(),
+                limit=1,
+            )),
+            "analyst": lambda: _first(self._client.list_benzinga_consensus_ratings(
+                ticker=test_ticker, limit=1,
+            )),
+            "short_interest": lambda: _first(self._client.list_short_interest(
+                ticker=test_ticker, limit=1,
+            )),
+            "financials_vx": lambda: _first(self._client.vx.list_stock_financials(
+                ticker=test_ticker, limit=1, timeframe="annual",
+            )),
+            "technical_rsi": lambda: self._client.get_rsi(
+                test_ticker, timespan="day", window=14, limit=1,
+            ),
+            "technical_ema": lambda: self._client.get_ema(
+                test_ticker, timespan="day", window=21, limit=1,
+            ),
+            "technical_macd": lambda: self._client.get_macd(
+                test_ticker, timespan="day", limit=1,
+            ),
+            "dividends": lambda: _first(self._client.list_dividends(
+                ticker=test_ticker, limit=1,
+            )),
+            "splits": lambda: _first(self._client.list_splits(
+                ticker=test_ticker, limit=1,
+            )),
+            "news": lambda: _first(self._client.list_ticker_news(
+                ticker=test_ticker, limit=1,
+            )),
+            "related": lambda: self._client.get_related_companies(
+                ticker=test_ticker,
+            ),
         }
 
-        # Disable known-blocked endpoints immediately
-        for name, available in known_results.items():
-            if not available:
-                self._disabled_endpoints.add(name)
-                logger.info("  ✗ %s — blocked (known)", name)
-            else:
-                logger.info("  ✓ %s — available (known)", name)
+        results: dict[str, bool] = {}
+        import concurrent.futures
+        for name, probe_fn in probes.items():
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(probe_fn)
+                    future.result(timeout=10)  # 10s max per endpoint
+                results[name] = True
+                logger.info("  ✓ %s — available", name)
+            except concurrent.futures.TimeoutError:
+                results[name] = True  # assume available if just slow
+                logger.warning("  ? %s — probe timed out (assuming available)", name)
+            except StopIteration:
+                # Empty iterator — endpoint works but no data for test ticker
+                results[name] = True
+                logger.info("  ✓ %s — available (empty result)", name)
+            except Exception as e:
+                err_str = str(e)
+                if "NOT_AUTHORIZED" in err_str or "not entitled" in err_str.lower():
+                    results[name] = False
+                    self._disabled_endpoints.add(name)
+                    logger.info("  ✗ %s — blocked (NOT_AUTHORIZED)", name)
+                else:
+                    results[name] = True
+                    logger.warning("  ? %s — probe error (assuming available): %s", name, e)
 
-        # All endpoints now known — no live probing needed
-        results = dict(known_results)
         self._plan_access = results
         available = sum(1 for v in results.values() if v)
         blocked = sum(1 for v in results.values() if not v)
@@ -648,62 +693,141 @@ class PolygonDataProvider:
         if not curr:
             return
 
+        # ── Helper: safe division ──
+        def _num(v):
+            """Coerce to float if numeric, else None. Handles MagicMock in tests."""
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        def _div(a, b):
+            """Divide a/b safely, returns None if b is 0 or either is None."""
+            a, b = _num(a), _num(b)
+            if a is None or b is None or b == 0:
+                return None
+            return a / b
+
+        # ── Extract commonly used values (coerced to float) ──
+        mc = _num(fund.market_cap)
+        ni = _num(curr.get("net_income"))
+        eq = _num(curr.get("equity"))
+        ta = _num(curr.get("total_assets"))
+        tl = _num(curr.get("total_liabilities"))
+        ca = _num(curr.get("current_assets"))
+        cl = _num(curr.get("current_liabilities"))
+        ocf = _num(curr.get("operating_cash_flow"))
+        rev = _num(curr.get("revenues"))
+        inv = _num(curr.get("inventory"))
+        ltd = _num(curr.get("long_term_debt"))
+        cash = _num(curr.get("cash"))
+        oi = _num(curr.get("operating_income"))
+        diluted_eps = _num(curr.get("diluted_eps"))
+        diluted_shares = _num(curr.get("diluted_shares"))
+
         # ── Fallback ratios (only if ratios API didn't populate them) ──
-        mc = fund.market_cap
 
-        # Current ratio
-        ca = curr.get("current_assets")
-        cl = curr.get("current_liabilities")
-        if fund.current_ratio is None and ca and cl and cl != 0:
-            fund.current_ratio = ca / cl
+        # Current ratio = current_assets / current_liabilities
+        if fund.current_ratio is None:
+            fund.current_ratio = _div(ca, cl)
 
-        # Debt to equity
-        tl = curr.get("total_liabilities")
-        eq = curr.get("equity")
-        if fund.debt_to_equity is None and tl and eq and eq != 0:
-            fund.debt_to_equity = tl / eq
+        # Quick ratio = (current_assets - inventory) / current_liabilities
+        # More conservative than current ratio — excludes slow-to-liquidate inventory
+        if fund.quick_ratio is None and ca is not None and cl is not None and cl != 0:
+            inventory_val = inv if inv is not None else 0
+            fund.quick_ratio = (ca - inventory_val) / cl
 
-        # FCF yield
-        ocf = curr.get("operating_cash_flow")
-        if fund.fcf_yield is None and ocf is not None and mc and mc > 0:
-            fund.fcf_yield = ocf / mc
+        # Debt to equity = total_liabilities / equity
+        if fund.debt_to_equity is None:
+            fund.debt_to_equity = _div(tl, eq)
 
-        # Price to tangible book
-        ta = curr.get("total_assets")
-        tl2 = curr.get("total_liabilities")
-        if fund.price_to_tangible_book is None and ta is not None and tl2 is not None and mc:
-            tangible_book = ta - tl2
+        # FCF yield = operating_cash_flow / market_cap
+        if fund.fcf_yield is None:
+            fund.fcf_yield = _div(ocf, mc)
+
+        # Free cash flow = operating_cash_flow (capex is reported as negative investing)
+        if fund.free_cash_flow is None and ocf is not None:
+            fund.free_cash_flow = ocf
+
+        # Price to tangible book = market_cap / (total_assets - total_liabilities)
+        if fund.price_to_tangible_book is None and ta is not None and tl is not None and mc:
+            tangible_book = ta - tl
             if tangible_book > 0:
                 fund.price_to_tangible_book = mc / tangible_book
 
-        # P/E ratio
-        ni = curr.get("net_income")
-        if fund.price_to_earnings is None and mc and ni and ni > 0:
-            fund.price_to_earnings = mc / ni
+        # P/E ratio = market_cap / net_income
+        if fund.price_to_earnings is None and ni is not None and ni > 0:
+            fund.price_to_earnings = _div(mc, ni)
 
-        # ROE
-        if fund.return_on_equity is None and ni and eq and eq != 0:
-            fund.return_on_equity = ni / eq
+        # P/B ratio = market_cap / equity
+        if fund.price_to_book is None and eq is not None and eq > 0:
+            fund.price_to_book = _div(mc, eq)
 
-        # ROA
-        if fund.return_on_assets is None and ni and ta and ta != 0:
-            fund.return_on_assets = ni / ta
+        # P/S ratio = market_cap / revenues
+        if fund.price_to_sales is None and rev is not None and rev > 0:
+            fund.price_to_sales = _div(mc, rev)
+
+        # P/FCF = market_cap / operating_cash_flow
+        if fund.price_to_free_cash_flow is None and ocf is not None and ocf > 0:
+            fund.price_to_free_cash_flow = _div(mc, ocf)
+
+        # EV/EBITDA — Enterprise Value = market_cap + total_debt - cash
+        # EBITDA proxy = operating_income (depreciation not separately available)
+        if fund.ev_to_ebitda is None and mc and oi is not None and oi > 0:
+            debt = ltd if ltd is not None else 0
+            cash_val = cash if cash is not None else 0
+            ev = mc + debt - cash_val
+            fund.ev_to_ebitda = ev / oi
+            if fund.enterprise_value is None:
+                fund.enterprise_value = ev
+
+        # EV/Sales
+        if fund.ev_to_sales is None and rev is not None and rev > 0:
+            if fund.enterprise_value is not None:
+                fund.ev_to_sales = fund.enterprise_value / rev
+            elif mc:
+                debt = ltd if ltd is not None else 0
+                cash_val = cash if cash is not None else 0
+                ev = mc + debt - cash_val
+                fund.ev_to_sales = ev / rev
+
+        # ROE = net_income / equity
+        if fund.return_on_equity is None:
+            fund.return_on_equity = _div(ni, eq)
+
+        # ROA = net_income / total_assets
+        if fund.return_on_assets is None:
+            fund.return_on_assets = _div(ni, ta)
+
+        # EPS (use pre-computed diluted EPS from SEC filing)
+        if fund.earnings_per_share is None and diluted_eps is not None:
+            fund.earnings_per_share = diluted_eps
+
+        # Dividend yield = (annual dividend * frequency) / price
+        # If we have dividend_amount from _fill_dividends, compute yield
+        if fund.dividend_yield is None and fund.dividend_amount and fund.price:
+            # Assume quarterly dividends (most common in US equities)
+            annual_div = fund.dividend_amount * 4
+            if fund.price > 0:
+                fund.dividend_yield = annual_div / fund.price
 
         # ── YoY growth (always computed from 2-period comparison) ──
         prev = self._extract_financial_values(financials_list[1]) if len(financials_list) >= 2 else {}
 
         if prev:
-            curr_ni = curr.get("net_income")
-            prev_ni = prev.get("net_income")
+            curr_ni = _num(curr.get("net_income"))
+            prev_ni = _num(prev.get("net_income"))
             if curr_ni is not None and prev_ni is not None and prev_ni != 0:
                 fund.earnings_growth = (curr_ni - prev_ni) / abs(prev_ni)
 
-            curr_rev = curr.get("revenues")
-            prev_rev = prev.get("revenues")
+            curr_rev = _num(curr.get("revenues"))
+            prev_rev = _num(prev.get("revenues"))
             if curr_rev is not None and prev_rev is not None and prev_rev != 0:
                 fund.revenue_growth = (curr_rev - prev_rev) / abs(prev_rev)
 
-        # PEG ratio
+        # PEG ratio = P/E / earnings_growth_pct
         if (fund.peg_ratio is None and mc and ni and ni > 0 and
                 fund.earnings_growth is not None and fund.earnings_growth > 0):
             pe_ratio = mc / ni
@@ -957,38 +1081,50 @@ class PolygonDataProvider:
 
     @staticmethod
     def _extract_financial_values(financials_obj: Any) -> dict[str, float | None]:
-        """Extract key numeric values from a Massive financials object."""
+        """Extract key numeric values from a Massive financials object.
+
+        Pulls all fields needed to compute: P/E, P/B, P/S, P/FCF, EV/EBITDA,
+        D/E, current ratio, quick ratio, ROE, ROA, FCF yield, EPS, dividend yield.
+        """
         result: dict[str, float | None] = {}
         if not financials_obj or not hasattr(financials_obj, "financials"):
             return result
         fin = financials_obj.financials
 
+        def _val(obj, attr):
+            """Safely extract .value from a financial line item."""
+            item = getattr(obj, attr, None)
+            if item is None:
+                return None
+            return getattr(item, "value", None)
+
         if hasattr(fin, "income_statement"):
             inc = fin.income_statement
-            rev = getattr(inc, "revenues", None)
-            if rev:
-                result["revenues"] = getattr(rev, "value", None)
-            ni = getattr(inc, "net_income_loss", None)
-            if ni:
-                result["net_income"] = getattr(ni, "value", None)
+            result["revenues"] = _val(inc, "revenues")
+            result["net_income"] = _val(inc, "net_income_loss")
+            result["operating_income"] = _val(inc, "operating_income_loss")
+            result["gross_profit"] = _val(inc, "gross_profit")
+            result["cost_of_revenue"] = _val(inc, "cost_of_revenue")
+            result["income_before_tax"] = _val(inc, "income_loss_from_continuing_operations_before_tax")
+            result["interest_expense"] = _val(inc, "interest_and_debt_expense")
+            result["diluted_eps"] = _val(inc, "diluted_earnings_per_share")
+            result["diluted_shares"] = _val(inc, "diluted_average_shares")
 
         if hasattr(fin, "balance_sheet"):
             bs = fin.balance_sheet
-            for key, attr in [
-                ("total_assets", "assets"),
-                ("total_liabilities", "liabilities"),
-                ("equity", "equity"),
-                ("current_assets", "current_assets"),
-                ("current_liabilities", "current_liabilities"),
-            ]:
-                val = getattr(bs, attr, None)
-                if val:
-                    result[key] = getattr(val, "value", None)
+            result["total_assets"] = _val(bs, "assets")
+            result["total_liabilities"] = _val(bs, "liabilities")
+            result["equity"] = _val(bs, "equity")
+            result["current_assets"] = _val(bs, "current_assets")
+            result["current_liabilities"] = _val(bs, "current_liabilities")
+            result["inventory"] = _val(bs, "inventory")
+            result["long_term_debt"] = _val(bs, "long_term_debt")
+            result["cash"] = _val(bs, "cash")
+            result["noncurrent_liabilities"] = _val(bs, "noncurrent_liabilities")
 
         if hasattr(fin, "cash_flow_statement"):
             cf = fin.cash_flow_statement
-            op_cf = getattr(cf, "net_cash_flow_from_operating_activities", None)
-            if op_cf:
-                result["operating_cash_flow"] = getattr(op_cf, "value", None)
+            result["operating_cash_flow"] = _val(cf, "net_cash_flow_from_operating_activities")
+            result["capex"] = _val(cf, "net_cash_flow_from_investing_activities")
 
         return result
