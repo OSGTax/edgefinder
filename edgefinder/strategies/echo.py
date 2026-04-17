@@ -71,6 +71,27 @@ class EchoStrategy(BaseStrategy):
         return ["ema_crossover_bearish", "volume_spike_bearish"]
 
     @property
+    def scoring_profile(self):
+        """Broad scoring: balanced across growth, value, and momentum factors.
+
+        Echo casts a wide net since it delegates signal selection to whichever
+        source strategy performs best in the current regime. The scoring just
+        ensures the watchlist covers stocks that any strategy might want.
+        """
+        from edgefinder.scanner.scoring import ScoringFactor, ScoringProfile
+        return ScoringProfile(
+            factors=[
+                ScoringFactor("earnings_growth", 0.20, "high"),
+                ScoringFactor("revenue_growth", 0.20, "high"),
+                ScoringFactor("fcf_yield", 0.15, "high"),
+                ScoringFactor("return_on_equity", 0.15, "high"),
+                ScoringFactor("ev_to_ebitda", 0.15, "low"),
+                ScoringFactor("peg_ratio", 0.15, "low"),
+            ],
+            top_n=50,
+        )
+
+    @property
     def risk_config(self) -> dict:
         """Conservative risk — Echo should be careful since it's learning."""
         return {"max_risk_pct": 0.02, "max_concentration_pct": 0.20}
