@@ -371,3 +371,61 @@ class TradeContext(Base):
     dividends: Mapped[dict | None] = mapped_column(JSON)
     indicators: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 16. agent_observations ─────────────────────────────
+
+
+class AgentObservation(Base):
+    """Findings reported by management agents (watchdog, strategist, ...).
+
+    Observations are read by the dashboard for a unified audit view and
+    by other agents to decide whether a finding needs follow-up action.
+    """
+
+    __tablename__ = "agent_observations"
+    __table_args__ = (
+        Index("idx_agent_obs_agent_ts", "agent_name", "timestamp"),
+        Index("idx_agent_obs_unresolved", "resolved_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(50), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    severity: Mapped[str] = mapped_column(String(10))  # INFO | WARN | ERROR | CRITICAL
+    category: Mapped[str] = mapped_column(String(50), index=True)
+    message: Mapped[str] = mapped_column(Text)
+    obs_metadata: Mapped[dict | None] = mapped_column(JSON)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+
+# ── 17. agent_actions ──────────────────────────────────
+
+
+class AgentAction(Base):
+    """Actions taken by management agents — diagnoses, proposals, PRs.
+
+    Actions are the write-side counterpart to observations: every change
+    an agent makes to the system (commit, PR, comment, diagnostic write)
+    lands here so postmortems read a single timeline of agent activity.
+    """
+
+    __tablename__ = "agent_actions"
+    __table_args__ = (
+        Index("idx_agent_act_agent_ts", "agent_name", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(50), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    action_type: Mapped[str] = mapped_column(String(30))  # diagnose | propose_param | propose_strategy | open_pr | comment
+    summary: Mapped[str] = mapped_column(String(500))
+    files_touched: Mapped[list | None] = mapped_column(JSON)
+    commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pr_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | submitted | merged | rejected
+    observation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_observations.id"), nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)

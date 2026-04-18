@@ -38,6 +38,9 @@ data/cache/
 config/secrets.env
 .env
 
+# Management-agent runtime config — kill switch lives here, must be per-env
+.claude/agent-config.json
+
 # OS
 .DS_Store
 Thumbs.db

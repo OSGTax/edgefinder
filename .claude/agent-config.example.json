@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy to .claude/agent-config.json (gitignored) and edit per environment. The file is re-read on every is_agent_enabled() call, so flipping a switch takes effect without a redeploy. Missing or invalid file => all agents disabled.",
+  "enabled": true,
+  "agents": {
+    "watchdog": {
+      "enabled": false,
+      "interval_minutes": 15,
+      "auto_open_issues": false,
+      "drift_threshold_pct": 0.01,
+      "signal_check_staleness_minutes": 10
+    },
+    "strategist": {
+      "enabled": false,
+      "max_proposals_per_week": 3,
+      "auto_open_prs": false,
+      "backtest_required": true,
+      "min_sharpe_improvement": 0.10
+    }
+  }
+}
