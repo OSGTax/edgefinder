@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "EdgeFinder",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+  },
+  "postCreateCommand": "pip install -e '.[dev]' && npm install -g @anthropic-ai/claude-code",
+  "secrets": {
+    "DATABASE_URL": {
+      "description": "Supabase pooler URL (same value used in Render and GitHub Actions)."
+    },
+    "CLAUDE_CODE_OAUTH_TOKEN": {
+      "description": "Generate locally with `claude setup-token`. Used by `claude -p` in the watchdog reasoning step."
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff"
+      ]
+    }
+  }
+}

@@ -302,3 +302,27 @@ Default reasoning model is `claude-opus-4-7`. Downgrade to Sonnet 4.6
 via the `WATCHDOG_REASONING_MODEL` env var in the workflow
 (`claude-sonnet-4-6`) if you want to conserve subscription quota on a
 larger cron schedule.
+
+### Running the watchdog from a Codespace (interactive / dev)
+The GitHub Actions cron runs unattended on a schedule; a Codespace is
+for running ticks on demand while you iterate, or sanity-checking
+changes before merge.
+
+1. **Set Codespaces secrets** (one-time, per-user): GitHub → Settings
+   → Codespaces → Secrets. Add `DATABASE_URL` and
+   `CLAUDE_CODE_OAUTH_TOKEN`, scoped to this repo. They appear as env
+   vars in every Codespace you open.
+2. **Open the repo in a Codespace** (green Code button → Codespaces).
+   The committed `.devcontainer/devcontainer.json` installs Python +
+   Node + the package + `@anthropic-ai/claude-code` on container
+   create, so the environment is ready without manual setup.
+3. **Run ticks on demand:**
+   ```bash
+   python -m edgefinder.agents.watchdog --force         # deterministic checks
+   python -m edgefinder.agents.reasoning --force        # LLM step
+   python -m edgefinder.agents.watchdog --dry-run       # preview without writes
+   ```
+
+Do NOT use a Codespace as the cron itself — Codespaces auto-stop after
+30 min idle and burn paid minutes while alive. Keep the unattended
+schedule on GitHub Actions (`.github/workflows/watchdog.yml`).
