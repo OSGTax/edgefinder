@@ -280,38 +280,74 @@ postmortems read a single timeline alongside the trades table.
   - Cron: `.github/workflows/watchdog.yml` (hourly, kill-switch via
     `WATCHDOG_ENABLED` repo variable).
 
-### Enabling the watchdog cron for the first time
-The reasoning step uses the user's Claude Pro/Max/Team/Enterprise
-subscription via `claude -p` — no Anthropic API key is used.
+### Automation model — set it once, runs itself forever
+The watchdog is designed to be fully unattended after a 5-minute
+setup. After step 3 below, you never touch it again unless you want
+to pause it or read what it's learned.
 
-1. Generate a long-lived OAuth token locally (valid ~1 year):
+**What runs on its own, with no prompting:**
+- GitHub Actions cron fires every hour Mon-Fri (covers both EDT +
+  EST via a wide UTC range).
+- Python skips cleanly outside the ET active window (08:30-17:00)
+  so only ~10 ticks per day actually do work.
+- Each tick: SQL checks → write observations → call Claude via
+  `claude -p` → record decisions → update memory.
+- DST rollovers are handled automatically by `zoneinfo` in the
+  Python layer — nothing to adjust twice a year.
+- Memory accumulates across ticks. Known false positives get
+  suppressed without code changes.
+- Kill switch is a GitHub repo variable, not code — flipping it
+  off takes seconds and requires no deploy.
+
+**What requires a human (one-time, ~5 minutes):**
+1. **Mint a subscription token.** On a machine with Claude Code
+   installed (including a Codespace):
    ```bash
-   claude setup-token     # walks you through browser OAuth, prints a token
+   claude setup-token   # browser OAuth; prints a long-lived token
    ```
-2. Repo → Settings → Secrets and variables → Actions:
+2. **Add three settings** to GitHub → Settings → Secrets and
+   variables → Actions:
    - Secret `DATABASE_URL` = Supabase pooler URL (same as Render).
    - Secret `CLAUDE_CODE_OAUTH_TOKEN` = the token from step 1.
    - Variable `WATCHDOG_ENABLED` = `true`.
-3. Actions → Watchdog → Run workflow (smoke test the cron).
-4. Check `agent_observations` for findings and `agent_memory` for the
-   memory row. A clean system should produce 0 observations on the
-   first tick; `agent_memory` starts with a default placeholder.
+3. **Smoke test.** GitHub → Actions → Watchdog → Run workflow. If
+   the run goes green and you see a `tick done` line in the logs,
+   the cron will take over on the next scheduled hour.
+
+**What requires a human (recurring):** nothing, by design. The
+agent records its decisions to `agent_actions` but does not yet
+auto-create GitHub issues on CRITICAL escalations — that is the
+next automation step. Today you learn about escalations by
+occasionally running `SELECT * FROM agent_actions WHERE status =
+'pending' ORDER BY timestamp DESC` or by reading `agent_memory`.
+See "Next automation step" below to close that loop.
+
+### Pausing the watchdog
+Flip the `WATCHDOG_ENABLED` repo variable to `false`. The workflow
+`if:` gate skips the entire job — no deploy, no downtime, instant.
 
 ### Model selection
 Default reasoning model is `claude-opus-4-7`. Downgrade to Sonnet 4.6
-via the `WATCHDOG_REASONING_MODEL` env var in the workflow
-(`claude-sonnet-4-6`) if you want to conserve subscription quota on a
-larger cron schedule.
+via `WATCHDOG_REASONING_MODEL=claude-sonnet-4-6` in the workflow env
+if you want to conserve subscription quota on a larger cron schedule.
+
+### Next automation step (not yet built)
+To make the loop fully hands-off: add a step at the end of the
+workflow that reads `agent_actions` rows with `status='pending'` and
+`action_type='diagnose'` from the current tick, then calls
+`mcp__github__issue_write` (GitHub MCP) to create an issue for each
+one, and updates the row to `status='submitted'`. Then every
+escalation reaches you as a GitHub notification with no manual
+checking. Ping in a future session to build this.
 
 ### Running the watchdog from a Codespace (interactive / dev)
-The GitHub Actions cron runs unattended on a schedule; a Codespace is
-for running ticks on demand while you iterate, or sanity-checking
-changes before merge.
+The Codespace is for running ticks on demand while you iterate, not
+for replacing the cron. Unattended scheduling stays on GitHub
+Actions because Codespaces auto-stop after 30 min idle.
 
-1. **Set Codespaces secrets** (one-time, per-user): GitHub → Settings
-   → Codespaces → Secrets. Add `DATABASE_URL` and
-   `CLAUDE_CODE_OAUTH_TOKEN`, scoped to this repo. They appear as env
-   vars in every Codespace you open.
+1. **Set Codespaces secrets** (one-time, per-user): GitHub →
+   Settings → Codespaces → Secrets. Add `DATABASE_URL` and
+   `CLAUDE_CODE_OAUTH_TOKEN`, scoped to this repo.
 2. **Open the repo in a Codespace** (green Code button → Codespaces).
    The committed `.devcontainer/devcontainer.json` installs Python +
    Node + the package + `@anthropic-ai/claude-code` on container
@@ -322,7 +358,3 @@ changes before merge.
    python -m edgefinder.agents.reasoning --force        # LLM step
    python -m edgefinder.agents.watchdog --dry-run       # preview without writes
    ```
-
-Do NOT use a Codespace as the cron itself — Codespaces auto-stop after
-30 min idle and burn paid minutes while alive. Keep the unattended
-schedule on GitHub Actions (`.github/workflows/watchdog.yml`).
