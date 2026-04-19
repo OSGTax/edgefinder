@@ -18,6 +18,7 @@ from edgefinder.agents.journal import (
     record_observation,
     resolve_observation,
 )
+from edgefinder.agents.memory import load_memory, save_memory
 from edgefinder.agents.watchdog import (
     ObservationSpec,
     persist_checks,
@@ -33,6 +34,8 @@ __all__ = [
     "record_action",
     "record_observation",
     "resolve_observation",
+    "load_memory",
+    "save_memory",
     "ObservationSpec",
     "persist_checks",
     "run_checks",
