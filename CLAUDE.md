@@ -281,18 +281,24 @@ postmortems read a single timeline alongside the trades table.
     `WATCHDOG_ENABLED` repo variable).
 
 ### Enabling the watchdog cron for the first time
-1. Repo → Settings → Secrets and variables → Actions:
+The reasoning step uses the user's Claude Pro/Max/Team/Enterprise
+subscription via `claude -p` — no Anthropic API key is used.
+
+1. Generate a long-lived OAuth token locally (valid ~1 year):
+   ```bash
+   claude setup-token     # walks you through browser OAuth, prints a token
+   ```
+2. Repo → Settings → Secrets and variables → Actions:
    - Secret `DATABASE_URL` = Supabase pooler URL (same as Render).
-   - Secret `ANTHROPIC_API_KEY` = your Anthropic API key (for the
-     reasoning step).
+   - Secret `CLAUDE_CODE_OAUTH_TOKEN` = the token from step 1.
    - Variable `WATCHDOG_ENABLED` = `true`.
-2. Actions → Watchdog → Run workflow (smoke test the cron).
-3. Check `agent_observations` for findings and `agent_memory` for the
+3. Actions → Watchdog → Run workflow (smoke test the cron).
+4. Check `agent_observations` for findings and `agent_memory` for the
    memory row. A clean system should produce 0 observations on the
    first tick; `agent_memory` starts with a default placeholder.
 
-### Model selection / cost
+### Model selection
 Default reasoning model is `claude-opus-4-7`. Downgrade to Sonnet 4.6
-for lower cost via the `WATCHDOG_REASONING_MODEL` env var in the
-workflow (`claude-sonnet-4-6`). With prompt caching on the system
-prompt + memory, a typical tick costs <$0.02 after the first one.
+via the `WATCHDOG_REASONING_MODEL` env var in the workflow
+(`claude-sonnet-4-6`) if you want to conserve subscription quota on a
+larger cron schedule.
