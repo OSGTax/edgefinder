@@ -18,6 +18,12 @@ from edgefinder.agents.journal import (
     record_observation,
     resolve_observation,
 )
+from edgefinder.agents.watchdog import (
+    ObservationSpec,
+    persist_checks,
+    run_checks,
+    run_once,
+)
 
 __all__ = [
     "AgentConfigError",
@@ -27,4 +33,8 @@ __all__ = [
     "record_action",
     "record_observation",
     "resolve_observation",
+    "ObservationSpec",
+    "persist_checks",
+    "run_checks",
+    "run_once",
 ]
