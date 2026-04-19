@@ -20,8 +20,9 @@ import argparse
 import logging
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -34,6 +35,21 @@ from edgefinder.db.models import AgentObservation, StrategyAccount, TradeRecord
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "watchdog"
+
+# Active window: 1 hour before market open to 1 hour after market close, ET.
+# Hard-coded to real US equity market hours (9:30-16:00 ET). If the user
+# wants pre-market/after-hours monitoring, expose these as settings.
+_ACTIVE_WINDOW_START_ET = time(8, 30)  # 1h before 9:30 open
+_ACTIVE_WINDOW_END_ET = time(17, 0)    # 1h after 16:00 close
+_ET = ZoneInfo("America/New_York")
+
+
+def is_in_active_window(now: datetime | None = None) -> bool:
+    """True if current time (ET) is Mon-Fri, 08:30 to 17:00 inclusive."""
+    current = (now or datetime.now(timezone.utc)).astimezone(_ET)
+    if current.weekday() >= 5:  # Sat=5, Sun=6
+        return False
+    return _ACTIVE_WINDOW_START_ET <= current.time() <= _ACTIVE_WINDOW_END_ET
 
 
 @dataclass(frozen=True)
@@ -296,9 +312,22 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Run checks and print findings but do not persist",
     )
+    parser.add_argument(
+        "--ignore-window",
+        action="store_true",
+        help="Run even outside the active market window (Mon-Fri 08:30-17:00 ET)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    if not args.ignore_window and not is_in_active_window():
+        logger.info(
+            "[%s] outside active window (Mon-Fri 08:30-17:00 ET) — exiting cleanly "
+            "(use --ignore-window to override)",
+            args.agent_name,
+        )
+        return 0
 
     cfg = get_agent_config(args.agent_name)
     if not cfg.enabled and not args.force:

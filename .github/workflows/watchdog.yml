@@ -1,29 +1,39 @@
 name: Watchdog
 
 # Runs the EdgeFinder watchdog management agent on a schedule. Each tick
-# connects to the production DB, runs invariant checks (cash drift,
-# negative cash, paused accounts, high drawdown), and writes findings
-# to the agent_observations table. See edgefinder/agents/watchdog.py
-# for the checks themselves.
+# has two phases:
+#   1. Deterministic SQL checks (edgefinder.agents.watchdog) — writes
+#      observations to the DB. Cheap, fast, always runs first.
+#   2. Agentic reasoning (edgefinder.agents.reasoning) — calls Claude
+#      over the observations + persistent memory + recent trades +
+#      recent trading commits. Returns structured decisions per
+#      observation (escalate/investigate/monitor/dismiss) and an
+#      optional memory update. This is the "learning" layer.
+#
+# Cron fires hourly, but the Python entry points skip cleanly outside
+# the active window (Mon-Fri 08:30-17:00 ET). This is DST-safe: the
+# cron range covers both EDT (UTC-4) and EST (UTC-5), and the ET-aware
+# window check filters down to the correct local hours.
 #
 # --- Enabling ---------------------------------------------------------
-# 1. GitHub repo → Settings → Secrets and variables → Actions:
-#      - Secrets:   DATABASE_URL            (Supabase pooler URL)
-#      - Variables: WATCHDOG_ENABLED=true   (kill switch — set to 'false' to pause)
-# 2. GitHub repo → Actions → "Watchdog" → Run workflow (smoke test).
-# 3. Wait for the next scheduled run, or leave 'workflow_dispatch' runs
-#    as the primary trigger until the cron's noise level is understood.
+# 1. Repo → Settings → Secrets and variables → Actions:
+#      - Secrets:   DATABASE_URL           (Supabase pooler URL)
+#                   ANTHROPIC_API_KEY      (for the reasoning step)
+#      - Variables: WATCHDOG_ENABLED=true  (job-level kill switch)
+# 2. Actions → "Watchdog" → Run workflow (smoke test via workflow_dispatch).
 #
 # --- Stopping ---------------------------------------------------------
-# Flip the WATCHDOG_ENABLED variable to 'false' — no deploy needed, the
-# `if:` gate below skips the entire job.
+# Flip WATCHDOG_ENABLED to 'false' — no deploy. The `if:` gate below
+# skips the entire job.
 
 on:
   schedule:
-    # Every 15 minutes. Adjust downward (eg "0,30 * * * *" for every 30
-    # min) if the run volume on free-tier GitHub Actions becomes a cost
-    # concern.
-    - cron: '*/15 * * * *'
+    # Every hour on the hour, Mon-Fri, covering both EDT (12:00-21:00
+    # UTC = 08:00-17:00 ET) and EST (13:00-22:00 UTC = 08:00-17:00 ET).
+    # The Python entry points apply the precise ET window filter, so
+    # running a few extra crons outside the window is free (they exit
+    # at ~0.5s without writing or calling Claude).
+    - cron: '0 12-22 * * 1-5'
   workflow_dispatch: {}
 
 permissions:
@@ -35,12 +45,11 @@ jobs:
     if: vars.WATCHDOG_ENABLED == 'true'
     timeout-minutes: 5
     concurrency:
-      # Prior tick still running? Kill it — we care about the latest
-      # snapshot, not serializing a backlog.
       group: watchdog-tick
       cancel-in-progress: true
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,9 +61,21 @@ jobs:
       - name: Install package
         run: pip install -e .
 
-      - name: Run watchdog tick
-        # --force bypasses the .claude/agent-config.json kill switch
-        # because that file is intentionally gitignored (per-env). The
-        # GitHub Actions `if: vars.WATCHDOG_ENABLED == 'true'` gate above
-        # IS the kill switch for the cron.
+      - name: Deterministic checks
+        # Writes observations to the DB. The --force flag bypasses the
+        # .claude/agent-config.json kill switch (that file is gitignored,
+        # so it's never present in CI). The GH `vars.WATCHDOG_ENABLED`
+        # gate on the job IS the kill switch for the cron.
+        #
+        # --ignore-window is omitted intentionally: during the 4-5 cron
+        # runs that fall outside the ET active window (two at the DST
+        # boundaries), this exits in <1s without doing anything.
         run: python -m edgefinder.agents.watchdog --force
+
+      - name: Agentic reasoning
+        # Only runs if the deterministic step wrote observations that
+        # are now unresolved. Calls Claude over them + the agent's
+        # persistent memory. Records AgentActions for meaningful
+        # decisions and may rewrite the memory.
+        if: success()
+        run: python -m edgefinder.agents.reasoning --force

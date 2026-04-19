@@ -253,20 +253,46 @@ postmortems read a single timeline alongside the trades table.
   set to anything other than `'true'`. No redeploy needed.
 
 ### Agents
-- **watchdog** (`edgefinder/agents/watchdog.py`) — DB-only health
-  monitor. Checks cash drift, negative cash, paused accounts, high
-  drawdown. Reconciles against unresolved observations so conditions
-  that clear are auto-resolved and persisting conditions don't spam.
-  Run one tick:
+- **watchdog** — two-phase management agent:
+  1. **Deterministic checks** (`edgefinder/agents/watchdog.py`) — DB-only
+     SQL checks: cash drift, negative cash, paused accounts, high
+     drawdown. Writes to `agent_observations`, reconciles against
+     prior unresolved rows (dedup + auto-resolve).
+  2. **Agentic reasoning** (`edgefinder/agents/reasoning.py`) — calls
+     Claude (default `claude-opus-4-7`, adaptive thinking, prompt
+     caching on system + memory) over the current observations + the
+     agent's persistent memory (`agent_memory` table) + recent trades
+     + recent trading-path commits. Returns structured decisions per
+     observation (escalate/investigate/monitor/dismiss) and an
+     optional memory update. Records AgentActions only for
+     escalate/investigate decisions (no audit noise for routine
+     ticks).
+
+  Both steps respect an **active-window check**: Mon-Fri 08:30-17:00
+  ET (one hour before market open to one hour after close). Outside
+  the window they exit cleanly without work. Override with
+  `--ignore-window`.
+
+  Entry points:
   - Interactive: `/watchdog-tick` in a Claude Code session.
-  - CLI: `python -m edgefinder.agents.watchdog [--dry-run] [--force]`.
-  - Cron: `.github/workflows/watchdog.yml` (every 15 min when
-    `WATCHDOG_ENABLED=true`).
+  - CLI deterministic: `python -m edgefinder.agents.watchdog [--dry-run] [--force] [--ignore-window]`.
+  - CLI reasoning: `python -m edgefinder.agents.reasoning [--force] [--model MODEL]`.
+  - Cron: `.github/workflows/watchdog.yml` (hourly, kill-switch via
+    `WATCHDOG_ENABLED` repo variable).
 
 ### Enabling the watchdog cron for the first time
 1. Repo → Settings → Secrets and variables → Actions:
    - Secret `DATABASE_URL` = Supabase pooler URL (same as Render).
+   - Secret `ANTHROPIC_API_KEY` = your Anthropic API key (for the
+     reasoning step).
    - Variable `WATCHDOG_ENABLED` = `true`.
 2. Actions → Watchdog → Run workflow (smoke test the cron).
-3. Check `agent_observations` for the first findings. A clean system
-   should produce 0 rows on the first tick.
+3. Check `agent_observations` for findings and `agent_memory` for the
+   memory row. A clean system should produce 0 observations on the
+   first tick; `agent_memory` starts with a default placeholder.
+
+### Model selection / cost
+Default reasoning model is `claude-opus-4-7`. Downgrade to Sonnet 4.6
+for lower cost via the `WATCHDOG_REASONING_MODEL` env var in the
+workflow (`claude-sonnet-4-6`). With prompt caching on the system
+prompt + memory, a typical tick costs <$0.02 after the first one.

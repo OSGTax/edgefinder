@@ -429,3 +429,28 @@ class AgentAction(Base):
         ForeignKey("agent_observations.id"), nullable=True
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# ── 18. agent_memory ───────────────────────────────────
+
+
+class AgentMemory(Base):
+    """Persistent memory for each management agent — the agent's
+    "learning" across ticks.
+
+    The reasoning step reads this content before calling the LLM and
+    may rewrite it to capture new patterns, known false positives, or
+    recent resolutions. One row per agent_name.
+    """
+
+    __tablename__ = "agent_memory"
+    __table_args__ = (
+        UniqueConstraint("agent_name", name="uq_agent_memory_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(50), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
