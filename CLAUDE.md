@@ -236,3 +236,37 @@ python -m pytest tests/ -v -m integration          # Integration tests (hits Pol
 - Run tests before every commit
 - Commit format: `[vX.Y] short description`
 - **Version bump required**: Every merge to main that changes functionality must update `__version__` in `dashboard/app.py`. This version is displayed in the top-right corner of the dashboard via `/api/health`.
+
+## Management Agents
+
+Agent infrastructure lives under `edgefinder/agents/`. Each agent writes
+findings to `agent_observations` and changes to `agent_actions` so
+postmortems read a single timeline alongside the trades table.
+
+### Kill switches — two separate gates
+- **Interactive / Render**: `.claude/agent-config.json` (gitignored).
+  `is_agent_enabled("<name>")` reads it on every call. Missing file or
+  `enabled: false` ⇒ disabled. Example template:
+  `.claude/agent-config.example.json`.
+- **GitHub Actions cron**: the `WATCHDOG_ENABLED` repo variable. The
+  workflow's `if: vars.WATCHDOG_ENABLED == 'true'` skips the job when
+  set to anything other than `'true'`. No redeploy needed.
+
+### Agents
+- **watchdog** (`edgefinder/agents/watchdog.py`) — DB-only health
+  monitor. Checks cash drift, negative cash, paused accounts, high
+  drawdown. Reconciles against unresolved observations so conditions
+  that clear are auto-resolved and persisting conditions don't spam.
+  Run one tick:
+  - Interactive: `/watchdog-tick` in a Claude Code session.
+  - CLI: `python -m edgefinder.agents.watchdog [--dry-run] [--force]`.
+  - Cron: `.github/workflows/watchdog.yml` (every 15 min when
+    `WATCHDOG_ENABLED=true`).
+
+### Enabling the watchdog cron for the first time
+1. Repo → Settings → Secrets and variables → Actions:
+   - Secret `DATABASE_URL` = Supabase pooler URL (same as Render).
+   - Variable `WATCHDOG_ENABLED` = `true`.
+2. Actions → Watchdog → Run workflow (smoke test the cron).
+3. Check `agent_observations` for the first findings. A clean system
+   should produce 0 rows on the first tick.
