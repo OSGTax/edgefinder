@@ -1,38 +1,31 @@
 name: Watchdog
 
-# Runs the EdgeFinder watchdog management agent on a schedule. Each tick
-# has two phases:
+# Runs the EdgeFinder watchdog management agent on a schedule. Each tick:
 #   1. Deterministic SQL checks (edgefinder.agents.watchdog) — writes
-#      observations to the DB. Cheap, fast, always runs first.
+#      observations to the DB.
 #   2. Agentic reasoning (edgefinder.agents.reasoning) — calls Claude
-#      over the observations + persistent memory + recent trades +
-#      recent trading commits. Returns structured decisions per
-#      observation (escalate/investigate/monitor/dismiss) and an
-#      optional memory update. This is the "learning" layer.
+#      via the `claude -p` CLI using the CLAUDE_CODE_OAUTH_TOKEN secret.
+#      This consumes the user's Claude Pro/Max/Team/Enterprise
+#      subscription quota. No Anthropic API key is required or used.
 #
-# Cron fires hourly, but the Python entry points skip cleanly outside
-# the active window (Mon-Fri 08:30-17:00 ET). This is DST-safe: the
-# cron range covers both EDT (UTC-4) and EST (UTC-5), and the ET-aware
-# window check filters down to the correct local hours.
+# Cron fires hourly. The Python entry points skip cleanly outside the
+# active window (Mon-Fri 08:30-17:00 ET). DST-safe via zoneinfo.
 #
 # --- Enabling ---------------------------------------------------------
-# 1. Repo → Settings → Secrets and variables → Actions:
-#      - Secrets:   DATABASE_URL           (Supabase pooler URL)
-#                   ANTHROPIC_API_KEY      (for the reasoning step)
-#      - Variables: WATCHDOG_ENABLED=true  (job-level kill switch)
-# 2. Actions → "Watchdog" → Run workflow (smoke test via workflow_dispatch).
+# 1. Generate a long-lived OAuth token locally:
+#      $ claude setup-token        # walks you through browser OAuth
+# 2. Repo → Settings → Secrets and variables → Actions:
+#      - Secrets:   DATABASE_URL              (Supabase pooler URL)
+#                   CLAUDE_CODE_OAUTH_TOKEN   (the token from step 1)
+#      - Variables: WATCHDOG_ENABLED=true     (job-level kill switch)
+# 3. Actions → "Watchdog" → Run workflow (smoke test).
 #
 # --- Stopping ---------------------------------------------------------
-# Flip WATCHDOG_ENABLED to 'false' — no deploy. The `if:` gate below
-# skips the entire job.
+# Flip WATCHDOG_ENABLED to 'false' — no deploy. The `if:` gate skips
+# the entire job.
 
 on:
   schedule:
-    # Every hour on the hour, Mon-Fri, covering both EDT (12:00-21:00
-    # UTC = 08:00-17:00 ET) and EST (13:00-22:00 UTC = 08:00-17:00 ET).
-    # The Python entry points apply the precise ET window filter, so
-    # running a few extra crons outside the window is free (they exit
-    # at ~0.5s without writing or calling Claude).
     - cron: '0 12-22 * * 1-5'
   workflow_dispatch: {}
 
@@ -49,7 +42,7 @@ jobs:
       cancel-in-progress: true
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,24 +51,19 @@ jobs:
           python-version: '3.11'
           cache: pip
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install claude binary
+        run: npm install -g @anthropic-ai/claude-code
+
       - name: Install package
         run: pip install -e .
 
       - name: Deterministic checks
-        # Writes observations to the DB. The --force flag bypasses the
-        # .claude/agent-config.json kill switch (that file is gitignored,
-        # so it's never present in CI). The GH `vars.WATCHDOG_ENABLED`
-        # gate on the job IS the kill switch for the cron.
-        #
-        # --ignore-window is omitted intentionally: during the 4-5 cron
-        # runs that fall outside the ET active window (two at the DST
-        # boundaries), this exits in <1s without doing anything.
         run: python -m edgefinder.agents.watchdog --force
 
       - name: Agentic reasoning
-        # Only runs if the deterministic step wrote observations that
-        # are now unresolved. Calls Claude over them + the agent's
-        # persistent memory. Records AgentActions for meaningful
-        # decisions and may rewrite the memory.
         if: success()
         run: python -m edgefinder.agents.reasoning --force

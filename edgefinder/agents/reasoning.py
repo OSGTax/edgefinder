@@ -203,64 +203,103 @@ def _parse_response(raw_text: str) -> ReasoningResult:
     )
 
 
+def _extract_json_object(text: str) -> str:
+    """Return the first top-level JSON object substring in text.
+
+    The Claude Code CLI prompts for JSON but sometimes returns prose
+    wrapping ("Sure, here's the JSON: {...}"). Strip to the first
+    balanced braces. Fail hard if none found so the caller sees the
+    raw output.
+    """
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return text[start : i + 1]
+    raise ValueError(f"No JSON object found in response: {text[:200]!r}")
+
+
+def _call_claude_cli(
+    system_prompt: str,
+    memory: str,
+    user_content: str,
+    model: str,
+    runner: Any | None = None,
+) -> str:
+    """Invoke `claude -p` and return the inner JSON text.
+
+    Consumes the Claude Pro/Max/Team/Enterprise subscription quota via
+    `CLAUDE_CODE_OAUTH_TOKEN` — no Anthropic API key required. The
+    prompt is piped via stdin (argv has length limits). `runner`
+    defaults to subprocess.run; tests inject a stub.
+    """
+    runner = runner or subprocess.run
+
+    if not os.getenv("CLAUDE_CODE_OAUTH_TOKEN"):
+        raise RuntimeError(
+            "CLAUDE_CODE_OAUTH_TOKEN not set. Generate locally with "
+            "`claude setup-token` and add it as a GitHub Actions secret."
+        )
+
+    schema_str = json.dumps(RESPONSE_SCHEMA, indent=2)
+    prompt = (
+        f"{system_prompt}\n\n"
+        f"## Required output schema (JSON Schema draft 2020-12)\n\n"
+        f"```json\n{schema_str}\n```\n\n"
+        f"## Current agent memory\n\n{memory}\n\n"
+        f"## Input\n\n{user_content}\n\n"
+        "Respond with ONE JSON object that validates against the schema above. "
+        "No markdown fences, no commentary, no text outside the JSON."
+    )
+
+    result = runner(
+        ["claude", "-p", "--model", model, "--output-format", "json"],
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"claude -p exited {result.returncode}: {result.stderr[:500]}"
+        )
+
+    envelope = json.loads(result.stdout)
+    response_text = envelope.get("result")
+    if not isinstance(response_text, str):
+        raise RuntimeError(
+            f"Unexpected claude -p envelope (no 'result' string): {result.stdout[:300]}"
+        )
+    return _extract_json_object(response_text)
+
+
 def reason_over_tick(
     observations: list[AgentObservation],
     memory: str,
     trade_summary: dict[str, Any] | None = None,
     commits: list[str] | None = None,
     model: str = DEFAULT_MODEL,
-    client: Any | None = None,
+    cli_runner: Any | None = None,
 ) -> ReasoningResult:
     """Call Claude over the tick's context and return structured decisions.
 
-    `client` defaults to a fresh anthropic.Anthropic() — tests inject a
-    mock. Model defaults to Opus 4.7; override via WATCHDOG_REASONING_MODEL.
+    Uses `claude -p` with the user's Claude subscription token. No
+    Anthropic API key is used or required.
     """
-    if client is None:
-        import anthropic
-        client = anthropic.Anthropic()
-
-    system_blocks = [
-        {
-            "type": "text",
-            "text": SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        },
-        {
-            "type": "text",
-            "text": f"## Current agent memory\n\n{memory}",
-            "cache_control": {"type": "ephemeral"},
-        },
-    ]
-
     user_content = _build_user_message(
         observations,
         trade_summary or {},
         commits or [],
     )
-
-    response = client.messages.create(
-        model=model,
-        max_tokens=MAX_OUTPUT_TOKENS,
-        thinking={"type": "adaptive"},
-        system=system_blocks,
-        messages=[{"role": "user", "content": user_content}],
-        output_config={
-            "format": {
-                "type": "json_schema",
-                "schema": RESPONSE_SCHEMA,
-            },
-        },
-    )
-
-    text = next(
-        (b.text for b in response.content if getattr(b, "type", None) == "text"),
-        None,
-    )
-    if text is None:
-        raise RuntimeError("Model returned no text block")
-
-    return _parse_response(text)
+    raw = _call_claude_cli(SYSTEM_PROMPT, memory, user_content, model, cli_runner)
+    return _parse_response(raw)
 
 
 # ── Orchestration ─────────────────────────────────────────
@@ -270,9 +309,9 @@ def run_reasoning(
     session: Session,
     agent_name: str = "watchdog",
     model: str | None = None,
-    client: Any | None = None,
+    cli_runner: Any | None = None,
 ) -> ReasoningResult:
-    """Full tick: load context, call LLM, persist actions + memory."""
+    """Full tick: load context, call Claude via `claude -p`, persist."""
     observations = (
         session.query(AgentObservation)
         .filter(
@@ -297,7 +336,7 @@ def run_reasoning(
         trade_summary=trade_summary,
         commits=commits,
         model=effective_model,
-        client=client,
+        cli_runner=cli_runner,
     )
 
     # Persist the agent's meaningful decisions as AgentActions. "Monitor"

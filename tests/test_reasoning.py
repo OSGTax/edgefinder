@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from types import SimpleNamespace
 
 import pytest
 
@@ -25,33 +24,38 @@ from edgefinder.db.models import (
 )
 
 
-# ── Mock Anthropic client ───────────────────────────────────
+# ── Mock subprocess runner ──────────────────────────────────
 
 
-class _FakeTextBlock:
-    def __init__(self, text: str) -> None:
-        self.type = "text"
-        self.text = text
+class _FakeCompletedProcess:
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
 
 
-class _FakeResponse:
-    def __init__(self, payload: dict) -> None:
-        self.content = [_FakeTextBlock(json.dumps(payload))]
+class _RecordingRunner:
+    """Stand-in for subprocess.run — captures args + returns a fixed result."""
 
-
-class _FakeMessages:
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
+    def __init__(self, result: _FakeCompletedProcess):
+        self.result = result
         self.calls: list[dict] = []
 
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        return _FakeResponse(self._payload)
+    def __call__(self, cmd, **kwargs):
+        self.calls.append({"cmd": cmd, **kwargs})
+        return self.result
 
 
-class _FakeClient:
-    def __init__(self, payload: dict) -> None:
-        self.messages = _FakeMessages(payload)
+def _envelope(payload: dict, wrapping: str | None = None) -> str:
+    """Build the `claude -p --output-format json` envelope."""
+    inner = json.dumps(payload)
+    if wrapping:
+        inner = wrapping.replace("{INNER}", inner)
+    return json.dumps({"type": "result", "result": inner})
+
+
+def _runner_for(payload: dict) -> _RecordingRunner:
+    return _RecordingRunner(_FakeCompletedProcess(stdout=_envelope(payload)))
 
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -70,6 +74,12 @@ def _make_obs(db_session, **kwargs) -> AgentObservation:
     return obs
 
 
+@pytest.fixture(autouse=True)
+def _fake_oauth_token(monkeypatch):
+    """All reasoning tests need CLAUDE_CODE_OAUTH_TOKEN to pass the env check."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "fake-token-for-tests")
+
+
 # ── Memory ──────────────────────────────────────────────────
 
 
@@ -77,7 +87,6 @@ class TestMemory:
     def test_load_missing_creates_default(self, db_session):
         content = load_memory(db_session, "watchdog")
         assert content == DEFAULT_MEMORY
-        # Persisted for future calls
         assert db_session.query(AgentMemory).count() == 1
 
     def test_save_then_load_roundtrip(self, db_session):
@@ -130,14 +139,14 @@ class TestParseResponse:
         assert result.memory_update is None
 
 
-# ── LLM call with mocked client ─────────────────────────────
+# ── CLI transport ───────────────────────────────────────────
 
 
-class TestReasonOverTick:
-    def test_sends_caching_and_adaptive_thinking(self, db_session):
-        obs = _make_obs(db_session, agent_name="watchdog")
+class TestCliTransport:
+    def test_builds_claude_cli_command(self, db_session):
+        obs = _make_obs(db_session)
         payload = {
-            "summary": "test",
+            "summary": "via cli",
             "decisions": [{
                 "observation_id": obs.id,
                 "assessment": "expected",
@@ -146,60 +155,92 @@ class TestReasonOverTick:
             }],
             "memory_update": None,
         }
-        client = _FakeClient(payload)
+        runner = _runner_for(payload)
 
-        reason_over_tick(
+        result = reason_over_tick(
             observations=[obs],
-            memory="# memory",
-            trade_summary={"alpha": {"count": 3, "pnl": 10.0}},
-            commits=["abc123 [v4.7.2] foo"],
-            client=client,
+            memory="# mem",
+            cli_runner=runner,
             model="claude-opus-4-7",
         )
 
-        assert len(client.messages.calls) == 1
-        call = client.messages.calls[0]
+        assert result.decisions[0].observation_id == obs.id
+        assert len(runner.calls) == 1
+        call = runner.calls[0]
+        # Command is `claude -p --model <M> --output-format json`
+        assert call["cmd"][0] == "claude"
+        assert "-p" in call["cmd"]
+        assert "--output-format" in call["cmd"] and "json" in call["cmd"]
+        assert "--model" in call["cmd"] and "claude-opus-4-7" in call["cmd"]
+        # Prompt is piped via stdin (argv length limits).
+        assert isinstance(call["input"], str) and len(call["input"]) > 100
 
-        assert call["model"] == "claude-opus-4-7"
-        assert call["thinking"] == {"type": "adaptive"}
-        assert call["output_config"]["format"]["type"] == "json_schema"
+    def test_cli_failure_raises(self, db_session):
+        obs = _make_obs(db_session)
+        runner = _RecordingRunner(_FakeCompletedProcess(returncode=1, stderr="auth failed"))
+        with pytest.raises(RuntimeError, match="auth failed"):
+            reason_over_tick(
+                observations=[obs],
+                memory="",
+                cli_runner=runner,
+            )
 
-        # Two cached system blocks: prompt + memory
-        system = call["system"]
-        assert len(system) == 2
-        assert all(b.get("cache_control") == {"type": "ephemeral"} for b in system)
+    def test_cli_extracts_json_from_wrapping_prose(self, db_session):
+        obs = _make_obs(db_session)
+        payload = {"summary": "ok", "decisions": [], "memory_update": None}
+        # Claude sometimes wraps JSON in apology/explanation — the CLI
+        # path must extract the first balanced JSON object.
+        wrapped = f"Sure, here's the JSON you asked for:\n\n{json.dumps(payload)}\n\nLet me know if you need anything else."
+        envelope = json.dumps({"type": "result", "result": wrapped})
+        runner = _RecordingRunner(_FakeCompletedProcess(stdout=envelope))
 
-        # User message is JSON carrying the observation + trade summary
-        user_content = call["messages"][0]["content"]
-        parsed = json.loads(user_content)
-        assert parsed["unresolved_observations"][0]["id"] == obs.id
-        assert parsed["recent_trades_24h"]["alpha"]["count"] == 3
-        assert parsed["recent_trading_commits"] == ["abc123 [v4.7.2] foo"]
+        result = reason_over_tick(
+            observations=[obs],
+            memory="",
+            cli_runner=runner,
+        )
+        assert result.summary == "ok"
+
+    def test_missing_oauth_token_raises(self, db_session, monkeypatch):
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        obs = _make_obs(db_session)
+        with pytest.raises(RuntimeError, match="CLAUDE_CODE_OAUTH_TOKEN not set"):
+            reason_over_tick(
+                observations=[obs],
+                memory="",
+                cli_runner=_RecordingRunner(_FakeCompletedProcess()),
+            )
 
 
 # ── Orchestration ───────────────────────────────────────────
 
 
+def _seed_account(db_session) -> None:
+    db_session.add(StrategyAccount(
+        strategy_name="alpha",
+        starting_capital=5000.0,
+        cash_balance=5000.0,
+        open_positions_value=0.0,
+        total_equity=5000.0,
+        peak_equity=5000.0,
+        drawdown_pct=0.0,
+    ))
+    db_session.commit()
+
+
 class TestRunReasoning:
     def test_no_observations_short_circuits(self, db_session):
-        result = run_reasoning(db_session, client=_FakeClient({}))
+        # Runner must not be invoked when there are no observations —
+        # pass a runner that raises if called.
+        def _boom(*_a, **_kw):
+            raise AssertionError("runner should not be called")
+        result = run_reasoning(db_session, cli_runner=_boom)
         assert result.decisions == []
         assert result.memory_update is None
-        # No LLM call made (client.messages would raise if it had been)
 
     def test_escalate_decision_records_action(self, db_session):
         obs = _make_obs(db_session)
-        # Give it a starting balance row so trade summary query succeeds.
-        db_session.add(StrategyAccount(
-            strategy_name="alpha",
-            starting_capital=5000.0,
-            cash_balance=5000.0,
-            open_positions_value=0.0,
-            total_equity=5000.0,
-            peak_equity=5000.0,
-            drawdown_pct=0.0,
-        ))
-        db_session.commit()
+        _seed_account(db_session)
 
         payload = {
             "summary": "escalating",
@@ -211,9 +252,8 @@ class TestRunReasoning:
             }],
             "memory_update": None,
         }
-        result = run_reasoning(db_session, client=_FakeClient(payload))
+        run_reasoning(db_session, cli_runner=_runner_for(payload))
 
-        assert len(result.decisions) == 1
         actions = db_session.query(AgentAction).all()
         assert len(actions) == 1
         assert actions[0].action_type == "diagnose"
@@ -222,13 +262,7 @@ class TestRunReasoning:
 
     def test_monitor_decision_does_not_record_action(self, db_session):
         obs = _make_obs(db_session)
-        db_session.add(StrategyAccount(
-            strategy_name="alpha", starting_capital=5000.0, cash_balance=5000.0,
-            open_positions_value=0.0, total_equity=5000.0, peak_equity=5000.0,
-            drawdown_pct=0.0,
-        ))
-        db_session.commit()
-
+        _seed_account(db_session)
         payload = {
             "summary": "routine",
             "decisions": [{
@@ -239,17 +273,12 @@ class TestRunReasoning:
             }],
             "memory_update": None,
         }
-        run_reasoning(db_session, client=_FakeClient(payload))
+        run_reasoning(db_session, cli_runner=_runner_for(payload))
         assert db_session.query(AgentAction).count() == 0
 
     def test_memory_update_persisted_when_changed(self, db_session):
         obs = _make_obs(db_session)
-        db_session.add(StrategyAccount(
-            strategy_name="alpha", starting_capital=5000.0, cash_balance=5000.0,
-            open_positions_value=0.0, total_equity=5000.0, peak_equity=5000.0,
-            drawdown_pct=0.0,
-        ))
-        db_session.commit()
+        _seed_account(db_session)
 
         new_memory = "# Updated\n- new pattern learned"
         payload = {
@@ -262,17 +291,12 @@ class TestRunReasoning:
             }],
             "memory_update": new_memory,
         }
-        run_reasoning(db_session, client=_FakeClient(payload))
+        run_reasoning(db_session, cli_runner=_runner_for(payload))
         assert load_memory(db_session, "watchdog") == new_memory
 
     def test_null_memory_update_leaves_memory_intact(self, db_session):
         obs = _make_obs(db_session)
-        db_session.add(StrategyAccount(
-            strategy_name="alpha", starting_capital=5000.0, cash_balance=5000.0,
-            open_positions_value=0.0, total_equity=5000.0, peak_equity=5000.0,
-            drawdown_pct=0.0,
-        ))
-        db_session.commit()
+        _seed_account(db_session)
         save_memory(db_session, "watchdog", "# original\n- important note")
 
         payload = {
@@ -285,7 +309,7 @@ class TestRunReasoning:
             }],
             "memory_update": None,
         }
-        run_reasoning(db_session, client=_FakeClient(payload))
+        run_reasoning(db_session, cli_runner=_runner_for(payload))
         assert load_memory(db_session, "watchdog") == "# original\n- important note"
 
 
@@ -294,31 +318,25 @@ class TestRunReasoning:
 
 class TestActiveWindow:
     def test_monday_midday_is_active(self):
-        # Monday April 13 2026, 14:00 ET → UTC 18:00
-        t = datetime(2026, 4, 13, 18, 0, tzinfo=timezone.utc)
+        t = datetime(2026, 4, 13, 18, 0, tzinfo=timezone.utc)  # Mon 14:00 ET
         assert is_in_active_window(t) is True
 
     def test_monday_early_morning_is_inactive(self):
-        # Monday 07:00 ET → UTC 11:00 (before 08:30 window start)
-        t = datetime(2026, 4, 13, 11, 0, tzinfo=timezone.utc)
+        t = datetime(2026, 4, 13, 11, 0, tzinfo=timezone.utc)  # Mon 07:00 ET
         assert is_in_active_window(t) is False
 
     def test_monday_late_evening_is_inactive(self):
-        # Monday 19:00 ET → UTC 23:00 (after 17:00 window end)
-        t = datetime(2026, 4, 13, 23, 0, tzinfo=timezone.utc)
+        t = datetime(2026, 4, 13, 23, 0, tzinfo=timezone.utc)  # Mon 19:00 ET
         assert is_in_active_window(t) is False
 
     def test_saturday_is_inactive(self):
-        # Saturday April 18 2026, 12:00 ET
-        t = datetime(2026, 4, 18, 16, 0, tzinfo=timezone.utc)
+        t = datetime(2026, 4, 18, 16, 0, tzinfo=timezone.utc)  # Sat
         assert is_in_active_window(t) is False
 
     def test_boundary_open_is_active(self):
-        # Exactly 08:30 ET on a Monday
-        t = datetime(2026, 4, 13, 12, 30, tzinfo=timezone.utc)
+        t = datetime(2026, 4, 13, 12, 30, tzinfo=timezone.utc)  # Mon 08:30 ET
         assert is_in_active_window(t) is True
 
     def test_boundary_close_is_active(self):
-        # Exactly 17:00 ET on a Monday
-        t = datetime(2026, 4, 13, 21, 0, tzinfo=timezone.utc)
+        t = datetime(2026, 4, 13, 21, 0, tzinfo=timezone.utc)  # Mon 17:00 ET
         assert is_in_active_window(t) is True
