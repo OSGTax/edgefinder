@@ -1,0 +1,60 @@
+name: Watchdog
+
+# Runs the EdgeFinder watchdog management agent on a schedule. Each tick
+# connects to the production DB, runs invariant checks (cash drift,
+# negative cash, paused accounts, high drawdown), and writes findings
+# to the agent_observations table. See edgefinder/agents/watchdog.py
+# for the checks themselves.
+#
+# --- Enabling ---------------------------------------------------------
+# 1. GitHub repo → Settings → Secrets and variables → Actions:
+#      - Secrets:   DATABASE_URL            (Supabase pooler URL)
+#      - Variables: WATCHDOG_ENABLED=true   (kill switch — set to 'false' to pause)
+# 2. GitHub repo → Actions → "Watchdog" → Run workflow (smoke test).
+# 3. Wait for the next scheduled run, or leave 'workflow_dispatch' runs
+#    as the primary trigger until the cron's noise level is understood.
+#
+# --- Stopping ---------------------------------------------------------
+# Flip the WATCHDOG_ENABLED variable to 'false' — no deploy needed, the
+# `if:` gate below skips the entire job.
+
+on:
+  schedule:
+    # Every 15 minutes. Adjust downward (eg "0,30 * * * *" for every 30
+    # min) if the run volume on free-tier GitHub Actions becomes a cost
+    # concern.
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    if: vars.WATCHDOG_ENABLED == 'true'
+    timeout-minutes: 5
+    concurrency:
+      # Prior tick still running? Kill it — we care about the latest
+      # snapshot, not serializing a backlog.
+      group: watchdog-tick
+      cancel-in-progress: true
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run watchdog tick
+        # --force bypasses the .claude/agent-config.json kill switch
+        # because that file is intentionally gitignored (per-env). The
+        # GitHub Actions `if: vars.WATCHDOG_ENABLED == 'true'` gate above
+        # IS the kill switch for the cron.
+        run: python -m edgefinder.agents.watchdog --force
