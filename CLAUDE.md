@@ -3,14 +3,20 @@
 ## Project Overview
 EdgeFinder is a trading workbench for strategy research, paper trading, and performance analysis.
 It combines fundamental data from Polygon.io, technical signal detection,
-multi-source sentiment analysis, and multi-strategy competition in isolated virtual accounts.
+Polygon News AI-insight sentiment enrichment, and multi-strategy competition in isolated virtual accounts.
 
 **Key principles:**
-- Polygon.io is the sole data source (no fallback chains)
-- Every strategy gets its own isolated $5,000 virtual account
-- Every trade captures a market-wide snapshot (SPY, QQQ, IWM, DIA, VIX, sectors)
-- Per-strategy views everywhere — no aggregate P&L
-- AI meta-strategy interfaces are built in (future Phase 8)
+- Polygon.io is the sole data source (no fallback chains). The Python
+  SDK ships as the `massive` package on PyPI (Polygon rebranded to
+  "Massive" in 2025); the vendor and capabilities are unchanged.
+- Every strategy gets its own isolated $5,000 virtual account.
+- Every trade captures a market-wide snapshot (SPY, QQQ, IWM, DIA, VIX,
+  sectors) in the SAME transaction as the trade row write. If Polygon
+  snapshot capture fails, the trade still persists with
+  `market_snapshot_id=NULL`; run `scripts/repair_orphan_snapshots.py` to
+  backfill from nearest-in-time snapshots.
+- Per-strategy views everywhere — no aggregate P&L.
+- AI meta-strategy interfaces are built in (future Phase 8).
 
 ## Architecture
 ```
@@ -19,16 +25,17 @@ Dashboard (FastAPI) — Research | Trades | Strategies | Benchmarks | Inject
   Research Service              Trading Engine (Arena)
   (per-ticker aggregation)      Executor → Virtual Accounts
         |                                    |
-  Scanner | Sentiment | Market Snapshot | Strategies (plugins)
-        |            |           |              |
-                  Data Layer (Polygon.io)
+  UnifiedScanner  | Market Snapshot | Strategies (plugins)
+        |                |                |
+                  Data Layer (Polygon.io — `massive` SDK)
 ```
 
 ## Tech Stack
 - Python 3.11+, FastAPI, SQLAlchemy 2.0, Alembic
-- Polygon.io (bars, fundamentals, universe, streaming)
+- `massive>=2.4.0` — Polygon.io REST client (bars, fundamentals, universe)
 - pydantic + pydantic-settings (domain models, typed config)
-- APScheduler (ET timezone scheduling)
+- APScheduler (ET timezone scheduling — Render only; Vercel is not
+  supported and the config has been removed)
 - SQLite (dev) / PostgreSQL (production via Render)
 
 ## Directory Structure
@@ -42,62 +49,74 @@ edgefinder/
 ├── edgefinder/                 # Main package
 │   ├── core/
 │   │   ├── models.py           # Pydantic domain models (Signal, Trade, MarketSnapshot, etc.)
-│   │   ├── interfaces.py       # Protocols: DataProvider, StreamProvider, SentimentProvider
-│   │   └── events.py           # In-process event bus (pub/sub)
+│   │   ├── interfaces.py       # Protocol: DataProvider (+ DataHub wrapper)
+│   │   └── events.py           # In-process event bus — `trade.opened`, `trade.closed` live
 │   ├── data/
-│   │   ├── polygon.py          # Polygon.io REST (bars, fundamentals, universe, price)
+│   │   ├── polygon.py          # Polygon REST (bars, fundamentals, universe, price, news sentiment)
 │   │   ├── provider.py         # CachedDataProvider wrapper
-│   │   ├── cache.py            # Filesystem cache (Parquet bars, JSON fundamentals)
-│   │   └── stream.py           # Polygon WebSocket streaming
+│   │   └── cache.py            # Filesystem cache (Parquet bars, JSON fundamentals)
 │   ├── db/
 │   │   ├── engine.py           # SQLAlchemy engine/session (SQLite/PostgreSQL)
-│   │   ├── models.py           # 10 ORM tables
+│   │   ├── models.py           # ORM tables (see live list via `SELECT name FROM sqlite_master`)
 │   │   └── migrations/         # Alembic migrations
 │   ├── scanner/
-│   │   └── scanner.py          # Nightly fundamental scan + strategy qualification
+│   │   └── unified_scanner.py  # Nightly fundamental scan — evaluates all strategies in one pass
 │   ├── signals/
 │   │   └── engine.py           # Technical indicators + 9 signal pattern detectors
 │   ├── strategies/
 │   │   ├── base.py             # BaseStrategy ABC + StrategyRegistry
 │   │   ├── alpha.py            # Momentum/EMA day trading
 │   │   ├── bravo.py            # Mean reversion/BB swing trading
-│   │   └── charlie.py          # Deep value contrarian
+│   │   ├── charlie.py          # Deep value contrarian
+│   │   ├── degenerate.py       # High-risk / high-concentration plays
+│   │   └── echo.py             # Learning meta-strategy (uses edgefinder/analytics/)
+│   ├── analytics/              # Regime + trade-feature analytics (consumed by echo.py)
 │   ├── trading/
-│   │   ├── account.py          # Per-strategy $5k virtual accounts
-│   │   ├── executor.py         # Risk-based sizing, slippage, hash chain audit
+│   │   ├── account.py          # Per-strategy $5k virtual accounts, mark-to-market equity
+│   │   ├── executor.py         # Risk-based sizing, slippage, hash chain audit + verify
 │   │   ├── arena.py            # Multi-strategy orchestration
 │   │   └── journal.py          # Trade persistence + stats
 │   ├── market/
 │   │   ├── snapshot.py         # Captures indices/VIX/sectors at trade time
 │   │   └── benchmarks.py       # Daily index data for comparison charts
-│   ├── sentiment/
-│   │   ├── aggregator.py       # Weighted composite from all sources
-│   │   ├── reddit.py           # Reddit API (r/wallstreetbets, r/stocks)
-│   │   ├── twitter.py          # Twitter/X stub (future API integration)
-│   │   ├── news_rss.py         # RSS keyword-based sentiment
-│   │   └── provider.py         # Score-to-action mapping
 │   ├── research/
-│   │   └── research.py         # Per-ticker deep-dive aggregation
+│   │   └── research.py         # Per-ticker deep-dive aggregation (reads injections for reports)
+│   ├── agents/                 # Watchdog + reasoning agents (kill-switched via .claude/agent-config.json)
 │   └── scheduler/
 │       └── scheduler.py        # APScheduler (ET timezone)
 ├── dashboard/
-│   ├── app.py                  # FastAPI application
+│   ├── app.py                  # FastAPI application (bearer auth, CORS allowlist)
+│   ├── services.py             # init_services, _load_watchlists, event handlers
 │   ├── dependencies.py         # DB session dependency injection
 │   ├── routers/
 │   │   ├── trades.py           # Wins/losses/open/closed, strategy-filterable
-│   │   ├── strategies.py       # Per-strategy accounts + equity curves
-│   │   ├── research.py         # Ticker reports + search
-│   │   ├── sentiment.py        # Sentiment scores + trending
-│   │   ├── benchmarks.py       # Strategy vs index comparison
-│   │   └── inject.py           # Manual ticker injection
+│   │   ├── strategies.py       # Per-strategy accounts + equity curves + open positions
+│   │   ├── research.py         # Ticker reports + search + POST /scan trigger
+│   │   ├── benchmarks.py       # Strategy vs index comparison + sector data
+│   │   └── inject.py           # Manual ticker injection (wired into watchlist)
 │   └── templates/
 │       └── index.html          # Dashboard frontend
 ├── scripts/
-│   ├── setup_db.py             # Initialize database
-│   ├── run_scanner.py          # CLI scanner (--quick, --tickers)
-│   └── render_start.py         # Render deployment startup
-└── tests/                      # 244+ tests
+│   ├── setup_db.py                   # Initialize database
+│   ├── run_scanner.py                # CLI scanner (UnifiedScanner, --quick, --tickers)
+│   ├── repair_orphan_snapshots.py    # Backfill trades.market_snapshot_id for NULL rows
+│   └── render_start.py               # Render deployment startup (provisions agent-config)
+└── tests/                      # 347 tests (`pytest -m "not integration"`)
 ```
+
+### Removed in the 2026-04 cleanup (no longer referenced)
+- `vercel.json` + `api/index.py` — Vercel serverless cannot run
+  APScheduler. Render is the sole deploy target.
+- `edgefinder/data/stream.py` + `StreamProvider`, `SupplementalProvider`
+  protocols — streaming was never wired; system is polling-only.
+- `edgefinder/scanner/strategy_scanner.py` — replaced by `unified_scanner.py`.
+- `edgefinder/sentiment/` — never existed in code. Sentiment comes from
+  Polygon News AI insights populating `fundamentals.news_sentiment`,
+  which `on_trade_opened` copies onto `trades.sentiment_data`.
+- `trades.sentiment_score`, `strategy_parameters`, and `trade_context`
+  tables/columns — dropped via Alembic migrations
+  `a1d9f3c0b2e4_drop_strategy_parameters` and
+  `b7e2f8a3c5d1_drop_sentiment_score_and_trade_context`.
 
 ## Quick Start
 ```bash
@@ -122,6 +141,19 @@ uvicorn dashboard.app:app --reload
 python -m pytest tests/ -v -m "not integration"
 ```
 
+### Optional production env vars
+- `EDGEFINDER_DASHBOARD_TOKEN` — when set, every non-exempt route
+  requires `Authorization: Bearer <token>`. Exempt: `/`, `/api/health`,
+  `/docs`, `/redoc`, `/openapi.json`.
+- `EDGEFINDER_CORS_ORIGINS` — comma-separated allowlist. Defaults to
+  `http://localhost:8000,http://127.0.0.1:8000` so prod isn't wide-open
+  unless you opt in. Setting to `*` restores unrestricted CORS but
+  disables credentialed requests.
+- `AGENT_CONFIG_JSON` — on Render, the JSON body written to
+  `.claude/agent-config.json` at boot. Required to enable the
+  in-process management agents; without it, `is_agent_enabled()` returns
+  False and the agent layer no-ops.
+
 ## API Endpoints
 
 | Method | Path | Description |
@@ -133,28 +165,39 @@ python -m pytest tests/ -v -m "not integration"
 | GET | `/api/trades/losses` | Losing trades |
 | GET | `/api/strategies` | List registered strategies |
 | GET | `/api/strategies/accounts` | Per-strategy account states |
+| GET | `/api/strategies/positions` | All open positions across strategies |
 | GET | `/api/strategies/equity-curve?days=90` | Equity curve data |
 | GET | `/api/research/ticker/{symbol}` | Full ticker research report |
 | GET | `/api/research/search?q=X` | Search tickers |
 | GET | `/api/research/active` | Active watchlist tickers |
-| GET | `/api/sentiment/ticker/{symbol}` | Aggregated sentiment |
-| GET | `/api/sentiment/trending` | Trending tickers |
-| GET | `/api/sentiment/history/{symbol}` | Sentiment time series |
+| POST | `/api/research/scan` | Trigger a unified multi-strategy scan in the background |
 | GET | `/api/benchmarks/comparison?days=90` | Strategy vs index data |
+| GET | `/api/benchmarks/sectors` | Current sector rotation snapshot |
 | POST | `/api/benchmarks/collect` | Collect daily benchmark data |
-| POST | `/api/inject` | Inject ticker for evaluation |
+| POST | `/api/benchmarks/backfill` | Backfill historical benchmark bars |
+| POST | `/api/inject` | Inject ticker for evaluation — reaches the arena watchlist on the next signal check |
 | GET | `/api/inject` | List active injections |
 | DELETE | `/api/inject/{id}` | Remove injection |
+
+Sentiment-only endpoints that appeared in earlier versions of this doc
+(`/api/sentiment/*`) were never implemented — the multi-source sentiment
+module they referenced doesn't exist. Sentiment is surfaced indirectly
+via `trades.sentiment_data.news_sentiment`.
 
 ## Virtual Account Rules
 - $5,000 starting capital per strategy
 - Buying power = cash only (no margin/leverage)
-- PDT mode: per-strategy toggle (3 day trades / 5 business days)
+- PDT mode: per-strategy toggle (3 day trades / 5 **business** days,
+  counted via `numpy.busday_offset`)
 - Max risk per trade: 2% of equity
 - Max concentration: 20% in single position
 - Max open positions: 5
-- Drawdown circuit breaker: 20%
-- Revenge trade cooldown: 30 minutes after stop-out
+- Max positions per sector: 3 (enforced via `Position.sector` looked up
+  from `Fundamental.sector`)
+- Drawdown circuit breaker: 20%, computed on **mark-to-market** equity
+- Revenge trade cooldown: 30 minutes after stop-out — state persisted
+  via `_last_stop_out` and restored on every boot from the most recent
+  `STOP_HIT` trade per strategy
 
 ### Account Balance Integrity (CRITICAL)
 The trades table is the **source of truth** for all account balances. On every startup,
@@ -162,14 +205,25 @@ The trades table is the **source of truth** for all account balances. On every s
 ```
 correct_cash = starting_capital + sum(closed trade P&L) - sum(open position cost basis)
 ```
+Additionally, every executor's integrity hash chain is restored from
+`trades.sequence_num`/`integrity_hash` and then verified end-to-end by
+`verify_chain()`. A mismatch logs a loud WARNING but does not halt
+trading — investigate `agent_observations` and the trades table before
+assuming the chain is corrupt rather than legitimately extended.
+
 **Rules for all strategies (existing and new):**
-1. Every strategy uses the same `VirtualAccount` class — no custom account logic
-2. Account state is persisted to DB immediately after every trade open/close AND on shutdown
-3. On startup, cash and realized P&L are always recalculated from the trades table
-4. Total Account Value on the dashboard = Cash + market value of positions (not cost basis)
-5. Total P&L = Total Account Value - Starting Capital (canonical formula)
-6. Realized P&L = sum of pnl_dollars from closed trades in DB
-7. Unrealized P&L = sum of (current_price - entry_price) × shares for open positions
+1. Every strategy uses the same `VirtualAccount` class — no custom account logic.
+2. Account state is persisted to DB immediately after every trade open/close AND on shutdown.
+3. On startup, cash and realized P&L are always recalculated from the trades table.
+4. **Total Account Value = Cash + market value of positions** (mark-to-market,
+   not cost basis). `VirtualAccount.total_equity` uses
+   `Position.current_price` stamped by `Executor.check_positions` each
+   tick; before the first tick it falls back to `entry_price`.
+5. Total P&L = Total Account Value − Starting Capital (canonical formula).
+6. Realized P&L = sum of `pnl_dollars` from closed trades in DB.
+7. Unrealized P&L = sum of `(current_price − entry_price) × shares` for open positions.
+8. `Peak_equity` is updated on every tick (not just on close) so
+   drawdown tracks real account value.
 
 ## Strategy Plugin Guide
 
@@ -221,13 +275,12 @@ See `config/settings.py` for the full list. Key sections:
 - Scanner filters ($300M-$200B market cap, $5-$500 price)
 - Strategy qualification (per-strategy criteria using Polygon fundamentals)
 - Technical signals (EMA 9/21/50/200, RSI 14, MACD 12/26/9, BB 20/2)
-- Sentiment thresholds (BLOCK at -0.5, REDUCE at -0.2, BOOST at +0.2/+0.5)
-- Scheduling (scanner 6:15 PM, signals every 15m, positions every 5m)
+- Scheduling (scanner 6:15 PM ET, signals every 5m, positions every 5m)
 - Polygon.io connection (API key, retries, timeouts)
 
 ## Testing
 ```bash
-python -m pytest tests/ -v -m "not integration"   # Unit tests (244+)
+python -m pytest tests/ -v -m "not integration"   # Unit tests (347)
 python -m pytest tests/ -v -m integration          # Integration tests (hits Polygon)
 ```
 
