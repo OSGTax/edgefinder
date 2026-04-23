@@ -1,17 +1,17 @@
-"""EdgeFinder v2 — Simple in-process event bus (pub/sub).
+"""EdgeFinder — Simple in-process event bus (pub/sub).
 
 Lightweight decoupling between modules. Not Kafka, not Redis — just an
 in-process callback registry so modules can react to events without
 circular imports.
 
-Planned event types:
-    trade.opened, trade.closed, trade.cancelled
-    signal.generated, signal.rejected
-    scan.completed
-    market.snapshot
-    sentiment.update
-    strategy.paused, strategy.resumed
-    injection.added
+Live event types (subscribers in dashboard/services.py):
+    trade.opened, trade.closed
+
+Any other string key may be published; it will just fan out to whatever
+handlers happen to be subscribed. The earlier generations of this file
+advertised several placeholder event types (signal.generated,
+scan.completed, etc.) that were never wired — those have been removed
+from this docstring to avoid misleading consumers.
 """
 
 from __future__ import annotations

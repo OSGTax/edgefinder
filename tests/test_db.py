@@ -13,7 +13,6 @@ from edgefinder.db.models import (
     ManualInjection,
     MarketSnapshotRecord,
     StrategyAccount,
-    StrategyParameterLog,
     StrategySnapshot,
     Ticker,
     TradeRecord,
@@ -32,7 +31,7 @@ class TestEngine:
         expected = [
             "tickers", "fundamentals", "trades", "market_snapshots",
             "strategy_accounts", "strategy_snapshots", "index_daily",
-            "manual_injections", "strategy_parameters",
+            "manual_injections",
         ]
         for table in expected:
             assert table in tables, f"Missing table: {table}"
@@ -298,15 +297,3 @@ class TestOtherModels:
         assert result.symbol == "GME"
         assert result.target_strategy is None
 
-    def test_strategy_parameter_log(self, db_session):
-        log = StrategyParameterLog(
-            strategy_name="alpha",
-            param_name="signal_rsi_oversold",
-            old_value="30",
-            new_value="25",
-            changed_by="optimizer",
-        )
-        db_session.add(log)
-        db_session.flush()
-        result = db_session.query(StrategyParameterLog).first()
-        assert result.changed_by == "optimizer"

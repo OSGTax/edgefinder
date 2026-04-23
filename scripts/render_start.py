@@ -70,8 +70,33 @@ def init_database():
     engine.dispose()
 
 
+def provision_agent_config() -> None:
+    """Write .claude/agent-config.json from the AGENT_CONFIG_JSON env var.
+
+    Required so `is_agent_enabled()` returns True on Render. If the env var
+    is missing or empty we leave the file alone — the gate defaults to
+    disabled, which is the correct fail-safe when running untrusted code.
+    """
+    from pathlib import Path
+
+    payload = os.getenv("AGENT_CONFIG_JSON", "").strip()
+    if not payload:
+        logger.info(
+            "AGENT_CONFIG_JSON is not set — in-process agents will default "
+            "to disabled. Set the env var to a JSON body matching "
+            ".claude/agent-config.example.json to enable them."
+        )
+        return
+
+    target = Path(".claude/agent-config.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload)
+    logger.info("Wrote %s from AGENT_CONFIG_JSON (%d bytes)", target, len(payload))
+
+
 def main():
     init_database()
+    provision_agent_config()
 
     import uvicorn
     port = int(os.getenv("PORT", "8000"))

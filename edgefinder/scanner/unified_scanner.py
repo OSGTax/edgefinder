@@ -1,24 +1,16 @@
-"""EdgeFinder v2 — Unified multi-strategy scanner.
+"""EdgeFinder — Unified multi-strategy scanner.
 
-Replaces the per-strategy `StrategyScanner.run()` loop. Instead of running
-the same Pass 1 fundamentals fetch 4 times (once per strategy), it fetches
-each ticker's fundamentals ONCE and evaluates every strategy's
-qualifies_stock() against the shared result.
+Fetches each ticker's fundamentals ONCE and evaluates every registered
+strategy's qualifies_stock() against the shared result, then scores and
+persists per-strategy qualification rows.
 
-Performance gains vs the old per-strategy loop:
-- Pass 1 API calls: O(tickers) instead of O(tickers × strategies) — 4x fewer
-  fetches when running 4 strategies (alpha/bravo/charlie/degenerate).
-- Concurrency: ThreadPoolExecutor parallelizes the network-bound fetches,
-  10x throughput at 10 workers (Polygon Starter is "unlimited" calls).
+- Pass 1 API calls: O(tickers) instead of O(tickers × strategies).
+- Concurrency: ThreadPoolExecutor parallelizes the network-bound fetches.
 - Incremental commits: persists every N tickers so a deploy mid-scan
-  doesn't lose all progress.
+  doesn't lose progress.
 
-Combined with the universe pre-filter (top 1000 by dollar volume), the
-total scan time drops from ~2 hours to ~30-60 seconds.
-
-The old StrategyScanner is kept intact for backward compatibility — only
-the orchestration in dashboard/services.py is updated to call
-UnifiedScanner.run() instead of looping per-strategy.
+Combined with the universe pre-filter (top 1000 by dollar volume), total
+scan time is ~30-60 seconds.
 """
 
 from __future__ import annotations

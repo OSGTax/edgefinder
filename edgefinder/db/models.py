@@ -252,22 +252,7 @@ class ManualInjection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-# ── 10. strategy_parameters ─────────────────────────────
-
-
-class StrategyParameterLog(Base):
-    __tablename__ = "strategy_parameters"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    strategy_name: Mapped[str] = mapped_column(String(50), index=True)
-    param_name: Mapped[str] = mapped_column(String(100))
-    old_value: Mapped[str | None] = mapped_column(String(200))
-    new_value: Mapped[str | None] = mapped_column(String(200))
-    changed_by: Mapped[str] = mapped_column(String(30))
-    changed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-
-# ── 11. ticker_strategy_qualifications ─────────────────
+# ── 10. ticker_strategy_qualifications ─────────────────
 
 
 class TickerStrategyQualification(Base):

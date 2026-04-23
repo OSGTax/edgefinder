@@ -28,7 +28,7 @@ from edgefinder.db.models import (
 )
 from edgefinder.market.benchmarks import BenchmarkService
 from edgefinder.market.snapshot import MarketSnapshotService
-from edgefinder.scanner.strategy_scanner import StrategyScanner
+from edgefinder.scanner.unified_scanner import UnifiedScanner
 from edgefinder.scheduler.scheduler import EdgeFinderScheduler
 from edgefinder.trading.arena import ArenaEngine
 from edgefinder.trading.journal import TradeJournal
@@ -104,27 +104,26 @@ def _deferred_initial_scan() -> None:
 
 
 def _run_scan_batch(tickers: list[str]) -> None:
-    """Run per-strategy scan on a specific list of tickers."""
+    """Run the unified multi-strategy scan on a specific list of tickers."""
     from edgefinder.strategies.base import StrategyRegistry
 
-    for strategy in StrategyRegistry.get_instances():
-        session = _session_factory()
-        try:
-            scanner = StrategyScanner(strategy, _provider, session)
-            results = scanner.run(tickers=tickers)
-            qualified = sum(1 for r in results if r.qualified)
-            logger.info("[%s] batch scan: %d qualified of %d", strategy.name, qualified, len(results))
-        except Exception:
-            logger.exception("Batch scan failed for '%s'", strategy.name)
-        finally:
-            session.close()
+    strategies = list(StrategyRegistry.get_instances())
+    scanner = UnifiedScanner(strategies, _provider, _session_factory)
+    try:
+        summary = scanner.run(tickers)
+        logger.info(
+            "Batch scan complete: %s",
+            ", ".join(f"{k}={v}" for k, v in summary.items()),
+        )
+    except Exception:
+        logger.exception("Batch scan failed")
 
 
 def init_services() -> None:
     """Initialize all trading pipeline services. Called once at startup."""
     global _provider, _arena, _scheduler, _session_factory
 
-    # Data provider — DataHub wraps Polygon + optional supplements
+    # Data provider — DataHub wraps Polygon (supplements hook removed; unused)
     try:
         polygon = PolygonDataProvider()
     except ValueError:
@@ -145,8 +144,6 @@ def init_services() -> None:
     from edgefinder.core.interfaces import DataHub
 
     hub = DataHub(CachedDataProvider(polygon, DataCache()))
-
-    # Future: register supplemental providers here via hub.register_supplement()
 
     _provider = hub
 

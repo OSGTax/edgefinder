@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Awaitable, Callable, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
-from edgefinder.core.models import BarData, TickerFundamentals
+from edgefinder.core.models import TickerFundamentals
 
 logger = logging.getLogger(__name__)
 
@@ -66,60 +66,18 @@ class DataProvider(Protocol):
         ...
 
 
-@runtime_checkable
-class SupplementalProvider(Protocol):
-    """Contract for supplemental data sources that enrich fundamentals.
-
-    Supplements fill fields that the primary provider (Polygon) doesn't
-    supply: earnings calendar, analyst ratings, insider activity, etc.
-    Each supplement enriches a TickerFundamentals in-place, filling only
-    None fields (never overwriting primary data).
-
-    To add a new data source:
-    1. Create edgefinder/data/<source>.py implementing this protocol
-    2. Add API key setting to config/settings.py
-    3. Register in DataHub via register_supplement()
-    """
-
-    @property
-    def source_name(self) -> str:
-        """Unique identifier for this source (e.g., 'finnhub', 'fmp')."""
-        ...
-
-    @property
-    def available_fields(self) -> list[str]:
-        """TickerFundamentals field names this provider can populate."""
-        ...
-
-    def enrich(self, fund: TickerFundamentals) -> None:
-        """Enrich fundamentals in-place. Fill None fields only."""
-        ...
-
-
 class DataHub:
-    """Central registry for all data providers.
+    """Thin passthrough wrapper for a DataProvider.
 
-    Wraps a primary DataProvider (Polygon) and optional SupplementalProviders
-    (Finnhub, FMP, etc.). All existing code that takes a DataProvider works
-    with DataHub since it exposes the same interface.
-
-    Fundamentals flow:
-    1. Primary provider fetches core data (financials, ratios, company info)
-    2. Each supplement enriches with fields the primary doesn't provide
-    3. Failed supplements are logged and skipped (graceful degradation)
+    Historically supported registering SupplementalProviders that enriched
+    fundamentals after the primary fetch; that hook was never exercised and
+    has been removed. DataHub now just forwards every call to its primary.
+    Kept as a shell so callers can get supplementary methods (get_news,
+    get_dividends, etc.) that aren't on the DataProvider protocol proper.
     """
 
     def __init__(self, primary: DataProvider) -> None:
         self._primary = primary
-        self._supplements: list[SupplementalProvider] = []
-
-    def register_supplement(self, provider: SupplementalProvider) -> None:
-        """Register a supplemental data provider."""
-        self._supplements.append(provider)
-        logger.info(
-            "Registered supplement '%s' (fields: %s)",
-            provider.source_name, ", ".join(provider.available_fields),
-        )
 
     # ── DataProvider interface (delegates to primary) ────
 
@@ -153,78 +111,26 @@ class DataHub:
         return self._primary.is_market_open()
 
     def get_news(self, ticker: str, limit: int = 10) -> list[dict]:
-        """Delegate news fetch to primary provider."""
         if hasattr(self._primary, "get_news"):
             return self._primary.get_news(ticker, limit)
         return []
 
     def get_dividends(self, ticker: str, limit: int = 20) -> list[dict]:
-        """Delegate dividend fetch to primary provider."""
         if hasattr(self._primary, "get_dividends"):
             return self._primary.get_dividends(ticker, limit)
         return []
 
     def get_splits(self, ticker: str, limit: int = 10) -> list[dict]:
-        """Delegate split fetch to primary provider."""
         if hasattr(self._primary, "get_splits"):
             return self._primary.get_splits(ticker, limit)
         return []
 
     def get_market_holidays(self) -> list[dict]:
-        """Delegate market holidays fetch to primary provider."""
         if hasattr(self._primary, "get_market_holidays"):
             return self._primary.get_market_holidays()
         return []
 
     def get_fundamentals(self, ticker: str, full_refresh: bool = False) -> TickerFundamentals | None:
-        """Get fundamentals from primary, then enrich via supplements."""
-        fund = self._primary.get_fundamentals(ticker, full_refresh=full_refresh)
-        if fund is None:
-            return None
-
-        sources: dict[str, str] = {}
-        for supplement in self._supplements:
-            try:
-                supplement.enrich(fund)
-                for field_name in supplement.available_fields:
-                    if getattr(fund, field_name, None) is not None:
-                        sources[field_name] = supplement.source_name
-            except Exception:
-                logger.warning(
-                    "Supplement '%s' failed for %s — skipping",
-                    supplement.source_name, ticker, exc_info=True,
-                )
-
-        if sources:
-            fund.data_sources = sources
-
-        return fund
-
-
-@runtime_checkable
-class StreamProvider(Protocol):
-    """Contract for real-time WebSocket streaming."""
-
-    async def connect(self) -> None:
-        """Establish WebSocket connection and authenticate."""
-        ...
-
-    async def subscribe(
-        self,
-        tickers: list[str],
-        on_bar: Callable[[BarData], Awaitable[None]] | None = None,
-        on_trade: Callable[[dict], Awaitable[None]] | None = None,
-        on_quote: Callable[[dict], Awaitable[None]] | None = None,
-    ) -> None:
-        """Subscribe to real-time data for given tickers."""
-        ...
-
-    async def unsubscribe(self, tickers: list[str]) -> None:
-        """Unsubscribe from tickers."""
-        ...
-
-    async def disconnect(self) -> None:
-        """Cleanly close the WebSocket connection."""
-        ...
+        return self._primary.get_fundamentals(ticker, full_refresh=full_refresh)
 
 
