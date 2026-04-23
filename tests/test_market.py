@@ -63,6 +63,19 @@ class TestMarketSnapshotService:
         record = db_session.get(MarketSnapshotRecord, snap_id)
         assert record.spy_price == 450.0
 
+    def test_capture_and_persist_no_commit_flushes_only(self, service, db_session):
+        """With commit=False the id is available but txn stays open.
+
+        Needed for atomic snapshot + trade writes in on_trade_opened.
+        """
+        snap_id = service.capture_and_persist(commit=False)
+        assert snap_id is not None
+        record = db_session.get(MarketSnapshotRecord, snap_id)
+        assert record.spy_price == 450.0
+        # Rolling back should wipe it — proves commit didn't happen.
+        db_session.rollback()
+        assert db_session.get(MarketSnapshotRecord, snap_id) is None
+
     def test_get_latest(self, service, db_session):
         service.capture_and_persist()
         latest = service.get_latest()

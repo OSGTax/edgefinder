@@ -113,7 +113,6 @@ class Trade(BaseModel):
     r_multiple: Optional[float] = None
     exit_reason: Optional[str] = None
     market_snapshot_id: Optional[int] = None
-    sentiment_score: Optional[float] = None
     sentiment_data: Optional[dict] = None
     technical_signals: Optional[dict] = None
     entry_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

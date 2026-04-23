@@ -20,6 +20,7 @@ from edgefinder.data.provider import CachedDataProvider
 from edgefinder.db.engine import get_engine, get_session_factory
 from edgefinder.db import models as db_models  # noqa: F401 — registers ORM tables
 from edgefinder.db.models import (
+    ManualInjection,
     StrategyAccount,
     StrategySnapshot,
     Ticker,
@@ -565,21 +566,32 @@ def _load_watchlist() -> list[str]:
 
 
 def _load_watchlists() -> dict[str, list[str]]:
-    """Load per-strategy qualified tickers from DB, ranked by score.
+    """Load per-strategy watchlists from the DB.
 
-    Returns dict mapping strategy_name -> list of qualified ticker symbols.
-    Each strategy only sees stocks that passed its own qualifies_stock() check.
-    Lists are ordered by score (highest first) and capped at top N per strategy.
+    Sources, in priority order:
+      1. `ticker_strategy_qualifications` rows where qualified=True, ranked
+         by score descending. This is what the scanner produces.
+      2. Non-expired `manual_injections`. Rows with `target_strategy` set are
+         appended to that strategy only; rows with NULL target fan out to
+         every strategy's list. Injections go to the end so they don't
+         displace high-score qualified tickers, but they always make it in
+         regardless of whether they ever passed qualifies_stock().
+
+    Both sources are deduped within a strategy. Per-strategy cap still
+    applies (settings.scanner_max_watchlist_per_strategy) — qualifications
+    fill the cap first, injections fill any remainder.
     """
+    from edgefinder.strategies.base import StrategyRegistry
+
     max_per_strategy = settings.scanner_max_watchlist_per_strategy
     session = _session_factory()
     try:
-        rows = (
+        qual_rows = (
             session.query(
                 TickerStrategyQualification.strategy_name,
                 TickerStrategyQualification.symbol,
             )
-            .filter(TickerStrategyQualification.qualified == True)
+            .filter(TickerStrategyQualification.qualified == True)  # noqa: E712
             .order_by(
                 TickerStrategyQualification.strategy_name,
                 TickerStrategyQualification.score.desc().nullslast(),
@@ -587,10 +599,37 @@ def _load_watchlists() -> dict[str, list[str]]:
             .all()
         )
         result: dict[str, list[str]] = {}
-        for strategy_name, symbol in rows:
+        seen: dict[str, set[str]] = {}
+        for strategy_name, symbol in qual_rows:
             tickers = result.setdefault(strategy_name, [])
-            if len(tickers) < max_per_strategy:
+            seen_set = seen.setdefault(strategy_name, set())
+            if len(tickers) < max_per_strategy and symbol not in seen_set:
                 tickers.append(symbol)
+                seen_set.add(symbol)
+
+        now = datetime.now(timezone.utc)
+        injections = (
+            session.query(ManualInjection.symbol, ManualInjection.target_strategy)
+            .filter(
+                (ManualInjection.expires_at.is_(None))
+                | (ManualInjection.expires_at > now)
+            )
+            .order_by(ManualInjection.created_at.desc())
+            .all()
+        )
+        all_strategy_names = list(StrategyRegistry.list_names())
+        for symbol, target in injections:
+            targets = [target] if target else all_strategy_names
+            for strategy_name in targets:
+                tickers = result.setdefault(strategy_name, [])
+                seen_set = seen.setdefault(strategy_name, set())
+                if symbol in seen_set:
+                    continue
+                if len(tickers) >= max_per_strategy:
+                    continue
+                tickers.append(symbol)
+                seen_set.add(symbol)
+
         return result
     finally:
         session.close()
@@ -678,25 +717,48 @@ def _wire_event_bus() -> None:
     def on_trade_opened(trade):
         # Snapshot commits independently — the trade row needs its FK and
         # an orphan snapshot is harmless if the atomic write below fails.
-        snapshot_id = None
-        try:
-            snap_session = _session_factory()
-            try:
-                snapshot_svc = MarketSnapshotService(_provider, snap_session)
-                snapshot_id = snapshot_svc.capture_and_persist()
-                trade.market_snapshot_id = snapshot_id
-            finally:
-                snap_session.close()
-        except Exception:
-            logger.exception("Failed to capture market snapshot for %s", trade.trade_id)
-
-        # Atomic: trade row + account-state row commit together. Without
-        # this, a crash between the two writes leaves the DB with a trade
-        # whose cost was never deducted from cash_balance; on restart,
-        # _recalculate_account_balances then self-heals by cancelling an
-        # arbitrary newest position.
+        # Atomic: snapshot row + trade row + account-state row all commit
+        # together in a single transaction. If any step fails the whole
+        # thing rolls back. If snapshot CAPTURE (the Polygon call) fails
+        # we proceed with market_snapshot_id=None — we'd rather lose the
+        # snapshot than lose the trade; a repair job can backfill later.
         session = _session_factory()
+        snapshot_id: int | None = None
         try:
+            try:
+                snapshot_svc = MarketSnapshotService(_provider, session)
+                snapshot_id = snapshot_svc.capture_and_persist(commit=False)
+                trade.market_snapshot_id = snapshot_id
+            except Exception:
+                logger.exception(
+                    "Failed to capture market snapshot for %s — trade will "
+                    "persist with market_snapshot_id=NULL",
+                    trade.trade_id,
+                )
+                # Reset any half-staged snapshot row so the trade can still
+                # go in on this session.
+                session.rollback()
+
+            # Attach the latest news sentiment for the ticker, if one is
+            # in the fundamentals table. Populated by Polygon's News AI
+            # insights in polygon._fill_news_sentiment. This is the only
+            # sentiment signal currently available — the multi-source
+            # module described in older docs was never built.
+            try:
+                from edgefinder.db.models import Fundamental, Ticker as TickerRow
+                fund_row = (
+                    session.query(Fundamental.news_sentiment)
+                    .join(TickerRow, Fundamental.ticker_id == TickerRow.id)
+                    .filter(TickerRow.symbol == trade.symbol)
+                    .first()
+                )
+                if fund_row and fund_row.news_sentiment:
+                    trade.sentiment_data = {"news_sentiment": fund_row.news_sentiment}
+            except Exception:
+                logger.debug(
+                    "Could not attach news sentiment for %s", trade.symbol,
+                )
+
             journal = TradeJournal(session)
             journal.log_trade(trade, commit=False)
             _persist_account_state(
@@ -706,7 +768,6 @@ def _wire_event_bus() -> None:
             )
             session.commit()
 
-            _capture_trade_context(session, trade)
             logger.info(
                 "[%s] Trade opened: %s %s @ $%.2f (snapshot #%s)",
                 trade.strategy_name, trade.direction.value,
@@ -745,65 +806,6 @@ def _wire_event_bus() -> None:
 
     event_bus.subscribe("trade.opened", on_trade_opened)
     event_bus.subscribe("trade.closed", on_trade_closed)
-
-
-def _capture_trade_context(session, trade) -> None:
-    """Capture rich market context at trade time for later AI analysis.
-
-    Pulls from DB (pre-accumulated data) — no extra API calls.
-    """
-    from edgefinder.db.models import TickerNews, TickerDividend, TradeContext
-
-    try:
-        # Recent news for this ticker (from accumulated DB)
-        news_rows = (
-            session.query(TickerNews)
-            .filter_by(symbol=trade.symbol)
-            .order_by(TickerNews.id.desc())
-            .limit(5)
-            .all()
-        )
-        recent_news = [
-            {"title": n.title, "published": n.published_utc, "publisher": n.publisher_name}
-            for n in news_rows
-        ]
-
-        # Upcoming dividends
-        divs = (
-            session.query(TickerDividend)
-            .filter_by(symbol=trade.symbol)
-            .order_by(TickerDividend.id.desc())
-            .limit(3)
-            .all()
-        )
-        dividends = [
-            {"ex_date": d.ex_dividend_date, "amount": d.cash_amount}
-            for d in divs
-        ]
-
-        # Sector rotation data (if available)
-        sector_prices = {}
-        if _sector_rotation_data:
-            sector_prices = {r["symbol"]: r.get("quadrant") for r in _sector_rotation_data}
-
-        # Related tickers (from cached fundamentals if available)
-        related = None
-        if hasattr(trade, "technical_signals") and trade.technical_signals:
-            related = trade.technical_signals.get("related_tickers")
-
-        context = TradeContext(
-            trade_id=trade.trade_id,
-            recent_news=recent_news,
-            sector_prices=sector_prices,
-            related_tickers=related,
-            short_interest=None,  # populated from fundamentals if available
-            dividends=dividends,
-            indicators=trade.technical_signals,
-        )
-        session.add(context)
-        session.commit()
-    except Exception:
-        logger.debug("Trade context capture failed for %s", trade.trade_id)
 
 
 # ── Market Holiday Check ───────────────────────────────

@@ -68,7 +68,6 @@ class TradeJournal:
                 r_multiple=trade.r_multiple,
                 exit_reason=trade.exit_reason,
                 market_snapshot_id=trade.market_snapshot_id,
-                sentiment_score=trade.sentiment_score,
                 sentiment_data=trade.sentiment_data,
                 technical_signals=trade.technical_signals,
                 sequence_num=trade.sequence_num,

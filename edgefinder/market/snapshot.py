@@ -80,8 +80,13 @@ class MarketSnapshotService:
 
         return snapshot
 
-    def capture_and_persist(self) -> int:
-        """Capture snapshot and save to DB. Returns the snapshot ID."""
+    def capture_and_persist(self, commit: bool = True) -> int:
+        """Capture snapshot and save to DB. Returns the snapshot ID.
+
+        When `commit=False` the record is flushed (so its id is available)
+        but the caller owns the transaction — use this to group the
+        snapshot write with a trade-row write inside one atomic commit.
+        """
         snapshot = self.capture()
         record = MarketSnapshotRecord(
             timestamp=snapshot.timestamp,
@@ -99,7 +104,10 @@ class MarketSnapshotService:
             advance_decline_ratio=snapshot.advance_decline_ratio,
         )
         self._session.add(record)
-        self._session.commit()
+        if commit:
+            self._session.commit()
+        else:
+            self._session.flush()
         logger.info(
             "Market snapshot captured: SPY=$%.2f (%.2f%%) VIX=%.1f regime=%s",
             snapshot.spy_price, snapshot.spy_change_pct,

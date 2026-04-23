@@ -141,7 +141,6 @@ class TradeRecord(Base):
     market_snapshot_id: Mapped[int | None] = mapped_column(
         ForeignKey("market_snapshots.id")
     )
-    sentiment_score: Mapped[float | None] = mapped_column(Float)
     sentiment_data: Mapped[dict | None] = mapped_column(JSON)
     technical_signals: Mapped[dict | None] = mapped_column(JSON)
 
@@ -339,26 +338,7 @@ class TickerSplit(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
-# ── 15. trade_context ──────────────────────────────────
-
-
-class TradeContext(Base):
-    """Rich market context captured at trade time for later AI analysis."""
-
-    __tablename__ = "trade_context"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    trade_id: Mapped[str] = mapped_column(String(36), ForeignKey("trades.trade_id"), unique=True)
-    recent_news: Mapped[dict | None] = mapped_column(JSON)
-    sector_prices: Mapped[dict | None] = mapped_column(JSON)
-    related_tickers: Mapped[dict | None] = mapped_column(JSON)
-    short_interest: Mapped[dict | None] = mapped_column(JSON)
-    dividends: Mapped[dict | None] = mapped_column(JSON)
-    indicators: Mapped[dict | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-
-
-# ── 16. agent_observations ─────────────────────────────
+# ── 15. agent_observations ─────────────────────────────
 
 
 class AgentObservation(Base):
