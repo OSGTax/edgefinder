@@ -17,6 +17,8 @@ name: Watchdog
 # 2. Repo → Settings → Secrets and variables → Actions:
 #      - Secrets:   DATABASE_URL              (Supabase pooler URL)
 #                   CLAUDE_CODE_OAUTH_TOKEN   (the token from step 1)
+#                   AGENT_CONFIG_JSON         (body of .claude/agent-config.json —
+#                                              see .claude/agent-config.example.json)
 #      - Variables: WATCHDOG_ENABLED=true     (job-level kill switch)
 # 3. Actions → "Watchdog" → Run workflow (smoke test).
 #
@@ -43,6 +45,7 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      AGENT_CONFIG_JSON: ${{ secrets.AGENT_CONFIG_JSON }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,9 +64,47 @@ jobs:
       - name: Install package
         run: pip install -e .
 
+      - name: Diagnose environment
+        # Prints presence/length of secrets (no values), claude binary path,
+        # and ET time vs active window. Helpful context whenever a later
+        # step fails — grep the job log for "DIAG" to read it quickly.
+        run: |
+          echo "DIAG DATABASE_URL set=${DATABASE_URL:+yes}"
+          echo "DIAG CLAUDE_CODE_OAUTH_TOKEN set=${CLAUDE_CODE_OAUTH_TOKEN:+yes} (len=${#CLAUDE_CODE_OAUTH_TOKEN})"
+          echo "DIAG AGENT_CONFIG_JSON set=${AGENT_CONFIG_JSON:+yes} (len=${#AGENT_CONFIG_JSON})"
+          echo "DIAG which claude: $(which claude || echo 'NOT FOUND')"
+          echo "DIAG claude version: $(claude --version 2>&1 | head -1 || echo 'CLI ERROR')"
+          python -c "
+          from datetime import datetime, timezone
+          from edgefinder.agents.watchdog import is_in_active_window
+          now = datetime.now(timezone.utc)
+          print(f'DIAG now_utc={now.isoformat()}')
+          print(f'DIAG in_active_window={is_in_active_window(now)}')
+          "
+
+      - name: Provision agent config
+        # Materialize .claude/agent-config.json from the secret. Without this
+        # the watchdog runs with fallback defaults and ignores any tuning
+        # (drift thresholds, stagnation minutes, etc.) the operator set in
+        # the config body. The file is written fresh every tick so the
+        # secret is the single source of truth.
+        run: |
+          mkdir -p .claude
+          if [ -n "$AGENT_CONFIG_JSON" ]; then
+            printf '%s' "$AGENT_CONFIG_JSON" > .claude/agent-config.json
+            echo "Wrote .claude/agent-config.json ($(wc -c < .claude/agent-config.json) bytes)"
+          else
+            echo "AGENT_CONFIG_JSON not set — using fallback config (from .claude/agent-config.example.json)."
+            cp .claude/agent-config.example.json .claude/agent-config.json
+          fi
+
       - name: Deterministic checks
         run: python -m edgefinder.agents.watchdog --force
 
       - name: Agentic reasoning
+        # Best-effort: a flaky `claude -p` (rate limit, transient network,
+        # expired token) shouldn't fail the whole workflow and spam emails.
+        # Deterministic checks above are the must-pass step.
+        continue-on-error: true
         if: success()
         run: python -m edgefinder.agents.reasoning --force

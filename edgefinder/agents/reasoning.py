@@ -374,6 +374,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Run even if the kill switch disables the agent",
     )
     parser.add_argument(
+        "--ignore-window",
+        action="store_true",
+        help="Run even outside the active market window (Mon-Fri 08:30-17:00 ET)",
+    )
+    parser.add_argument(
         "--model",
         default=None,
         help="Override the Claude model (default: WATCHDOG_REASONING_MODEL or claude-opus-4-7)",
@@ -381,6 +386,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    # Mirror the deterministic watchdog's window behavior so the workflow's
+    # hourly cron doesn't try to call `claude -p` outside market hours —
+    # that was the silent cause of failure emails when the deterministic
+    # step cleanly exited but this step fired anyway.
+    from edgefinder.agents.watchdog import is_in_active_window
+
+    if not args.ignore_window and not is_in_active_window():
+        logger.info(
+            "[%s-reasoning] outside active window (Mon-Fri 08:30-17:00 ET) — "
+            "exiting cleanly (use --ignore-window to override)",
+            args.agent_name,
+        )
+        return 0
 
     cfg = get_agent_config(args.agent_name)
     if not cfg.enabled and not args.force:
