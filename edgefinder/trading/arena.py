@@ -179,8 +179,14 @@ class ArenaEngine:
                     except Exception:
                         logger.exception("get_latest_price failed for %s", ticker)
 
+                sector = None
+                if cached_fund is not None:
+                    sector = getattr(cached_fund, "sector", None)
+
                 for signal in signals:
-                    trade = slot.executor.execute_signal(signal, fresh_price=fresh_price)
+                    trade = slot.executor.execute_signal(
+                        signal, fresh_price=fresh_price, sector=sector,
+                    )
                     if trade:
                         all_trades.append(trade)
                         opened_here += 1
@@ -307,6 +313,11 @@ class ArenaEngine:
         """Get a strategy instance by name."""
         slot = self._slots.get(name)
         return slot.strategy if slot else None
+
+    def get_executor(self, name: str):
+        """Get an Executor instance by strategy name (for state restoration)."""
+        slot = self._slots.get(name)
+        return slot.executor if slot else None
 
     def get_strategy_names(self) -> list[str]:
         return list(self._slots.keys())

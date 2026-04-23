@@ -10,6 +10,9 @@ import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Callable
+
+from sqlalchemy.orm import Session
 
 from config.settings import settings
 from edgefinder.core.events import event_bus
@@ -17,6 +20,16 @@ from edgefinder.core.models import Direction, Signal, Trade, TradeStatus, TradeT
 from edgefinder.trading.account import Position, VirtualAccount
 
 logger = logging.getLogger(__name__)
+
+
+class ChainIntegrityError(Exception):
+    """Raised when the integrity hash chain doesn't verify on boot."""
+
+
+def _compute_chain_hash(trade_id: str, sequence_num: int, prev_hash: str) -> str:
+    """Pure function used by both live writes and chain verification."""
+    data = f"{trade_id}:{sequence_num}:{prev_hash}"
+    return hashlib.sha256(data.encode()).hexdigest()
 
 
 class Executor:
@@ -27,10 +40,80 @@ class Executor:
         self._sequence_num = 0
         self._prev_hash = ""
 
+    def restore_hash_chain(self, session: Session) -> None:
+        """Seed sequence_num / prev_hash from this strategy's last trade.
+
+        Without this, a deploy or restart resets both to 0 / "" and the
+        next trade's hash chains to an empty string — a permanent gap in
+        the audit trail. Call once per executor after account state is
+        restored.
+        """
+        from edgefinder.db.models import TradeRecord
+
+        last = (
+            session.query(TradeRecord.sequence_num, TradeRecord.integrity_hash)
+            .filter(
+                TradeRecord.strategy_name == self.account.strategy_name,
+                TradeRecord.sequence_num.isnot(None),
+            )
+            .order_by(TradeRecord.sequence_num.desc())
+            .first()
+        )
+        if last is None:
+            return
+        seq, hsh = last
+        self._sequence_num = int(seq or 0)
+        self._prev_hash = hsh or ""
+        logger.info(
+            "[%s] Restored hash chain: sequence_num=%d prev_hash=%s",
+            self.account.strategy_name, self._sequence_num,
+            self._prev_hash[:12] + "…" if self._prev_hash else "<empty>",
+        )
+
+    def verify_chain(self, session: Session) -> tuple[bool, int]:
+        """Recompute every row's hash for this strategy and compare.
+
+        Returns (ok, checked_count). When a mismatch is found, logs
+        pointedly (strategy, sequence_num, trade_id) and returns False
+        without raising — callers choose whether to halt trading.
+        """
+        from edgefinder.db.models import TradeRecord
+
+        rows = (
+            session.query(
+                TradeRecord.trade_id,
+                TradeRecord.sequence_num,
+                TradeRecord.integrity_hash,
+            )
+            .filter(
+                TradeRecord.strategy_name == self.account.strategy_name,
+                TradeRecord.sequence_num.isnot(None),
+            )
+            .order_by(TradeRecord.sequence_num.asc())
+            .all()
+        )
+
+        prev = ""
+        checked = 0
+        for trade_id, seq, stored_hash in rows:
+            expected = _compute_chain_hash(trade_id, int(seq), prev)
+            if expected != (stored_hash or ""):
+                logger.error(
+                    "[%s] Chain integrity mismatch at sequence=%d trade_id=%s: "
+                    "expected %s, stored %s",
+                    self.account.strategy_name, seq, trade_id,
+                    expected[:12], (stored_hash or "")[:12],
+                )
+                return False, checked
+            prev = stored_hash or ""
+            checked += 1
+        return True, checked
+
     def execute_signal(
         self,
         signal: Signal,
         fresh_price: float | None = None,
+        sector: str | None = None,
     ) -> Trade | None:
         """Execute a signal: size, slippage, open position, return Trade.
 
@@ -60,7 +143,7 @@ class Executor:
 
         # Check account rules with actual cost
         allowed, reason = self.account.can_open_position(
-            cost, signal.trade_type.value, symbol=signal.ticker,
+            cost, signal.trade_type.value, symbol=signal.ticker, sector=sector,
         )
         if not allowed:
             logger.info(
@@ -81,6 +164,7 @@ class Executor:
             trade_type=signal.trade_type.value,
             entry_time=datetime.now(timezone.utc),
             trade_id=trade_id,
+            sector=sector,
         )
 
         self.account.open_position(position)
@@ -110,7 +194,9 @@ class Executor:
     def check_positions(self, prices: dict[str, float]) -> list[Trade]:
         """Check all open positions against current prices.
 
-        Returns list of closed Trade objects.
+        Stamps each position's `current_price` with the latest mark so
+        total_equity, market_value, and drawdown_pct are accurate
+        mark-to-market. Returns list of closed Trade objects.
         """
         closed_trades: list[Trade] = []
 
@@ -118,6 +204,10 @@ class Executor:
             price = prices.get(position.symbol)
             if price is None:
                 continue
+
+            # Mark-to-market stamp — feeds account.total_equity and
+            # drawdown_pct regardless of whether this tick closes.
+            position.current_price = price
 
             reason = None
             if position.should_stop_out(price):
@@ -152,6 +242,11 @@ class Executor:
                 )
                 closed_trades.append(trade)
                 event_bus.publish("trade.closed", trade)
+
+        # After this tick's marks have been applied and any closes
+        # recorded, update peak_equity so drawdown tracks real market
+        # value, not just values seen at close time.
+        self.account.update_peak_equity()
 
         return closed_trades
 
@@ -243,7 +338,6 @@ class Executor:
 
     def _compute_hash(self, trade_id: str) -> str:
         """SHA-256 hash chaining for audit trail."""
-        data = f"{trade_id}:{self._sequence_num}:{self._prev_hash}"
-        h = hashlib.sha256(data.encode()).hexdigest()
+        h = _compute_chain_hash(trade_id, self._sequence_num, self._prev_hash)
         self._prev_hash = h
         return h

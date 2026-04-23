@@ -70,17 +70,28 @@ def _ema(series: pd.Series, period: int) -> pd.Series:
 
 
 def _rsi(close: pd.Series, period: int) -> pd.Series:
-    """Relative Strength Index using Wilder's smoothing."""
+    """Relative Strength Index using Wilder's smoothing.
+
+    Edge cases:
+      - All gains (avg_loss == 0): rs → inf, rsi = 100.
+      - All losses (avg_gain == 0, avg_loss > 0): rs = 0, rsi = 0.
+      - Flat market (both zero): rs = 0/0 = NaN; treat as 50. The
+        previous implementation collapsed flat bars to 0, which fired
+        spurious oversold signals on halted or range-bound tickers.
+    """
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0)
     loss = (-delta).where(delta < 0, 0.0)
     avg_gain = gain.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
-    # When avg_loss is 0 (all gains), RSI = 100. When avg_gain is 0, RSI = 0.
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    rsi = rsi.fillna(100)  # all gains → RSI 100
-    rsi = rsi.where(avg_gain > 0, 0)  # all losses → RSI 0
+    # Two kinds of NaN collapse to different values:
+    #   - flat window (both averages 0) → 50 neutral
+    #   - all-gains window (avg_loss==0, avg_gain>0) → 100
+    flat = (avg_gain == 0) & (avg_loss == 0)
+    rsi = rsi.mask(flat, 50.0)
+    rsi = rsi.fillna(100.0)
     return rsi
 
 

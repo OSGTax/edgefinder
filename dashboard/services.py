@@ -174,6 +174,8 @@ def init_services() -> None:
     _restore_account_state()
     _restore_open_positions()
     _restore_close_cooldowns()
+    _restore_revenge_cooldowns()
+    _restore_hash_chain_state()
     _recalculate_account_balances()
 
     # Persist any corrections from _recalculate_account_balances back to DB
@@ -286,6 +288,18 @@ def _restore_open_positions() -> None:
             # Skip if already have this position (shouldn't happen, but be safe)
             if account.get_position(tr.symbol):
                 continue
+            # Look up sector from fundamentals if present; used by the
+            # concentration check on the NEXT open.
+            sector = None
+            from edgefinder.db.models import Fundamental
+            fund_sector = (
+                session.query(Fundamental.sector, Fundamental.ticker_id)
+                .join(Ticker, Fundamental.ticker_id == Ticker.id)
+                .filter(Ticker.symbol == tr.symbol)
+                .first()
+            )
+            if fund_sector:
+                sector = fund_sector[0]
             position = Position(
                 symbol=tr.symbol,
                 shares=tr.shares,
@@ -296,6 +310,7 @@ def _restore_open_positions() -> None:
                 trade_type=tr.trade_type,
                 entry_time=tr.entry_time,
                 trade_id=tr.trade_id,
+                sector=sector,
             )
             # Add position only — cash already reflects this from _restore_account_state()
             account.positions.append(position)
@@ -362,6 +377,97 @@ def _restore_close_cooldowns() -> None:
             )
     except Exception:
         logger.exception("Failed to restore close cooldowns")
+    finally:
+        session.close()
+
+
+def _restore_revenge_cooldowns() -> None:
+    """Seed _last_stop_out from the most recent STOP_HIT exit per strategy.
+
+    Revenge-trade cooldown is held in memory on VirtualAccount. Without
+    this restore a STOP_HIT at 14:59 + deploy at 15:00 would let the
+    strategy revenge-trade at 15:01 despite the documented 30-minute
+    cooldown. Only looks at closes within the cooldown window — anything
+    older has already expired.
+    """
+    if not _arena or not _session_factory:
+        return
+    from datetime import timedelta
+    from sqlalchemy import func
+
+    session = _session_factory()
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=settings.revenge_trade_cooldown_minutes
+        )
+        rows = (
+            session.query(
+                TradeRecord.strategy_name,
+                func.max(TradeRecord.exit_time).label("last_exit"),
+            )
+            .filter(
+                TradeRecord.status == "CLOSED",
+                TradeRecord.exit_reason == "STOP_HIT",
+                TradeRecord.exit_time.is_not(None),
+                TradeRecord.exit_time >= cutoff,
+            )
+            .group_by(TradeRecord.strategy_name)
+            .all()
+        )
+        restored = 0
+        for strategy_name, last_exit in rows:
+            account = _arena.get_account(strategy_name)
+            if not account:
+                continue
+            if last_exit.tzinfo is None:
+                last_exit = last_exit.replace(tzinfo=timezone.utc)
+            account._last_stop_out = last_exit
+            restored += 1
+        if restored:
+            logger.info(
+                "Restored %d revenge-trade cooldowns from trades table",
+                restored,
+            )
+    except Exception:
+        logger.exception("Failed to restore revenge-trade cooldowns")
+    finally:
+        session.close()
+
+
+def _restore_hash_chain_state() -> None:
+    """Seed each executor's sequence_num + prev_hash from the trades table.
+
+    Without this restore, a deploy resets the chain to (0, "") and new
+    trades hash to an empty prev — a permanent gap in the audit trail.
+    Also runs verify_chain() for each strategy and WARNs on mismatch; we
+    don't halt trading because a mismatch could be a legitimate pre-audit
+    legacy row, but ops should notice the log and investigate.
+    """
+    if not _arena or not _session_factory:
+        return
+
+    session = _session_factory()
+    try:
+        for name in _arena.get_strategy_names():
+            executor = _arena.get_executor(name)
+            if executor is None:
+                continue
+            executor.restore_hash_chain(session)
+            ok, checked = executor.verify_chain(session)
+            if not ok:
+                logger.warning(
+                    "[%s] Hash chain verification FAILED after restore "
+                    "(%d rows checked before mismatch). Audit trail may be "
+                    "compromised — investigate.",
+                    name, checked,
+                )
+            elif checked > 0:
+                logger.info(
+                    "[%s] Hash chain verified: %d rows ok",
+                    name, checked,
+                )
+    except Exception:
+        logger.exception("Failed to restore hash chain state")
     finally:
         session.close()
 
