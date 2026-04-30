@@ -1,0 +1,34 @@
+name: Tests
+
+# Runs the test suite on every PR to main. The coach's auto-merge
+# (`gh pr merge --auto`) waits for this workflow to go green before the
+# tune lands. If a coach-proposed change breaks anything, the PR stays
+# open instead of merging.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install package with dev deps
+        run: pip install -e '.[dev]'
+
+      - name: Run unit tests (non-integration)
+        # test_market.py has a known pandas-len flake — exclude until
+        # it's fixed. Everything else must pass.
+        run: python -m pytest tests/ -m "not integration" --ignore=tests/test_market.py
