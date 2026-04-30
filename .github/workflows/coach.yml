@@ -1,0 +1,97 @@
+name: Coach (daily review + tune)
+
+# Daily Mon-Fri at 5:30 PM ET (after market close), the coach reviews
+# one strategy on a fixed weekday rotation:
+#
+#   Mon=alpha  Tue=bravo  Wed=charlie  Thu=degenerate  Fri=echo
+#
+# Output:
+#   - Always: a markdown review committed to reviews/YYYY-MM-DD-<strategy>.md
+#   - Sometimes: a PR with a single config/settings.py tweak. Auto-merge
+#     enabled; the tests workflow gates it.
+#
+# --- Enabling ---------------------------------------------------------
+# 1. GitHub repo → Settings → General → Pull Requests:
+#      ☑ Allow auto-merge
+# 2. GitHub repo → Settings → Secrets and variables → Actions:
+#      Secrets:    DATABASE_URL              (Supabase pooler URL)
+#                  CLAUDE_CODE_OAUTH_TOKEN   (claude setup-token)
+#      Variables:  COACH_ENABLED=true        (kill switch)
+# 3. Actions → Coach → Run workflow (smoke test).
+#
+# --- Stopping ---------------------------------------------------------
+# Flip COACH_ENABLED to 'false'. The `if:` gate skips the entire job.
+
+on:
+  # 21:30 UTC during EDT = 17:30 ET, 22:30 UTC during EST = 17:30 ET.
+  # Fire both; the Python ET clock won't pick a duplicate strategy
+  # (the day already advanced) — but to be safe, we use ONE schedule
+  # per DST half-year by relying on the wide window plus zoneinfo.
+  # In practice 21:30 covers EDT and 22:30 covers EST cleanly.
+  schedule:
+    - cron: '30 21 * * 1-5'
+    - cron: '30 22 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      strategy:
+        description: 'Override weekday rotation (alpha|bravo|charlie|degenerate|echo). Blank = use today.'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Dry run (print prompt, do not write or commit)'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  coach:
+    runs-on: ubuntu-latest
+    if: vars.COACH_ENABLED == 'true'
+    timeout-minutes: 10
+    concurrency:
+      group: coach-${{ github.event_name }}
+      cancel-in-progress: false  # never cancel a half-committed run
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gh pr create needs full history + actual main checkout
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Claude CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Configure git
+        run: |
+          git config --global user.name "edgefinder-coach[bot]"
+          git config --global user.email "edgefinder-coach@users.noreply.github.com"
+
+      - name: Run coach
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.strategy }}" ]; then
+            ARGS="--strategy ${{ inputs.strategy }}"
+          fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          python -m edgefinder.agents.coach --force $ARGS

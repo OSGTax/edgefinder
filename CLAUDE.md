@@ -326,6 +326,41 @@ See "Next automation step" below to close that loop.
 Flip the `WATCHDOG_ENABLED` repo variable to `false`. The workflow
 `if:` gate skips the entire job — no deploy, no downtime, instant.
 
+### Coach (daily strategy reviewer + tuner) — v4.9.0
+Where the watchdog monitors data integrity, the **coach** monitors
+**trade quality** for one strategy per weekday and proposes parameter
+tweaks as PRs.
+
+- Module: `edgefinder/agents/coach.py`. Cron:
+  `.github/workflows/coach.yml` (Mon-Fri 5:30 PM ET).
+- Rotation: Mon=alpha, Tue=bravo, Wed=charlie, Thu=degenerate, Fri=echo.
+- Each run pulls 30 days of closed trades for that strategy from
+  Supabase, the current `config/settings.py` text, and the last 3
+  prior reviews of the same strategy. Hands all of it to `claude -p`,
+  asks for a short review and (optionally) ONE parameter tweak.
+- Always commits a `reviews/YYYY-MM-DD-<strategy>.md` markdown file.
+  - No tune → committed straight to `main`.
+  - Tune → opens a PR with both the review and the `settings.py` edit;
+    `gh pr merge --auto --squash --delete-branch` enables auto-merge,
+    so the PR lands on `main` once the test suite goes green.
+- Kill switch: `COACH_ENABLED` repo variable.
+- Setup checklist: `SETUP-COACH.md` at the repo root.
+
+### Weekly portfolio summary
+Cross-strategy synthesis Saturday morning. Reads the past 7 days of
+`reviews/*.md` plus all closed trades, asks Claude for a portfolio-
+level digest, commits to `reviews/WEEK-YYYY-WW.md`. No code changes.
+
+- Module: `edgefinder/agents/weekly_summary.py`.
+- Cron: `.github/workflows/weekly-summary.yml`.
+- Kill switch: `WEEKLY_SUMMARY_ENABLED` repo variable.
+
+### Tests workflow
+`.github/workflows/tests.yml` runs `pytest -m "not integration"` (with
+`test_market.py` excluded — known pre-existing flake) on every PR to
+main. This is what gates the coach's auto-merge. Without it, the
+auto-merge has no safety check.
+
 ### Model selection
 Default reasoning model is `claude-opus-4-7`. Downgrade to Sonnet 4.6
 via `WATCHDOG_REASONING_MODEL=claude-sonnet-4-6` in the workflow env
