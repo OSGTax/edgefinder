@@ -109,12 +109,12 @@ class VirtualAccount:
 
     @property
     def open_positions_value(self) -> float:
-        """Sum of cost basis for all open positions."""
-        return sum(p.cost_basis for p in self.positions)
+        """Mark-to-market value of all open positions."""
+        return sum(p.market_value for p in self.positions)
 
     @property
     def total_equity(self) -> float:
-        """Cash + open position cost basis (use mark-to-market for real equity)."""
+        """Cash + mark-to-market value of open positions."""
         return self.cash + self.open_positions_value
 
     @property

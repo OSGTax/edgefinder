@@ -576,3 +576,61 @@ class TestAccountFinancialIntegrity:
         acct.realized_pnl = round(realized, 2)
         assert acct.cash == 4050.0
         assert acct.realized_pnl == 50.0
+
+
+class TestMarkToMarketEquity:
+    def test_total_equity_reflects_unrealized_gain(self):
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="DAY",
+        )
+        acct.open_position(pos)  # cash = 4000, cost = 1000
+        pos.market_price = 110.0  # position now worth 1100
+        assert acct.total_equity == 5100.0  # 4000 + 1100
+
+    def test_total_equity_reflects_unrealized_loss(self):
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="DAY",
+        )
+        acct.open_position(pos)  # cash = 4000
+        pos.market_price = 90.0  # position now worth 900
+        assert acct.total_equity == 4900.0  # 4000 + 900
+
+    def test_open_positions_value_uses_market_price(self):
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="DAY",
+        )
+        acct.open_position(pos)
+        pos.market_price = 115.0
+        assert acct.open_positions_value == 1150.0
+
+    def test_drawdown_triggers_on_unrealized_loss(self):
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        acct.peak_equity = 5000.0
+        pos = Position(
+            symbol="AAPL", shares=40, entry_price=100.0,
+            stop_loss=70.0, target=130.0, direction="LONG", trade_type="SWING",
+        )
+        acct.open_position(pos)  # cash = 1000, cost = 4000
+        # Position drops 30%: 40 * 70 = 2800
+        pos.market_price = 70.0
+        # Equity = 1000 + 2800 = 3800. Drawdown = (5000-3800)/5000 = 24%
+        assert acct.drawdown_pct == pytest.approx(0.24, abs=0.01)
+        allowed, reason = acct.can_open_position(100.0)
+        assert allowed is False
+        assert "circuit breaker" in reason.lower()
+
+    def test_equity_without_market_price_uses_entry(self):
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="DAY",
+        )
+        acct.open_position(pos)
+        # market_price is None — falls back to entry_price
+        assert acct.total_equity == 5000.0  # 4000 + 1000 (cost basis)
