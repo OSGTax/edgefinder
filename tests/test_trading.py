@@ -689,6 +689,40 @@ class TestMarkToMarketEquity:
         assert allowed is False
         assert "circuit breaker" in reason.lower()
 
+    def test_full_lifecycle_mark_to_market(self):
+        """Open position, market moves, check equity, close position."""
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        executor = Executor(acct)
+
+        # Open a position
+        signal = Signal(
+            ticker="AAPL", action=SignalAction.BUY,
+            entry_price=100.0, stop_loss=95.0, target=110.0,
+            confidence=70.0, trade_type=TradeType.DAY, strategy_name="alpha",
+        )
+        trade = executor.execute_signal(signal)
+        assert trade is not None
+        shares = trade.shares
+        entry = trade.entry_price  # includes slippage
+
+        # Simulate position monitor updating market price — stock goes up
+        pos = acct.get_position("AAPL")
+        pos.market_price = 108.0
+        equity_up = acct.total_equity
+        assert equity_up > 5000.0  # unrealized gain reflected
+
+        # Stock drops
+        pos.market_price = 92.0
+        equity_down = acct.total_equity
+        assert equity_down < 5000.0  # unrealized loss reflected
+
+        # Close the position
+        result = acct.close_position(pos, 92.0, "STOP_HIT")
+        # After close, equity is just cash (no positions)
+        assert acct.position_count == 0
+        assert acct.total_equity == acct.cash
+        assert result["pnl_dollars"] < 0  # loss
+
     def test_equity_without_market_price_uses_entry(self):
         acct = VirtualAccount("alpha", starting_capital=5000.0)
         pos = Position(
