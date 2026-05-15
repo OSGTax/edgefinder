@@ -123,6 +123,32 @@ class TestPosition:
         assert pos.should_take_profit(111.0) is True
         assert pos.should_take_profit(109.0) is False
 
+    def test_market_value_with_market_price(self):
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="DAY",
+        )
+        pos.market_price = 110.0
+        assert pos.market_value == 1100.0
+
+    def test_market_value_falls_back_to_entry_price(self):
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="DAY",
+        )
+        # market_price is None by default
+        assert pos.market_value == 1000.0  # falls back to entry_price
+
+    def test_market_value_preserves_stale_price(self):
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="DAY",
+        )
+        pos.market_price = 105.0
+        # Simulate a failed price fetch — market_price stays at 105
+        # (we never clear it)
+        assert pos.market_value == 1050.0
+
 
 # ── Executor Tests ───────────────────────────────────────
 

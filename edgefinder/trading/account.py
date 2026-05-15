@@ -31,6 +31,15 @@ class Position:
     trade_type: str  # DAY or SWING
     entry_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     trade_id: str = ""
+    market_price: float | None = None  # latest price, updated by position monitor
+
+    @property
+    def market_value(self) -> float:
+        """Current market value using best available price.
+        Priority: market_price (updated every 5 min) > entry_price (last resort).
+        """
+        price = self.market_price if self.market_price is not None else self.entry_price
+        return self.shares * price
 
     @property
     def cost_basis(self) -> float:
