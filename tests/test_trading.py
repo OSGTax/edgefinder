@@ -357,6 +357,42 @@ class TestArena:
         # market_price should now be set
         assert pos.market_price == 105.0
 
+    def test_new_position_gets_market_price(self, mock_provider):
+        import importlib
+        from edgefinder.strategies import alpha, bravo, charlie
+        from edgefinder.strategies.base import StrategyRegistry
+        from edgefinder.core.models import Signal, SignalAction
+        StrategyRegistry.clear()
+        importlib.reload(alpha)
+        importlib.reload(bravo)
+        importlib.reload(charlie)
+
+        arena = ArenaEngine(mock_provider)
+        arena.load_strategies()
+        arena.set_watchlists({"alpha": ["AAPL"]})
+
+        # Force a signal so a trade actually opens
+        fake_signal = Signal(
+            ticker="AAPL",
+            action=SignalAction.BUY,
+            entry_price=100.0,
+            stop_loss=95.0,
+            target=110.0,
+            confidence=80.0,
+            metadata={"pattern": "ema_crossover_bullish"},
+        )
+        slot = arena._slots["alpha"]
+        slot.strategy.generate_signals = MagicMock(return_value=[fake_signal])
+
+        mock_provider.get_latest_price.return_value = 100.0
+        trades = arena.run_signal_check()
+
+        assert len(trades) > 0, "Expected at least one trade to open"
+        acct = arena.get_account(trades[0].strategy_name)
+        pos = acct.get_position("AAPL")
+        assert pos is not None
+        assert pos.market_price is not None
+
 
 # ── Journal Tests ────────────────────────────────────────
 

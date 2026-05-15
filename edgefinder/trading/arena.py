@@ -184,6 +184,10 @@ class ArenaEngine:
                     if trade:
                         all_trades.append(trade)
                         opened_here += 1
+                        # Set market price on the new position
+                        new_pos = slot.account.get_position(signal.ticker)
+                        if new_pos:
+                            new_pos.market_price = fresh_price or trade.entry_price
                         slot.strategy.on_trade_executed(
                             TradeNotification(trade=trade, event="opened")
                         )
