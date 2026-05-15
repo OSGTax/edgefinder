@@ -247,6 +247,7 @@ class ArenaEngine:
                 price = self._provider.get_latest_price(pos.symbol)
                 if price is not None:
                     prices[pos.symbol] = price
+                    pos.market_price = price
 
             # Pass 1: stop loss / target hit
             closed = slot.executor.check_positions(prices)

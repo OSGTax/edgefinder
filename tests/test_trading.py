@@ -329,6 +329,34 @@ class TestArena:
         trades = arena.run_signal_check()
         assert trades == []  # no trades opened
 
+    def test_check_positions_updates_market_price(self, mock_provider):
+        import importlib
+        from edgefinder.strategies import alpha, bravo, charlie
+        from edgefinder.strategies.base import StrategyRegistry
+        StrategyRegistry.clear()
+        importlib.reload(alpha)
+        importlib.reload(bravo)
+        importlib.reload(charlie)
+
+        arena = ArenaEngine(mock_provider)
+        arena.load_strategies()
+
+        # Manually add a position to alpha's account
+        acct = arena.get_account("alpha")
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=50.0, target=200.0, direction="LONG", trade_type="SWING",
+            trade_id="test-mtm-1",
+        )
+        acct.open_position(pos)
+
+        # Position monitor checks prices — mock returns 105.0
+        mock_provider.get_latest_price.return_value = 105.0
+        arena.check_positions()
+
+        # market_price should now be set
+        assert pos.market_price == 105.0
+
 
 # ── Journal Tests ────────────────────────────────────────
 
