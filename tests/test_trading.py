@@ -698,3 +698,29 @@ class TestMarkToMarketEquity:
         acct.open_position(pos)
         # market_price is None — falls back to entry_price
         assert acct.total_equity == 5000.0  # 4000 + 1000 (cost basis)
+
+
+class TestStartupPriceFetch:
+    def test_restored_positions_get_market_price(self):
+        """Simulates what services.py should do after restoring positions."""
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
+        pos = Position(
+            symbol="AAPL", shares=10, entry_price=100.0,
+            stop_loss=95.0, target=110.0, direction="LONG", trade_type="SWING",
+            trade_id="restore-001",
+        )
+        # Simulate restore: add position without deducting cash
+        # (mirrors _restore_open_positions behavior)
+        acct.positions.append(pos)
+        acct.cash = 4000.0  # already reflects the open position
+
+        # Before price fetch — falls back to entry
+        assert pos.market_price is None
+        assert acct.total_equity == 5000.0  # 4000 + 1000 (entry fallback)
+
+        # Simulate startup price fetch
+        mock_price = 112.0
+        pos.market_price = mock_price
+
+        # After price fetch — uses real market value
+        assert acct.total_equity == 5120.0  # 4000 + 1120

@@ -304,10 +304,40 @@ def _restore_open_positions() -> None:
             restored += 1
         if restored:
             logger.info("Restored %d open positions from DB", restored)
+            _fetch_startup_prices()
     except Exception:
         logger.exception("Failed to restore open positions")
     finally:
         session.close()
+
+
+def _fetch_startup_prices() -> None:
+    """Fetch current market prices for all open positions at startup.
+
+    Ensures mark-to-market equity is correct before the first
+    position monitor cycle runs.
+    """
+    if not _arena or not _provider:
+        return
+    fetched = 0
+    failed = 0
+    for name in _arena.get_strategy_names():
+        account = _arena.get_account(name)
+        if not account:
+            continue
+        for pos in account.positions:
+            price = _provider.get_latest_price(pos.symbol)
+            if price is not None:
+                pos.market_price = price
+                fetched += 1
+            else:
+                logger.warning(
+                    "Startup: no price for %s — using entry price $%.2f until next monitor cycle",
+                    pos.symbol, pos.entry_price,
+                )
+                failed += 1
+    if fetched or failed:
+        logger.info("Startup price fetch: %d fetched, %d failed", fetched, failed)
 
 
 def _restore_close_cooldowns() -> None:
