@@ -9,12 +9,11 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 
-from dashboard.routers import benchmarks, inject, research, strategies, trades
+from dashboard.routers import benchmarks, inject, pages, research, strategies, trades
 from edgefinder.core.logging_config import configure_logging
 
 configure_logging()
@@ -22,9 +21,6 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 __version__ = "5.0.1"
-
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
 @asynccontextmanager
@@ -53,17 +49,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
+# Static files
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+
+# Page routes (before API routers so / is handled by pages)
+app.include_router(pages.router, tags=["pages"])
+
+# Register API routers
 app.include_router(trades.router, prefix="/api/trades", tags=["trades"])
 app.include_router(strategies.router, prefix="/api/strategies", tags=["strategies"])
 app.include_router(research.router, prefix="/api/research", tags=["research"])
 app.include_router(benchmarks.router, prefix="/api/benchmarks", tags=["benchmarks"])
 app.include_router(inject.router, prefix="/api/inject", tags=["inject"])
-
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html")
 
 
 @app.get("/api/health")

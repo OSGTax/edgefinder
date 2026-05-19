@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}EdgeFinder{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9670;</text></svg>">
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="/static/js/common.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<!-- Top Navigation Bar -->
+<nav class="topnav">
+  <div class="topnav-brand">
+    <span class="icon">&#9670;</span> EdgeFinder
+  </div>
+  <div class="topnav-tabs">
+    <a href="/" class="topnav-tab">Dashboard</a>
+    <a href="/strategies" class="topnav-tab">Strategies</a>
+    <a href="/screener" class="topnav-tab">Screener</a>
+    <a href="/trades" class="topnav-tab">Trades</a>
+    <a href="/research" class="topnav-tab">Research</a>
+  </div>
+  <div class="topnav-right">
+    <div id="topnav-indices" style="display:flex;gap:16px;"></div>
+    <div id="topnav-status" class="topnav-status">
+      <span class="dot"></span> ...
+    </div>
+  </div>
+</nav>
+
+<!-- Page Content -->
+<main class="page">
+  {% block content %}{% endblock %}
+</main>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>
