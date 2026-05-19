@@ -16,7 +16,7 @@ def init_database():
     """Create all tables if they don't exist, and add any missing columns."""
     from edgefinder.db.engine import Base, get_engine
     from edgefinder.db import models  # noqa: F401 — registers ORM models
-    from sqlalchemy import text, inspect
+    from sqlalchemy import text
 
     # Fail fast if DATABASE_URL is missing on Render — SQLite uses ephemeral
     # filesystem and all data (trades, accounts, research) is lost on redeploy
@@ -75,13 +75,26 @@ def init_database():
         ("trades", "pdt_flag", "BOOLEAN DEFAULT 0"),
         ("trades", "hold_duration_hours", "FLOAT"),
     ]
-    inspector = inspect(engine)
     with engine.begin() as conn:
         for table, column, col_type in migrations:
-            existing = [c["name"] for c in inspector.get_columns(table)]
-            if column not in existing:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
-                logger.info("Added column %s.%s", table, column)
+            # Use IF NOT EXISTS to avoid inspection (which hangs on Supabase pooler)
+            try:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
+                ))
+            except Exception:
+                # SQLite doesn't support IF NOT EXISTS — fall back to inspect
+                try:
+                    from sqlalchemy import inspect
+                    inspector = inspect(engine)
+                    existing = [c["name"] for c in inspector.get_columns(table)]
+                    if column not in existing:
+                        conn.execute(text(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                        ))
+                        logger.info("Added column %s.%s", table, column)
+                except Exception:
+                    pass  # Column likely already exists
 
     logger.info("Column migrations complete")
     engine.dispose()
