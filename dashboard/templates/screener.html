@@ -2,5 +2,61 @@
 {% block title %}Screener — EdgeFinder{% endblock %}
 {% block content %}
 <h1 class="page-title">Screener</h1>
-<div class="empty-state">Loading...</div>
+
+<!-- Sector Rotation -->
+<div class="card mb-20">
+  <div class="card-header">Sector Rotation (RRG)</div>
+  <div class="card-body">
+    <div class="sector-grid" id="sector-grid">
+      <div class="empty-state" style="grid-column:1/-1;">Loading sectors&hellip;</div>
+    </div>
+  </div>
+</div>
+
+<!-- Filters -->
+<div class="filters mb-16">
+  <select class="filter-select" id="filter-strategy">
+    <option value="">All Strategies</option>
+  </select>
+  <select class="filter-select" id="filter-sector">
+    <option value="">All Sectors</option>
+  </select>
+  <input class="filter-input" id="filter-search" placeholder="Search symbol or company..." type="text" style="min-width:220px;">
+</div>
+
+<!-- Screener Table -->
+<div class="card">
+  <div class="card-header">
+    Stocks
+    <span id="stock-count" style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+  </div>
+  <div class="card-body" style="padding:0;max-height:600px;overflow-y:auto;">
+    <table class="data-table" id="screener-table">
+      <thead>
+        <tr>
+          <th data-col="symbol">Symbol</th>
+          <th data-col="company_name">Company</th>
+          <th data-col="sector">Sector</th>
+          <th data-col="last_price" class="text-right">Price</th>
+          <th data-col="market_cap" class="text-right">MktCap</th>
+          <th data-col="earnings_growth" class="text-right">EG%</th>
+          <th data-col="revenue_growth" class="text-right">RG%</th>
+          <th data-col="price_to_earnings" class="text-right">P/E</th>
+          <th data-col="rsi_14" class="text-right">RSI</th>
+          <th data-col="macd_histogram" class="text-right">MACD</th>
+          <th data-col="short_interest" class="text-right">SI%</th>
+          <th>Strategies</th>
+        </tr>
+      </thead>
+      <tbody id="screener-body">
+        <tr>
+          <td colspan="12" class="empty-state" style="padding:40px;">Loading&hellip;</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/screener.js"></script>
 {% endblock %}
