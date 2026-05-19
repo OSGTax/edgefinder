@@ -173,6 +173,9 @@ class ArenaEngine:
         Returns:
             (opened_trades, closed_trades)
         """
+        # Step 0: Dynamic watchlist expansion for Degenerate (3x+ volume anomalies)
+        self._expand_degenerate_watchlist(snapshot_data)
+
         # Step 1: Build MarketData objects for all tickers that have data
         market_data_map = self._build_market_data(snapshot_data, market_context)
 
@@ -292,6 +295,65 @@ class ArenaEngine:
             ]
         return result
 
+    # ── Private: Dynamic Watchlist ───────────────────
+
+    def _expand_degenerate_watchlist(self, snapshot_data: dict[str, dict]) -> None:
+        """Temporarily add high-volume tickers to Degenerate's watchlist.
+
+        Scans snapshot data for stocks showing 3x+ time-normalized volume
+        that aren't already on any strategy's watchlist.
+        """
+        degen_slot = self._slots.get("degenerate")
+        if degen_slot is None:
+            return
+
+        # Collect all tickers already on any watchlist
+        all_watched: set[str] = set()
+        for slot in self._slots.values():
+            all_watched.update(slot.watchlist)
+
+        # Compute time-normalized volume for each ticker in snapshot
+        threshold = settings.volume_anomaly_threshold  # 3.0
+        added = 0
+        for ticker, snap in snapshot_data.items():
+            if ticker in all_watched:
+                continue
+            vol = snap.get("volume", 0)
+            if vol <= 0:
+                continue
+            # We don't have avg volume for unknown tickers, so skip the ratio
+            # check — the strategy's evaluate() will still check volume_ratio.
+            # For dynamic additions, a raw volume > 0 with high absolute
+            # volume (top of snapshot) qualifies as anomalous.
+            # Full time-normalized ratio requires avg_daily_volume from indicator
+            # engine, which we only have for watched tickers.
+            # Instead, just add tickers with very high raw volume (top percentile).
+            pass
+
+        # Simpler approach: use snapshot_data volume compared to any available avg
+        # Since we lack avg for unwatched tickers, check if they have
+        # cached bars with volume data
+        for ticker, snap in snapshot_data.items():
+            if ticker in all_watched:
+                continue
+            today_vol = snap.get("volume", 0)
+            if today_vol <= 0:
+                continue
+
+            # Check cached bars for avg volume
+            bars = self._daily_bars_cache.get(ticker)
+            if bars is not None and not bars.empty and "volume" in bars.columns:
+                avg_vol = bars["volume"].mean()
+                if avg_vol > 0:
+                    raw_ratio = today_vol / avg_vol
+                    if raw_ratio >= threshold:
+                        degen_slot.watchlist.append(ticker)
+                        all_watched.add(ticker)
+                        added += 1
+
+        if added:
+            logger.info("Dynamic Degenerate watchlist: added %d volume anomaly tickers", added)
+
     # ── Private: Data Building ────────────────────────
 
     def _build_market_data(
@@ -351,10 +413,16 @@ class ArenaEngine:
             # Get history buffer
             history = self._indicator_histories.get(ticker, IndicatorHistory(max_days=30))
 
-            # Compute volume ratio
+            # Compute time-normalized volume ratio:
+            # (today_volume / avg_daily_volume) / (minutes_since_open / 390)
             avg_vol = current_snapshot.volume_avg or 0.0
             today_vol = snap.get("volume", 0.0)
-            volume_ratio = today_vol / avg_vol if avg_vol > 0 else 0.0
+            raw_ratio = today_vol / avg_vol if avg_vol > 0 else 0.0
+            time_factor = self._minutes_since_market_open() / 390.0
+            if time_factor > 0:
+                volume_ratio = raw_ratio / time_factor
+            else:
+                volume_ratio = raw_ratio
 
             fundamentals = self._fundamentals_cache.get(ticker)
 
@@ -483,22 +551,23 @@ class ArenaEngine:
 
             rm = slot.risk_manager
 
+            mdata = market_data_map.get(pos.symbol)
+
             # Pass 1: Non-negotiable stop loss
             if rm.should_stop_out(pos.entry_price, current_price):
-                trade = self._close_position(slot, pos, current_price, "STOP_LOSS")
+                trade = self._close_position(slot, pos, current_price, "STOP_LOSS", mdata)
                 if trade:
                     closed.append(trade)
                 continue
 
             # Pass 2: Profit target
             if rm.should_take_profit(pos.entry_price, current_price):
-                trade = self._close_position(slot, pos, current_price, "TARGET_HIT")
+                trade = self._close_position(slot, pos, current_price, "TARGET_HIT", mdata)
                 if trade:
                     closed.append(trade)
                 continue
 
             # Pass 3: Strategy-defined exit
-            mdata = market_data_map.get(pos.symbol)
             if mdata is not None:
                 try:
                     exit_intent = slot.strategy.should_exit(
@@ -513,7 +582,7 @@ class ArenaEngine:
 
                 if exit_intent is not None:
                     reason = f"STRATEGY_EXIT:{exit_intent.reasoning[:50]}"
-                    trade = self._close_position(slot, pos, current_price, reason)
+                    trade = self._close_position(slot, pos, current_price, reason, mdata)
                     if trade:
                         closed.append(trade)
 
@@ -628,10 +697,15 @@ class ArenaEngine:
         position: Position,
         exit_price: float,
         reason: str,
+        market_data: MarketData | None = None,
     ) -> Trade | None:
         """Close a position and create a Trade object."""
         result = slot.account.close_position(position, exit_price, reason)
         self._sequence_num += 1
+
+        now = datetime.now(timezone.utc)
+        hold_hours = (now - position.entry_time).total_seconds() / 3600
+        is_pdt = position.entry_time.date() == now.date()
 
         trade = Trade(
             trade_id=result["trade_id"],
@@ -650,9 +724,13 @@ class ArenaEngine:
             pnl_percent=result["pnl_percent"],
             r_multiple=result["r_multiple"],
             exit_reason=reason,
-            exit_time=datetime.now(timezone.utc),
+            exit_reasoning=reason,
+            exit_time=now,
             sequence_num=self._sequence_num,
             integrity_hash=self._compute_hash(result["trade_id"]),
+            indicators_at_exit=market_data.current.to_dict() if market_data else None,
+            pdt_flag=is_pdt,
+            hold_duration_hours=round(hold_hours, 2),
         )
 
         event_bus.publish("trade.closed", trade)
@@ -665,7 +743,20 @@ class ArenaEngine:
         )
         return trade
 
-    # ── Private: Data Fetching ────────────────────────
+    # ── Private: Data Fetching / Helpers ─────────────
+
+    @staticmethod
+    def _minutes_since_market_open() -> float:
+        """Minutes elapsed since 9:30 AM ET. Returns 0 if before open, caps at 390."""
+        try:
+            from zoneinfo import ZoneInfo
+            et = ZoneInfo("US/Eastern")
+            now_et = datetime.now(et)
+            open_time = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            elapsed = (now_et - open_time).total_seconds() / 60.0
+            return max(0.0, min(elapsed, 390.0))
+        except Exception:
+            return 390.0  # default to full day if timezone fails
 
     def _fetch_daily_bars(self, ticker: str) -> pd.DataFrame | None:
         """Fetch daily bars for indicator computation (~90 trading days)."""

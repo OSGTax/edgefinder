@@ -160,9 +160,15 @@ def init_services() -> None:
 
     watchlists = _load_watchlists()
     if not watchlists or not _has_fundamentals():
-        # First run or no scored data — scan in background so server starts fast
-        logger.info("No scored tickers — launching background initial scan")
-        _deferred_initial_scan()
+        # Startup safeguard: skip scan if within 2 hours of market open
+        if _is_near_market_open():
+            logger.info(
+                "Within 2 hours of market open — skipping initial scan, "
+                "using existing DB watchlists until nightly scan"
+            )
+        else:
+            logger.info("No scored tickers — launching background initial scan")
+            _deferred_initial_scan()
     else:
         _arena.set_watchlists(watchlists)
         _populate_fundamentals_cache()
@@ -602,7 +608,11 @@ def _load_watchlists() -> dict[str, list[str]]:
     Each strategy only sees stocks that passed its own qualifies_stock() check.
     Lists are ordered by score (highest first) and capped at top N per strategy.
     """
-    max_per_strategy = settings.scanner_max_watchlist_per_strategy
+    default_max = settings.scanner_max_watchlist_per_strategy
+    # Per-strategy caps from strategy.watchlist_size (Coward=50, Gambler=100, Degenerate=200)
+    from edgefinder.strategies.base import StrategyRegistry
+    watchlist_limits = {s.name: getattr(s, "watchlist_size", default_max)
+                        for s in StrategyRegistry.get_instances()}
     session = _session_factory()
     try:
         rows = (
@@ -620,7 +630,8 @@ def _load_watchlists() -> dict[str, list[str]]:
         result: dict[str, list[str]] = {}
         for strategy_name, symbol in rows:
             tickers = result.setdefault(strategy_name, [])
-            if len(tickers) < max_per_strategy:
+            limit = watchlist_limits.get(strategy_name, default_max)
+            if len(tickers) < limit:
                 tickers.append(symbol)
         return result
     finally:
@@ -821,6 +832,23 @@ def _capture_trade_context(session, trade) -> None:
 
 # ── Market Holiday Check ───────────────────────────────
 
+def _is_near_market_open() -> bool:
+    """Check if current time is within 2 hours of market open (9:30 AM ET).
+
+    Used as startup safeguard: skip initial scan to avoid bleeding into trading time.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        et = ZoneInfo("US/Eastern")
+        now_et = datetime.now(et)
+        market_open_h, market_open_m = (int(x) for x in settings.market_open_et.split(":"))
+        open_time = now_et.replace(hour=market_open_h, minute=market_open_m, second=0, microsecond=0)
+        hours_until_open = (open_time - now_et).total_seconds() / 3600
+        return 0 <= hours_until_open <= 2
+    except Exception:
+        return False
+
+
 _holidays_cache: list[str] = []  # cached list of holiday date strings
 _holidays_last_refresh: float = 0
 
@@ -913,11 +941,12 @@ def _signal_check_job() -> None:
         )
 
         # Run the intraday cycle (entries + exits)
-        trades = _arena.run_intraday_cycle(snapshot_data, ctx)
-        if trades:
-            logger.info("Intraday cycle: %d trades", len(trades))
+        opened, closed = _arena.run_intraday_cycle(snapshot_data, ctx)
+        total = len(opened) + len(closed)
+        if total:
+            logger.info("Intraday cycle: %d opened, %d closed", len(opened), len(closed))
         else:
-            logger.info("Intraday cycle: no new trades")
+            logger.info("Intraday cycle: no trades")
 
         _persist_account_state()
     except Exception:
