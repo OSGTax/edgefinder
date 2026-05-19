@@ -1,10 +1,7 @@
 """Tests for edgefinder/trading/ — account, executor, arena, journal."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from edgefinder.core.models import (
@@ -12,7 +9,6 @@ from edgefinder.core.models import (
 )
 from edgefinder.db.models import TradeRecord
 from edgefinder.trading.account import Position, VirtualAccount
-from edgefinder.trading.arena import ArenaEngine
 from edgefinder.trading.executor import Executor
 from edgefinder.trading.journal import TradeJournal
 
@@ -232,166 +228,7 @@ class TestExecutor:
 
 
 # ── Arena Tests ──────────────────────────────────────────
-
-
-class TestArena:
-    @pytest.fixture
-    def mock_provider(self):
-        provider = MagicMock()
-        provider.get_latest_price.return_value = 100.0
-        # Return a DataFrame with enough bars
-        np.random.seed(42)
-        n = 250
-        close = 100 + np.random.normal(0, 1, n).cumsum()
-        df = pd.DataFrame({
-            "open": close * 0.999,
-            "high": close * 1.005,
-            "low": close * 0.995,
-            "close": close,
-            "volume": np.random.randint(500_000, 2_000_000, n).astype(float),
-        }, index=pd.date_range("2023-01-01", periods=n, freq="D", name="timestamp"))
-        provider.get_bars.return_value = df
-        return provider
-
-    def test_load_strategies(self, mock_provider):
-        # Ensure strategies are registered
-        import importlib
-        from edgefinder.strategies import alpha, bravo, charlie
-        from edgefinder.strategies.base import StrategyRegistry
-        StrategyRegistry.clear()
-        importlib.reload(alpha)
-        importlib.reload(bravo)
-        importlib.reload(charlie)
-
-        arena = ArenaEngine(mock_provider)
-        arena.load_strategies(pdt_config={"alpha": True})
-        assert len(arena.get_strategy_names()) == 3
-        alpha_acct = arena.get_account("alpha")
-        assert alpha_acct.pdt_enabled is True
-
-    def test_get_all_accounts(self, mock_provider):
-        import importlib
-        from edgefinder.strategies import alpha, bravo, charlie
-        from edgefinder.strategies.base import StrategyRegistry
-        StrategyRegistry.clear()
-        importlib.reload(alpha)
-        importlib.reload(bravo)
-        importlib.reload(charlie)
-
-        arena = ArenaEngine(mock_provider)
-        arena.load_strategies()
-        accounts = arena.get_all_accounts()
-        assert len(accounts) == 3
-        for name, acct in accounts.items():
-            assert acct["cash"] == 5000.0
-
-    def test_set_global_watchlist(self, mock_provider):
-        import importlib
-        from edgefinder.strategies import alpha, bravo, charlie
-        from edgefinder.strategies.base import StrategyRegistry
-        StrategyRegistry.clear()
-        importlib.reload(alpha)
-        importlib.reload(bravo)
-        importlib.reload(charlie)
-
-        arena = ArenaEngine(mock_provider)
-        arena.load_strategies()
-        arena.set_global_watchlist(["AAPL", "MSFT"])
-        # Signal check should not crash
-        trades = arena.run_signal_check()
-        assert isinstance(trades, list)
-
-    def test_requalification_gate_skips_disqualified(self, mock_provider):
-        """Stocks that no longer meet fundamentals criteria are skipped."""
-        import importlib
-        from edgefinder.strategies import alpha, bravo, charlie
-        from edgefinder.strategies.base import StrategyRegistry
-        from edgefinder.core.models import TickerFundamentals
-        StrategyRegistry.clear()
-        importlib.reload(alpha)
-        importlib.reload(bravo)
-        importlib.reload(charlie)
-
-        arena = ArenaEngine(mock_provider)
-        arena.load_strategies()
-        arena.set_watchlists({"alpha": ["AAPL"]})
-
-        # Set fundamentals cache with a stock that FAILS Alpha qualification
-        # (Alpha requires earnings_growth > 0 AND revenue_growth > 0)
-        bad_fund = TickerFundamentals(
-            symbol="AAPL",
-            earnings_growth=-0.10,  # negative = fails Alpha
-            revenue_growth=-0.05,
-        )
-        arena.set_fundamentals_cache({"AAPL": bad_fund})
-
-        # Signal check should skip AAPL due to re-qualification failure
-        trades = arena.run_signal_check()
-        assert trades == []  # no trades opened
-
-    def test_check_positions_updates_market_price(self, mock_provider):
-        import importlib
-        from edgefinder.strategies import alpha, bravo, charlie
-        from edgefinder.strategies.base import StrategyRegistry
-        StrategyRegistry.clear()
-        importlib.reload(alpha)
-        importlib.reload(bravo)
-        importlib.reload(charlie)
-
-        arena = ArenaEngine(mock_provider)
-        arena.load_strategies()
-
-        # Manually add a position to alpha's account
-        acct = arena.get_account("alpha")
-        pos = Position(
-            symbol="AAPL", shares=10, entry_price=100.0,
-            stop_loss=50.0, target=200.0, direction="LONG", trade_type="SWING",
-            trade_id="test-mtm-1",
-        )
-        acct.open_position(pos)
-
-        # Position monitor checks prices — mock returns 105.0
-        mock_provider.get_latest_price.return_value = 105.0
-        arena.check_positions()
-
-        # market_price should now be set
-        assert pos.market_price == 105.0
-
-    def test_new_position_gets_market_price(self, mock_provider):
-        import importlib
-        from edgefinder.strategies import alpha, bravo, charlie
-        from edgefinder.strategies.base import StrategyRegistry
-        from edgefinder.core.models import Signal, SignalAction
-        StrategyRegistry.clear()
-        importlib.reload(alpha)
-        importlib.reload(bravo)
-        importlib.reload(charlie)
-
-        arena = ArenaEngine(mock_provider)
-        arena.load_strategies()
-        arena.set_watchlists({"alpha": ["AAPL"]})
-
-        # Force a signal so a trade actually opens
-        fake_signal = Signal(
-            ticker="AAPL",
-            action=SignalAction.BUY,
-            entry_price=100.0,
-            stop_loss=95.0,
-            target=110.0,
-            confidence=80.0,
-            metadata={"pattern": "ema_crossover_bullish"},
-        )
-        slot = arena._slots["alpha"]
-        slot.strategy.generate_signals = MagicMock(return_value=[fake_signal])
-
-        mock_provider.get_latest_price.return_value = 100.0
-        trades = arena.run_signal_check()
-
-        assert len(trades) > 0, "Expected at least one trade to open"
-        acct = arena.get_account(trades[0].strategy_name)
-        pos = acct.get_position("AAPL")
-        assert pos is not None
-        assert pos.market_price is not None
+# Old TestArena class removed — new arena tested in tests/test_arena_new.py
 
 
 # ── Journal Tests ────────────────────────────────────────

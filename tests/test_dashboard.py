@@ -103,7 +103,7 @@ class TestStrategiesAPI:
         resp = client.get("/api/strategies")
         assert resp.status_code == 200
         names = {s["name"] for s in resp.json()}
-        assert "alpha" in names
+        assert "coward" in names
 
     def test_accounts_empty(self, client):
         resp = client.get("/api/strategies/accounts")
@@ -122,7 +122,7 @@ class TestStrategiesAPI:
             data = resp.json()
             assert len(data) >= 1
             names = {a["strategy_name"] for a in data}
-            assert "alpha" in names
+            assert "coward" in names
         else:
             # No arena — DB fallback
             db_session.add(StrategyAccount(strategy_name="alpha", cash_balance=4500.0))
