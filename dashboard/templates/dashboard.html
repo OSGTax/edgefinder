@@ -1,6 +1,74 @@
 {% extends "base.html" %}
 {% block title %}Dashboard — EdgeFinder{% endblock %}
 {% block content %}
-<h1 class="page-title">Dashboard</h1>
-<div class="empty-state">Loading...</div>
+
+<!-- Hero Stats Row -->
+<div class="stats-grid grid-4 mb-20" id="stats-row">
+  <div class="stat-card">
+    <div class="stat-label">Total Equity</div>
+    <div class="stat-value" id="stat-equity">&mdash;</div>
+    <div class="stat-sub" id="stat-equity-chg">&nbsp;</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Today's P&amp;L</div>
+    <div class="stat-value" id="stat-pnl">&mdash;</div>
+    <div class="stat-sub" id="stat-pnl-sub">&nbsp;</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Open Positions</div>
+    <div class="stat-value" id="stat-positions">&mdash;</div>
+    <div class="stat-sub text-secondary" id="stat-positions-sub">&nbsp;</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Win Rate</div>
+    <div class="stat-value" id="stat-winrate">&mdash;</div>
+    <div class="stat-sub text-secondary" id="stat-winrate-sub">&nbsp;</div>
+  </div>
+</div>
+
+<!-- Equity Curve -->
+<div class="card mb-20">
+  <div class="card-header">
+    Equity Curve
+    <div class="right">
+      <div class="filter-tabs" id="eq-range-tabs">
+        <span class="filter-tab" data-days="30">30D</span>
+        <span class="filter-tab active" data-days="90">90D</span>
+        <span class="filter-tab" data-days="180">180D</span>
+        <span class="filter-tab" data-days="365">1Y</span>
+      </div>
+    </div>
+  </div>
+  <div class="card-body" style="padding:8px 8px 0 8px;">
+    <div id="equity-chart" style="width:100%;height:300px;"></div>
+  </div>
+</div>
+
+<!-- Open Positions -->
+<div class="card mb-20">
+  <div class="card-header">
+    Open Positions
+    <div class="right" id="positions-count-header"></div>
+  </div>
+  <div class="card-body" id="positions-grid">
+    <div class="empty-state">
+      <div class="icon">&#9744;</div>
+      Loading positions...
+    </div>
+  </div>
+</div>
+
+<!-- Market Overview -->
+<div class="card mb-20">
+  <div class="card-header">Market Overview</div>
+  <div class="card-body">
+    <div class="stats-grid" id="market-row" style="grid-template-columns:repeat(5,1fr);">
+      <!-- Filled by JS -->
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
 {% endblock %}
