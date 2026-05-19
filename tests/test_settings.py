@@ -43,3 +43,19 @@ def test_cache_ttl_defaults():
     assert "day" in s.cache_bars_ttl_minutes
     assert "1" in s.cache_bars_ttl_minutes
     assert s.cache_bars_ttl_minutes["day"] == 1080
+
+
+def test_new_risk_settings():
+    from config.settings import settings
+    assert settings.stop_loss_pct == 0.20
+    assert settings.profit_target_coward == 0.15
+    assert settings.profit_target_gambler == 0.25
+    assert settings.profit_target_degenerate == 0.50
+    assert settings.risk_pct_coward == 0.05
+    assert settings.risk_pct_gambler == 0.10
+    assert settings.risk_pct_degenerate == 0.20
+    assert settings.market_open_et == "09:30"
+    assert settings.market_close_et == "16:00"
+    assert settings.indicator_history_days == 30
+    assert settings.volume_anomaly_threshold == 3.0
+    assert settings.scanner_max_universe_size == 1000

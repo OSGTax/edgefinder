@@ -62,6 +62,21 @@ class Settings(BaseSettings):
     # Commit cadence for incremental persistence — survives mid-scan deploys.
     scanner_commit_batch_size: int = 100
 
+    # ── NEW RISK SYSTEM ───────────────────────────────
+    stop_loss_pct: float = 0.20  # fixed 20% stop for all strategies
+    risk_pct_coward: float = 0.05  # max loss per trade as % of equity
+    risk_pct_gambler: float = 0.10
+    risk_pct_degenerate: float = 0.20
+    profit_target_coward: float = 0.15
+    profit_target_gambler: float = 0.25
+    profit_target_degenerate: float = 0.50
+
+    # ── INDICATOR HISTORY ─────────────────────────────
+    indicator_history_days: int = 30
+
+    # ── VOLUME ANOMALY (Degenerate dynamic watchlist) ──
+    volume_anomaly_threshold: float = 3.0  # 3x time-normalized volume
+
     # ── SIGNALS / TECHNICAL ──────────────────────────
     signal_ema_fast_day: int = 9
     signal_ema_slow_day: int = 21
@@ -96,8 +111,8 @@ class Settings(BaseSettings):
     # ── SCHEDULING (ET timezone) ─────────────────────
     scanner_run_time: str = "18:15"
     signal_check_interval_minutes: int = 5
-    market_open_et: str = "07:00"
-    market_close_et: str = "18:00"
+    market_open_et: str = "09:30"
+    market_close_et: str = "16:00"
     position_monitor_interval_minutes: int = 5
 
     # ── DATA SOURCE (Polygon.io) ─────────────────────
