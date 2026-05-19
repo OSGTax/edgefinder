@@ -148,15 +148,16 @@ class TradeRecord(Base):
     sequence_num: Mapped[int | None] = mapped_column(Integer, index=True)
     integrity_hash: Mapped[str | None] = mapped_column(String(64))
 
-    # Rich trade context (new)
-    entry_reasoning: Mapped[str | None] = mapped_column(Text)
-    exit_reasoning: Mapped[str | None] = mapped_column(Text)
-    indicators_at_entry: Mapped[dict | None] = mapped_column(JSON)
-    indicators_at_exit: Mapped[dict | None] = mapped_column(JSON)
-    fundamentals_at_entry: Mapped[dict | None] = mapped_column(JSON)
-    market_context_at_entry: Mapped[dict | None] = mapped_column(JSON)
-    pdt_flag: Mapped[bool] = mapped_column(Boolean, default=False)
-    hold_duration_hours: Mapped[float | None] = mapped_column(Float)
+    # Rich trade context (new) — deferred to avoid SELECT errors if columns
+    # haven't been added yet (Supabase pooler can block DDL migrations)
+    entry_reasoning: Mapped[str | None] = mapped_column(Text, deferred=True)
+    exit_reasoning: Mapped[str | None] = mapped_column(Text, deferred=True)
+    indicators_at_entry: Mapped[dict | None] = mapped_column(JSON, deferred=True)
+    indicators_at_exit: Mapped[dict | None] = mapped_column(JSON, deferred=True)
+    fundamentals_at_entry: Mapped[dict | None] = mapped_column(JSON, deferred=True)
+    market_context_at_entry: Mapped[dict | None] = mapped_column(JSON, deferred=True)
+    pdt_flag: Mapped[bool] = mapped_column(Boolean, default=False, deferred=True)
+    hold_duration_hours: Mapped[float | None] = mapped_column(Float, deferred=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
