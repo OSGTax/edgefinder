@@ -31,9 +31,12 @@ def init_database():
         sys.exit(1)
 
     engine = get_engine()
+    logger.info("Running create_all...")
     Base.metadata.create_all(engine)
+    logger.info("create_all complete")
 
     # Add missing columns that create_all won't add to existing tables
+    logger.info("Running column migrations...")
     migrations = [
         ("strategy_accounts", "realized_pnl", "FLOAT DEFAULT 0.0"),
         ("tickers", "scan_batch", "INTEGER"),
@@ -74,15 +77,29 @@ def init_database():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
                 logger.info("Added column %s.%s", table, column)
 
-    logger.info("Database tables verified/created")
+    logger.info("Column migrations complete")
     engine.dispose()
+    logger.info("Database init done")
 
 
 def main():
-    init_database()
+    # Run DB init in background so uvicorn can bind the port immediately.
+    # Render kills deploys that don't bind a port within ~60s.
+    # The tables already exist from prior deploys — this just adds new columns.
+    import threading
+
+    def _bg_init():
+        try:
+            init_database()
+        except Exception:
+            logger.exception("Background database init failed — app will still serve")
+
+    thread = threading.Thread(target=_bg_init, daemon=True, name="db-init")
+    thread.start()
 
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
+    logger.info("Starting uvicorn on port %d...", port)
     uvicorn.run(
         "dashboard.app:app",
         host="0.0.0.0",
