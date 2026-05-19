@@ -148,6 +148,16 @@ class TradeRecord(Base):
     sequence_num: Mapped[int | None] = mapped_column(Integer, index=True)
     integrity_hash: Mapped[str | None] = mapped_column(String(64))
 
+    # Rich trade context (new)
+    entry_reasoning: Mapped[str | None] = mapped_column(Text)
+    exit_reasoning: Mapped[str | None] = mapped_column(Text)
+    indicators_at_entry: Mapped[dict | None] = mapped_column(JSON)
+    indicators_at_exit: Mapped[dict | None] = mapped_column(JSON)
+    fundamentals_at_entry: Mapped[dict | None] = mapped_column(JSON)
+    market_context_at_entry: Mapped[dict | None] = mapped_column(JSON)
+    pdt_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    hold_duration_hours: Mapped[float | None] = mapped_column(Float)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     market_snapshot: Mapped[MarketSnapshotRecord | None] = relationship()

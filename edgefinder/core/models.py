@@ -120,6 +120,14 @@ class Trade(BaseModel):
     exit_time: Optional[datetime] = None
     sequence_num: Optional[int] = None
     integrity_hash: Optional[str] = None
+    entry_reasoning: Optional[str] = None
+    exit_reasoning: Optional[str] = None
+    indicators_at_entry: Optional[dict] = None
+    indicators_at_exit: Optional[dict] = None
+    fundamentals_at_entry: Optional[dict] = None
+    market_context_at_entry: Optional[dict] = None
+    pdt_flag: bool = False
+    hold_duration_hours: Optional[float] = None
 
 
 class MarketSnapshot(BaseModel):

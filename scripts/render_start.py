@@ -57,6 +57,14 @@ def init_database():
         ("fundamentals", "macd_value", "FLOAT"),
         ("fundamentals", "macd_signal", "FLOAT"),
         ("fundamentals", "macd_histogram", "FLOAT"),
+        ("trades", "entry_reasoning", "TEXT"),
+        ("trades", "exit_reasoning", "TEXT"),
+        ("trades", "indicators_at_entry", "TEXT"),
+        ("trades", "indicators_at_exit", "TEXT"),
+        ("trades", "fundamentals_at_entry", "TEXT"),
+        ("trades", "market_context_at_entry", "TEXT"),
+        ("trades", "pdt_flag", "BOOLEAN DEFAULT 0"),
+        ("trades", "hold_duration_hours", "FLOAT"),
     ]
     inspector = inspect(engine)
     with engine.begin() as conn:

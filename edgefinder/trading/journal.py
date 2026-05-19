@@ -47,6 +47,10 @@ class TradeJournal:
             existing.r_multiple = trade.r_multiple
             existing.exit_reason = trade.exit_reason
             existing.market_snapshot_id = trade.market_snapshot_id
+            existing.exit_reasoning = getattr(trade, 'exit_reasoning', None)
+            existing.indicators_at_exit = getattr(trade, 'indicators_at_exit', None)
+            existing.pdt_flag = getattr(trade, 'pdt_flag', False)
+            existing.hold_duration_hours = getattr(trade, 'hold_duration_hours', None)
         else:
             record = TradeRecord(
                 trade_id=trade.trade_id,
@@ -73,6 +77,10 @@ class TradeJournal:
                 technical_signals=trade.technical_signals,
                 sequence_num=trade.sequence_num,
                 integrity_hash=trade.integrity_hash,
+                entry_reasoning=getattr(trade, 'entry_reasoning', None),
+                indicators_at_entry=getattr(trade, 'indicators_at_entry', None),
+                fundamentals_at_entry=getattr(trade, 'fundamentals_at_entry', None),
+                market_context_at_entry=getattr(trade, 'market_context_at_entry', None),
             )
             self._session.add(record)
 
