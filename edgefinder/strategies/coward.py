@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from edgefinder.core.models import ExitIntent, TickerFundamentals, TradeIntent
 from edgefinder.data.market_data import MarketData
+from edgefinder.strategies.base import StrategyRegistry
 from edgefinder.strategies.strategy_interface import SwingStrategy
 
 
+@StrategyRegistry.register("coward")
 class CowardStrategy(SwingStrategy):
 
     @property

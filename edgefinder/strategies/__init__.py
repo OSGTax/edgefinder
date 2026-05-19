@@ -1,2 +1,2 @@
-# Auto-import all strategy modules so @register decorators fire
-from edgefinder.strategies import alpha, bravo, charlie, degenerate, echo  # noqa: F401
+# Register new strategies — old ones (alpha, bravo, charlie, degenerate, echo) removed
+from edgefinder.strategies import coward, gambler, degenerate_v2  # noqa: F401
