@@ -241,3 +241,25 @@ class StrategyAccountState(BaseModel):
     def buying_power(self) -> float:
         """Available cash for new trades. No margin — cash only."""
         return self.cash_balance
+
+
+class TradeIntent(BaseModel):
+    """A strategy's decision to enter a trade. The risk system handles sizing/stops."""
+
+    ticker: str
+    direction: str  # "LONG"
+    reasoning: str  # human-readable explanation of why
+    strategy_name: str
+    indicators_snapshot: dict = Field(default_factory=dict)
+    fundamentals_snapshot: dict = Field(default_factory=dict)
+    market_context_snapshot: dict = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ExitIntent(BaseModel):
+    """A strategy's decision to exit an open position."""
+
+    ticker: str
+    reasoning: str
+    indicators_snapshot: dict = Field(default_factory=dict)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

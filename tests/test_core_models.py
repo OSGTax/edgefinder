@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from edgefinder.core.models import (
     BarData,
     Direction,
+    ExitIntent,
     MarketRegime,
     MarketSnapshot,
     Signal,
@@ -14,6 +15,7 @@ from edgefinder.core.models import (
     StrategyAccountState,
     TickerFundamentals,
     Trade,
+    TradeIntent,
     TradeStatus,
     TradeType,
 )
@@ -205,3 +207,35 @@ class TestBarData:
         )
         assert bar.vwap == 150.8
         assert bar.trade_count == 5000
+
+
+class TestTradeIntent:
+    def test_creation(self):
+        intent = TradeIntent(
+            ticker="AAPL",
+            direction="LONG",
+            reasoning="RSI oversold at BB lower",
+            strategy_name="coward",
+            indicators_snapshot={"rsi": 28.0, "close": 150.0},
+        )
+        assert intent.ticker == "AAPL"
+        assert intent.direction == "LONG"
+        assert intent.reasoning == "RSI oversold at BB lower"
+
+    def test_defaults(self):
+        intent = TradeIntent(
+            ticker="AAPL", direction="LONG",
+            reasoning="test", strategy_name="coward",
+        )
+        assert intent.indicators_snapshot == {}
+
+
+class TestExitIntent:
+    def test_creation(self):
+        intent = ExitIntent(
+            ticker="AAPL",
+            reasoning="RSI overbought",
+            indicators_snapshot={"rsi": 72.0},
+        )
+        assert intent.ticker == "AAPL"
+        assert intent.reasoning == "RSI overbought"
