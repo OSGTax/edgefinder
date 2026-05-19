@@ -140,10 +140,6 @@ class VirtualAccount:
         if self.is_paused:
             return False, "Account is paused"
 
-        # Max open positions hard limit
-        if self.position_count >= settings.max_open_positions:
-            return False, f"Max open positions reached ({settings.max_open_positions})"
-
         # Duplicate ticker check — only one position per symbol at a time
         if symbol and self.get_position(symbol):
             return False, f"Already have open position in {symbol}"

@@ -169,9 +169,6 @@ def init_services() -> None:
         for name, tickers in watchlists.items():
             logger.info("Watchlist '%s': %d tickers", name, len(tickers))
 
-    # Wire Echo meta-strategy with a DB session so it can learn from history
-    _wire_echo_strategy()
-
     # Restore account state, open positions, then recalculate from trades (source of truth)
     _restore_account_state()
     _restore_open_positions()
@@ -209,6 +206,7 @@ def init_services() -> None:
         sector_rotation_fn=_sector_rotation_job,
         news_accumulate_fn=_news_accumulate_job,
         dividend_split_fn=_dividend_split_job,
+        daily_indicator_fn=_daily_indicator_job,
     )
     _scheduler.start()
 
@@ -684,24 +682,6 @@ def _has_fundamentals() -> bool:
         session.close()
 
 
-# ── Echo Meta-Strategy Wiring ──────────────────────────
-
-
-def _wire_echo_strategy() -> None:
-    """Give Echo a DB session so it can query trade history for learning."""
-    if not _arena or not _session_factory:
-        return
-    strategy = _arena.get_strategy("echo")
-    if strategy is None:
-        return
-    try:
-        session = _session_factory()
-        strategy.set_db_session(session)
-        logger.info("Echo meta-strategy wired with DB session")
-    except Exception:
-        logger.exception("Failed to wire Echo strategy")
-
-
 # ── Event Bus Wiring ────────────────────────────────────
 
 
@@ -893,43 +873,65 @@ def _broadcast_snapshot_to_strategies() -> None:
 # ── Scheduler Job Callbacks ─────────────────────────────
 
 
-def _signal_check_job() -> None:
-    """Called every 5 min during market hours. Skips market holidays."""
+def _daily_indicator_job() -> None:
+    """Called at 4:30 PM ET — save daily indicators to history buffer."""
     if not _arena:
+        return
+    try:
+        _arena.run_daily_cycle()
+        logger.info("Daily indicator cycle complete")
+    except Exception:
+        logger.exception("Daily indicator cycle failed")
+
+
+def _signal_check_job() -> None:
+    """Called every 5 min during market hours. Runs the intraday cycle."""
+    if not _arena or not _provider:
         logger.warning("Signal check skipped: arena not initialized")
         return
     if _is_market_holiday():
         logger.info("Signal check skipped — market holiday")
         return
     try:
-        # Broadcast market snapshot to all strategies (feeds Echo's regime tracker)
-        _broadcast_snapshot_to_strategies()
+        from edgefinder.data.snapshot_provider import get_enriched_snapshots
+        from edgefinder.data.market_data import MarketContext
 
-        trades = _arena.run_signal_check()
+        # Get bulk snapshot data (one API call)
+        snapshot_data = get_enriched_snapshots(_provider)
+
+        # Build market context from index prices
+        ctx = MarketContext(
+            spy_price=snapshot_data.get("SPY", {}).get("price", 0),
+            spy_change_pct=0,  # calculated from prev close if needed
+            qqq_price=snapshot_data.get("QQQ", {}).get("price", 0),
+            qqq_change_pct=0,
+            iwm_price=snapshot_data.get("IWM", {}).get("price", 0),
+            iwm_change_pct=0,
+            dia_price=snapshot_data.get("DIA", {}).get("price", 0),
+            dia_change_pct=0,
+            vix_level=snapshot_data.get("VIX", {}).get("price", 0),
+        )
+
+        # Run the intraday cycle (entries + exits)
+        trades = _arena.run_intraday_cycle(snapshot_data, ctx)
         if trades:
-            logger.info("Signal check: %d trades opened", len(trades))
+            logger.info("Intraday cycle: %d trades", len(trades))
         else:
-            logger.info("Signal check: no new trades")
+            logger.info("Intraday cycle: no new trades")
+
+        _persist_account_state()
     except Exception:
-        logger.exception("Signal check failed")
+        logger.exception("Intraday cycle failed")
 
 
 def _position_monitor_job() -> None:
-    """Called every 5 min during market hours. Skips market holidays."""
+    """Called every 5 min — persist account state."""
     if not _arena:
         return
-    if _is_market_holiday():
-        logger.debug("Position monitor skipped — market holiday")
-        return
     try:
-        closed = _arena.check_positions()
-        if closed:
-            logger.info("Position monitor: %d trades closed", len(closed))
-
-        # Sync account state to DB
         _persist_account_state()
     except Exception:
-        logger.exception("Position monitor failed")
+        logger.exception("Position monitor persist failed")
 
 
 def _nightly_scan_job() -> None:
