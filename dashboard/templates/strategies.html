@@ -2,5 +2,92 @@
 {% block title %}Strategies — EdgeFinder{% endblock %}
 {% block content %}
 <h1 class="page-title">Strategies</h1>
-<div class="empty-state">Loading...</div>
+
+<!-- Strategy Cards Grid -->
+<div class="grid-3 mb-20" id="strategy-cards">
+  <div class="empty-state" style="grid-column:1/-1;">
+    <div class="icon">&#9670;</div>
+    Loading strategies&hellip;
+  </div>
+</div>
+
+<!-- Strategy Detail Panel (hidden until a card is clicked) -->
+<div id="strategy-detail" style="display:none;">
+
+  <!-- Detail Header -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span id="detail-dot" class="strat-dot"></span>
+      <span id="detail-name" style="font-size:18px;font-weight:800;color:var(--text-primary);text-transform:capitalize;"></span>
+      <span id="detail-paused-badge"></span>
+    </div>
+    <button id="detail-close"
+      style="background:none;border:1px solid var(--border);color:var(--text-secondary);padding:5px 12px;
+             border-radius:var(--radius-sm);cursor:pointer;font-size:12px;"
+      onclick="closeDetail()">
+      Close ✕
+    </button>
+  </div>
+
+  <div class="grid-2 mb-16">
+
+    <!-- Equity Curve -->
+    <div class="card">
+      <div class="card-header">
+        Equity Curve
+        <div class="right">
+          <div class="filter-tabs" id="detail-eq-tabs">
+            <span class="filter-tab active" data-days="30">30d</span>
+            <span class="filter-tab" data-days="90">90d</span>
+            <span class="filter-tab" data-days="180">180d</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body" style="padding:12px 16px;">
+        <div id="detail-equity-chart" style="height:250px;"></div>
+      </div>
+    </div>
+
+    <!-- Risk Budget + Account Detail -->
+    <div class="card">
+      <div class="card-header">Account &amp; Risk Budget</div>
+      <div class="card-body" id="detail-account-body">
+        <!-- Filled by JS -->
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Trade History -->
+  <div class="card">
+    <div class="card-header">
+      Recent Trades
+      <div class="right" id="detail-trade-count" style="font-size:11px;text-transform:none;letter-spacing:0;color:var(--text-secondary);font-weight:400;"></div>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+      <table class="data-table" id="detail-trades-table">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Dir</th>
+            <th>Entry</th>
+            <th>Exit</th>
+            <th>P&amp;L</th>
+            <th>R&#x00D7;</th>
+            <th>Status</th>
+            <th>Opened</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody id="detail-trades-body">
+          <tr><td colspan="9" class="empty-state">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/strategies.js"></script>
 {% endblock %}
