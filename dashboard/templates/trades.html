@@ -2,5 +2,53 @@
 {% block title %}Trades — EdgeFinder{% endblock %}
 {% block content %}
 <h1 class="page-title">Trades</h1>
-<div class="empty-state">Loading...</div>
+
+<!-- Stats Bar -->
+<div class="stats-grid mb-20" id="trade-stats"></div>
+
+<!-- Filters -->
+<div class="filters mb-16">
+  <select class="filter-select" id="filter-strategy">
+    <option value="">All Strategies</option>
+  </select>
+  <div class="filter-tabs" id="status-tabs">
+    <div class="filter-tab active" data-status="all">All</div>
+    <div class="filter-tab" data-status="OPEN">Open</div>
+    <div class="filter-tab" data-status="wins">Wins</div>
+    <div class="filter-tab" data-status="losses">Losses</div>
+  </div>
+</div>
+
+<!-- Trade Journal Table -->
+<div class="card">
+  <div class="card-header">
+    Trade Journal
+    <span id="trade-count" style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
+  </div>
+  <div class="card-body" style="padding:0;max-height:600px;overflow-y:auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th data-col="symbol">Symbol</th>
+          <th data-col="strategy_name">Strategy</th>
+          <th data-col="direction">Dir</th>
+          <th data-col="entry_price">Entry</th>
+          <th data-col="exit_price">Exit</th>
+          <th data-col="shares">Shares</th>
+          <th data-col="pnl_dollars">P&amp;L</th>
+          <th data-col="pnl_percent">P&amp;L%</th>
+          <th data-col="r_multiple">R</th>
+          <th data-col="status">Status</th>
+          <th data-col="exit_reason">Reason</th>
+          <th data-col="entry_time">Opened</th>
+          <th data-col="exit_time">Closed</th>
+        </tr>
+      </thead>
+      <tbody id="trades-body"></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/trades.js"></script>
 {% endblock %}
