@@ -2,5 +2,23 @@
 {% block title %}Research — EdgeFinder{% endblock %}
 {% block content %}
 <h1 class="page-title">Research</h1>
-<div class="empty-state">Loading...</div>
+
+<!-- Search -->
+<div class="search-box mb-20">
+  <span class="search-icon">&#128269;</span>
+  <input class="search-input" id="search-input" placeholder="Search any ticker..." autocomplete="off">
+  <div class="search-results" id="search-results"></div>
+</div>
+
+<!-- Profile (hidden until ticker selected) -->
+<div id="ticker-profile" style="display:none;"></div>
+
+<!-- Empty state (shown when no ticker selected) -->
+<div id="research-empty" class="empty-state">
+  <div class="icon">&#128300;</div>
+  Search for a ticker to see its full research profile
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/research.js"></script>
 {% endblock %}
