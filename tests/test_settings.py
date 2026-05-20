@@ -7,7 +7,7 @@ from config.settings import Settings
 def test_defaults_load():
     """Settings loads with all defaults without error."""
     s = Settings(polygon_api_key="test")
-    assert s.starting_capital == 5_000.00
+    assert s.starting_capital == 10_000.00
     assert s.max_open_positions == 5
     assert s.max_risk_per_trade_pct == 0.02
     assert s.pdt_day_trade_limit == 3

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     )
 
     # ── ACCOUNT ──────────────────────────────────────
-    starting_capital: float = 5_000.00
+    starting_capital: float = 10_000.00
     max_open_positions: int = 5
     max_portfolio_concentration_pct: float = 0.20
 

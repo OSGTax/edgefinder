@@ -108,7 +108,7 @@ class TestNewArena:
         for name, acct_dict in accounts.items():
             assert "cash" in acct_dict
             assert "total_equity" in acct_dict
-            assert acct_dict["starting_capital"] == 5000.0
+            assert acct_dict["starting_capital"] == 10000.0
 
     def test_get_all_open_positions(self, mock_provider):
         """get_all_open_positions returns empty lists initially."""

@@ -108,6 +108,13 @@ def main():
     # this only runs the fast ALTER TABLE migrations.
     init_database()
 
+    # One-time account reset — set EDGEFINDER_RESET_ACCOUNTS=1 on Render,
+    # deploy, then remove the env var. Wipes old trades and resets to $10k.
+    if os.getenv("EDGEFINDER_RESET_ACCOUNTS") == "1":
+        logger.info("EDGEFINDER_RESET_ACCOUNTS=1 — running account reset")
+        from scripts.reset_accounts import reset
+        reset()
+
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
     logger.info("Starting uvicorn on port %d...", port)

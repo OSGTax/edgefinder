@@ -18,14 +18,14 @@ from edgefinder.trading.journal import TradeJournal
 
 class TestVirtualAccount:
     def test_initial_state(self):
-        acct = VirtualAccount("alpha")
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
         assert acct.cash == 5000.0
         assert acct.buying_power == 5000.0
         assert acct.position_count == 0
         assert acct.is_paused is False
 
     def test_open_position_deducts_cash(self):
-        acct = VirtualAccount("alpha")
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
         pos = Position(
             symbol="AAPL", shares=10, entry_price=150.0,
             stop_loss=145.0, target=160.0, direction="LONG", trade_type="DAY",
@@ -35,7 +35,7 @@ class TestVirtualAccount:
         assert acct.position_count == 1
 
     def test_close_position_returns_cash(self):
-        acct = VirtualAccount("alpha")
+        acct = VirtualAccount("alpha", starting_capital=5000.0)
         pos = Position(
             symbol="AAPL", shares=10, entry_price=150.0,
             stop_loss=145.0, target=160.0, direction="LONG", trade_type="DAY",

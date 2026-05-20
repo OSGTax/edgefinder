@@ -1,0 +1,91 @@
+"""One-time account reset: wipe old trades, reset strategy accounts to fresh $10k.
+
+Run directly:
+    python scripts/reset_accounts.py
+
+Or set EDGEFINDER_RESET_ACCOUNTS=1 env var on Render for a one-deploy reset.
+The script deletes all trades before 2026-05-20 and resets all strategy
+accounts to $10,000 starting capital with zero P&L.
+"""
+
+import logging
+import os
+import sys
+
+sys.path.insert(0, ".")
+
+from edgefinder.core.logging_config import configure_logging
+
+configure_logging(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+CUTOFF_DATE = "2026-05-20"
+
+
+def reset():
+    from sqlalchemy import text
+    from edgefinder.db.engine import get_engine
+
+    engine = get_engine()
+    logger.info("Starting account reset — cutoff date: %s", CUTOFF_DATE)
+
+    with engine.begin() as conn:
+        # 1. Delete all trades before cutoff
+        result = conn.execute(text(
+            "DELETE FROM trades WHERE entry_time < :cutoff OR entry_time IS NULL"
+        ), {"cutoff": CUTOFF_DATE})
+        logger.info("Deleted %d old trades", result.rowcount)
+
+        # 2. Delete cancelled/old trades
+        result = conn.execute(text(
+            "DELETE FROM trades WHERE status = 'CANCELLED'"
+        ))
+        logger.info("Deleted %d cancelled trades", result.rowcount)
+
+        # 3. Delete trade contexts for trades that no longer exist
+        result = conn.execute(text("""
+            DELETE FROM trade_contexts
+            WHERE trade_id NOT IN (SELECT trade_id FROM trades)
+        """))
+        logger.info("Deleted %d orphaned trade contexts", result.rowcount)
+
+        # 4. Reset all strategy accounts to fresh $10k
+        result = conn.execute(text("""
+            UPDATE strategy_accounts SET
+                starting_capital = 10000.0,
+                cash_balance = 10000.0,
+                open_positions_value = 0.0,
+                total_equity = 10000.0,
+                peak_equity = 10000.0,
+                drawdown_pct = 0.0,
+                realized_pnl = 0.0,
+                is_paused = false
+        """))
+        logger.info("Reset %d strategy accounts to $10,000", result.rowcount)
+
+        # 5. Delete old equity curve snapshots before cutoff
+        result = conn.execute(text(
+            "DELETE FROM strategy_snapshots WHERE timestamp < :cutoff"
+        ), {"cutoff": CUTOFF_DATE})
+        logger.info("Deleted %d old equity snapshots", result.rowcount)
+
+        # 6. Delete old agent observations and actions
+        try:
+            result = conn.execute(text(
+                "DELETE FROM agent_observations WHERE timestamp < :cutoff"
+            ), {"cutoff": CUTOFF_DATE})
+            logger.info("Deleted %d old agent observations", result.rowcount)
+
+            result = conn.execute(text(
+                "DELETE FROM agent_actions WHERE timestamp < :cutoff"
+            ), {"cutoff": CUTOFF_DATE})
+            logger.info("Deleted %d old agent actions", result.rowcount)
+        except Exception:
+            logger.debug("No agent tables to clean (may not exist)")
+
+    engine.dispose()
+    logger.info("Account reset complete — all strategies at $10,000, no trade history before %s", CUTOFF_DATE)
+
+
+if __name__ == "__main__":
+    reset()
