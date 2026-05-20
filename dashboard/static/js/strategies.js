@@ -6,6 +6,7 @@
 
 let _accounts = [];       // raw accounts array from API
 let _statsCache = {};     // strategy_name -> stats object
+let _tradesCache = {};    // strategy_name -> trades array
 let _selectedStrategy = null;
 let _detailChart = null;
 let _detailSeries = null;
@@ -17,6 +18,23 @@ const STRATEGY_RISK = {
   gambler:    { risk_pct: 10, target_pct: 25, stop_pct: 20 },
   degenerate: { risk_pct: 20, target_pct: 50, stop_pct: 20 },
 };
+
+// ── Streak Computation ────────────────────────────────────────
+
+function computeStreak(trades) {
+  const closed = trades
+    .filter(t => t.status === 'CLOSED' && t.pnl_dollars != null)
+    .sort((a, b) => new Date(b.exit_time) - new Date(a.exit_time));
+  if (closed.length === 0) return { type: 'none', count: 0 };
+  const firstIsWin = closed[0].pnl_dollars > 0;
+  let count = 0;
+  for (const t of closed) {
+    if ((t.pnl_dollars > 0) === firstIsWin) count++;
+    else break;
+  }
+  if (count < 2) return { type: 'none', count: 0 };
+  return { type: firstIsWin ? 'win' : 'loss', count };
+}
 
 // ── Strategy Cards ───────────────────────────────────────────
 
@@ -40,13 +58,20 @@ async function loadStrategyCards() {
       return;
     }
 
-    // Fetch stats per strategy concurrently
+    // Fetch stats and trades per strategy concurrently
     await Promise.all(_accounts.map(async (acct) => {
+      const name = acct.strategy_name;
       try {
-        const stats = await api('/api/trades/stats?strategy=' + encodeURIComponent(acct.strategy_name));
-        _statsCache[acct.strategy_name] = stats;
+        const stats = await api('/api/trades/stats?strategy=' + encodeURIComponent(name));
+        _statsCache[name] = stats;
       } catch (_) {
-        _statsCache[acct.strategy_name] = null;
+        _statsCache[name] = null;
+      }
+      try {
+        const trades = await api('/api/trades?strategy=' + encodeURIComponent(name) + '&limit=50');
+        _tradesCache[name] = Array.isArray(trades) ? trades : [];
+      } catch (_) {
+        _tradesCache[name] = [];
       }
     }));
 
@@ -98,6 +123,13 @@ function renderStrategyCard(acct) {
 
   const pausedBadge = isPaused
     ? `<span class="pill pill-warning" style="margin-left:8px;">PAUSED</span>`
+    : '';
+
+  const streak = computeStreak(_tradesCache[name] || []);
+  const streakHtml = streak.type === 'win'
+    ? `<div style="font-size:12px;margin-top:6px;" class="text-positive">🔥 ${streak.count}W streak</div>`
+    : streak.type === 'loss'
+    ? `<div style="font-size:12px;margin-top:6px;" class="text-negative">❄️ ${streak.count}L streak</div>`
     : '';
 
   return `
@@ -158,6 +190,7 @@ function renderStrategyCard(acct) {
             <div style="font-size:15px;font-weight:700;color:var(--text-primary);">${tradeCount}</div>
           </div>
         </div>
+        ${streakHtml}
 
         <!-- Risk parameters -->
         <div style="background:var(--bg);border-radius:var(--radius-sm);padding:8px 10px;margin-bottom:14px;">
