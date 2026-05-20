@@ -481,3 +481,20 @@ body.light-mode {
   color: var(--text-primary);
 }
 .calendar-cell:hover .calendar-tooltip { display: block; }
+
+/* ── RSI Gauge (inline) ───────────────────────────── */
+.rsi-gauge {
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.rsi-bar {
+  width: 50px; height: 6px; border-radius: 3px;
+  background: var(--border); overflow: hidden;
+  display: inline-block; vertical-align: middle;
+}
+.rsi-fill {
+  height: 100%; border-radius: 3px;
+  transition: width 0.3s;
+}
+.rsi-fill.oversold { background: var(--positive); }
+.rsi-fill.neutral { background: var(--accent); }
+.rsi-fill.overbought { background: var(--negative); }

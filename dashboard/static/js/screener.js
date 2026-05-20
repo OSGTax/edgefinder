@@ -9,48 +9,124 @@ let _filteredStocks = [];     // after filters applied
 let _sortCol = 'symbol';
 let _sortDir = 1;             // 1 = asc, -1 = desc
 
-// ── Sector Rotation ───────────────────────────────────────────
+// ── Sector Rotation (Treemap) ─────────────────────────────────
+
+let treemapChart = null;
 
 async function loadSectors() {
-  const grid = document.getElementById('sector-grid');
   try {
-    const sectors = await api('/api/benchmarks/sectors');
-    if (!sectors || !sectors.length) {
-      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">No sector data available.</div>';
+    const sectorData = await api('/api/benchmarks/sectors').then(r => r.sectors || r).catch(() => []);
+
+    const canvas = document.getElementById('sector-treemap');
+    if (!canvas) return;
+
+    // Count stocks per sector name from screener data
+    const sectorCounts = {};
+    const stockList = _allStocks || [];
+    for (const s of stockList) {
+      const sec = s.sector || 'Unknown';
+      sectorCounts[sec] = (sectorCounts[sec] || 0) + 1;
+    }
+
+    // Build treemap data: merge sector rotation quadrants with stock counts
+    const quadrantMap = {};
+    if (Array.isArray(sectorData)) {
+      for (const s of sectorData) {
+        quadrantMap[s.name || s.symbol] = s.quadrant || 'unknown';
+        if (s.symbol) quadrantMap[s.symbol] = s.quadrant || 'unknown';
+      }
+    }
+
+    const SECTOR_NAME_MAP = {
+      'Technology': 'XLK', 'Financial Services': 'XLF', 'Energy': 'XLE',
+      'Healthcare': 'XLV', 'Industrials': 'XLI', 'Consumer Defensive': 'XLP',
+      'Consumer Cyclical': 'XLY', 'Utilities': 'XLU', 'Real Estate': 'XLRE',
+      'Communication Services': 'XLC', 'Basic Materials': 'XLB',
+    };
+
+    const treemapData = Object.entries(sectorCounts).map(([name, count]) => {
+      const etf = SECTOR_NAME_MAP[name];
+      const quadrant = quadrantMap[name] || quadrantMap[etf] || 'unknown';
+      return { sector: name, count, quadrant };
+    }).filter(d => d.count > 0).sort((a, b) => b.count - a.count);
+
+    const quadrantColors = {
+      leading: '#00d4a1', improving: '#f0b429',
+      weakening: '#4a6a8a', lagging: '#ef4444',
+      unknown: '#2a3a4a',
+    };
+
+    if (treemapChart) {
+      treemapChart.destroy();
+      treemapChart = null;
+    }
+
+    if (treemapData.length === 0) {
+      canvas.parentElement.innerHTML = '<div class="empty-state">Sector data unavailable</div>';
       return;
     }
-    grid.innerHTML = sectors.map(s => renderSectorItem(s)).join('');
+
+    treemapChart = new Chart(canvas, {
+      type: 'treemap',
+      data: {
+        datasets: [{
+          tree: treemapData,
+          key: 'count',
+          labels: {
+            display: true,
+            color: '#e8f0f8',
+            font: { size: 11, weight: 'bold' },
+            formatter: (ctx) => {
+              const d = ctx.raw._data;
+              return d ? d.sector + ' (' + d.count + ')' : '';
+            },
+          },
+          backgroundColor: (ctx) => {
+            const d = ctx.raw && ctx.raw._data;
+            return d ? (quadrantColors[d.quadrant] || '#2a3a4a') : '#2a3a4a';
+          },
+          borderColor: 'rgba(0,0,0,0.2)',
+          borderWidth: 2,
+          spacing: 2,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => {
+                const d = items[0] && items[0].raw && items[0].raw._data;
+                return d ? d.sector : '';
+              },
+              label: (item) => {
+                const d = item.raw && item.raw._data;
+                return d ? d.count + ' stocks \u00b7 ' + d.quadrant : '';
+              },
+            }
+          }
+        },
+        onClick: (evt, elements) => {
+          if (elements.length > 0) {
+            const d = elements[0].element.$context.raw._data;
+            if (d && d.sector) {
+              const filterEl = document.getElementById('filter-sector');
+              if (filterEl) {
+                filterEl.value = d.sector;
+                if (typeof applyFilters === 'function') applyFilters();
+                else if (typeof renderTable === 'function') renderTable();
+              }
+            }
+          }
+        }
+      }
+    });
+
   } catch (e) {
     console.error('Failed to load sectors:', e);
-    grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">Sector data unavailable.</div>';
   }
-}
-
-function quadrantPillClass(quadrant) {
-  switch ((quadrant || '').toLowerCase()) {
-    case 'leading':   return 'pill-positive';
-    case 'improving': return 'pill-warning';
-    case 'weakening': return 'pill-muted';
-    case 'lagging':   return 'pill-negative';
-    default:          return 'pill-muted';
-  }
-}
-
-function renderSectorItem(s) {
-  const pillClass = quadrantPillClass(s.quadrant);
-  const label = s.quadrant
-    ? s.quadrant.charAt(0).toUpperCase() + s.quadrant.slice(1).toLowerCase()
-    : '—';
-  const ret = s.return_1m != null
-    ? `<span class="${s.return_1m >= 0 ? 'text-positive' : 'text-negative'}" style="font-size:11px;margin-left:auto;padding-right:4px;">${s.return_1m >= 0 ? '+' : ''}${Number(s.return_1m).toFixed(1)}%</span>`
-    : '';
-  return `
-    <div class="sector-item">
-      <span class="etf">${s.symbol}</span>
-      <span class="name" title="${s.name || ''}">${s.name || '—'}</span>
-      ${ret}
-      <span class="pill ${pillClass}">${label}</span>
-    </div>`;
 }
 
 // ── Stock Screener ─────────────────────────────────────────────
@@ -196,19 +272,21 @@ function fmtGrowth(n) {
   return `<span class="${cls}">${sign}${(n * 100).toFixed(1)}%</span>`;
 }
 
-function fmtRsi(n) {
-  if (n == null) return '<span class="text-muted">—</span>';
-  const val = Number(n).toFixed(1);
-  if (n < 30) return `<span class="text-positive">${val}</span>`;
-  if (n > 70) return `<span class="text-negative">${val}</span>`;
-  return `<span>${val}</span>`;
+function renderRsiGauge(rsi) {
+  if (rsi == null) return '<span class="text-muted">—</span>';
+  const pct = Math.min(100, Math.max(0, rsi));
+  const cls = rsi < 30 ? 'oversold' : rsi > 70 ? 'overbought' : 'neutral';
+  return `<span class="rsi-gauge">
+    <span class="rsi-bar"><span class="rsi-fill ${cls}" style="width:${pct}%"></span></span>
+    <span style="font-size:11px;${rsi < 30 ? 'color:var(--positive)' : rsi > 70 ? 'color:var(--negative)' : ''}">${rsi.toFixed(0)}</span>
+  </span>`;
 }
 
-function fmtMacd(n) {
-  if (n == null) return '<span class="text-muted">—</span>';
-  const val = Number(n).toFixed(3);
-  const cls = n >= 0 ? 'text-positive' : 'text-negative';
-  return `<span class="${cls}">${n >= 0 ? '+' : ''}${val}</span>`;
+function renderMacd(val) {
+  if (val == null) return '<span class="text-muted">—</span>';
+  const cls = val > 0 ? 'text-positive' : 'text-negative';
+  const arrow = val > 0 ? '▲' : '▼';
+  return `<span class="${cls}">${arrow} ${val.toFixed(2)}</span>`;
 }
 
 function fmtPe(n) {
@@ -267,8 +345,8 @@ function renderTable() {
       <td class="text-right">${fmtGrowth(s.earnings_growth)}</td>
       <td class="text-right">${fmtGrowth(s.revenue_growth)}</td>
       <td class="text-right">${fmtPe(s.price_to_earnings)}</td>
-      <td class="text-right">${fmtRsi(s.rsi_14)}</td>
-      <td class="text-right">${fmtMacd(s.macd_histogram)}</td>
+      <td class="text-right">${renderRsiGauge(s.rsi_14)}</td>
+      <td class="text-right">${renderMacd(s.macd_histogram)}</td>
       <td class="text-right">${fmtSi(s.short_interest)}</td>
       <td style="white-space:nowrap;">${renderStratDots(s.qualifying_strategies)}</td>
     </tr>`;
@@ -288,10 +366,10 @@ function initFilters() {
 document.addEventListener('DOMContentLoaded', () => {
   initSortHeaders();
   initFilters();
-  // Load all data in parallel
+  // Load stocks first (treemap needs sector counts from stock data),
+  // then load sectors; strategies can load in parallel.
   Promise.all([
-    loadSectors(),
-    loadStocks(),
+    loadStocks().then(() => loadSectors()),
     loadStrategies(),
   ]);
 });
