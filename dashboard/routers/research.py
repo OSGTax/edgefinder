@@ -8,18 +8,16 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from dashboard.dependencies import get_db
-from edgefinder.data.polygon import PolygonDataProvider
 from edgefinder.research.research import ResearchService
 
 router = APIRouter()
 
 
 def _get_research_service(db: Session = Depends(get_db)) -> ResearchService:
-    try:
-        provider = PolygonDataProvider()
-    except ValueError:
-        provider = None
-    return ResearchService(provider=provider, session=db)
+    # Reuse the singleton provider from services.py to avoid creating
+    # a new PolygonDataProvider (with 20 connection pools) per request
+    from dashboard.services import _provider
+    return ResearchService(provider=_provider, session=db)
 
 
 @router.get("/ticker/{symbol}")

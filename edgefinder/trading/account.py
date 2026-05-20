@@ -176,12 +176,19 @@ class VirtualAccount:
         if last_close is None:
             return False
         cooldown = timedelta(minutes=settings.ticker_reentry_cooldown_minutes)
-        return datetime.now(timezone.utc) - last_close < cooldown
+        now = datetime.now(timezone.utc)
+        if now - last_close >= cooldown:
+            # Expired — prune it
+            del self._last_close_per_ticker[symbol]
+            return False
+        return True
 
     def _can_day_trade(self) -> bool:
         """Check PDT compliance: max 3 day trades per 5 rolling business days."""
         cutoff = datetime.now(timezone.utc) - timedelta(days=settings.pdt_window_days)
         recent = [dt for dt in self._day_trades if dt > cutoff]
+        # Prune old entries to prevent unbounded growth
+        self._day_trades = recent
         return len(recent) < settings.pdt_day_trade_limit
 
     def _is_revenge_trade(self) -> bool:

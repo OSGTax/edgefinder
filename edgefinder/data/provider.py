@@ -45,7 +45,7 @@ class CachedDataProvider:
         return df
 
     def get_latest_price(self, ticker: str) -> float | None:
-        """Get latest price with 2-minute in-memory cache.
+        """Get latest price with 30s in-memory cache.
 
         Prevents redundant API calls when check_positions() loops over
         multiple tickers within seconds.
@@ -54,6 +54,13 @@ class CachedDataProvider:
         cached = _PRICE_CACHE.get(ticker)
         if cached and (now - cached[1]) < _PRICE_CACHE_TTL:
             return cached[0]
+
+        # Evict stale entries periodically (every 100 lookups)
+        if len(_PRICE_CACHE) > 500:
+            stale = [k for k, (_, ts) in _PRICE_CACHE.items() if now - ts > _PRICE_CACHE_TTL * 10]
+            for k in stale:
+                del _PRICE_CACHE[k]
+
         price = self._provider.get_latest_price(ticker)
         if price is not None:
             _PRICE_CACHE[ticker] = (price, now)

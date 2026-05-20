@@ -6,18 +6,16 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from dashboard.dependencies import get_db
-from edgefinder.data.polygon import PolygonDataProvider
 from edgefinder.market.benchmarks import BenchmarkService
 
 router = APIRouter()
 
 
 def _get_benchmark_service(db: Session = Depends(get_db)) -> BenchmarkService:
-    try:
-        provider = PolygonDataProvider()
-    except ValueError:
-        provider = None
-    return BenchmarkService(provider=provider, session=db)
+    # Reuse the singleton provider from services.py to avoid creating
+    # a new PolygonDataProvider (with 20 connection pools) per request
+    from dashboard.services import _provider
+    return BenchmarkService(provider=_provider, session=db)
 
 
 @router.get("/comparison")

@@ -128,6 +128,19 @@ class ArenaEngine:
         for slot in self._slots.values():
             all_tickers.update(slot.watchlist)
 
+        # Prune stale cache entries for tickers no longer on any watchlist
+        stale_bars = set(self._daily_bars_cache.keys()) - all_tickers
+        for k in stale_bars:
+            del self._daily_bars_cache[k]
+        stale_hist = set(self._indicator_histories.keys()) - all_tickers
+        for k in stale_hist:
+            del self._indicator_histories[k]
+        if stale_bars or stale_hist:
+            logger.info(
+                "Cache pruned: %d bars, %d histories removed",
+                len(stale_bars), len(stale_hist),
+            )
+
         computed = 0
         failed = 0
 
