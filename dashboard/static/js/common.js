@@ -2,6 +2,22 @@
    EdgeFinder — Common Utilities
    ═══════════════════════════════════════════════════════════════ */
 
+// ── Theme Toggle ─────────────────────────────────────────────────────
+
+function initTheme() {
+  const saved = localStorage.getItem('ef-theme');
+  if (saved === 'light') {
+    document.body.classList.add('light-mode');
+  }
+}
+
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light-mode');
+  localStorage.setItem('ef-theme', isLight ? 'light' : 'dark');
+  const btn = document.getElementById('theme-toggle-btn');
+  if (btn) btn.textContent = isLight ? '☀️' : '🌙';
+}
+
 // ── API Fetch ────────────────────────────────────────────────
 
 async function api(path) {
@@ -168,6 +184,7 @@ async function loadTopBarHealth() {
 // ── Init (runs on every page) ────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
   initNav();
   loadTopBarIndices();
   loadTopBarHealth();

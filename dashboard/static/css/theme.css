@@ -363,3 +363,27 @@ a:hover { text-decoration: underline; }
 .fw-800 { font-weight: 800; }
 .fw-700 { font-weight: 700; }
 .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Light Mode ───────────────────────────────────── */
+body.light-mode {
+  --bg: #f5f7fa;
+  --surface: #ffffff;
+  --surface-elevated: #f0f2f5;
+  --border: #e2e8f0;
+  --text-primary: #1a202c;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  --dim-positive: rgba(0,212,161,0.10);
+  --dim-negative: rgba(239,68,68,0.10);
+  --dim-warning: rgba(240,180,41,0.10);
+  --dim-accent: rgba(0,212,161,0.06);
+}
+
+/* ── Theme Toggle Button ──────────────────────────── */
+.theme-toggle {
+  background: none; border: none; cursor: pointer;
+  font-size: 18px; padding: 4px 8px; border-radius: 6px;
+  transition: background 0.2s;
+  line-height: 1;
+}
+.theme-toggle:hover { background: var(--surface-elevated); }
