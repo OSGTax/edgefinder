@@ -2,7 +2,7 @@
    EdgeFinder — Dashboard Page
    ═══════════════════════════════════════════════════════════════ */
 
-const STARTING_CAPITAL = 15000; // 3 strategies x $5,000
+const STARTING_CAPITAL = 30000; // 3 strategies x $10,000
 let equityChart = null;
 let equitySeries = null;
 
@@ -270,13 +270,18 @@ async function loadMarketOverview() {
   if (!row) return;
 
   try {
+    // API returns { dates: [...], indices: { SPY: [cumPct, ...], ... } }
     const data = await api('/api/benchmarks/comparison?days=5');
-    if (!data) return;
+    if (!data || !data.indices) {
+      row.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">Market data unavailable</div>';
+      return;
+    }
 
-    const indices = ['SPY', 'QQQ', 'IWM', 'DIA', 'VIX'];
+    const symbols = ['SPY', 'QQQ', 'IWM', 'DIA'];
+    const dates = data.dates || [];
 
-    row.innerHTML = indices.map(sym => {
-      const series = data[sym];
+    row.innerHTML = symbols.map(sym => {
+      const series = data.indices[sym];
       if (!series || !series.length) {
         return `<div class="stat-card" style="text-align:center;">
           <div class="stat-label">${sym}</div>
@@ -284,20 +289,20 @@ async function loadMarketOverview() {
         </div>`;
       }
 
-      const latest = series[series.length - 1];
-      const price = latest.close || latest.value || 0;
-      const prev = series.length > 1
-        ? (series[series.length - 2].close || series[series.length - 2].value || price)
-        : price;
-      const chg = prev ? ((price - prev) / prev) : 0;
-      const arrow = chg >= 0 ? '\u25B2' : '\u25BC';
+      // series is cumulative % change from start — latest value is total change
+      const latestPct = series[series.length - 1] || 0;
+      // Daily change = difference between last two data points
+      const prevPct = series.length > 1 ? series[series.length - 2] : 0;
+      const dailyChg = latestPct - prevPct;
+      const arrow = dailyChg >= 0 ? '\u25B2' : '\u25BC';
+      const latestDate = dates.length ? dates[dates.length - 1] : '';
 
       return `<div class="stat-card" style="text-align:center;">
         <div class="stat-label">${sym}</div>
-        <div class="stat-value" style="font-size:18px;">${fmtPrice(price)}</div>
-        <div class="stat-sub ${pnlClass(chg)}">
-          ${arrow} ${(Math.abs(chg) * 100).toFixed(2)}%
+        <div class="stat-value" style="font-size:18px;">
+          <span class="${dailyChg >= 0 ? 'text-positive' : 'text-negative'}">${arrow} ${Math.abs(dailyChg).toFixed(2)}%</span>
         </div>
+        <div class="stat-sub text-secondary">${latestPct >= 0 ? '+' : ''}${latestPct.toFixed(2)}% (5d)</div>
       </div>`;
     }).join('');
 

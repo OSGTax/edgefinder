@@ -131,24 +131,23 @@ function initNav() {
 
 async function loadTopBarIndices() {
   try {
-    const data = await api('/api/benchmarks/comparison?days=1');
+    // API returns { dates: [...], indices: { SPY: [cumPct, ...], ... } }
+    const data = await api('/api/benchmarks/comparison?days=5');
     const el = document.getElementById('topnav-indices');
-    if (!el || !data) return;
+    if (!el || !data || !data.indices) return;
 
-    const indices = ['SPY', 'QQQ', 'VIX'];
-    el.innerHTML = indices.map(sym => {
-      const series = data[sym];
+    const symbols = ['SPY', 'QQQ', 'VIX'];
+    el.innerHTML = symbols.map(sym => {
+      const series = data.indices[sym];
       if (!series || !series.length) return '';
-      const latest = series[series.length - 1];
-      const price = latest.close || latest.value || 0;
-      const prev = series.length > 1 ? (series[series.length - 2].close || series[series.length - 2].value || price) : price;
-      const chg = prev ? ((price - prev) / prev) * 100 : 0;
-      const cls = chg >= 0 ? 'text-positive' : 'text-negative';
-      const arrow = chg >= 0 ? '\u25B2' : '\u25BC';
+      const latestPct = series[series.length - 1] || 0;
+      const prevPct = series.length > 1 ? series[series.length - 2] : 0;
+      const dailyChg = latestPct - prevPct;
+      const cls = dailyChg >= 0 ? 'text-positive' : 'text-negative';
+      const arrow = dailyChg >= 0 ? '\u25B2' : '\u25BC';
       return `<div class="topnav-index">
         <span class="sym">${sym}</span>
-        <span class="val">${fmtNum(price, 1)}</span>
-        <span class="${cls}">${arrow}${Math.abs(chg).toFixed(1)}%</span>
+        <span class="${cls}">${arrow}${Math.abs(dailyChg).toFixed(2)}%</span>
       </div>`;
     }).join('');
   } catch (e) {
