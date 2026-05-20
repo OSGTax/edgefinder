@@ -8,6 +8,7 @@ let _allTrades = [];        // full fetched trade list
 let _activeStatus = 'all';  // current status tab filter
 let _sortCol = 'entry_time';
 let _sortDir = -1;          // -1 = desc, 1 = asc
+let _expandedTradeId = null; // currently expanded timeline row
 
 // ── Stats ─────────────────────────────────────────────────────
 
@@ -72,6 +73,7 @@ async function loadTrades(strategy) {
     _allTrades = await api(url);
     if (!Array.isArray(_allTrades)) _allTrades = [];
     renderTable(countEl, tbody);
+    renderCalendar(_allTrades);
   } catch (e) {
     console.error('Failed to load trades:', e);
     tbody.innerHTML = '<tr><td colspan="13" class="empty-state" style="padding:24px;">Failed to load trades.</td></tr>';
@@ -122,6 +124,7 @@ function updateSortIndicators() {
 function renderTable(countEl, tbody) {
   tbody = tbody || document.getElementById('trades-body');
   countEl = countEl || document.getElementById('trade-count');
+  _expandedTradeId = null;
 
   const trades = sortedTrades(filteredTrades());
 
@@ -207,7 +210,7 @@ function renderRow(t) {
   const entryTime = fmtTime(t.entry_time);
   const exitTime  = t.exit_time ? fmtTime(t.exit_time) : `<span class="text-muted">—</span>`;
 
-  return `<tr>
+  return `<tr data-trade-id="${t.trade_id}" onclick="toggleTimeline(${t.trade_id})" style="cursor:pointer;">
     <td>${symCell}</td>
     <td>${stratCell}</td>
     <td>${dirPill}</td>
@@ -222,6 +225,187 @@ function renderRow(t) {
     <td style="color:var(--text-secondary);">${entryTime}</td>
     <td style="color:var(--text-muted);">${exitTime}</td>
   </tr>`;
+}
+
+// ── P&L Calendar Heatmap ─────────────────────────────────────
+
+function renderCalendar(trades) {
+  const container = document.getElementById('pnl-calendar');
+  const rangeEl = document.getElementById('calendar-range');
+  if (!container) return;
+
+  // Filter to closed trades with exit_time
+  const closed = (trades || []).filter(t => t.status === 'CLOSED' && t.exit_time);
+
+  // Group by exit date, sum pnl_dollars
+  const pnlByDate = {};
+  closed.forEach(t => {
+    const d = t.exit_time.slice(0, 10); // YYYY-MM-DD
+    pnlByDate[d] = (pnlByDate[d] || 0) + (t.pnl_dollars || 0);
+  });
+
+  // Build 91-day range ending today
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = [];
+  for (let i = 90; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    days.push(d);
+  }
+
+  // Find start day-of-week (0=Sun..6=Sat) — we need Mon=0 layout
+  // Reorganize into 7 rows (Mon-Sun) x 13 columns
+  const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  // Build a grid: rows[dow][weekIdx]
+  const grid = Array.from({ length: 7 }, () => Array(13).fill(null));
+  days.forEach(d => {
+    const diffDays = Math.round((today - d) / 86400000);
+    const col = 12 - Math.floor(diffDays / 7);
+    let dow = d.getDay() - 1; // Mon=0..Sun=6
+    if (dow < 0) dow = 6;
+    if (col >= 0 && col < 13) {
+      const key = d.toISOString().slice(0, 10);
+      grid[dow][col] = { date: d, key: key, pnl: pnlByDate[key] || null };
+    }
+  });
+
+  // Find max abs pnl for color normalization
+  const allPnl = Object.values(pnlByDate).map(Math.abs);
+  const maxAbsPnl = allPnl.length ? Math.max(...allPnl) : 1;
+
+  // Set range label
+  if (rangeEl) {
+    const startStr = days[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endStr = days[days.length - 1].toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    rangeEl.textContent = '(' + startStr + ' — ' + endStr + ')';
+  }
+
+  // Render
+  let html = '';
+  for (let row = 0; row < 7; row++) {
+    // Day label
+    html += '<div class="calendar-label">' + dayLabels[row] + '</div>';
+    for (let col = 0; col < 13; col++) {
+      const cell = grid[row][col];
+      if (!cell) {
+        html += '<div class="calendar-cell" style="background:transparent;"></div>';
+        continue;
+      }
+      let bg;
+      const dateStr = cell.date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      if (cell.pnl === null) {
+        bg = 'var(--border)';
+        html += '<div class="calendar-cell" style="background:' + bg + ';">' +
+          '<span class="calendar-tooltip">' + dateStr + ': no trades</span></div>';
+      } else {
+        const opacity = (Math.abs(cell.pnl) / maxAbsPnl) * 0.8 + 0.1;
+        if (cell.pnl >= 0) {
+          bg = 'rgba(0,212,161,' + opacity.toFixed(2) + ')';
+        } else {
+          bg = 'rgba(239,68,68,' + opacity.toFixed(2) + ')';
+        }
+        const sign = cell.pnl >= 0 ? '+' : '';
+        html += '<div class="calendar-cell" style="background:' + bg + ';">' +
+          '<span class="calendar-tooltip">' + dateStr + ': ' + sign + '$' + Math.abs(cell.pnl).toFixed(2) + '</span></div>';
+      }
+    }
+  }
+  container.innerHTML = html;
+}
+
+// ── Trade Reasoning Timeline ─────────────────────────────────
+
+function renderIndicators(ind) {
+  if (!ind || typeof ind !== 'object') return '<div style="color:var(--text-muted);font-size:11px;">No indicator data</div>';
+  const rows = [];
+  if (ind.rsi != null) rows.push(['RSI', ind.rsi.toFixed(1)]);
+  if (ind.macd_histogram != null) rows.push(['MACD', ind.macd_histogram.toFixed(3)]);
+  if (ind.close != null) rows.push(['Price', '$' + ind.close.toFixed(2)]);
+  if (ind.ema_21 != null) rows.push(['EMA 21', '$' + ind.ema_21.toFixed(2)]);
+  if (rows.length === 0) return '<div style="color:var(--text-muted);font-size:11px;">No indicator data</div>';
+  return '<div class="timeline-indicators">' +
+    rows.map(function(r) { return '<span class="label">' + r[0] + '</span><span class="value">' + r[1] + '</span>'; }).join('') +
+    '</div>';
+}
+
+function formatHoldDuration(hours) {
+  if (hours == null) return '\u2014';
+  if (hours < 1) return Math.round(hours * 60) + 'm';
+  if (hours < 24) return hours.toFixed(1) + 'h';
+  const days = Math.floor(hours / 24);
+  const rem = Math.round(hours % 24);
+  return days + 'd ' + rem + 'h';
+}
+
+function renderTimeline(trade) {
+  const isWin = (trade.pnl_dollars || 0) > 0;
+  const dotColor = isWin ? 'var(--positive)' : 'var(--negative)';
+  const lineColor = isWin ? 'rgba(0,212,161,0.3)' : 'rgba(239,68,68,0.3)';
+
+  const entryReasoning = trade.entry_reasoning || 'No reasoning captured';
+  const exitReasoning = trade.exit_reasoning || 'No reasoning captured';
+
+  return '<div class="trade-timeline">' +
+    '<div class="timeline-card entry">' +
+      '<h4>Entry</h4>' +
+      '<div style="font-size:12px;color:var(--text-primary);margin-bottom:8px;">' + escapeHtml(entryReasoning) + '</div>' +
+      renderIndicators(trade.indicators_at_entry) +
+    '</div>' +
+    '<div class="timeline-connector">' +
+      '<div class="timeline-dot" style="background:' + dotColor + ';"></div>' +
+      '<div class="timeline-line" style="background:' + lineColor + ';"></div>' +
+      '<div class="timeline-duration">' + formatHoldDuration(trade.hold_duration_hours) + '</div>' +
+      '<div class="timeline-line" style="background:' + lineColor + ';"></div>' +
+      '<div class="timeline-dot" style="background:' + dotColor + ';"></div>' +
+    '</div>' +
+    '<div class="timeline-card exit">' +
+      '<h4>Exit</h4>' +
+      '<div style="font-size:12px;color:var(--text-primary);margin-bottom:8px;">' + escapeHtml(exitReasoning) + '</div>' +
+      renderIndicators(trade.indicators_at_exit) +
+    '</div>' +
+  '</div>';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function toggleTimeline(tradeId) {
+  const tbody = document.getElementById('trades-body');
+  const existing = document.getElementById('timeline-row-' + tradeId);
+
+  // Collapse any open timeline
+  const openRow = tbody.querySelector('tr[id^="timeline-row-"]');
+  if (openRow) {
+    openRow.remove();
+    // If we clicked the same row, just collapse
+    if (_expandedTradeId === tradeId) {
+      _expandedTradeId = null;
+      return;
+    }
+  }
+
+  // Find the trade
+  const trade = _allTrades.find(t => t.trade_id === tradeId);
+  if (!trade) return;
+
+  _expandedTradeId = tradeId;
+
+  // Find the clicked row and insert after it
+  const rows = tbody.querySelectorAll('tr');
+  for (const row of rows) {
+    if (row.dataset.tradeId === String(tradeId)) {
+      const detailRow = document.createElement('tr');
+      detailRow.id = 'timeline-row-' + tradeId;
+      detailRow.innerHTML = '<td colspan="13" style="padding:0;border-bottom:1px solid var(--border);">' + renderTimeline(trade) + '</td>';
+      row.after(detailRow);
+      break;
+    }
+  }
 }
 
 // ── Strategy Dropdown ─────────────────────────────────────────
