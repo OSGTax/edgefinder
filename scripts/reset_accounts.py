@@ -30,24 +30,21 @@ def reset():
     logger.info("Starting account reset — cutoff date: %s", CUTOFF_DATE)
 
     with engine.begin() as conn:
-        # 1. Delete all trades before cutoff
-        result = conn.execute(text(
-            "DELETE FROM trades WHERE entry_time < :cutoff OR entry_time IS NULL"
-        ), {"cutoff": CUTOFF_DATE})
-        logger.info("Deleted %d old trades", result.rowcount)
-
-        # 2. Delete cancelled/old trades
-        result = conn.execute(text(
-            "DELETE FROM trades WHERE status = 'CANCELLED'"
-        ))
-        logger.info("Deleted %d cancelled trades", result.rowcount)
-
-        # 3. Delete trade contexts for trades that no longer exist
+        # 1. Delete trade_context rows FIRST (FK references trades.trade_id)
         result = conn.execute(text("""
-            DELETE FROM trade_contexts
-            WHERE trade_id NOT IN (SELECT trade_id FROM trades)
-        """))
-        logger.info("Deleted %d orphaned trade contexts", result.rowcount)
+            DELETE FROM trade_context
+            WHERE trade_id IN (
+                SELECT trade_id FROM trades
+                WHERE entry_time < :cutoff OR entry_time IS NULL OR status = 'CANCELLED'
+            )
+        """), {"cutoff": CUTOFF_DATE})
+        logger.info("Deleted %d trade context rows", result.rowcount)
+
+        # 2. Delete all trades before cutoff + cancelled trades
+        result = conn.execute(text(
+            "DELETE FROM trades WHERE entry_time < :cutoff OR entry_time IS NULL OR status = 'CANCELLED'"
+        ), {"cutoff": CUTOFF_DATE})
+        logger.info("Deleted %d old/cancelled trades", result.rowcount)
 
         # 4. Reset all strategy accounts to fresh $10k
         result = conn.execute(text("""
