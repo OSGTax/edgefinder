@@ -44,3 +44,4 @@ config/secrets.env
 # OS
 .DS_Store
 Thumbs.db
+.superpowers/
