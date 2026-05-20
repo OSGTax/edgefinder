@@ -3,8 +3,14 @@
    ═══════════════════════════════════════════════════════════════ */
 
 const STARTING_CAPITAL = 30000; // 3 strategies x $10,000
+const STRATEGY_TARGETS = { coward: 0.15, gambler: 0.25, degenerate: 0.50 };
 let equityChart = null;
 let equitySeries = null;
+let comparisonChart = null;
+let refreshInterval = null;
+let refreshTimerInterval = null;
+let lastUpdate = Date.now();
+let autoRefreshEnabled = localStorage.getItem('ef-auto-refresh') !== 'off';
 
 // ── Hero Stats ──────────────────────────────────────────────
 
@@ -223,13 +229,27 @@ async function loadPositions() {
         const pctPos = range !== 0 ? Math.max(0, Math.min(100, ((current - stop) / range) * 100)) : 50;
         const barColor = isPositive ? 'var(--positive)' : 'var(--negative)';
 
+        // Alert detection
+        const alertStop = entry * 0.80;
+        const targetPct = STRATEGY_TARGETS[stratName] || 0.25;
+        const alertTarget = entry * (1 + targetPct);
+        const nearStop = current > 0 && current <= alertStop * 1.05;
+        const nearTarget = current > 0 && current >= alertTarget * 0.95;
+        const pulseClass = nearStop ? 'pulse-stop' : nearTarget ? 'pulse-target' : '';
+        const alertBadge = nearStop
+          ? '<span class="alert-badge stop">\u26A0\uFE0F Near Stop</span>'
+          : nearTarget
+          ? '<span class="alert-badge target">\uD83C\uDFAF Near Target</span>'
+          : '';
+
         return `
           <a href="/research?ticker=${pos.symbol}" style="text-decoration:none;color:inherit;">
-            <div class="stat-card" style="background:${tint};cursor:pointer;padding:14px;">
+            <div class="stat-card ${pulseClass}" style="background:${tint};cursor:pointer;padding:14px;">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                 <div style="display:flex;align-items:center;gap:8px;">
                   <span style="font-size:18px;font-weight:800;color:var(--text-primary);">${pos.symbol}</span>
                   <span style="font-size:10px;color:var(--text-muted);text-transform:uppercase;">${pos.direction === 'short' ? 'SHORT' : 'LONG'}</span>
+                  ${alertBadge}
                 </div>
                 <div style="display:flex;align-items:center;gap:4px;">
                   ${stratDot(stratName)}
@@ -312,12 +332,158 @@ async function loadMarketOverview() {
   }
 }
 
+// ── Strategy Comparison Chart ────────────────────────────────
+
+async function loadComparisonChart(days = 90) {
+  try {
+    const [equityData, benchData] = await Promise.all([
+      api('/api/strategies/equity-curve?days=' + days),
+      api('/api/benchmarks/comparison?days=' + days),
+    ]);
+
+    // Normalize each strategy to cumulative % change
+    const series = {};
+    if (equityData) {
+      for (const [strat, points] of Object.entries(equityData)) {
+        if (!Array.isArray(points) || points.length === 0) continue;
+        const first = points[0].total_equity || points[0].equity || 0;
+        if (first <= 0) continue;
+        series[strat] = points.map(p => ({
+          time: p.date,
+          value: ((( p.total_equity || p.equity || first) - first) / first) * 100,
+        }));
+      }
+    }
+
+    // Add SPY from benchmarks
+    if (benchData && benchData.indices && benchData.indices.SPY && benchData.dates) {
+      series['SPY'] = benchData.dates.map((d, i) => ({
+        time: d,
+        value: benchData.indices.SPY[i] || 0,
+      }));
+    }
+
+    const container = document.getElementById('comparison-chart');
+    if (!container) return;
+
+    if (comparisonChart) {
+      comparisonChart.remove();
+      comparisonChart = null;
+    }
+
+    if (Object.keys(series).length === 0) {
+      container.innerHTML = '<div class="empty-state">No comparison data yet</div>';
+      return;
+    }
+
+    comparisonChart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: 280,
+      layout: { background: { color: getComputedStyle(document.body).getPropertyValue('--surface').trim() || '#111a25' }, textColor: '#6b8aab' },
+      grid: { vertLines: { color: '#1a2332' }, horzLines: { color: '#1a2332' } },
+      timeScale: { borderColor: '#1a2332' },
+      rightPriceScale: { borderColor: '#1a2332' },
+    });
+
+    const colors = { coward: '#00d4a1', gambler: '#6ea8fe', degenerate: '#f0b429', SPY: '#6b8aab' };
+
+    for (const [name, data] of Object.entries(series)) {
+      const s = comparisonChart.addLineSeries({
+        color: colors[name] || '#6b8aab',
+        lineWidth: name === 'SPY' ? 1 : 2,
+        lineStyle: name === 'SPY' ? 2 : 0,
+      });
+      s.setData(data);
+    }
+
+    comparisonChart.timeScale().fitContent();
+    new ResizeObserver(() => {
+      comparisonChart.applyOptions({ width: container.clientWidth });
+    }).observe(container);
+
+    // Legend
+    const legendEl = document.getElementById('comparison-legend');
+    if (legendEl) {
+      legendEl.innerHTML = Object.keys(series).map(name => {
+        const color = colors[name] || '#6b8aab';
+        const style = name === 'SPY' ? 'border-bottom: 2px dashed ' + color : 'border-bottom: 2px solid ' + color;
+        return `<span style="display:flex;align-items:center;gap:4px;">
+          <span style="width:16px;${style};"></span>
+          <span style="color:var(--text-secondary);text-transform:capitalize;">${name}</span>
+        </span>`;
+      }).join('');
+    }
+  } catch (e) {
+    console.error('Failed to load comparison chart:', e);
+  }
+}
+
+function initComparisonTabs() {
+  const tabs = document.getElementById('cmp-range-tabs');
+  if (!tabs) return;
+  tabs.addEventListener('click', (e) => {
+    const tab = e.target.closest('.filter-tab');
+    if (!tab) return;
+    tabs.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    loadComparisonChart(parseInt(tab.dataset.days, 10));
+  });
+}
+
+// ── Auto-Refresh ────────────────────────────────────────────
+
+function startAutoRefresh() {
+  if (refreshInterval) return;
+  refreshInterval = setInterval(() => {
+    loadStats();
+    loadPositions();
+    loadMarketOverview();
+    lastUpdate = Date.now();
+  }, 60000);
+  refreshTimerInterval = setInterval(updateRefreshStatus, 1000);
+}
+
+function stopAutoRefresh() {
+  clearInterval(refreshInterval);
+  clearInterval(refreshTimerInterval);
+  refreshInterval = null;
+  refreshTimerInterval = null;
+}
+
+function toggleAutoRefresh() {
+  autoRefreshEnabled = !autoRefreshEnabled;
+  localStorage.setItem('ef-auto-refresh', autoRefreshEnabled ? 'on' : 'off');
+  const btn = document.getElementById('refresh-toggle');
+  if (btn) btn.classList.toggle('active', autoRefreshEnabled);
+  if (autoRefreshEnabled) {
+    startAutoRefresh();
+  } else {
+    stopAutoRefresh();
+  }
+  updateRefreshStatus();
+}
+
+function updateRefreshStatus() {
+  const el = document.getElementById('refresh-status');
+  if (!el) return;
+  const ago = Math.floor((Date.now() - lastUpdate) / 1000);
+  const agoText = ago < 5 ? 'just now' : ago + 's ago';
+  el.textContent = autoRefreshEnabled
+    ? 'Auto-refresh: on \u00B7 Updated ' + agoText
+    : 'Auto-refresh: paused';
+}
+
 // ── Init ────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   loadEquityCurve(90);
+  loadComparisonChart(90);
   loadPositions();
   loadMarketOverview();
   initEquityTabs();
+  initComparisonTabs();
+  lastUpdate = Date.now();
+  if (autoRefreshEnabled) startAutoRefresh();
+  updateRefreshStatus();
 });

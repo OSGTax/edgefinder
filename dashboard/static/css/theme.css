@@ -387,3 +387,35 @@ body.light-mode {
   line-height: 1;
 }
 .theme-toggle:hover { background: var(--surface-elevated); }
+
+/* ── Position Alert Pulse ─────────────────────────── */
+@keyframes pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+}
+@keyframes pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0,212,161,0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(0,212,161,0); }
+}
+.pulse-stop { animation: pulse-red 2s ease-in-out infinite; border-color: var(--negative) !important; }
+.pulse-target { animation: pulse-green 2s ease-in-out infinite; border-color: var(--positive) !important; }
+
+.alert-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 6px;
+  border-radius: 8px; text-transform: uppercase; letter-spacing: 0.3px;
+}
+.alert-badge.stop { background: var(--dim-negative); color: var(--negative); }
+.alert-badge.target { background: var(--dim-positive); color: var(--positive); }
+
+/* ── Auto-Refresh Bar ─────────────────────────────── */
+.refresh-bar {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; color: var(--text-muted);
+}
+.refresh-toggle {
+  background: none; border: 1px solid var(--border); color: var(--text-secondary);
+  cursor: pointer; font-size: 14px; padding: 2px 8px; border-radius: 6px;
+  transition: all 0.15s; line-height: 1;
+}
+.refresh-toggle:hover { border-color: var(--accent); color: var(--accent); }
+.refresh-toggle.active { border-color: var(--accent); color: var(--accent); background: var(--dim-accent); }

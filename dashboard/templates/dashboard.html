@@ -2,6 +2,12 @@
 {% block title %}Dashboard — EdgeFinder{% endblock %}
 {% block content %}
 
+<!-- Auto-Refresh Bar -->
+<div class="refresh-bar mb-16">
+  <button id="refresh-toggle" class="refresh-toggle active" onclick="toggleAutoRefresh()">&#x27F3;</button>
+  <span id="refresh-status">Auto-refresh: on &middot; Updated just now</span>
+</div>
+
 <!-- Hero Stats Row -->
 <div class="stats-grid grid-4 mb-20" id="stats-row">
   <div class="stat-card">
@@ -41,6 +47,25 @@
   </div>
   <div class="card-body" style="padding:8px 8px 0 8px;">
     <div id="equity-chart" style="width:100%;height:300px;"></div>
+  </div>
+</div>
+
+<!-- Strategy Comparison -->
+<div class="card mb-20">
+  <div class="card-header">
+    Strategy Comparison
+    <div class="right">
+      <div class="filter-tabs" id="cmp-range-tabs">
+        <div class="filter-tab" data-days="30">30D</div>
+        <div class="filter-tab active" data-days="90">90D</div>
+        <div class="filter-tab" data-days="180">180D</div>
+        <div class="filter-tab" data-days="365">1Y</div>
+      </div>
+    </div>
+  </div>
+  <div class="card-body">
+    <div id="comparison-chart" style="height:280px;"></div>
+    <div id="comparison-legend" style="display:flex;gap:16px;justify-content:center;margin-top:8px;font-size:12px;"></div>
   </div>
 </div>
 
