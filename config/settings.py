@@ -123,6 +123,16 @@ class Settings(BaseSettings):
     polygon_max_retries: int = 3
     polygon_retry_delay: float = 1.0
 
+    # ── FLAT FILES (Massive/Polygon S3) ──────────────
+    # Bulk historical aggregates served as gzipped CSV over an S3-compatible
+    # API. Used for daily-bar backfill and minute-bar backtesting — NOT for
+    # live intraday data (files land T+1). Credentials via EDGEFINDER_POLYGON_S3_*.
+    polygon_s3_endpoint_url: str = "https://files.massive.com"
+    polygon_s3_access_key_id: str = ""
+    polygon_s3_secret_access_key: str = ""
+    polygon_s3_bucket: str = "flatfiles"
+    flatfiles_stocks_prefix: str = "us_stocks_sip"
+
     # ── CACHE ────────────────────────────────────────
     cache_dir: Path = Path("data/cache")
     # Intraday TTLs are deliberately shorter than the signal-check interval

@@ -5,10 +5,11 @@ All models use Mapped + mapped_column (SQLAlchemy 2.0 style).
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -465,3 +466,32 @@ class AgentMemory(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+# ── 19. daily_bars ─────────────────────────────────────
+
+
+class DailyBar(Base):
+    """Daily OHLCV bars backfilled from Massive flat files (day_aggs).
+
+    One row per (symbol, date). `volume` is Float because the flat-file
+    day_aggs report volume-weighted/fractional share counts, not integers.
+    """
+
+    __tablename__ = "daily_bars"
+    __table_args__ = (
+        UniqueConstraint("symbol", "date", name="uq_daily_bars_symbol_date"),
+        Index("idx_daily_bars_symbol_date", "symbol", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[float] = mapped_column(Float)
+    transactions: Mapped[int | None] = mapped_column(Integer)
+    source: Mapped[str] = mapped_column(String(20), default="flatfiles")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
