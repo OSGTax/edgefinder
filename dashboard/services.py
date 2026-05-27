@@ -921,11 +921,10 @@ def _signal_check_job() -> None:
         logger.info("Signal check skipped — market holiday")
         return
     try:
-        from edgefinder.data.snapshot_provider import get_enriched_snapshots
         from edgefinder.data.market_data import MarketContext
 
         # Get bulk snapshot data (one API call)
-        snapshot_data = get_enriched_snapshots(_provider)
+        snapshot_data = _provider.get_enriched_snapshots()
 
         # Build market context from index prices
         ctx = MarketContext(

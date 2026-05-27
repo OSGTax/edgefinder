@@ -149,6 +149,9 @@ class DataHub:
     def get_all_snapshots(self) -> dict[str, float]:
         return self._primary.get_all_snapshots()
 
+    def get_enriched_snapshots(self) -> dict[str, dict]:
+        return self._primary.get_enriched_snapshots()
+
     def is_market_open(self) -> bool:
         return self._primary.is_market_open()
 
