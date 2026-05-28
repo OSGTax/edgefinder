@@ -292,6 +292,19 @@ class ArenaEngine:
     def get_all_accounts(self) -> dict[str, dict]:
         return {name: slot.account.to_dict() for name, slot in self._slots.items()}
 
+    def get_all_watched_tickers(self) -> set[str]:
+        """Union of all strategies' watchlists + every open position's symbol.
+
+        Used by the intraday cycle to seed per-ticker snapshot fallback when
+        the bulk Polygon snapshot endpoint isn't available.
+        """
+        tickers: set[str] = set()
+        for slot in self._slots.values():
+            tickers.update(slot.watchlist)
+            for pos in slot.account.positions:
+                tickers.add(pos.symbol)
+        return tickers
+
     def get_all_open_positions(self) -> dict[str, list[dict]]:
         result = {}
         for name, slot in self._slots.items():

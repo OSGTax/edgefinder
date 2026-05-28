@@ -557,20 +557,30 @@ class PolygonDataProvider:
         logger.info("Batch snapshot: got prices for %d tickers", len(prices))
         return prices
 
-    def get_enriched_snapshots(self) -> dict[str, dict]:
+    def get_enriched_snapshots(
+        self, fallback_tickers: list[str] | None = None
+    ) -> dict[str, dict]:
         """Get price + volume + OHLC for ALL tickers in ONE API call.
 
         Like get_all_snapshots, but keeps volume and the day's OHLC so the
         intraday cycle can build single-bar MarketData and detect volume
         anomalies. Returns {ticker: {"price", "volume", "open", "high", "low"}}.
+
+        The bulk snapshot endpoint (/v2/snapshot/locale/us/markets/stocks/
+        tickers) is plan-gated on some Polygon tiers and may return nothing.
+        If ``fallback_tickers`` is provided and the bulk call yields no
+        usable data, fall back to per-ticker minute-aggregate fetches —
+        the same endpoint family that ``get_latest_price`` already uses
+        successfully. This keeps the intraday cycle functional on
+        snapshot-free plans.
         """
         snapshots = self._retry(
             lambda: self._client.get_snapshot_all("stocks"),
             context="get_enriched_snapshots",
         )
-        if not snapshots:
-            return {}
         result: dict[str, dict] = {}
+        if not snapshots:
+            return self._fallback_per_ticker(fallback_tickers, reason="bulk returned no data")
         for s in snapshots:
             ticker = getattr(s, "ticker", None)
             if not ticker:
@@ -601,8 +611,91 @@ class PolygonDataProvider:
                     "low": low,
                 }
 
-        logger.info("Enriched snapshots: %d tickers", len(result))
+        if not result:
+            return self._fallback_per_ticker(
+                fallback_tickers, reason="bulk returned data but no tickers had price"
+            )
+        logger.info("Enriched snapshots: %d tickers (bulk)", len(result))
         return result
+
+    def _fallback_per_ticker(
+        self, tickers: list[str] | None, reason: str
+    ) -> dict[str, dict]:
+        """Build snapshots one ticker at a time using minute aggregates.
+
+        Used when the bulk snapshot endpoint isn't available (plan-gated)
+        or returns nothing usable.
+        """
+        if not tickers:
+            logger.warning(
+                "get_enriched_snapshots: %s and no fallback tickers — returning empty",
+                reason,
+            )
+            return {}
+        logger.warning(
+            "get_enriched_snapshots: %s — falling back to per-ticker minute aggs (%d tickers)",
+            reason, len(tickers),
+        )
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        result: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            futures = {pool.submit(self._snapshot_from_minutes, t): t for t in tickers}
+            for fut in as_completed(futures):
+                ticker = futures[fut]
+                try:
+                    snap = fut.result(timeout=30)
+                except Exception:
+                    logger.debug("per-ticker snapshot failed for %s", ticker, exc_info=True)
+                    continue
+                if snap:
+                    result[ticker] = snap
+        logger.info("Enriched snapshots: %d tickers (per-ticker fallback)", len(result))
+        return result
+
+    def _snapshot_from_minutes(self, ticker: str) -> dict | None:
+        """Today's snapshot (price, volume, OHLC) from minute bars.
+
+        Aggregates all of today's minute bars into a synthetic snapshot:
+        price = latest close, volume = cumulative day volume,
+        open = first bar's open, high = max high, low = min low.
+
+        Falls back to the most-recent bar regardless of day if today's
+        bars aren't available (e.g., low-liquidity ticker, pre-market).
+        """
+        end = date.today()
+        start = end - timedelta(days=3)
+        aggs = self._retry(
+            lambda: list(
+                self._client.get_aggs(
+                    ticker=ticker,
+                    multiplier=1,
+                    timespan="minute",
+                    from_=start.isoformat(),
+                    to=end.isoformat(),
+                    limit=50000,
+                )
+            ),
+            context=f"snapshot_from_minutes({ticker})",
+        )
+        if not aggs:
+            return None
+
+        def _bar_date(a) -> date:
+            return datetime.fromtimestamp(a.timestamp / 1000).date()
+
+        today_bars = [a for a in aggs if _bar_date(a) == end]
+        bars = today_bars or [aggs[-1]]
+        last = bars[-1]
+        if not getattr(last, "close", None):
+            return None
+        close = float(last.close)
+        return {
+            "price": close,
+            "volume": sum(float(getattr(a, "volume", 0) or 0) for a in bars),
+            "open": float(getattr(bars[0], "open", None) or close),
+            "high": max((float(getattr(a, "high", None) or close)) for a in bars),
+            "low": min((float(getattr(a, "low", None) or close)) for a in bars),
+        }
 
     # ── Private: Fill TickerFundamentals from each endpoint ──
 

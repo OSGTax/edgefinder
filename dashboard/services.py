@@ -938,8 +938,11 @@ def _signal_check_job() -> None:
     try:
         from edgefinder.data.market_data import MarketContext
 
-        # Get bulk snapshot data (one API call)
-        snapshot_data = _provider.get_enriched_snapshots()
+        # Get bulk snapshot data (one API call). Pass the watchlist as
+        # a fallback so the provider can fetch per-ticker if the bulk
+        # snapshot endpoint isn't on this Polygon plan.
+        fallback = list(_arena.get_all_watched_tickers())
+        snapshot_data = _provider.get_enriched_snapshots(fallback_tickers=fallback)
 
         # Build market context from index prices
         ctx = MarketContext(
