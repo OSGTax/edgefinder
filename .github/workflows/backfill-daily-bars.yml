@@ -1,0 +1,86 @@
+name: Daily-bars backfill + schema upgrade
+
+# One-click workflow for the flat-files daily_bars pipeline. Runs:
+#   1. `alembic upgrade head` (idempotent — no-op if prod is already
+#      at the latest revision; applies any new migrations cleanly).
+#   2. The backfill script, downloading day_aggs from files.massive.com
+#      and upserting into daily_bars.
+#
+# Manual dispatch only (no schedule). The backfill is idempotent
+# (upserts on (symbol, date)), so reruns are safe.
+#
+# --- Required repo secrets --------------------------------------------
+#   DATABASE_URL                              (Supabase pooler URL)
+#   EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID       (flat-files S3 key)
+#   EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY   (flat-files S3 secret)
+# Optional (have sensible defaults in config/settings.py):
+#   EDGEFINDER_POLYGON_S3_ENDPOINT_URL        (default: files.massive.com)
+#   EDGEFINDER_POLYGON_S3_BUCKET              (default: flatfiles)
+#
+# --- Running ---------------------------------------------------------
+#   Actions → "Daily-bars backfill + schema upgrade" → Run workflow.
+#   Leave `execute=false` for a dry-run (S3 LIST only, no downloads or
+#   writes). Flip `execute=true` once the date range looks right.
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Start date (YYYY-MM-DD, inclusive)"
+        required: true
+        default: "2021-05-27"
+      end:
+        description: "End date (YYYY-MM-DD, inclusive)"
+        required: true
+        default: "2026-05-26"
+      execute:
+        description: "Actually download + write (otherwise dry-run)"
+        type: boolean
+        default: false
+      limit_days:
+        description: "Optional cap on trading days processed (smoke tests)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: daily-bars-backfill
+      cancel-in-progress: false
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID: ${{ secrets.EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID }}
+      EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY: ${{ secrets.EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY }}
+      EDGEFINDER_POLYGON_S3_ENDPOINT_URL: ${{ secrets.EDGEFINDER_POLYGON_S3_ENDPOINT_URL }}
+      EDGEFINDER_POLYGON_S3_BUCKET: ${{ secrets.EDGEFINDER_POLYGON_S3_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Alembic upgrade head (no-op if already current)
+        run: python -m alembic upgrade head
+
+      - name: Backfill daily_bars
+        run: |
+          set -euo pipefail
+          ARGS="--start ${{ inputs.start }} --end ${{ inputs.end }}"
+          if [ -n "${{ inputs.limit_days }}" ]; then
+            ARGS="$ARGS --limit-days ${{ inputs.limit_days }}"
+          fi
+          if [ "${{ inputs.execute }}" = "true" ]; then
+            ARGS="$ARGS --execute"
+          fi
+          echo "Running: python scripts/backfill_daily_bars.py $ARGS"
+          python scripts/backfill_daily_bars.py $ARGS
