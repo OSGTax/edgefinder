@@ -1,32 +1,43 @@
 """EdgeFinder v2 — APScheduler job scheduling.
 
-All scheduled jobs run in ET timezone:
-- Signal check: every 15 min during market hours
-- Position monitor: every 5 min during market hours
-- Nightly scan: 6:15 PM ET
-- Daily benchmark collection: 4:10 PM ET
+All scheduled jobs run in ET wall-clock time:
+- Signal check / position monitor: every N min during market hours
 - Daily strategy snapshots: 4:05 PM ET
+- Benchmark collection: 4:10 PM ET
+- Sector rotation: 4:15 PM ET
+- Daily indicator computation: 4:30 PM ET
+- Nightly scan: 6:15 PM ET
+- Dividends & splits: 6:30 PM ET
+- News accumulator: hourly :30 from 9:30 AM to 4:30 PM ET
+
+Render containers (and most prod environments) run as UTC. APScheduler 3.x
+CronTrigger ignores the scheduler's default tz when none is passed
+explicitly — it falls back to ``tzlocal.get_localzone()``, which on a UTC
+container makes ``CronTrigger(hour=18, ...)`` fire at 18:00 UTC, four hours
+earlier than 18:00 ET. We pin the ZoneInfo here and pass it to both the
+scheduler and every trigger so jobs fire on the intended ET wall clock.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+ET = ZoneInfo("America/New_York")
 
 
 class EdgeFinderScheduler:
     """Manages all scheduled jobs."""
 
     def __init__(self) -> None:
-        self._scheduler = BackgroundScheduler(timezone="US/Eastern")
+        self._scheduler = BackgroundScheduler(timezone=ET)
         self._jobs: dict[str, str] = {}
 
     def setup(
@@ -56,6 +67,7 @@ class EdgeFinderScheduler:
                     minute=f"*/{settings.signal_check_interval_minutes}",
                     hour=market_hours,
                     day_of_week="mon-fri",
+                    timezone=ET,
                 ),
                 id="signal_check",
                 name="Signal Check",
@@ -70,6 +82,7 @@ class EdgeFinderScheduler:
                     minute=f"*/{settings.position_monitor_interval_minutes}",
                     hour=market_hours,
                     day_of_week="mon-fri",
+                    timezone=ET,
                 ),
                 id="position_monitor",
                 name="Position Monitor",
@@ -81,7 +94,12 @@ class EdgeFinderScheduler:
             scan_hour, scan_min = settings.scanner_run_time.split(":")
             self._scheduler.add_job(
                 nightly_scan_fn,
-                CronTrigger(hour=int(scan_hour), minute=int(scan_min), day_of_week="mon-fri"),
+                CronTrigger(
+                    hour=int(scan_hour),
+                    minute=int(scan_min),
+                    day_of_week="mon-fri",
+                    timezone=ET,
+                ),
                 id="nightly_scan",
                 name="Nightly Scan",
                 replace_existing=True,
@@ -91,7 +109,7 @@ class EdgeFinderScheduler:
         if benchmark_collect_fn:
             self._scheduler.add_job(
                 benchmark_collect_fn,
-                CronTrigger(hour=16, minute=10, day_of_week="mon-fri"),
+                CronTrigger(hour=16, minute=10, day_of_week="mon-fri", timezone=ET),
                 id="benchmark_collect",
                 name="Benchmark Collection",
                 replace_existing=True,
@@ -101,7 +119,7 @@ class EdgeFinderScheduler:
         if snapshot_fn:
             self._scheduler.add_job(
                 snapshot_fn,
-                CronTrigger(hour=16, minute=5, day_of_week="mon-fri"),
+                CronTrigger(hour=16, minute=5, day_of_week="mon-fri", timezone=ET),
                 id="daily_snapshot",
                 name="Daily Strategy Snapshots",
                 replace_existing=True,
@@ -111,7 +129,7 @@ class EdgeFinderScheduler:
         if sector_rotation_fn:
             self._scheduler.add_job(
                 sector_rotation_fn,
-                CronTrigger(hour=16, minute=15, day_of_week="mon-fri"),
+                CronTrigger(hour=16, minute=15, day_of_week="mon-fri", timezone=ET),
                 id="sector_rotation",
                 name="Sector Rotation (RRG)",
                 replace_existing=True,
@@ -121,7 +139,7 @@ class EdgeFinderScheduler:
         if news_accumulate_fn:
             self._scheduler.add_job(
                 news_accumulate_fn,
-                CronTrigger(minute="30", hour="9-16", day_of_week="mon-fri"),
+                CronTrigger(minute="30", hour="9-16", day_of_week="mon-fri", timezone=ET),
                 id="news_accumulate",
                 name="News Accumulation",
                 replace_existing=True,
@@ -131,7 +149,7 @@ class EdgeFinderScheduler:
         if dividend_split_fn:
             self._scheduler.add_job(
                 dividend_split_fn,
-                CronTrigger(hour=18, minute=30, day_of_week="mon-fri"),
+                CronTrigger(hour=18, minute=30, day_of_week="mon-fri", timezone=ET),
                 id="dividend_split",
                 name="Dividends & Splits",
                 replace_existing=True,
@@ -141,7 +159,7 @@ class EdgeFinderScheduler:
         if daily_indicator_fn:
             self._scheduler.add_job(
                 daily_indicator_fn,
-                CronTrigger(hour=16, minute=30, day_of_week="mon-fri"),
+                CronTrigger(hour=16, minute=30, day_of_week="mon-fri", timezone=ET),
                 id="daily_indicators",
                 name="Daily Indicator Computation",
                 replace_existing=True,
