@@ -59,9 +59,9 @@ edgefinder/
 │   │   └── engine.py           # Technical indicators + 9 signal pattern detectors
 │   ├── strategies/
 │   │   ├── base.py             # BaseStrategy ABC + StrategyRegistry
-│   │   ├── alpha.py            # Momentum/EMA day trading
-│   │   ├── bravo.py            # Mean reversion/BB swing trading
-│   │   └── charlie.py          # Deep value contrarian
+│   │   ├── coward.py           # Conservative swing — oversold dips, exit early
+│   │   ├── gambler.py          # Balanced swing — MACD momentum, exit on fade
+│   │   └── degenerate_v2.py    # Aggressive swing — volume spikes, ride the hype
 │   ├── trading/
 │   │   ├── account.py          # Per-strategy $5k virtual accounts
 │   │   ├── executor.py         # Risk-based sizing, slippage, hash chain audit
@@ -259,7 +259,7 @@ postmortems read a single timeline alongside the trades table.
      drawdown. Writes to `agent_observations`, reconciles against
      prior unresolved rows (dedup + auto-resolve).
   2. **Agentic reasoning** (`edgefinder/agents/reasoning.py`) — calls
-     Claude (default `claude-opus-4-7`, adaptive thinking, prompt
+     Claude (default `claude-opus-4-8`, adaptive thinking, prompt
      caching on system + memory) over the current observations + the
      agent's persistent memory (`agent_memory` table) + recent trades
      + recent trading-path commits. Returns structured decisions per
@@ -333,7 +333,9 @@ tweaks as PRs.
 
 - Module: `edgefinder/agents/coach.py`. Cron:
   `.github/workflows/coach.yml` (Mon-Fri 5:30 PM ET).
-- Rotation: Mon=alpha, Tue=bravo, Wed=charlie, Thu=degenerate, Fri=echo.
+- Rotation: round-robin over the live StrategyRegistry (currently coward,
+  degenerate, gambler), cycled by day-of-year across weekdays — never
+  drifts when strategies are added/removed. Weekends are skipped.
 - Each run pulls 30 days of closed trades for that strategy from
   Supabase, the current `config/settings.py` text, and the last 3
   prior reviews of the same strategy. Hands all of it to `claude -p`,
@@ -362,7 +364,7 @@ main. This is what gates the coach's auto-merge. Without it, the
 auto-merge has no safety check.
 
 ### Model selection
-Default reasoning model is `claude-opus-4-7`. Downgrade to Sonnet 4.6
+Default reasoning model is `claude-opus-4-8`. Downgrade to Sonnet 4.6
 via `WATCHDOG_REASONING_MODEL=claude-sonnet-4-6` in the workflow env
 if you want to conserve subscription quota on a larger cron schedule.
 

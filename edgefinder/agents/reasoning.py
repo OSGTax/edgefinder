@@ -35,7 +35,7 @@ from edgefinder.db.models import AgentObservation, TradeRecord
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "claude-opus-4-8"
 MAX_OUTPUT_TOKENS = 4096
 
 # Static system prompt — stable across every tick so we cache it.
@@ -376,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--model",
         default=None,
-        help="Override the Claude model (default: WATCHDOG_REASONING_MODEL or claude-opus-4-7)",
+        help="Override the Claude model (default: WATCHDOG_REASONING_MODEL or claude-opus-4-8)",
     )
     args = parser.parse_args(argv)
 

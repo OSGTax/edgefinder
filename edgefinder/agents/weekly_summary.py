@@ -2,8 +2,8 @@
 
 Reads the past 7 days of `reviews/` markdown + the past 7 days of trades
 across ALL strategies, asks Claude to synthesize portfolio-level
-patterns ("alpha and bravo both lost on Tuesday — was it the regime?",
-"charlie's win rate is climbing while degenerate's drops"), writes the
+patterns ("coward and gambler both lost on Tuesday — was it the regime?",
+"degenerate's win rate is climbing while gambler's drops"), writes the
 result to reviews/WEEK-YYYY-WW.md, and pushes directly to main.
 
 No code changes are proposed at the portfolio level — this is a
@@ -36,7 +36,7 @@ from edgefinder.db.models import TradeRecord
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "weekly_summary"
-DEFAULT_MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "claude-opus-4-8"
 LOOKBACK_DAYS = 7
 REVIEWS_DIR = Path("reviews")
 
@@ -44,7 +44,7 @@ REVIEWS_DIR = Path("reviews")
 SYSTEM_PROMPT = """You are EdgeFinder's portfolio-level analyst. Once a week you read the past week's per-strategy reviews and the past week's trades across ALL strategies, then write a portfolio-level synthesis.
 
 Your goals:
-1. Identify cross-strategy patterns the daily coach can't see — e.g., "all five strategies took losses on Tuesday afternoon, suggesting a market-regime effect," or "alpha and bravo entered the same names within 30 minutes on three days, indicating signal correlation."
+1. Identify cross-strategy patterns the daily coach can't see — e.g., "every strategy took losses on Tuesday afternoon, suggesting a market-regime effect," or "coward and gambler entered the same names within 30 minutes on three days, indicating signal correlation."
 2. Note which strategies are trending up vs. down on win rate, expectancy, R-multiple, or trade frequency.
 3. Call out anything anomalous: a strategy that stopped trading, a P&L distribution that suddenly widened, a new exit-reason pattern.
 

@@ -1,7 +1,8 @@
 """Coach agent — daily per-strategy reviewer + tuner.
 
 Once per weekday (5:30 PM ET, after market close), picks today's
-strategy by a fixed rotation and:
+strategy by round-robin over the registered strategies (read live from
+StrategyRegistry, so the rotation never drifts from the shipped code) and:
 
   1. Pulls the last 30 days of that strategy's closed trades from
      Supabase.
@@ -18,9 +19,9 @@ strategy by a fixed rotation and:
      it's just a markdown journal).
 
 CLI:
-    python -m edgefinder.agents.coach                   # auto-pick by weekday
-    python -m edgefinder.agents.coach --strategy alpha  # override
-    python -m edgefinder.agents.coach --strategy alpha --dry-run
+    python -m edgefinder.agents.coach                    # auto-pick by rotation
+    python -m edgefinder.agents.coach --strategy coward  # override
+    python -m edgefinder.agents.coach --strategy coward --dry-run
 """
 
 from __future__ import annotations
@@ -46,20 +47,11 @@ from edgefinder.db.models import TradeRecord
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "coach"
-DEFAULT_MODEL = "claude-opus-4-7"
+DEFAULT_MODEL = "claude-opus-4-8"
 LOOKBACK_DAYS = 30
 PRIOR_REVIEWS_TO_INCLUDE = 3
 REVIEWS_DIR = Path("reviews")
 SETTINGS_FILE = Path("config/settings.py")
-
-# Mon=0 ... Fri=4. Sat/Sun absent → exit cleanly.
-WEEKDAY_TO_STRATEGY = {
-    0: "alpha",
-    1: "bravo",
-    2: "charlie",
-    3: "degenerate",
-    4: "echo",
-}
 
 _ET = ZoneInfo("America/New_York")
 
@@ -118,10 +110,35 @@ class CoachResponse:
 # ── Strategy rotation ──────────────────────────────────────
 
 
+def active_strategies() -> list[str]:
+    """Registered strategy names, sorted for a stable rotation order.
+
+    Reads the live StrategyRegistry rather than a hardcoded list, so the
+    rotation always matches the strategies actually shipped in the code —
+    adding or removing a strategy plugin is picked up automatically with
+    no change needed here.
+    """
+    import edgefinder.strategies  # noqa: F401 — import triggers registration
+    from edgefinder.strategies.base import StrategyRegistry
+
+    return sorted(StrategyRegistry.list_names())
+
+
 def pick_strategy_for_today(now: datetime | None = None) -> str | None:
-    """Today's strategy by ET weekday, or None for Sat/Sun."""
+    """Today's strategy by round-robin over the registered strategies.
+
+    Returns None on Sat/Sun (the coach only runs after weekday closes).
+    On weekdays it cycles through ``active_strategies()`` by day-of-year,
+    so every strategy is reviewed on an even cadence and a newly-added
+    strategy joins the rotation automatically.
+    """
     current = (now or datetime.now(timezone.utc)).astimezone(_ET)
-    return WEEKDAY_TO_STRATEGY.get(current.weekday())
+    if current.weekday() >= 5:  # Sat/Sun
+        return None
+    strategies = active_strategies()
+    if not strategies:
+        return None
+    return strategies[current.timetuple().tm_yday % len(strategies)]
 
 
 # ── Context builders ───────────────────────────────────────
@@ -400,7 +417,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--strategy",
         default=None,
-        help="Override the weekday-rotation pick (alpha|bravo|charlie|degenerate|echo)",
+        help="Override the rotation pick with any registered strategy name "
+        "(e.g. coward, gambler, degenerate)",
     )
     parser.add_argument("--force", action="store_true", help="Run even if disabled in agent-config")
     parser.add_argument("--dry-run", action="store_true", help="Print prompt + plan, no writes")
@@ -418,8 +436,9 @@ def main(argv: list[str] | None = None) -> int:
     if strategy is None:
         logger.info("[coach] weekend, no strategy assigned today — exiting")
         return 0
-    if strategy not in WEEKDAY_TO_STRATEGY.values():
-        logger.error("[coach] unknown strategy %r — known: %s", strategy, list(WEEKDAY_TO_STRATEGY.values()))
+    known = active_strategies()
+    if strategy not in known:
+        logger.error("[coach] unknown strategy %r — known: %s", strategy, known)
         return 2
 
     from edgefinder.db.engine import get_engine, get_session_factory

@@ -57,25 +57,39 @@ def _fake_oauth(monkeypatch):
 
 
 class TestPickStrategy:
-    @pytest.mark.parametrize(
-        "iso_dt,expected",
-        [
-            # Mon → alpha (Apr 13 2026 14:00 ET = 18:00 UTC)
-            (datetime(2026, 4, 13, 18, 0, tzinfo=timezone.utc), "alpha"),
-            (datetime(2026, 4, 14, 18, 0, tzinfo=timezone.utc), "bravo"),
-            (datetime(2026, 4, 15, 18, 0, tzinfo=timezone.utc), "charlie"),
-            (datetime(2026, 4, 16, 18, 0, tzinfo=timezone.utc), "degenerate"),
-            (datetime(2026, 4, 17, 18, 0, tzinfo=timezone.utc), "echo"),
-        ],
-    )
-    def test_weekday_rotation(self, iso_dt, expected):
-        assert coach.pick_strategy_for_today(iso_dt) == expected
+    def test_active_strategies_reads_registry(self):
+        # Guards against the rotation drifting from the shipped code: the
+        # coach must derive its list from the live StrategyRegistry.
+        names = coach.active_strategies()
+        assert {"coward", "gambler", "degenerate"} <= set(names)
+        assert names == sorted(names)  # stable order
+
+    def test_weekday_rotation_is_round_robin(self, monkeypatch):
+        monkeypatch.setattr(coach, "active_strategies", lambda: ["aa", "bb", "cc"])
+        # Three consecutive weekdays (Mon–Wed Apr 13–15 2026, 18:00 UTC =
+        # 14:00 ET) advance day-of-year by one each day, so a 3-strategy
+        # list is covered exactly once with no repeats.
+        picks = [
+            coach.pick_strategy_for_today(datetime(2026, 4, d, 18, 0, tzinfo=timezone.utc))
+            for d in (13, 14, 15)
+        ]
+        assert sorted(picks) == ["aa", "bb", "cc"]
+        assert len(set(picks)) == 3
+
+    def test_rotation_is_deterministic(self, monkeypatch):
+        monkeypatch.setattr(coach, "active_strategies", lambda: ["aa", "bb", "cc"])
+        dt = datetime(2026, 4, 13, 18, 0, tzinfo=timezone.utc)
+        assert coach.pick_strategy_for_today(dt) == coach.pick_strategy_for_today(dt)
 
     def test_saturday_returns_none(self):
         assert coach.pick_strategy_for_today(datetime(2026, 4, 18, 18, 0, tzinfo=timezone.utc)) is None
 
     def test_sunday_returns_none(self):
         assert coach.pick_strategy_for_today(datetime(2026, 4, 19, 18, 0, tzinfo=timezone.utc)) is None
+
+    def test_no_registered_strategies_returns_none(self, monkeypatch):
+        monkeypatch.setattr(coach, "active_strategies", lambda: [])
+        assert coach.pick_strategy_for_today(datetime(2026, 4, 13, 18, 0, tzinfo=timezone.utc)) is None
 
 
 # ── Trade fetching ─────────────────────────────────────────
