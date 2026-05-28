@@ -317,10 +317,10 @@ class TickerNews(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     symbol: Mapped[str] = mapped_column(String(10))
-    title: Mapped[str] = mapped_column(String(500))
+    title: Mapped[str] = mapped_column(Text)
     author: Mapped[str | None] = mapped_column(String(200))
     published_utc: Mapped[str | None] = mapped_column(String(30))
-    article_url: Mapped[str | None] = mapped_column(String(500))
+    article_url: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     publisher_name: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -432,7 +432,7 @@ class AgentAction(Base):
     agent_name: Mapped[str] = mapped_column(String(50), index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     action_type: Mapped[str] = mapped_column(String(30))  # diagnose | propose_param | propose_strategy | open_pr | comment
-    summary: Mapped[str] = mapped_column(String(500))
+    summary: Mapped[str] = mapped_column(Text)
     files_touched: Mapped[list | None] = mapped_column(JSON)
     commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(200), nullable=True)
