@@ -638,7 +638,7 @@ class PolygonDataProvider:
         )
         from concurrent.futures import ThreadPoolExecutor, as_completed
         result: dict[str, dict] = {}
-        with ThreadPoolExecutor(max_workers=10) as pool:
+        with ThreadPoolExecutor(max_workers=24) as pool:
             futures = {pool.submit(self._snapshot_from_minutes, t): t for t in tickers}
             for fut in as_completed(futures):
                 ticker = futures[fut]
@@ -659,11 +659,13 @@ class PolygonDataProvider:
         price = latest close, volume = cumulative day volume,
         open = first bar's open, high = max high, low = min low.
 
-        Falls back to the most-recent bar regardless of day if today's
-        bars aren't available (e.g., low-liquidity ticker, pre-market).
+        Fetches today's bars only — this runs during the ET active window
+        when liquid tickers have intraday bars. Tickers with no bars today
+        (e.g. very low liquidity) are omitted from the snapshot rather than
+        backfilled from a stale prior session.
         """
         end = date.today()
-        start = end - timedelta(days=3)
+        start = end
         aggs = self._retry(
             lambda: list(
                 self._client.get_aggs(

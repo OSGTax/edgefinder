@@ -112,9 +112,10 @@ class TradeJournal:
 
     def compute_stats(self, strategy_name: str | None = None) -> dict:
         """Compute trading statistics for a strategy (or all)."""
+        open_count = len(self.get_open_trades(strategy_name))
         closed = self.get_closed_trades(strategy_name)
         if not closed:
-            return {"total_trades": 0}
+            return {"total_trades": 0, "open_trades": open_count}
 
         wins = [t for t in closed if t.pnl_dollars and t.pnl_dollars > 0]
         losses = [t for t in closed if t.pnl_dollars and t.pnl_dollars <= 0]
@@ -129,6 +130,7 @@ class TradeJournal:
 
         return {
             "total_trades": len(closed),
+            "open_trades": open_count,
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": len(wins) / len(closed) if closed else 0,
