@@ -653,19 +653,21 @@ class PolygonDataProvider:
         return result
 
     def _snapshot_from_minutes(self, ticker: str) -> dict | None:
-        """Today's snapshot (price, volume, OHLC) from minute bars.
+        """Snapshot (price, volume, OHLC) from minute bars.
 
-        Aggregates all of today's minute bars into a synthetic snapshot:
+        Aggregates today's minute bars into a synthetic snapshot:
         price = latest close, volume = cumulative day volume,
         open = first bar's open, high = max high, low = min low.
 
-        Fetches today's bars only — this runs during the ET active window
-        when liquid tickers have intraday bars. Tickers with no bars today
-        (e.g. very low liquidity) are omitted from the snapshot rather than
-        backfilled from a stale prior session.
+        Prefers today's intraday bars, but fetches a multi-day lookback so
+        that when today's bars aren't yet available (low-liquidity names,
+        data-feed delay, or a current session the plan hasn't published)
+        the most-recent prior bar is used instead. Fetching today only would
+        drop such tickers entirely, collapsing the watchlist to an empty
+        snapshot and halting all trading (regression fixed in v5.3.8).
         """
         end = date.today()
-        start = end
+        start = end - timedelta(days=5)
         aggs = self._retry(
             lambda: list(
                 self._client.get_aggs(
