@@ -43,10 +43,21 @@ _scheduler: EdgeFinderScheduler | None = None
 _session_factory = None
 _plan_access: dict[str, bool] = {}
 
+# Last 5-min signal-check result, surfaced via /api/strategies/scheduler so
+# we can see from outside whether cycles complete cleanly. No DB writes —
+# resets to {} on each Render redeploy, which is the right semantics
+# (we only care about the current process's runtime state).
+_last_signal_check: dict = {}
+
 
 def get_plan_access() -> dict[str, bool]:
     """Get plan access probe results for API display."""
     return _plan_access
+
+
+def get_last_signal_check() -> dict:
+    """Snapshot of the most recent _signal_check_job invocation."""
+    return dict(_last_signal_check)
 
 
 def get_arena() -> ArenaEngine | None:
@@ -914,10 +925,14 @@ def _daily_indicator_job() -> None:
 
 def _signal_check_job() -> None:
     """Called every 5 min during market hours. Runs the intraday cycle."""
+    global _last_signal_check
+    cycle_start = datetime.now(timezone.utc)
     if not _arena or not _provider:
+        _last_signal_check = {"ts": cycle_start.isoformat(), "skipped": "arena/provider not ready"}
         logger.warning("Signal check skipped: arena not initialized")
         return
     if _is_market_holiday():
+        _last_signal_check = {"ts": cycle_start.isoformat(), "skipped": "market holiday"}
         logger.info("Signal check skipped — market holiday")
         return
     try:
@@ -948,8 +963,22 @@ def _signal_check_job() -> None:
             logger.info("Intraday cycle: no trades")
 
         _persist_account_state()
-    except Exception:
+        _last_signal_check = {
+            "ts": cycle_start.isoformat(),
+            "duration_s": (datetime.now(timezone.utc) - cycle_start).total_seconds(),
+            "snapshot_count": len(snapshot_data),
+            "opened": len(opened),
+            "closed": len(closed),
+            "success": True,
+        }
+    except Exception as exc:
         logger.exception("Intraday cycle failed")
+        _last_signal_check = {
+            "ts": cycle_start.isoformat(),
+            "duration_s": (datetime.now(timezone.utc) - cycle_start).total_seconds(),
+            "success": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def _position_monitor_job() -> None:

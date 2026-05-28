@@ -132,8 +132,11 @@ def equity_curve(
 
 @router.get("/scheduler")
 def scheduler_status():
-    """Get scheduler status and next run times."""
+    """Get scheduler status, next run times, and last cycle result."""
+    from dashboard.services import get_last_signal_check
     scheduler = get_scheduler()
     if not scheduler:
         return {"running": False, "jobs": {}, "message": "Pipeline not initialized"}
-    return scheduler.get_status()
+    status = scheduler.get_status()
+    status["last_signal_check"] = get_last_signal_check()
+    return status
