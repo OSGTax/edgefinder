@@ -50,6 +50,21 @@ def test_backtest_runs_real_engine_and_trades():
     )
     # Final equity is internally consistent: cash + marked positions.
     assert result["final_equity"] > 0
+    # Rich metrics are all present.
+    s = result["stats"]
+    for key in ("cagr_pct", "sharpe", "profit_factor", "avg_win",
+                "avg_loss", "exposure_pct", "max_drawdown_pct"):
+        assert key in s
+
+
+def test_backtest_benchmark_excess_return():
+    bars = {"TEST": _series(_decline_then_rally())}
+    bench = {"symbol": "SPY", "return_pct": 3.0, "period": "2023-05-30..2026-05-26"}
+    result = run_daily_backtest("coward", bars, starting_cash=10_000.0, benchmark=bench)
+    s = result["stats"]
+    assert s["benchmark_symbol"] == "SPY"
+    assert s["benchmark_return_pct"] == 3.0
+    assert s["excess_return_pct"] == round(s["return_pct"] - 3.0, 2)
 
 
 def test_backtest_unknown_strategy_raises():

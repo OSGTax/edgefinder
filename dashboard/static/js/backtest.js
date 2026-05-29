@@ -54,29 +54,34 @@
   function renderResult(d) {
     const s = d.stats || {};
     const retCls = (s.return_pct >= 0) ? 'text-positive' : 'text-negative';
-    const winRate = (s.win_rate == null) ? '&mdash;' : s.win_rate + '%';
+    const num = (v, suf = '') => (v == null ? '&mdash;' : v + suf);
+
+    // Benchmark sub-line on the Return card
+    let benchSub = `${fmtUsd(d.starting_cash)} &rarr; ${fmtUsd(d.final_equity)}`;
+    if (s.benchmark_return_pct != null) {
+      const exCls = (s.excess_return_pct >= 0) ? 'text-positive' : 'text-negative';
+      benchSub = `vs ${s.benchmark_symbol} ${fmtPct(s.benchmark_return_pct)} · `
+        + `<span class="${exCls}">${fmtPct(s.excess_return_pct)} excess</span>`;
+    }
+
+    const cards = [
+      { label: 'Return', value: `<span class="${retCls}">${fmtPct(s.return_pct)}</span>`, sub: benchSub },
+      { label: 'CAGR', value: num(s.cagr_pct, '%') },
+      { label: 'Sharpe', value: num(s.sharpe) },
+      { label: 'Max drawdown', value: `<span class="text-negative">-${num(s.max_drawdown_pct, '%')}</span>`, sub: `${s.days} trading days` },
+      { label: 'Win rate', value: num(s.win_rate, '%'), sub: `${s.num_closed_trades} closed · ${s.num_open_positions} open` },
+      { label: 'Profit factor', value: num(s.profit_factor) },
+      { label: 'Avg win / loss', value: `${s.avg_win == null ? '—' : fmtUsd(s.avg_win)} / ${s.avg_loss == null ? '—' : fmtUsd(s.avg_loss)}` },
+      { label: 'Exposure', value: num(s.exposure_pct, '%'), sub: 'days holding ≥1 position' },
+    ];
 
     results.innerHTML = `
       <div class="stats-grid grid-4 mb-20">
-        <div class="stat-card">
-          <div class="stat-label">Return</div>
-          <div class="stat-value ${retCls}">${fmtPct(s.return_pct)}</div>
-          <div class="stat-sub text-secondary">${fmtUsd(d.starting_cash)} &rarr; ${fmtUsd(d.final_equity)}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Closed trades</div>
-          <div class="stat-value">${s.num_closed_trades}</div>
-          <div class="stat-sub text-secondary">${s.num_open_positions} open at end</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Win rate</div>
-          <div class="stat-value">${winRate}</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">Max drawdown</div>
-          <div class="stat-value text-negative">-${s.max_drawdown_pct}%</div>
-          <div class="stat-sub text-secondary">${s.days} trading days</div>
-        </div>
+        ${cards.map(c => `<div class="stat-card">
+          <div class="stat-label">${c.label}</div>
+          <div class="stat-value">${c.value}</div>
+          ${c.sub ? `<div class="stat-sub text-secondary">${c.sub}</div>` : ''}
+        </div>`).join('')}
       </div>
       <div class="card mb-20">
         <div class="card-header">Equity Curve</div>

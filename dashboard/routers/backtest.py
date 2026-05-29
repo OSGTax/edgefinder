@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from dashboard.dependencies import get_db
 from edgefinder.backtest.daily_backtest import run_daily_backtest
-from edgefinder.db.models import DailyBar
+from edgefinder.db.models import DailyBar, IndexDaily
 from edgefinder.strategies.base import StrategyRegistry
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,38 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_SYMBOLS = 25
+
+
+def _spy_benchmark(db: Session, start, end) -> dict | None:
+    """SPY buy-hold return over [start, end], preferring full-range daily_bars
+    and falling back to index_daily (shorter history). Aligned to whatever SPY
+    data overlaps the backtest window."""
+    rows = (
+        db.query(DailyBar.date, DailyBar.close)
+        .filter(DailyBar.symbol == "SPY", DailyBar.date >= start, DailyBar.date <= end)
+        .order_by(DailyBar.date).all()
+    )
+    if not rows:
+        rows = (
+            db.query(IndexDaily.date, IndexDaily.close)
+            .filter(IndexDaily.symbol == "SPY", IndexDaily.date >= start, IndexDaily.date <= end)
+            .order_by(IndexDaily.date).all()
+        )
+    rows = [(d, c) for d, c in rows if c]
+    if len(rows) < 2:
+        return None
+    first_close, last_close = rows[0][1], rows[-1][1]
+    if first_close <= 0:
+        return None
+
+    def _d(x):
+        return x.date().isoformat() if hasattr(x, "date") else str(x)[:10]
+
+    return {
+        "symbol": "SPY",
+        "return_pct": (last_close - first_close) / first_close * 100,
+        "period": f"{_d(rows[0][0])}..{_d(rows[-1][0])}",
+    }
 
 
 class BacktestRequest(BaseModel):
@@ -67,8 +99,13 @@ def run_backtest(req: BacktestRequest, db: Session = Depends(get_db)):
         })
     bars_by_symbol = {s: pd.DataFrame(recs) for s, recs in by_symbol.items()}
 
+    bt_start = min(r.date for r in rows)
+    bt_end = max(r.date for r in rows)
+    benchmark = _spy_benchmark(db, bt_start, bt_end)
+
     result = run_daily_backtest(
-        req.strategy, bars_by_symbol, starting_cash=req.starting_cash
+        req.strategy, bars_by_symbol,
+        starting_cash=req.starting_cash, benchmark=benchmark,
     )
     result["symbols"] = symbols
     result["coverage"] = {

@@ -23,6 +23,8 @@ want to match the live qualified universe.
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 from datetime import date
 from typing import Any
 
@@ -82,6 +84,7 @@ def run_daily_backtest(
     *,
     starting_cash: float = 10_000.0,
     fundamentals: dict[str, Any] | None = None,
+    benchmark: dict | None = None,
     min_history: int = 30,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
@@ -124,6 +127,7 @@ def run_daily_backtest(
     context = MarketContext()  # neutral broad-market state
     equity_curve: list[dict] = []
     closed_all: list = []
+    exposure_days = 0
 
     for current_day in days:
         snapshot_data: dict[str, dict] = {}
@@ -155,15 +159,39 @@ def run_daily_backtest(
             px = snapshot_data.get(pos.symbol, {}).get("price")
             if px:
                 pos.market_price = px
+        if slot.account.positions:
+            exposure_days += 1
         equity_curve.append({
             "date": current_day.isoformat(),
             "equity": round(slot.account.total_equity, 2),
         })
 
-    return _summarize(slot, strategy_name, starting_cash, equity_curve, closed_all)
+    return _summarize(
+        slot, strategy_name, starting_cash, equity_curve, closed_all,
+        exposure_days=exposure_days, benchmark=benchmark,
+    )
 
 
-def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades) -> dict:
+def _sharpe(equity: list[float]) -> float | None:
+    """Annualised Sharpe of daily equity returns (rf=0), ~252 trading days."""
+    rets = [equity[i] / equity[i - 1] - 1 for i in range(1, len(equity)) if equity[i - 1] > 0]
+    if len(rets) < 2:
+        return None
+    sd = statistics.pstdev(rets)
+    if sd == 0:
+        return None
+    return round(statistics.mean(rets) / sd * math.sqrt(252), 2)
+
+
+def _cagr(start: float, end: float, n_days: int) -> float | None:
+    years = n_days / 252.0
+    if years <= 0 or start <= 0 or end <= 0:
+        return None
+    return round(((end / start) ** (1 / years) - 1) * 100, 2)
+
+
+def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades,
+               *, exposure_days: int = 0, benchmark: dict | None = None) -> dict:
     closed = [
         {
             "symbol": t.symbol,
@@ -186,7 +214,37 @@ def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades) 
 
     final_equity = round(slot.account.total_equity, 2)
     wins = [t for t in closed if (t["pnl_dollars"] or 0) > 0]
+    losses = [t for t in closed if (t["pnl_dollars"] or 0) <= 0]
     eq_vals = [p["equity"] for p in equity_curve] or [starting_cash]
+    n_days = len(equity_curve)
+
+    gross_profit = sum(t["pnl_dollars"] or 0 for t in wins)
+    gross_loss = abs(sum(t["pnl_dollars"] or 0 for t in losses))
+    return_pct = round((final_equity - starting_cash) / starting_cash * 100, 2) if starting_cash else 0.0
+
+    stats = {
+        "return_pct": return_pct,
+        "cagr_pct": _cagr(starting_cash, final_equity, n_days),
+        "sharpe": _sharpe(eq_vals),
+        "max_drawdown_pct": round(_max_drawdown(eq_vals) * 100, 2),
+        "num_closed_trades": len(closed),
+        "num_open_positions": len(open_positions),
+        "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else None,
+        "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else None,
+        "avg_win": round(gross_profit / len(wins), 2) if wins else None,
+        "avg_loss": round(sum(t["pnl_dollars"] or 0 for t in losses) / len(losses), 2) if losses else None,
+        "exposure_pct": round(exposure_days / n_days * 100, 1) if n_days else 0.0,
+        "realized_pnl": round(slot.account.realized_pnl, 2),
+        "days": n_days,
+    }
+
+    # Benchmark (e.g., SPY buy-hold over the overlapping window)
+    if benchmark and benchmark.get("return_pct") is not None:
+        stats["benchmark_symbol"] = benchmark.get("symbol")
+        stats["benchmark_return_pct"] = round(benchmark["return_pct"], 2)
+        stats["benchmark_period"] = benchmark.get("period")
+        stats["excess_return_pct"] = round(return_pct - benchmark["return_pct"], 2)
+
     return {
         "strategy": strategy_name,
         "starting_cash": starting_cash,
@@ -194,14 +252,5 @@ def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades) 
         "equity_curve": equity_curve,
         "trades": closed,
         "open_positions": open_positions,
-        "stats": {
-            "return_pct": round((final_equity - starting_cash) / starting_cash * 100, 2)
-            if starting_cash else 0.0,
-            "num_closed_trades": len(closed),
-            "num_open_positions": len(open_positions),
-            "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else None,
-            "max_drawdown_pct": round(_max_drawdown(eq_vals) * 100, 2),
-            "realized_pnl": round(slot.account.realized_pnl, 2),
-            "days": len(equity_curve),
-        },
+        "stats": stats,
     }
