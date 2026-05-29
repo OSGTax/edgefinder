@@ -290,8 +290,26 @@ async function loadMarketOverview() {
   if (!row) return;
 
   try {
-    // API returns { dates: [...], indices: { SPY: [cumPct, ...], ... } }
-    const data = await api('/api/benchmarks/comparison?days=5');
+    // Indices from benchmarks; regime/VIX/sectors from the captured snapshots.
+    const [data, regime] = await Promise.all([
+      api('/api/benchmarks/comparison?days=5'),
+      api('/api/market/regime?limit=1').catch(() => null),
+    ]);
+    const latest = regime && regime.latest;
+
+    // Regime badge in the card header
+    const badge = document.getElementById('market-regime-badge');
+    if (badge) {
+      if (latest && latest.regime) {
+        const r = String(latest.regime).toLowerCase();
+        const cls = r.includes('bull') ? 'text-positive'
+                  : r.includes('bear') ? 'text-negative' : 'text-secondary';
+        badge.innerHTML = `<span class="${cls}" style="text-transform:capitalize;font-weight:600;">${latest.regime}</span>`;
+      } else {
+        badge.innerHTML = '';
+      }
+    }
+
     if (!data || !data.indices) {
       row.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">Market data unavailable</div>';
       return;
@@ -300,7 +318,7 @@ async function loadMarketOverview() {
     const symbols = ['SPY', 'QQQ', 'IWM', 'DIA'];
     const dates = data.dates || [];
 
-    row.innerHTML = symbols.map(sym => {
+    let cells = symbols.map(sym => {
       const series = data.indices[sym];
       if (!series || !series.length) {
         return `<div class="stat-card" style="text-align:center;">
@@ -325,6 +343,32 @@ async function loadMarketOverview() {
         <div class="stat-sub text-secondary">${latestPct >= 0 ? '+' : ''}${latestPct.toFixed(2)}% (5d)</div>
       </div>`;
     }).join('');
+
+    // 5th cell: VIX from the latest captured market snapshot
+    const vix = latest && latest.vix != null ? Number(latest.vix) : null;
+    cells += `<div class="stat-card" style="text-align:center;">
+      <div class="stat-label">VIX</div>
+      <div class="stat-value" style="font-size:18px;">${vix != null ? vix.toFixed(2) : '&mdash;'}</div>
+      <div class="stat-sub text-secondary">volatility</div>
+    </div>`;
+    row.innerHTML = cells;
+
+    // Sector performance strip (best → worst)
+    const strip = document.getElementById('sector-strip');
+    if (strip) {
+      const sectors = latest && latest.sector_performance;
+      if (sectors && Object.keys(sectors).length) {
+        strip.innerHTML = Object.entries(sectors)
+          .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))
+          .map(([name, pct]) => {
+            const p = Number(pct) || 0;
+            const cls = p >= 0 ? 'text-positive' : 'text-negative';
+            return `<span style="padding:3px 8px;border:1px solid #1a2332;border-radius:4px;font-size:11px;">${name} <span class="${cls}">${p >= 0 ? '+' : ''}${p.toFixed(2)}%</span></span>`;
+          }).join('');
+      } else {
+        strip.innerHTML = '';
+      }
+    }
 
   } catch (e) {
     console.error('Failed to load market overview:', e);

@@ -85,11 +85,15 @@
 
 <!-- Market Overview -->
 <div class="card mb-20">
-  <div class="card-header">Market Overview</div>
+  <div class="card-header">
+    <span>Market Overview</span>
+    <span class="right" id="market-regime-badge"></span>
+  </div>
   <div class="card-body">
     <div class="stats-grid" id="market-row" style="grid-template-columns:repeat(5,1fr);">
       <!-- Filled by JS -->
     </div>
+    <div id="sector-strip" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;"></div>
   </div>
 </div>
 

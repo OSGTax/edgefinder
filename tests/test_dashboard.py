@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from edgefinder.core.models import Direction, Trade, TradeStatus, TradeType
 from edgefinder.db.models import (
-    IndexDaily, ManualInjection, StrategyAccount,
-    StrategySnapshot, Ticker, TradeRecord,
+    IndexDaily, ManualInjection, MarketSnapshotRecord, StrategyAccount,
+    StrategySnapshot, Ticker, TradeContext, TradeRecord,
 )
 
 
@@ -252,6 +252,73 @@ class TestLiveAccountMarking:
         assert all(isinstance(t, int) for t in times)        # epoch seconds
         assert times == sorted(times)                         # ascending
         assert len(set(times)) == len(times) == 2             # not collapsed by date
+
+
+def _snap(ts, *, regime="bull", vix=15.0, spy=500.0, spy_chg=0.5, sectors=None):
+    return MarketSnapshotRecord(
+        timestamp=ts, market_regime=regime, vix_level=vix,
+        spy_price=spy, spy_change_pct=spy_chg,
+        qqq_price=400.0, qqq_change_pct=0.6,
+        iwm_price=200.0, iwm_change_pct=-0.1,
+        dia_price=380.0, dia_change_pct=0.3,
+        sector_performance=sectors, advance_decline_ratio=1.8,
+    )
+
+
+class TestMarketRegimeAPI:
+    def test_regime_returns_latest_and_ordered_history(self, client, db_session):
+        from datetime import datetime, timedelta, timezone
+        base = datetime.now(timezone.utc) - timedelta(hours=3)
+        db_session.add(_snap(base, regime="sideways", vix=20.0))
+        db_session.add(_snap(base + timedelta(hours=1), regime="bear", vix=28.0))
+        db_session.add(_snap(base + timedelta(hours=2), regime="bull", vix=14.0,
+                             sectors={"XLK": 1.2, "XLE": -0.4}))
+        db_session.commit()
+
+        data = client.get("/api/market/regime").json()
+        # latest = newest snapshot
+        assert data["latest"]["regime"] == "bull"
+        assert data["latest"]["vix"] == 14.0
+        assert data["latest"]["sector_performance"] == {"XLK": 1.2, "XLE": -0.4}
+        assert data["latest"]["indices"]["SPY"]["change_pct"] == 0.5
+        # history oldest -> newest
+        vix_series = [h["vix"] for h in data["history"]]
+        assert vix_series == [20.0, 28.0, 14.0]
+
+    def test_regime_empty(self, client):
+        data = client.get("/api/market/regime").json()
+        assert data["latest"] is None
+        assert data["history"] == []
+
+    def test_regime_at_trade_uses_snapshot_at_or_before_entry(self, client, db_session):
+        from datetime import datetime, timedelta, timezone
+        entry = datetime.now(timezone.utc)
+        # A snapshot just before entry (the regime the trade was taken in)...
+        db_session.add(_snap(entry - timedelta(minutes=2), regime="bear", vix=30.0))
+        # ...and one after entry that must NOT be chosen.
+        db_session.add(_snap(entry + timedelta(minutes=10), regime="bull", vix=12.0))
+        db_session.add(TradeRecord(
+            trade_id="trade-x", strategy_name="coward", symbol="DBC",
+            direction="LONG", trade_type="SWING", entry_price=24.0, shares=10,
+            stop_loss=22.0, target=28.0, confidence=60.0,
+            entry_time=entry, status="OPEN",
+        ))
+        db_session.commit()  # parent must exist before TradeContext FK
+        db_session.add(TradeContext(
+            trade_id="trade-x",
+            sector_prices={"XLE": 0.9},
+            short_interest={"pct_float": 3.2},
+        ))
+        db_session.commit()
+
+        data = client.get("/api/market/regime/trade/trade-x").json()
+        assert data["symbol"] == "DBC"
+        assert data["regime"]["regime"] == "bear"      # at-or-before entry, not the later bull
+        assert data["regime"]["vix"] == 30.0
+        assert data["context"]["short_interest"] == {"pct_float": 3.2}
+
+    def test_regime_at_trade_404(self, client):
+        assert client.get("/api/market/regime/trade/nope").status_code == 404
 
 
 def test_write_equity_snapshots_persists_timeseries(db_session, monkeypatch):
