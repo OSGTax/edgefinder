@@ -26,7 +26,7 @@ import logging
 import math
 import statistics
 from datetime import date
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
@@ -186,6 +186,7 @@ def run_daily_backtest(
     starting_cash: float = 10_000.0,
     fundamentals: dict[str, Any] | None = None,
     benchmark: dict | None = None,
+    progress_cb: Callable[[dict], None] | None = None,
     min_history: int = 30,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
@@ -215,7 +216,8 @@ def run_daily_backtest(
     # (avoids O(days^2) boolean filtering).
     per_sym: dict[str, dict] = {}
     all_days: set[date] = set()
-    for sym, df in bars_by_symbol.items():
+    n_symbols = len(bars_by_symbol)
+    for i, (sym, df) in enumerate(bars_by_symbol.items()):
         d = df.sort_values("date").reset_index(drop=True)
         ohlcv = d[_OHLCV].reset_index(drop=True)
         per_sym[sym] = {
@@ -227,6 +229,8 @@ def run_daily_backtest(
             "ptr": 0,
         }
         all_days.update(d["date"])
+        if progress_cb and (i % 50 == 0 or i == n_symbols - 1):
+            progress_cb({"phase": "prepare", "done": i + 1, "total": n_symbols})
     days = sorted(all_days)
 
     context = MarketContext()  # neutral broad-market state
@@ -234,7 +238,10 @@ def run_daily_backtest(
     closed_all: list = []
     exposure_days = 0
 
-    for current_day in days:
+    n_days = len(days)
+    for day_idx, current_day in enumerate(days):
+        if progress_cb and (day_idx % 25 == 0 or day_idx == n_days - 1):
+            progress_cb({"phase": "simulate", "done": day_idx + 1, "total": n_days})
         snapshot_data: dict[str, dict] = {}
         bt_snaps: dict[str, IndicatorSnapshot] = {}
         bt_hist: dict[str, IndicatorHistory] = {}

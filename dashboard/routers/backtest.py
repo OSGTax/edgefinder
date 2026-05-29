@@ -16,9 +16,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from dashboard.dependencies import get_db
+from dashboard.dependencies import _get_session_factory, get_db
 from edgefinder.backtest.daily_backtest import run_daily_backtest
-from edgefinder.db.models import DailyBar, IndexDaily
+from edgefinder.backtest.jobs import MAX_UNIVERSE, job_manager, spy_benchmark
+from edgefinder.db.models import DailyBar
 from edgefinder.strategies.base import StrategyRegistry
 
 logger = logging.getLogger(__name__)
@@ -26,38 +27,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_SYMBOLS = 25
-
-
-def _spy_benchmark(db: Session, start, end) -> dict | None:
-    """SPY buy-hold return over [start, end], preferring full-range daily_bars
-    and falling back to index_daily (shorter history). Aligned to whatever SPY
-    data overlaps the backtest window."""
-    rows = (
-        db.query(DailyBar.date, DailyBar.close)
-        .filter(DailyBar.symbol == "SPY", DailyBar.date >= start, DailyBar.date <= end)
-        .order_by(DailyBar.date).all()
-    )
-    if not rows:
-        rows = (
-            db.query(IndexDaily.date, IndexDaily.close)
-            .filter(IndexDaily.symbol == "SPY", IndexDaily.date >= start, IndexDaily.date <= end)
-            .order_by(IndexDaily.date).all()
-        )
-    rows = [(d, c) for d, c in rows if c]
-    if len(rows) < 2:
-        return None
-    first_close, last_close = rows[0][1], rows[-1][1]
-    if first_close <= 0:
-        return None
-
-    def _d(x):
-        return x.date().isoformat() if hasattr(x, "date") else str(x)[:10]
-
-    return {
-        "symbol": "SPY",
-        "return_pct": (last_close - first_close) / first_close * 100,
-        "period": f"{_d(rows[0][0])}..{_d(rows[-1][0])}",
-    }
 
 
 class BacktestRequest(BaseModel):
@@ -101,7 +70,7 @@ def run_backtest(req: BacktestRequest, db: Session = Depends(get_db)):
 
     bt_start = min(r.date for r in rows)
     bt_end = max(r.date for r in rows)
-    benchmark = _spy_benchmark(db, bt_start, bt_end)
+    benchmark = spy_benchmark(db, bt_start, bt_end)
 
     result = run_daily_backtest(
         req.strategy, bars_by_symbol,
@@ -114,3 +83,43 @@ def run_backtest(req: BacktestRequest, db: Session = Depends(get_db)):
         for s, df in bars_by_symbol.items()
     }
     return result
+
+
+class JobRequest(BaseModel):
+    strategy: str
+    mode: str = "symbols"          # symbols | top | full
+    symbols: list[str] = Field(default_factory=list)
+    top_n: int = 100
+    start: date | None = None
+    end: date | None = None
+    starting_cash: float = 10_000.0
+
+
+@router.post("/jobs")
+def start_backtest_job(req: JobRequest):
+    """Kick off a universe-scale backtest on the background worker. Returns a
+    job id to poll — full-universe runs take minutes, so they can't be sync."""
+    if req.strategy not in StrategyRegistry.list_names():
+        raise HTTPException(404, f"unknown strategy {req.strategy!r}")
+    if req.mode not in ("symbols", "top", "full"):
+        raise HTTPException(422, "mode must be one of: symbols, top, full")
+    if req.mode == "symbols" and not [s for s in req.symbols if s.strip()]:
+        raise HTTPException(422, "provide at least one symbol for mode=symbols")
+    if req.mode == "top" and not (1 <= req.top_n <= MAX_UNIVERSE):
+        raise HTTPException(422, f"top_n must be between 1 and {MAX_UNIVERSE}")
+
+    job = job_manager.submit(req.model_dump(), _get_session_factory())
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get("/jobs")
+def list_backtest_jobs():
+    return [j.to_dict(include_result=False) for j in job_manager.list_recent()]
+
+
+@router.get("/jobs/{job_id}")
+def get_backtest_job(job_id: str):
+    job = job_manager.get(job_id)
+    if job is None:
+        raise HTTPException(404, "unknown job id (jobs are in-memory and reset on restart)")
+    return job.to_dict(include_result=(job.status == "done"))

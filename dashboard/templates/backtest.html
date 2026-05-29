@@ -8,11 +8,23 @@
     <form id="bt-form" style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;">
       <div style="display:flex;flex-direction:column;gap:4px;">
         <label class="stat-label">Strategy</label>
-        <select id="bt-strategy" class="search-input" style="min-width:140px;"></select>
+        <select id="bt-strategy" class="search-input" style="min-width:130px;"></select>
       </div>
-      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:220px;">
-        <label class="stat-label">Symbols (comma-separated, max 25)</label>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label class="stat-label">Universe</label>
+        <select id="bt-mode" class="search-input" style="min-width:150px;">
+          <option value="symbols">Symbols (list)</option>
+          <option value="top">Top-N most liquid</option>
+          <option value="full">Full universe</option>
+        </select>
+      </div>
+      <div id="bt-symbols-wrap" style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:220px;">
+        <label class="stat-label">Symbols (comma-separated)</label>
         <input id="bt-symbols" class="search-input" value="AAPL,NVDA,TSLA">
+      </div>
+      <div id="bt-topn-wrap" style="display:none;flex-direction:column;gap:4px;">
+        <label class="stat-label">Top N (by $-volume)</label>
+        <input id="bt-topn" type="number" class="search-input" value="100" min="1" max="4000" style="width:110px;">
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;">
         <label class="stat-label">Start</label>
@@ -26,12 +38,13 @@
         <label class="stat-label">Starting cash</label>
         <input id="bt-cash" type="number" class="search-input" value="10000" style="width:120px;">
       </div>
-      <button class="btn" type="submit">Run backtest</button>
+      <button class="btn" type="submit" id="bt-run">Run backtest</button>
     </form>
     <div class="text-secondary" style="font-size:12px;margin-top:10px;">
       Replays daily bars from the flat-file backfill through the <strong>live</strong> strategy,
       executor, and risk engine (20% stop, profit target, position/concentration caps) — so
       results match live trade logic. Fundamental filter is off (no look-ahead bias).
+      Full-universe runs take a few minutes and execute on a background worker.
     </div>
   </div>
 </div>

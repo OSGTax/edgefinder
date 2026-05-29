@@ -390,6 +390,75 @@ class TestBacktestAPI:
             "strategy": "coward", "symbols": ["ZZZZ"]}).status_code == 404
 
 
+class TestBacktestJobs:
+    def _seed_multi(self, db_session):
+        from datetime import date, timedelta
+        from edgefinder.db.models import DailyBar
+        prices = [120.0]
+        for _ in range(40):
+            prices.append(prices[-1] * 0.988)   # decline -> oversold entry
+        for _ in range(25):
+            prices.append(prices[-1] * 1.02)    # rally -> exit
+        start = date(2024, 1, 1)
+        for i, p in enumerate(prices):
+            db_session.add(DailyBar(symbol="TEST", date=start + timedelta(days=i),
+                open=p, high=p * 1.01, low=p * 0.99, close=p, volume=1_000_000.0))
+        # Two flat symbols with different dollar-volume for top-N ordering.
+        for sym, vol in (("HIGHV", 5_000_000.0), ("LOWV", 100_000.0)):
+            for i in range(40):
+                db_session.add(DailyBar(symbol=sym, date=start + timedelta(days=i),
+                    open=50.0, high=50.5, low=49.5, close=50.0, volume=vol))
+        db_session.commit()
+
+    def test_resolve_universe_modes(self, db_session):
+        from edgefinder.backtest.jobs import resolve_universe
+        self._seed_multi(db_session)
+        assert resolve_universe(db_session, "symbols", ["test", "msft"], 0) == ["MSFT", "TEST"]
+        assert set(resolve_universe(db_session, "full", [], 0)) == {"TEST", "HIGHV", "LOWV"}
+        assert resolve_universe(db_session, "top", [], 1) == ["HIGHV"]  # top dollar-volume
+
+    def test_execute_backtest_direct(self, db_session):
+        from edgefinder.backtest.jobs import BacktestJob, _execute_backtest
+        self._seed_multi(db_session)
+        job = BacktestJob(id="t", params={
+            "strategy": "coward", "mode": "full", "starting_cash": 10_000.0})
+        result = _execute_backtest(job, db_session)
+        assert result["num_symbols"] == 3
+        assert result["universe_mode"] == "full"
+        assert result["stats"]["num_closed_trades"] >= 1
+        assert "sharpe" in result["stats"]
+        assert job.progress  # progress was reported during the run
+
+    def test_start_job_validation(self, client):
+        assert client.post("/api/backtest/jobs", json={
+            "strategy": "nope", "mode": "full"}).status_code == 404
+        assert client.post("/api/backtest/jobs", json={
+            "strategy": "coward", "mode": "bogus"}).status_code == 422
+        assert client.post("/api/backtest/jobs", json={
+            "strategy": "coward", "mode": "symbols", "symbols": []}).status_code == 422
+        assert client.post("/api/backtest/jobs", json={
+            "strategy": "coward", "mode": "top", "top_n": 0}).status_code == 422
+
+    def test_start_job_and_poll(self, client, monkeypatch):
+        import dashboard.routers.backtest as bt
+        from edgefinder.backtest.jobs import BacktestJob
+        captured = {}
+        fake = BacktestJob(id="abc123", params={})
+
+        def fake_submit(params, factory):
+            captured["params"] = params
+            return fake
+
+        monkeypatch.setattr(bt.job_manager, "submit", fake_submit)
+        r = client.post("/api/backtest/jobs", json={"strategy": "coward", "mode": "full"})
+        assert r.status_code == 200
+        assert r.json()["job_id"] == "abc123"
+        assert captured["params"]["mode"] == "full"
+
+    def test_get_unknown_job(self, client):
+        assert client.get("/api/backtest/jobs/does-not-exist").status_code == 404
+
+
 def test_write_equity_snapshots_persists_timeseries(db_session, monkeypatch):
     """The intraday monitor and daily job share this writer — one row/strategy."""
     import dashboard.services as services

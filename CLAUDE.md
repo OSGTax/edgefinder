@@ -142,6 +142,10 @@ python -m pytest tests/ -v -m "not integration"
 | GET | `/api/sentiment/history/{symbol}` | Sentiment time series |
 | GET | `/api/benchmarks/comparison?days=90` | Strategy vs index data |
 | POST | `/api/benchmarks/collect` | Collect daily benchmark data |
+| POST | `/api/backtest` | Sync backtest over explicit symbols (≤25) |
+| POST | `/api/backtest/jobs` | Start a universe-scale backtest (symbols/top-N/full) on the background worker |
+| GET | `/api/backtest/jobs` | List recent backtest jobs |
+| GET | `/api/backtest/jobs/{id}` | Poll a backtest job (status, progress, result) |
 | POST | `/api/inject` | Inject ticker for evaluation |
 | GET | `/api/inject` | List active injections |
 | DELETE | `/api/inject/{id}` | Remove injection |

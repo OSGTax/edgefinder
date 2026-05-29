@@ -21,11 +21,28 @@
     return '$' + Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
 
+  // Show/hide the symbols vs top-N inputs based on the universe mode.
+  const modeSel = document.getElementById('bt-mode');
+  function syncMode() {
+    const m = modeSel.value;
+    document.getElementById('bt-symbols-wrap').style.display = (m === 'symbols') ? 'flex' : 'none';
+    document.getElementById('bt-topn-wrap').style.display = (m === 'top') ? 'flex' : 'none';
+  }
+  modeSel.addEventListener('change', syncMode);
+  syncMode();
+
+  let pollTimer = null;
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+
+    const mode = modeSel.value;
     const body = {
       strategy: document.getElementById('bt-strategy').value,
+      mode,
       symbols: document.getElementById('bt-symbols').value.split(',').map(s => s.trim()).filter(Boolean),
+      top_n: parseInt(document.getElementById('bt-topn').value, 10) || 100,
       starting_cash: parseFloat(document.getElementById('bt-cash').value) || 10000,
     };
     const start = document.getElementById('bt-start').value;
@@ -33,9 +50,9 @@
     if (start) body.start = start;
     if (end) body.end = end;
 
-    results.innerHTML = '<div class="empty-state">Running backtest… (replaying the live engine over daily bars)</div>';
+    renderProgress({ status: 'queued', progress: {} });
     try {
-      const r = await fetch('/api/backtest', {
+      const r = await fetch('/api/backtest/jobs', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -44,17 +61,67 @@
         results.innerHTML = `<div class="empty-state"><div class="icon">&#9888;</div>${err.detail || ('HTTP ' + r.status)}</div>`;
         return;
       }
-      renderResult(await r.json());
+      pollJob((await r.json()).job_id);
     } catch (e) {
       console.error(e);
       results.innerHTML = '<div class="empty-state">Backtest request failed.</div>';
     }
   });
 
+  async function pollJob(jobId) {
+    try {
+      const job = await api('/api/backtest/jobs/' + jobId);
+      if (job.status === 'done') {
+        renderResult(job.result);
+        return;
+      }
+      if (job.status === 'error') {
+        results.innerHTML = `<div class="empty-state"><div class="icon">&#9888;</div>Backtest failed: ${job.error || 'unknown error'}</div>`;
+        return;
+      }
+      renderProgress(job);
+      pollTimer = setTimeout(() => pollJob(jobId), 1200);
+    } catch (e) {
+      console.error(e);
+      results.innerHTML = '<div class="empty-state">Lost contact with the backtest job.</div>';
+    }
+  }
+
+  function renderProgress(job) {
+    const p = job.progress || {};
+    const phaseLabels = { loading: 'Loading bars', prepare: 'Preparing indicators', simulate: 'Simulating days' };
+    let label = phaseLabels[p.phase] || (job.status === 'queued' ? 'Queued…' : 'Starting…');
+    let pct = 0, detail = '';
+    if (p.total) {
+      pct = Math.min(100, Math.round((p.done / p.total) * 100));
+      detail = `${p.done.toLocaleString()} / ${p.total.toLocaleString()}`;
+    }
+    const sym = job.num_symbols ? `${job.num_symbols.toLocaleString()} symbols · ` : '';
+    results.innerHTML = `
+      <div class="card"><div class="card-body">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+          <span class="stat-label">${label}</span>
+          <span class="text-secondary" style="font-size:12px;">${sym}${detail}</span>
+        </div>
+        <div style="background:#1a2332;border-radius:6px;height:10px;overflow:hidden;">
+          <div style="height:100%;width:${pct}%;background:#00d4a1;transition:width .3s;"></div>
+        </div>
+        <div class="text-secondary" style="font-size:12px;margin-top:8px;">
+          Replaying the live engine over daily bars — full-universe runs take a few minutes.
+        </div>
+      </div></div>`;
+  }
+
   function renderResult(d) {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
     const s = d.stats || {};
     const retCls = (s.return_pct >= 0) ? 'text-positive' : 'text-negative';
     const num = (v, suf = '') => (v == null ? '&mdash;' : v + suf);
+
+    const nSym = d.num_symbols || (d.symbols || []).length;
+    const uni = d.universe_mode === 'full' ? 'full universe'
+      : d.universe_mode === 'top' ? `top ${nSym} liquid` : `${nSym} symbol${nSym === 1 ? '' : 's'}`;
+    const benchPeriod = s.benchmark_period ? ` · benchmark ${s.benchmark_period}` : '';
 
     // Benchmark sub-line on the Return card
     let benchSub = `${fmtUsd(d.starting_cash)} &rarr; ${fmtUsd(d.final_equity)}`;
@@ -75,7 +142,16 @@
       { label: 'Exposure', value: num(s.exposure_pct, '%'), sub: 'days holding ≥1 position' },
     ];
 
+    const shown = (d.trades || []).length;
+    const total = d.trades_total || shown;
+    const tradesHdr = total > shown
+      ? `Closed Trades — top ${shown} of ${total.toLocaleString()} by P&amp;L`
+      : `Closed Trades (${shown})`;
+
     results.innerHTML = `
+      <div class="text-secondary" style="font-size:12px;margin-bottom:12px;">
+        ${d.strategy} · ${uni}${benchPeriod}
+      </div>
       <div class="stats-grid grid-4 mb-20">
         ${cards.map(c => `<div class="stat-card">
           <div class="stat-label">${c.label}</div>
@@ -88,7 +164,7 @@
         <div class="card-body"><div id="bt-chart" style="width:100%;height:300px;"></div></div>
       </div>
       <div class="card mb-20">
-        <div class="card-header">Closed Trades (${(d.trades || []).length})</div>
+        <div class="card-header">${tradesHdr}</div>
         <div class="card-body" id="bt-trades"></div>
       </div>`;
 
