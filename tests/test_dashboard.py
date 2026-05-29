@@ -230,6 +230,49 @@ class TestLiveAccountMarking:
         assert series[-1]["date"] == today
         assert series[-1]["total_equity"] == 10200.0
 
+    def test_equity_curve_keeps_intraday_points_distinct(self, client, db_session, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+        import dashboard.routers.strategies as strat
+        # Two snapshots on the SAME day, 5 min apart — must stay distinct on
+        # the time axis (the old date-only key would have collapsed them).
+        base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=2)
+        for i in range(2):
+            db_session.add(StrategySnapshot(
+                strategy_name="coward",
+                timestamp=base + timedelta(minutes=5 * i),
+                cash=10000.0, positions_value=0.0, total_equity=10000.0 + i,
+                drawdown_pct=0.0, total_return_pct=0.0,
+            ))
+        db_session.commit()
+        monkeypatch.setattr(strat, "get_arena", lambda: None)  # no live tail
+
+        resp = client.get("/api/strategies/equity-curve")
+        pts = resp.json()["coward"]
+        times = [p["time"] for p in pts]
+        assert all(isinstance(t, int) for t in times)        # epoch seconds
+        assert times == sorted(times)                         # ascending
+        assert len(set(times)) == len(times) == 2             # not collapsed by date
+
+
+def test_write_equity_snapshots_persists_timeseries(db_session, monkeypatch):
+    """The intraday monitor and daily job share this writer — one row/strategy."""
+    import dashboard.services as services
+    from unittest.mock import MagicMock
+    arena = MagicMock()
+    arena.get_all_accounts.return_value = {
+        "coward": {"cash": 5000.0, "open_positions_value": 5200.0,
+                   "total_equity": 10200.0, "drawdown_pct": 0.0},
+    }
+    monkeypatch.setattr(services, "_arena", arena)
+
+    n = services._write_equity_snapshots(db_session)
+    db_session.commit()
+    assert n == 1
+    rows = db_session.query(StrategySnapshot).filter_by(strategy_name="coward").all()
+    assert len(rows) == 1
+    assert rows[0].total_equity == 10200.0
+    assert rows[0].positions_value == 5200.0
+
 
 class TestResearchAPI:
     def test_search_empty(self, client):

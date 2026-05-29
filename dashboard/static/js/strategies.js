@@ -357,21 +357,23 @@ async function loadDetailEquityCurve(strategyName, days) {
     const data = await api('/api/strategies/equity-curve?days=' + days);
     const series = (data && data[strategyName]) ? data[strategyName] : [];
 
-    // Build chart data — one point per date
+    // Build chart data on an intraday time axis (UTC epoch seconds), so
+    // multiple snapshots within a day render as intraday shape.
     let equityData = series
-      .filter(pt => pt.date && pt.total_equity != null)
-      .map(pt => ({ time: pt.date, value: pt.total_equity }));
+      .filter(pt => pt.time != null && pt.total_equity != null)
+      .map(pt => ({ time: pt.time, value: pt.total_equity }));
 
-    // Deduplicate by date (keep last)
-    const byDate = {};
-    for (const pt of equityData) byDate[pt.time] = pt.value;
-    equityData = Object.keys(byDate).sort().map(d => ({ time: d, value: byDate[d] }));
+    // Deduplicate by timestamp (keep last), ascending
+    const byTime = {};
+    for (const pt of equityData) byTime[pt.time] = pt.value;
+    equityData = Object.keys(byTime)
+      .map(Number).sort((a, b) => a - b)
+      .map(t => ({ time: t, value: byTime[t] }));
 
     if (equityData.length === 0) {
-      // Flat starting-capital line
-      const today = new Date().toISOString().slice(0, 10);
+      // Flat starting-capital line at "now"
       const startingCapital = (_accounts.find(a => a.strategy_name === strategyName) || {}).starting_capital || 5000;
-      equityData = [{ time: today, value: startingCapital }];
+      equityData = [{ time: Math.floor(Date.now() / 1000), value: startingCapital }];
     }
 
     if (!_detailChart) {
@@ -383,7 +385,7 @@ async function loadDetailEquityCurve(strategyName, days) {
           vertLines: { color: '#1a2332' },
           horzLines: { color: '#1a2332' },
         },
-        timeScale: { borderColor: '#1a2332' },
+        timeScale: { borderColor: '#1a2332', timeVisible: true, secondsVisible: false },
         rightPriceScale: { borderColor: '#1a2332' },
         crosshair: {
           horzLine: { color: '#2a3a4a', labelBackgroundColor: '#162030' },

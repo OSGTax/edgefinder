@@ -985,13 +985,27 @@ def _signal_check_job() -> None:
 
 
 def _position_monitor_job() -> None:
-    """Called every 5 min — persist account state."""
+    """Called every 5 min during market hours — persist current account state
+    and record an intraday equity snapshot so the curve shows intraday shape."""
     if not _arena:
         return
     try:
         _persist_account_state()
     except Exception:
         logger.exception("Position monitor persist failed")
+
+    if not _session_factory:
+        return
+    session = _session_factory()
+    try:
+        n = _write_equity_snapshots(session)
+        session.commit()
+        logger.debug("Intraday equity snapshot: %d strategies", n)
+    except Exception:
+        logger.exception("Intraday snapshot failed")
+        session.rollback()
+    finally:
+        session.close()
 
 
 def _nightly_scan_job() -> None:
@@ -1109,30 +1123,43 @@ def _dividend_split_job() -> None:
         logger.exception("Dividend/split accumulation job failed")
 
 
+def _write_equity_snapshots(session, now=None) -> int:
+    """Append one StrategySnapshot per strategy — the equity-curve time series.
+
+    Marked to the same mark-to-market ``total_equity`` the accounts use
+    (cash + Σ shares×market_price, refreshed every 5 min by the intraday
+    cycle). Shared by the daily close snapshot and the intraday monitor so
+    the curve shows real intraday shape, not just daily closes.
+    """
+    if not _arena:
+        return 0
+    now = now or datetime.now(timezone.utc)
+    accounts = _arena.get_all_accounts()
+    for name, acct in accounts.items():
+        session.add(StrategySnapshot(
+            strategy_name=name,
+            timestamp=now,
+            cash=acct["cash"],
+            positions_value=acct["open_positions_value"],
+            total_equity=acct["total_equity"],
+            drawdown_pct=acct["drawdown_pct"],
+            total_return_pct=(
+                (acct["total_equity"] - settings.starting_capital)
+                / settings.starting_capital * 100
+            ),
+        ))
+    return len(accounts)
+
+
 def _snapshot_job() -> None:
-    """Called at 4:05 PM ET — persist strategy account snapshots for equity curves."""
+    """Called at 4:05 PM ET — persist the daily close strategy snapshots."""
     if not _arena:
         return
     session = _session_factory()
     try:
-        now = datetime.now(timezone.utc)
-        accounts = _arena.get_all_accounts()
-        for name, acct in accounts.items():
-            snapshot = StrategySnapshot(
-                strategy_name=name,
-                timestamp=now,
-                cash=acct["cash"],
-                positions_value=acct["open_positions_value"],
-                total_equity=acct["total_equity"],
-                drawdown_pct=acct["drawdown_pct"],
-                total_return_pct=(
-                    (acct["total_equity"] - settings.starting_capital)
-                    / settings.starting_capital * 100
-                ),
-            )
-            session.add(snapshot)
+        n = _write_equity_snapshots(session)
         session.commit()
-        logger.info("Daily snapshots: %d strategies recorded", len(accounts))
+        logger.info("Daily snapshots: %d strategies recorded", n)
     except Exception:
         logger.exception("Snapshot job failed")
     finally:

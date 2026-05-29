@@ -99,25 +99,25 @@ async function loadEquityCurve(days = 90) {
     const data = await api('/api/strategies/equity-curve?days=' + days);
     if (!data) return;
 
-    // Aggregate all strategies per date
-    const dateMap = {};
+    // Aggregate all strategies per timestamp (UTC epoch seconds) so the
+    // total-equity curve shows intraday shape, not one point per day.
+    const timeMap = {};
     for (const [, series] of Object.entries(data)) {
       if (!Array.isArray(series)) continue;
       for (const pt of series) {
-        const d = pt.date;
-        if (!dateMap[d]) dateMap[d] = 0;
-        dateMap[d] += (pt.total_equity || pt.equity || 0);
+        const t = pt.time;
+        if (t == null) continue;
+        timeMap[t] = (timeMap[t] || 0) + (pt.total_equity || pt.equity || 0);
       }
     }
 
-    const equityData = Object.keys(dateMap)
-      .sort()
-      .map(d => ({ time: d, value: dateMap[d] }));
+    const equityData = Object.keys(timeMap)
+      .map(Number).sort((a, b) => a - b)
+      .map(t => ({ time: t, value: timeMap[t] }));
 
     if (equityData.length === 0) {
       // Show flat line at starting capital
-      const today = new Date().toISOString().slice(0, 10);
-      equityData.push({ time: today, value: STARTING_CAPITAL });
+      equityData.push({ time: Math.floor(Date.now() / 1000), value: STARTING_CAPITAL });
     }
 
     const container = document.getElementById('equity-chart');
@@ -131,7 +131,7 @@ async function loadEquityCurve(days = 90) {
           vertLines: { color: '#1a2332' },
           horzLines: { color: '#1a2332' },
         },
-        timeScale: { borderColor: '#1a2332' },
+        timeScale: { borderColor: '#1a2332', timeVisible: true, secondsVisible: false },
         rightPriceScale: { borderColor: '#1a2332' },
         crosshair: {
           horzLine: { color: '#2a3a4a', labelBackgroundColor: '#162030' },
@@ -348,17 +348,21 @@ async function loadComparisonChart(days = 90) {
         if (!Array.isArray(points) || points.length === 0) continue;
         const first = points[0].total_equity || points[0].equity || 0;
         if (first <= 0) continue;
-        series[strat] = points.map(p => ({
-          time: p.date,
-          value: ((( p.total_equity || p.equity || first) - first) / first) * 100,
-        }));
+        series[strat] = points
+          .filter(p => p.time != null)
+          .map(p => ({
+            time: p.time,
+            value: ((( p.total_equity || p.equity || first) - first) / first) * 100,
+          }));
       }
     }
 
-    // Add SPY from benchmarks
+    // Add SPY from benchmarks — convert daily date strings to UTC epoch
+    // seconds so the chart shares one time type with the intraday strategy
+    // series (lightweight-charts forbids mixing date strings and timestamps).
     if (benchData && benchData.indices && benchData.indices.SPY && benchData.dates) {
       series['SPY'] = benchData.dates.map((d, i) => ({
-        time: d,
+        time: Math.floor(Date.parse(d + 'T00:00:00Z') / 1000),
         value: benchData.indices.SPY[i] || 0,
       }));
     }
@@ -381,7 +385,7 @@ async function loadComparisonChart(days = 90) {
       height: 280,
       layout: { background: { color: getComputedStyle(document.body).getPropertyValue('--surface').trim() || '#111a25' }, textColor: '#6b8aab' },
       grid: { vertLines: { color: '#1a2332' }, horzLines: { color: '#1a2332' } },
-      timeScale: { borderColor: '#1a2332' },
+      timeScale: { borderColor: '#1a2332', timeVisible: true, secondsVisible: false },
       rightPriceScale: { borderColor: '#1a2332' },
     });
 

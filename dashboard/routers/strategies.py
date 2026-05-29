@@ -137,30 +137,41 @@ def equity_curve(
     q = q.order_by(StrategySnapshot.timestamp)
     snapshots = q.all()
 
+    def _epoch(ts) -> int | None:
+        # Stored timestamps are naive UTC; chart axis wants UTC epoch seconds
+        # so intraday points within a day stay distinct (not collapsed by date).
+        if not ts:
+            return None
+        return int(ts.replace(tzinfo=timezone.utc).timestamp())
+
     result: dict[str, list] = {}
     for s in snapshots:
         if s.strategy_name not in result:
             result[s.strategy_name] = []
         result[s.strategy_name].append({
+            "time": _epoch(s.timestamp),
             "date": s.timestamp.strftime("%Y-%m-%d") if s.timestamp else None,
             "total_equity": s.total_equity,
             "total_return_pct": s.total_return_pct,
         })
 
     # Append a live "now" point so the curve ends at the current market value
-    # (cash + securities at current price) instead of the last daily-close
-    # snapshot. Replaces today's snapshot point if one already exists so the
-    # per-date dedup keeps the live value and the aggregate isn't doubled.
+    # (cash + securities at current price) rather than the last persisted
+    # snapshot. Appended as a distinct timestamp; only replaces the last point
+    # if it lands in the same second (so the aggregate isn't doubled).
     live = _live_account_states()
     if live is not None:
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+        now_epoch = int(now.timestamp())
+        now_date = now.strftime("%Y-%m-%d")
         for acct in live:
             name = acct["strategy_name"]
             if strategy and name != strategy:
                 continue
             starting = acct.get("starting_capital") or 0
             point = {
-                "date": today_str,
+                "time": now_epoch,
+                "date": now_date,
                 "total_equity": acct["total_equity"],
                 "total_return_pct": (
                     round((acct["total_equity"] - starting) / starting * 100, 4)
@@ -168,7 +179,7 @@ def equity_curve(
                 ),
             }
             pts = result.setdefault(name, [])
-            if pts and pts[-1]["date"] == today_str:
+            if pts and pts[-1].get("time") == now_epoch:
                 pts[-1] = point
             else:
                 pts.append(point)
