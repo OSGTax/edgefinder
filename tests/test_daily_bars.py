@@ -49,3 +49,18 @@ def test_upsert_idempotent_and_updates():
 def test_upsert_empty_is_noop():
     engine = _engine()
     assert upsert_daily_bars(engine, []) == 0
+
+
+def test_load_universe_reads_tickers(tmp_path):
+    """--universe pulls the symbol list from the tickers table (sorted, upper, deduped)."""
+    from edgefinder.db.models import Ticker
+    from scripts.backfill_daily_bars import _load_universe
+
+    url = f"sqlite:///{tmp_path}/universe.db"
+    engine = get_engine(url=url)
+    Base.metadata.create_all(engine)
+    with sessionmaker(bind=engine)() as s:
+        s.add_all([Ticker(symbol="AAPL"), Ticker(symbol="nvda"), Ticker(symbol="MSFT")])
+        s.commit()
+
+    assert _load_universe(url) == ["AAPL", "MSFT", "NVDA"]

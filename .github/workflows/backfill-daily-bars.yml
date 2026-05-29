@@ -45,6 +45,10 @@ on:
         description: "Optional comma-separated symbol filter (blank = full market; scope it to bound DB size)"
         required: false
         default: ""
+      universe:
+        description: "Filter to the tracked tickers table (bounds DB size; ignore the symbols box)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -85,6 +89,9 @@ jobs:
           fi
           if [ -n "${{ inputs.symbols }}" ]; then
             ARGS="$ARGS --symbols ${{ inputs.symbols }}"
+          fi
+          if [ "${{ inputs.universe }}" = "true" ]; then
+            ARGS="$ARGS --universe"
           fi
           if [ "${{ inputs.execute }}" = "true" ]; then
             ARGS="$ARGS --execute"

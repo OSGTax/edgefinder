@@ -72,12 +72,27 @@ def _parse_day(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
+def _load_universe(db_url: str | None) -> list[str]:
+    """Symbols from the tickers table — used to bound the backfill (and DB size)
+    to the tracked universe instead of the full ~11k-ticker market each day."""
+    from sqlalchemy import select
+
+    from edgefinder.db.models import Ticker
+
+    engine = get_engine(url=db_url) if db_url else get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(select(Ticker.symbol)).scalars().all()
+    return sorted({s.upper() for s in rows if s})
+
+
 def main() -> int:
     configure_logging(level=logging.INFO)
     p = argparse.ArgumentParser(description="Backfill daily_bars from flat-files day_aggs")
     p.add_argument("--start", required=True, type=_parse_day, help="YYYY-MM-DD (inclusive)")
     p.add_argument("--end", required=True, type=_parse_day, help="YYYY-MM-DD (inclusive)")
     p.add_argument("--symbols", default=None, help="comma-separated symbol filter (default: all)")
+    p.add_argument("--universe", action="store_true",
+                   help="filter to symbols in the tickers table (bounds DB size to the tracked universe)")
     p.add_argument("--db-url", default=None, help="override DATABASE_URL / settings")
     p.add_argument("--limit-days", type=int, default=None, help="cap number of days processed")
     p.add_argument("--no-cache", action="store_true", help="bypass the on-disk download cache")
@@ -88,6 +103,12 @@ def main() -> int:
         p.error("--start must be on or before --end")
 
     symbols = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else None
+    if args.universe and not symbols:
+        symbols = _load_universe(args.db_url)
+        if not symbols:
+            p.error("--universe requested but the tickers table is empty")
+        logger.info("Universe filter: %d symbols from the tickers table", len(symbols))
+
     client = FlatFilesClient()
 
     days = client.available_days("day_aggs", args.start, args.end)
