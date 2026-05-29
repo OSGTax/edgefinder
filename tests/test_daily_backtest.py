@@ -58,6 +58,25 @@ def test_backtest_unknown_strategy_raises():
         run_daily_backtest("nope", {"TEST": _series([100.0] * 40)})
 
 
+def test_backtest_does_not_touch_global_event_bus():
+    """Backtest trades must never reach the live event bus (which persists to
+    the trades table) — that leak corrupted live account balances."""
+    from edgefinder.core.events import event_bus
+
+    seen = []
+    def _open(t): seen.append(("open", t))
+    def _close(t): seen.append(("close", t))
+    event_bus.subscribe("trade.opened", _open)
+    event_bus.subscribe("trade.closed", _close)
+    try:
+        result = run_daily_backtest("coward", {"TEST": _series(_decline_then_rally())})
+        assert result["stats"]["num_closed_trades"] >= 1  # trades really happened
+        assert seen == []                                  # but none leaked out
+    finally:
+        event_bus.unsubscribe("trade.opened", _open)
+        event_bus.unsubscribe("trade.closed", _close)
+
+
 def test_backtest_steady_uptrend_no_entry():
     # A steady uptrend keeps RSI high and price near the upper band, so
     # coward's oversold / BB-lower entries never fire -> no trades, flat equity.

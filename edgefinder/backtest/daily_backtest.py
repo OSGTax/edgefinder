@@ -28,6 +28,7 @@ from typing import Any
 
 import pandas as pd
 
+from edgefinder.core.events import EventBus
 from edgefinder.data.market_data import MarketContext
 from edgefinder.trading.arena import ArenaEngine
 
@@ -45,7 +46,14 @@ class _NullProvider:
 
 
 class BacktestArena(ArenaEngine):
-    """Arena with wall-clock coupling neutralised for historical replay."""
+    """Arena with wall-clock coupling neutralised for historical replay.
+
+    Uses a private, subscriber-less event bus so simulated trades are never
+    persisted to the live trades table or seen by any live handler.
+    """
+
+    def __init__(self, provider) -> None:
+        super().__init__(provider, event_bus_override=EventBus())
 
     @staticmethod
     def _minutes_since_market_open() -> float:

@@ -63,8 +63,12 @@ class StrategySlot:
 class ArenaEngine:
     """Orchestrates multiple strategies competing in isolated accounts."""
 
-    def __init__(self, provider: DataProvider) -> None:
+    def __init__(self, provider: DataProvider, event_bus_override=None) -> None:
         self._provider = provider
+        # Trade events go to the global bus in production; the backtester
+        # injects an isolated bus so simulated trades are NOT persisted to the
+        # live trades table (which would corrupt account balances).
+        self._event_bus = event_bus_override if event_bus_override is not None else event_bus
         self._slots: dict[str, StrategySlot] = {}
         self._fundamentals_cache: dict[str, object] = {}  # ticker -> TickerFundamentals
         self._indicator_histories: dict[str, IndicatorHistory] = {}  # per-ticker
@@ -707,7 +711,7 @@ class ArenaEngine:
             market_context_at_entry=intent.market_context_snapshot,
         )
 
-        event_bus.publish("trade.opened", trade)
+        self._event_bus.publish("trade.opened", trade)
         slot.strategy_notification(trade, "opened")
 
         logger.info(
@@ -759,7 +763,7 @@ class ArenaEngine:
             hold_duration_hours=round(hold_hours, 2),
         )
 
-        event_bus.publish("trade.closed", trade)
+        self._event_bus.publish("trade.closed", trade)
         slot.strategy_notification(trade, "closed")
 
         logger.info(
