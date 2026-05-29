@@ -64,3 +64,31 @@ def test_load_universe_reads_tickers(tmp_path):
         s.commit()
 
     assert _load_universe(url) == ["AAPL", "MSFT", "NVDA"]
+
+
+def test_run_backfill_skips_failing_day():
+    """One bad day is logged + skipped; the rest of the range still loads."""
+    import pandas as pd
+    from scripts.backfill_daily_bars import run_backfill
+
+    engine = _engine()
+
+    def _df(symbol, d):
+        return pd.DataFrame([{
+            "ticker": symbol, "open": 1.0, "high": 2.0, "low": 0.5,
+            "close": 1.5, "volume": 100.0, "transactions": 10, "date": d,
+        }])
+
+    class FakeClient:
+        def read_day_aggs(self, d, symbols=None, use_cache=True):
+            if d == date(2025, 1, 2):
+                raise RuntimeError("boom: corrupt file")
+            return _df("AAPL", d)
+
+    days = [date(2025, 1, 1), date(2025, 1, 2), date(2025, 1, 3)]
+    total, failed = run_backfill(FakeClient(), engine, days)
+
+    assert total == 2                                  # two good days written
+    assert [d for d, _ in failed] == [date(2025, 1, 2)]  # bad day captured
+    with sessionmaker(bind=engine)() as s:
+        assert s.query(DailyBar).count() == 2

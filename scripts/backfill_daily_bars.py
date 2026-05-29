@@ -72,6 +72,30 @@ def _parse_day(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
+def run_backfill(client, engine, days, *, symbols=None, use_cache=True):
+    """Download + upsert each day independently.
+
+    A failed day (missing/corrupt file, transient S3 error, dropped DB
+    connection) is logged and skipped rather than aborting the whole run —
+    so one bad day can't forfeit the rest of a multi-year backfill (which is
+    exactly what truncated the first 3-year run at 2025-08-22). Returns
+    ``(total_rows, failed)`` where ``failed`` is a list of ``(day, error)``.
+    """
+    total_rows = 0
+    failed: list[tuple[date, str]] = []
+    for d in days:
+        try:
+            df = client.read_day_aggs(d, symbols=symbols, use_cache=use_cache)
+            rows = day_aggs_to_rows(df)
+            n = upsert_daily_bars(engine, rows)
+            total_rows += n
+            logger.info("  %s: upserted %d bars", d, n)
+        except Exception as exc:  # noqa: BLE001 — resilience is the point
+            failed.append((d, f"{type(exc).__name__}: {exc}"))
+            logger.error("  %s: FAILED (%s) — skipping", d, exc)
+    return total_rows, failed
+
+
 def _load_universe(db_url: str | None) -> list[str]:
     """Symbols from the tickers table — used to bound the backfill (and DB size)
     to the tracked universe instead of the full ~11k-ticker market each day."""
@@ -134,17 +158,22 @@ def main() -> int:
     # Single-table bootstrap (checkfirst avoids full-schema reflection).
     DailyBar.__table__.create(engine, checkfirst=True)
 
-    total_rows = 0
-    for d in days:
-        df = client.read_day_aggs(d, symbols=symbols, use_cache=not args.no_cache)
-        rows = day_aggs_to_rows(df)
-        n = upsert_daily_bars(engine, rows)
-        total_rows += n
-        logger.info("  %s: upserted %d bars", d, n)
+    total_rows, failed = run_backfill(
+        client, engine, days, symbols=symbols, use_cache=not args.no_cache
+    )
 
-    logger.info("Backfill complete: %d bars across %d days", total_rows, len(days))
+    if failed:
+        logger.warning("Backfill finished with %d failed day(s):", len(failed))
+        for d, err in failed:
+            logger.warning("  %s: %s", d, err)
+    logger.info(
+        "Backfill complete: %d bars across %d days (%d failed)",
+        total_rows, len(days) - len(failed), len(failed),
+    )
     engine.dispose()
-    return 0
+    # Non-zero only on total failure (e.g. bad creds), so a few bad days still
+    # count as a successful partial run that can be topped up idempotently.
+    return 1 if days and len(failed) == len(days) else 0
 
 
 if __name__ == "__main__":
