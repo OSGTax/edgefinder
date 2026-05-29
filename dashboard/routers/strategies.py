@@ -17,6 +17,62 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _live_account_states() -> list[dict] | None:
+    """Per-strategy accounts marked to the latest available market price.
+
+    Single source of truth for "current value" so the strategy cards and the
+    equity-curve tail can never disagree:
+
+        open_positions_value = Σ shares × current price
+                               (live price when available, else entry price)
+        total_equity         = cash + open_positions_value
+        unrealized_pnl       = market value − cost basis (direction-aware)
+
+    NOTE: ``to_dict()``'s ``open_positions_value`` is already mark-to-market,
+    so it must NOT be re-added to unrealized P&L (the prior bug double-counted
+    the P&L). We recompute the market value directly from current prices here.
+
+    Returns ``None`` when the arena isn't running so callers fall back to DB.
+    """
+    arena = get_arena()
+    if not arena:
+        return None
+    from dashboard.services import _provider
+
+    accounts = arena.get_all_accounts()
+    positions = arena.get_all_open_positions()
+
+    all_symbols = list({
+        p["symbol"] for pos_list in positions.values() for p in pos_list
+    })
+    live_prices: dict[str, float] = {}
+    if all_symbols and _provider:
+        for sym in all_symbols:
+            try:
+                price = _provider.get_latest_price(sym)
+                if price:
+                    live_prices[sym] = price
+            except Exception:
+                logger.warning("Failed to fetch live price for %s", sym, exc_info=True)
+
+    result = []
+    for name, acct in accounts.items():
+        market_value = 0.0
+        unrealized = 0.0
+        for p in positions.get(name, []):
+            price = live_prices.get(p["symbol"]) or p["entry_price"]
+            market_value += p["shares"] * price
+            if p["direction"] == "LONG":
+                unrealized += (price - p["entry_price"]) * p["shares"]
+            else:
+                unrealized += (p["entry_price"] - price) * p["shares"]
+        acct["open_positions_value"] = round(market_value, 2)
+        acct["unrealized_pnl"] = round(unrealized, 2)
+        acct["total_equity"] = round(acct["cash"] + market_value, 2)
+        result.append(acct)
+    return result
+
+
 @router.get("")
 def list_strategies():
     """List all registered strategies."""
@@ -32,45 +88,9 @@ def get_accounts(db: Session = Depends(get_db)):
 
     Enriches with unrealized P&L by fetching current prices for open positions.
     """
-    arena = get_arena()
-    if arena:
-        from dashboard.services import _provider
-        accounts = arena.get_all_accounts()
-        positions = arena.get_all_open_positions()
-
-        # Fetch live prices for all open position symbols
-        all_symbols = list({
-            p["symbol"]
-            for pos_list in positions.values()
-            for p in pos_list
-        })
-        live_prices: dict[str, float] = {}
-        if all_symbols and _provider:
-            for sym in all_symbols:
-                try:
-                    price = _provider.get_latest_price(sym)
-                    if price:
-                        live_prices[sym] = price
-                except Exception:
-                    logger.warning("Failed to fetch live price for %s", sym, exc_info=True)
-
-        # Compute unrealized P&L per strategy
-        result = []
-        for name, acct in accounts.items():
-            unrealized = 0.0
-            for p in positions.get(name, []):
-                price = live_prices.get(p["symbol"])
-                if price:
-                    if p["direction"] == "LONG":
-                        unrealized += (price - p["entry_price"]) * p["shares"]
-                    else:
-                        unrealized += (p["entry_price"] - price) * p["shares"]
-            acct["unrealized_pnl"] = round(unrealized, 2)
-            # Adjust to show market value, not cost basis
-            acct["open_positions_value"] = round(acct["open_positions_value"] + unrealized, 2)
-            acct["total_equity"] = round(acct["cash"] + acct["open_positions_value"], 2)
-            result.append(acct)
-        return result
+    live = _live_account_states()
+    if live is not None:
+        return live
 
     # Fallback to DB
     accounts = db.query(StrategyAccount).all()
@@ -126,6 +146,32 @@ def equity_curve(
             "total_equity": s.total_equity,
             "total_return_pct": s.total_return_pct,
         })
+
+    # Append a live "now" point so the curve ends at the current market value
+    # (cash + securities at current price) instead of the last daily-close
+    # snapshot. Replaces today's snapshot point if one already exists so the
+    # per-date dedup keeps the live value and the aggregate isn't doubled.
+    live = _live_account_states()
+    if live is not None:
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for acct in live:
+            name = acct["strategy_name"]
+            if strategy and name != strategy:
+                continue
+            starting = acct.get("starting_capital") or 0
+            point = {
+                "date": today_str,
+                "total_equity": acct["total_equity"],
+                "total_return_pct": (
+                    round((acct["total_equity"] - starting) / starting * 100, 4)
+                    if starting else None
+                ),
+            }
+            pts = result.setdefault(name, [])
+            if pts and pts[-1]["date"] == today_str:
+                pts[-1] = point
+            else:
+                pts.append(point)
 
     return result
 

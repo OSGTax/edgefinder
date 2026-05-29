@@ -136,6 +136,101 @@ class TestStrategiesAPI:
         assert resp.status_code == 200
 
 
+def _fake_arena(accounts, positions):
+    from unittest.mock import MagicMock
+    a = MagicMock()
+    a.get_all_accounts.return_value = accounts
+    a.get_all_open_positions.return_value = positions
+    return a
+
+
+class TestLiveAccountMarking:
+    """Per-strategy value must be cash + securities at current market price.
+
+    Regression guards for two bugs: (1) ``/accounts`` double-counted P&L by
+    adding unrealized to an already-mark-to-market open_positions_value, and
+    (2) the equity curve ended at the last daily-close snapshot instead of the
+    live current value.
+    """
+
+    def _patch(self, monkeypatch, accounts, positions, price):
+        import dashboard.routers.strategies as strat
+        import dashboard.services as services
+        from unittest.mock import MagicMock
+        monkeypatch.setattr(strat, "get_arena", lambda: _fake_arena(accounts, positions))
+        provider = MagicMock()
+        provider.get_latest_price.return_value = price
+        monkeypatch.setattr(services, "_provider", provider)
+        return strat
+
+    def test_marks_to_market_without_double_counting(self, monkeypatch):
+        # to_dict()'s open_positions_value is already mark-to-market (5100),
+        # but the live value must come from the current price (52*100=5200),
+        # and total_equity must be cash + market value with NO P&L re-added.
+        accounts = {"coward": {
+            "strategy_name": "coward", "starting_capital": 10000.0,
+            "cash": 5000.0, "open_positions_value": 5100.0, "total_equity": 10100.0,
+        }}
+        positions = {"coward": [{
+            "symbol": "AAA", "shares": 100.0, "entry_price": 50.0,
+            "direction": "LONG", "trade_type": "SWING", "trade_id": "t",
+        }]}
+        strat = self._patch(monkeypatch, accounts, positions, price=52.0)
+
+        [acct] = strat._live_account_states()
+        assert acct["open_positions_value"] == 5200.0          # 100 * live 52
+        assert acct["total_equity"] == 10200.0                 # cash + market value
+        assert acct["unrealized_pnl"] == 200.0                 # (52-50)*100
+        # The double-count bug would have produced 5100+200=5300 / 10300.
+        assert acct["total_equity"] == round(acct["cash"] + acct["open_positions_value"], 2)
+
+    def test_falls_back_to_entry_price_when_no_live_price(self, monkeypatch):
+        accounts = {"coward": {
+            "strategy_name": "coward", "starting_capital": 10000.0,
+            "cash": 5000.0, "open_positions_value": 5100.0, "total_equity": 10100.0,
+        }}
+        positions = {"coward": [{
+            "symbol": "AAA", "shares": 100.0, "entry_price": 50.0,
+            "direction": "LONG", "trade_type": "SWING", "trade_id": "t",
+        }]}
+        strat = self._patch(monkeypatch, accounts, positions, price=None)
+
+        [acct] = strat._live_account_states()
+        assert acct["open_positions_value"] == 5000.0          # 100 * entry 50
+        assert acct["total_equity"] == 10000.0
+        assert acct["unrealized_pnl"] == 0.0
+
+    def test_equity_curve_ends_at_live_market_value(self, client, db_session, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+        # A stale prior-day close snapshot...
+        db_session.add(StrategySnapshot(
+            strategy_name="coward",
+            timestamp=datetime.now(timezone.utc) - timedelta(days=1),
+            cash=10000.0, positions_value=0.0, total_equity=10000.0,
+            drawdown_pct=0.0, total_return_pct=0.0,
+        ))
+        db_session.commit()
+
+        accounts = {"coward": {
+            "strategy_name": "coward", "starting_capital": 10000.0,
+            "cash": 5000.0, "open_positions_value": 5100.0, "total_equity": 10100.0,
+        }}
+        positions = {"coward": [{
+            "symbol": "AAA", "shares": 100.0, "entry_price": 50.0,
+            "direction": "LONG", "trade_type": "SWING", "trade_id": "t",
+        }]}
+        self._patch(monkeypatch, accounts, positions, price=52.0)
+
+        resp = client.get("/api/strategies/equity-curve")
+        assert resp.status_code == 200
+        series = resp.json()["coward"]
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Last point is the live "now" value (cash + securities at 52), not the
+        # stale 10000 close.
+        assert series[-1]["date"] == today
+        assert series[-1]["total_equity"] == 10200.0
+
+
 class TestResearchAPI:
     def test_search_empty(self, client):
         resp = client.get("/api/research/search?q=AAPL")
