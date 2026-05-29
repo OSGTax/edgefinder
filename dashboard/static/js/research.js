@@ -13,6 +13,7 @@
 
   let debounceTimer = null;
   let currentSymbol = null;
+  let _priceChart = null;
 
   // ── Search Autocomplete ───────────────────────────────────
 
@@ -84,11 +85,12 @@
     profileEl.innerHTML = '<div class="empty-state">Loading...</div>';
 
     try {
-      const [report, trades] = await Promise.all([
+      const [report, trades, bars] = await Promise.all([
         api(`/api/research/ticker/${symbol}`),
         api(`/api/trades?symbol=${symbol}&limit=50`).catch(() => []),
+        api(`/api/research/ticker/${symbol}/bars?days=365`).catch(() => []),
       ]);
-      renderProfile(report, trades);
+      renderProfile(report, trades, bars);
     } catch (e) {
       profileEl.innerHTML = `<div class="empty-state"><div class="icon">&#9888;</div>Could not load data for ${symbol}</div>`;
     }
@@ -96,23 +98,124 @@
 
   // ── Render Full Profile ───────────────────────────────────
 
-  function renderProfile(r, trades) {
+  function renderProfile(r, trades, bars) {
     const f = r.fundamentals || {};
     const ind = r.indicators || {};
 
     profileEl.innerHTML = `
       ${renderHeader(r)}
       ${renderPriceDisplay(r, ind)}
+      ${renderPriceChartCard()}
       <div class="grid-2 mb-16">
         ${renderFundamentals(f)}
         ${renderTechnicals(ind)}
       </div>
       ${renderShortInterest(f)}
       ${renderDividends(r.dividends)}
+      ${renderSplits(r.splits)}
       ${renderNews(r.recent_news, f)}
       ${renderTradeHistory(trades)}
       ${renderRelated(r.related_tickers)}
     `;
+
+    // Chart must be built after innerHTML so the container exists in the DOM.
+    buildPriceChart(bars || [], r);
+  }
+
+  // ── Price chart (daily bars from flat-file backfill) + event markers ──
+
+  function _day(s) { return s ? String(s).slice(0, 10) : null; }
+
+  function renderPriceChartCard() {
+    return `
+      <div class="card mb-16">
+        <div class="card-header">
+          <span>Price History</span>
+          <span class="right text-secondary" style="font-size:11px;">daily &middot; dividend / split / news markers</span>
+        </div>
+        <div class="card-body">
+          <div id="price-history-chart" style="width:100%;height:300px;"></div>
+          <div id="price-history-empty" class="empty-state" style="display:none;">
+            No daily bars yet — run the daily-bar backfill to populate price history.
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function buildMarkers(r) {
+    const markers = [];
+    (r.dividends || []).forEach(d => {
+      const t = _day(d.ex_date);
+      if (t) markers.push({
+        time: t, position: 'belowBar', color: '#6ea8fe', shape: 'circle',
+        text: 'Div' + (d.amount != null ? ' $' + Number(d.amount).toFixed(2) : ''),
+      });
+    });
+    (r.splits || []).forEach(s => {
+      const t = _day(s.date);
+      if (t) markers.push({
+        time: t, position: 'belowBar', color: '#b388ff', shape: 'arrowUp',
+        text: 'Split' + (s.from && s.to ? ` ${s.from}:${s.to}` : ''),
+      });
+    });
+    (r.recent_news || []).forEach(n => {
+      const t = _day(n.published);
+      if (t) markers.push({ time: t, position: 'aboveBar', color: '#f0b429', shape: 'circle', text: 'News' });
+    });
+    // lightweight-charts requires markers sorted ascending by time
+    return markers.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0));
+  }
+
+  function buildPriceChart(bars, r) {
+    const container = document.getElementById('price-history-chart');
+    const emptyMsg = document.getElementById('price-history-empty');
+    if (!container) return;
+
+    if (_priceChart) { try { _priceChart.remove(); } catch (e) {} _priceChart = null; }
+
+    if (!bars || !bars.length) {
+      container.style.display = 'none';
+      if (emptyMsg) emptyMsg.style.display = 'block';
+      return;
+    }
+    container.style.display = 'block';
+    if (emptyMsg) emptyMsg.style.display = 'none';
+
+    _priceChart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: 300,
+      layout: { background: { color: '#111a25' }, textColor: '#6b8aab' },
+      grid: { vertLines: { color: '#1a2332' }, horzLines: { color: '#1a2332' } },
+      timeScale: { borderColor: '#1a2332' },
+      rightPriceScale: { borderColor: '#1a2332' },
+    });
+    const series = _priceChart.addCandlestickSeries({
+      upColor: '#00d4a1', downColor: '#ef5350', borderVisible: false,
+      wickUpColor: '#00d4a1', wickDownColor: '#ef5350',
+    });
+    series.setData(bars.map(b => ({
+      time: b.time, open: b.open, high: b.high, low: b.low, close: b.close,
+    })));
+    series.setMarkers(buildMarkers(r));
+    _priceChart.timeScale().fitContent();
+
+    new ResizeObserver(() => {
+      if (_priceChart) _priceChart.applyOptions({ width: container.clientWidth });
+    }).observe(container);
+  }
+
+  function renderSplits(splits) {
+    if (!splits || !splits.length) return '';
+    const rows = splits.map(s => `
+      <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1a2332;font-size:13px;">
+        <span class="text-secondary">${_day(s.date) || '&mdash;'}</span>
+        <span>${s.from && s.to ? `${s.from} : ${s.to}` : '&mdash;'}</span>
+      </div>`).join('');
+    return `
+      <div class="card mb-16">
+        <div class="card-header">Stock Splits</div>
+        <div class="card-body">${rows}</div>
+      </div>`;
   }
 
   // ── A. Header Card ────────────────────────────────────────

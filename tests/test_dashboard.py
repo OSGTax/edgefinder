@@ -321,6 +321,34 @@ class TestMarketRegimeAPI:
         assert client.get("/api/market/regime/trade/nope").status_code == 404
 
 
+class TestResearchBars:
+    def test_ticker_bars_returns_daily_ohlc_in_range(self, client, db_session):
+        from datetime import date, timedelta
+        from edgefinder.db.models import DailyBar
+        today = date.today()
+        # in-range + out-of-range + different symbol
+        db_session.add(DailyBar(symbol="AAPL", date=today - timedelta(days=2),
+                                open=10, high=11, low=9, close=10.5, volume=1000))
+        db_session.add(DailyBar(symbol="AAPL", date=today - timedelta(days=1),
+                                open=10.5, high=12, low=10, close=11.5, volume=1200))
+        db_session.add(DailyBar(symbol="AAPL", date=today - timedelta(days=400),
+                                open=5, high=6, low=4, close=5.5, volume=900))
+        db_session.add(DailyBar(symbol="MSFT", date=today - timedelta(days=1),
+                                open=200, high=205, low=199, close=204, volume=500))
+        db_session.commit()
+
+        bars = client.get("/api/research/ticker/AAPL/bars?days=365").json()
+        assert [b["time"] for b in bars] == [
+            (today - timedelta(days=2)).isoformat(),
+            (today - timedelta(days=1)).isoformat(),
+        ]  # in-range only, ascending, AAPL only
+        assert bars[-1]["close"] == 11.5
+        assert {"open", "high", "low", "close", "volume"} <= bars[0].keys()
+
+    def test_ticker_bars_empty_before_backfill(self, client):
+        assert client.get("/api/research/ticker/NOPE/bars").json() == []
+
+
 def test_write_equity_snapshots_persists_timeseries(db_session, monkeypatch):
     """The intraday monitor and daily job share this writer — one row/strategy."""
     import dashboard.services as services

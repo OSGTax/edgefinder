@@ -41,6 +41,10 @@ on:
         description: "Optional cap on trading days processed (smoke tests)"
         required: false
         default: ""
+      symbols:
+        description: "Optional comma-separated symbol filter (blank = full market; scope it to bound DB size)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -78,6 +82,9 @@ jobs:
           ARGS="--start ${{ inputs.start }} --end ${{ inputs.end }}"
           if [ -n "${{ inputs.limit_days }}" ]; then
             ARGS="$ARGS --limit-days ${{ inputs.limit_days }}"
+          fi
+          if [ -n "${{ inputs.symbols }}" ]; then
+            ARGS="$ARGS --symbols ${{ inputs.symbols }}"
           fi
           if [ "${{ inputs.execute }}" = "true" ]; then
             ARGS="$ARGS --execute"

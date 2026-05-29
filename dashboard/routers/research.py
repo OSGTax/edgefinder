@@ -27,6 +27,42 @@ def ticker_report(symbol: str, service: ResearchService = Depends(_get_research_
     return asdict(report)
 
 
+@router.get("/ticker/{symbol}/bars")
+def ticker_bars(
+    symbol: str,
+    days: int = Query(365, ge=1, le=1825),
+    db: Session = Depends(get_db),
+):
+    """Daily OHLC history for a ticker from the flat-file-backfilled daily_bars.
+
+    Powers the research price chart (with dividend/split/news event markers).
+    Returns business-day `time` strings for lightweight-charts. Empty until the
+    S3 daily-bar backfill has populated this symbol.
+    """
+    from datetime import date, timedelta
+
+    from edgefinder.db.models import DailyBar
+
+    cutoff = date.today() - timedelta(days=days)
+    rows = (
+        db.query(DailyBar)
+        .filter(DailyBar.symbol == symbol.upper(), DailyBar.date >= cutoff)
+        .order_by(DailyBar.date)
+        .all()
+    )
+    return [
+        {
+            "time": r.date.isoformat(),
+            "open": r.open,
+            "high": r.high,
+            "low": r.low,
+            "close": r.close,
+            "volume": r.volume,
+        }
+        for r in rows
+    ]
+
+
 @router.get("/search")
 def search_tickers(
     q: str = Query(..., min_length=1),
