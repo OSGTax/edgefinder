@@ -42,7 +42,9 @@ def _serialize(s: MarketSnapshotRecord) -> dict:
             "IWM": {"price": s.iwm_price, "change_pct": s.iwm_change_pct},
             "DIA": {"price": s.dia_price, "change_pct": s.dia_change_pct},
         },
-        "sector_performance": s.sector_performance,
+        # Stored column holds the latest *price* per sector ETF, not a %
+        # change — expose it under an honest key.
+        "sector_prices": s.sector_performance,
     }
 
 

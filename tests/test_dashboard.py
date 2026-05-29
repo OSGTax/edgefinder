@@ -279,7 +279,7 @@ class TestMarketRegimeAPI:
         # latest = newest snapshot
         assert data["latest"]["regime"] == "bull"
         assert data["latest"]["vix"] == 14.0
-        assert data["latest"]["sector_performance"] == {"XLK": 1.2, "XLE": -0.4}
+        assert data["latest"]["sector_prices"] == {"XLK": 1.2, "XLE": -0.4}
         assert data["latest"]["indices"]["SPY"]["change_pct"] == 0.5
         # history oldest -> newest
         vix_series = [h["vix"] for h in data["history"]]

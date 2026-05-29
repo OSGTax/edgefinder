@@ -353,18 +353,20 @@ async function loadMarketOverview() {
     </div>`;
     row.innerHTML = cells;
 
-    // Sector performance strip (best → worst)
+    // Sector ETF strip. NOTE: sector_performance holds the latest *price*
+    // of each sector ETF (not a % change), so display prices honestly.
     const strip = document.getElementById('sector-strip');
     if (strip) {
-      const sectors = latest && latest.sector_performance;
+      const sectors = latest && latest.sector_prices;
       if (sectors && Object.keys(sectors).length) {
-        strip.innerHTML = Object.entries(sectors)
-          .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))
-          .map(([name, pct]) => {
-            const p = Number(pct) || 0;
-            const cls = p >= 0 ? 'text-positive' : 'text-negative';
-            return `<span style="padding:3px 8px;border:1px solid #1a2332;border-radius:4px;font-size:11px;">${name} <span class="${cls}">${p >= 0 ? '+' : ''}${p.toFixed(2)}%</span></span>`;
-          }).join('');
+        strip.innerHTML =
+          '<span class="text-secondary" style="font-size:11px;align-self:center;margin-right:4px;">Sector ETFs:</span>' +
+          Object.entries(sectors)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([name, price]) => {
+              const v = Number(price) || 0;
+              return `<span style="padding:3px 8px;border:1px solid #1a2332;border-radius:4px;font-size:11px;">${name} <span class="text-secondary">$${v.toFixed(2)}</span></span>`;
+            }).join('');
       } else {
         strip.innerHTML = '';
       }
