@@ -88,7 +88,7 @@
       const [report, trades, bars] = await Promise.all([
         api(`/api/research/ticker/${symbol}`),
         api(`/api/trades?symbol=${symbol}&limit=50`).catch(() => []),
-        api(`/api/research/ticker/${symbol}/bars?days=365`).catch(() => []),
+        api(`/api/research/ticker/${symbol}/bars?days=1095`).catch(() => []),
       ]);
       renderProfile(report, trades, bars);
     } catch (e) {
