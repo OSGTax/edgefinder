@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Backtest — EdgeFinder{% endblock %}
+{% block content %}
+<h1 class="page-title">Backtest</h1>
+
+<div class="card mb-20">
+  <div class="card-body">
+    <form id="bt-form" style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;">
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label class="stat-label">Strategy</label>
+        <select id="bt-strategy" class="search-input" style="min-width:140px;"></select>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:220px;">
+        <label class="stat-label">Symbols (comma-separated, max 25)</label>
+        <input id="bt-symbols" class="search-input" value="AAPL,NVDA,TSLA">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label class="stat-label">Start</label>
+        <input id="bt-start" type="date" class="search-input">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label class="stat-label">End</label>
+        <input id="bt-end" type="date" class="search-input">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label class="stat-label">Starting cash</label>
+        <input id="bt-cash" type="number" class="search-input" value="10000" style="width:120px;">
+      </div>
+      <button class="btn" type="submit">Run backtest</button>
+    </form>
+    <div class="text-secondary" style="font-size:12px;margin-top:10px;">
+      Replays daily bars from the flat-file backfill through the <strong>live</strong> strategy,
+      executor, and risk engine (20% stop, profit target, position/concentration caps) — so
+      results match live trade logic. Fundamental filter is off (no look-ahead bias).
+    </div>
+  </div>
+</div>
+
+<div id="bt-results">
+  <div class="empty-state">Configure a backtest above and hit Run.</div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/js/backtest.js"></script>{% endblock %}

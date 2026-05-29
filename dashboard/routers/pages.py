@@ -32,3 +32,8 @@ async def trades_page(request: Request):
 @router.get("/research", response_class=HTMLResponse)
 async def research_page(request: Request):
     return templates.TemplateResponse(request=request, name="research.html")
+
+
+@router.get("/backtest", response_class=HTMLResponse)
+async def backtest_page(request: Request):
+    return templates.TemplateResponse(request=request, name="backtest.html")

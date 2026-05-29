@@ -349,6 +349,47 @@ class TestResearchBars:
         assert client.get("/api/research/ticker/NOPE/bars").json() == []
 
 
+class TestBacktestAPI:
+    def _seed(self, db_session):
+        from datetime import date, timedelta
+        from edgefinder.db.models import DailyBar
+        prices = [120.0]
+        for _ in range(40):
+            prices.append(prices[-1] * 0.988)   # decline -> oversold entry
+        for _ in range(25):
+            prices.append(prices[-1] * 1.02)    # rally -> exit
+        start = date(2024, 1, 1)
+        for i, p in enumerate(prices):
+            db_session.add(DailyBar(
+                symbol="TEST", date=start + timedelta(days=i),
+                open=p, high=p * 1.01, low=p * 0.99, close=p, volume=1_000_000.0,
+            ))
+        db_session.commit()
+
+    def test_backtest_runs_over_seeded_bars(self, client, db_session):
+        self._seed(db_session)
+        r = client.post("/api/backtest", json={
+            "strategy": "coward", "symbols": ["test"], "starting_cash": 10000})
+        assert r.status_code == 200
+        d = r.json()
+        assert d["symbols"] == ["TEST"]
+        assert d["equity_curve"]
+        assert d["stats"]["num_closed_trades"] >= 1
+        assert "coverage" in d and d["coverage"]["TEST"]["bars"] == 66
+
+    def test_backtest_unknown_strategy(self, client):
+        assert client.post("/api/backtest", json={
+            "strategy": "nope", "symbols": ["X"]}).status_code == 404
+
+    def test_backtest_requires_symbols(self, client):
+        assert client.post("/api/backtest", json={
+            "strategy": "coward", "symbols": []}).status_code == 422
+
+    def test_backtest_no_data_for_symbol(self, client):
+        assert client.post("/api/backtest", json={
+            "strategy": "coward", "symbols": ["ZZZZ"]}).status_code == 404
+
+
 def test_write_equity_snapshots_persists_timeseries(db_session, monkeypatch):
     """The intraday monitor and daily job share this writer — one row/strategy."""
     import dashboard.services as services
