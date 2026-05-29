@@ -49,6 +49,10 @@ on:
         description: "Filter to the tracked tickers table (bounds DB size; ignore the symbols box)"
         type: boolean
         default: false
+      no_benchmarks:
+        description: "Skip auto-including benchmark ETFs (SPY/QQQ/IWM/DIA). They're added to any scoped backfill by default so the backtest benchmark stays full-range."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -92,6 +96,9 @@ jobs:
           fi
           if [ "${{ inputs.universe }}" = "true" ]; then
             ARGS="$ARGS --universe"
+          fi
+          if [ "${{ inputs.no_benchmarks }}" = "true" ]; then
+            ARGS="$ARGS --no-benchmarks"
           fi
           if [ "${{ inputs.execute }}" = "true" ]; then
             ARGS="$ARGS --execute"

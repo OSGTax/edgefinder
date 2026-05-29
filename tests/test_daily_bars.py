@@ -66,6 +66,28 @@ def test_load_universe_reads_tickers(tmp_path):
     assert _load_universe(url) == ["AAPL", "MSFT", "NVDA"]
 
 
+def test_with_benchmarks_folds_in_index_etfs():
+    """A scoped backfill auto-includes the benchmark ETFs so the backtest's
+    full-range SPY/QQQ/IWM/DIA benchmark stays populated."""
+    from config.settings import settings
+    from scripts.backfill_daily_bars import _with_benchmarks
+
+    out = _with_benchmarks(["AAPL", "NVDA"])
+    for idx in settings.index_symbols:
+        assert idx.upper() in out
+    assert "AAPL" in out and "NVDA" in out
+    assert out == sorted(out) and len(out) == len(set(out))  # sorted + deduped
+
+
+def test_with_benchmarks_noops_when_unscoped_or_disabled():
+    from scripts.backfill_daily_bars import _with_benchmarks
+
+    assert _with_benchmarks(None) is None                       # full-market run
+    assert _with_benchmarks(["AAPL"], include=False) == ["AAPL"]  # opted out
+    # Already-present ETF isn't duplicated.
+    assert _with_benchmarks(["SPY"]).count("SPY") == 1
+
+
 def test_run_backfill_skips_failing_day():
     """One bad day is logged + skipped; the rest of the range still loads."""
     import pandas as pd

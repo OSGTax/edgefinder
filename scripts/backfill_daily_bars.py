@@ -30,9 +30,24 @@ from edgefinder.data.flatfiles import FlatFilesClient, day_aggs_to_rows
 from edgefinder.db.engine import get_engine
 from edgefinder.db.models import DailyBar
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
 
 _UPSERT_COLS = ("open", "high", "low", "close", "volume", "transactions", "source")
+
+
+def _with_benchmarks(symbols: list[str] | None, *, include: bool = True) -> list[str] | None:
+    """Fold the benchmark index ETFs (``settings.index_symbols`` — SPY/QQQ/IWM/
+    DIA) into a *scoped* symbol list so the daily_bars benchmark series the
+    backtester reads stays full-range.
+
+    No-op when ``symbols is None`` (an unscoped full-market backfill already
+    covers them) or when disabled. Returns a sorted, de-duplicated list.
+    """
+    if symbols is None or not include:
+        return symbols
+    return sorted(set(symbols) | {s.strip().upper() for s in settings.index_symbols if s.strip()})
 
 
 def upsert_daily_bars(engine, rows: list[dict], batch: int = 5_000) -> int:
@@ -117,6 +132,10 @@ def main() -> int:
     p.add_argument("--symbols", default=None, help="comma-separated symbol filter (default: all)")
     p.add_argument("--universe", action="store_true",
                    help="filter to symbols in the tickers table (bounds DB size to the tracked universe)")
+    p.add_argument("--no-benchmarks", action="store_true",
+                   help="don't auto-include the benchmark index ETFs (settings.index_symbols) "
+                        "in a scoped backfill (they're added by default so the backtest "
+                        "benchmark stays full-range)")
     p.add_argument("--db-url", default=None, help="override DATABASE_URL / settings")
     p.add_argument("--limit-days", type=int, default=None, help="cap number of days processed")
     p.add_argument("--no-cache", action="store_true", help="bypass the on-disk download cache")
@@ -132,6 +151,15 @@ def main() -> int:
         if not symbols:
             p.error("--universe requested but the tickers table is empty")
         logger.info("Universe filter: %d symbols from the tickers table", len(symbols))
+
+    # Always pull the benchmark index ETFs alongside a scoped backfill so the
+    # backtest's SPY/QQQ/IWM/DIA buy-hold benchmark stays full-range.
+    if symbols is not None and not args.no_benchmarks:
+        before = set(symbols)
+        symbols = _with_benchmarks(symbols)
+        added = sorted(set(symbols) - before)
+        if added:
+            logger.info("Including benchmark indices: %s", ", ".join(added))
 
     client = FlatFilesClient()
 
