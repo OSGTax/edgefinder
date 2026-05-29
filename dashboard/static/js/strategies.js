@@ -116,8 +116,8 @@ function renderStrategyCard(acct) {
   const winRate = stats && stats.total_trades > 0
     ? (stats.win_rate * 100).toFixed(1) + '%'
     : '—';
-  const avgR = stats && stats.total_trades > 0
-    ? fmtNum(stats.avg_r_multiple, 2) + 'R'
+  const avgReturn = stats && stats.total_trades > 0 && stats.avg_pnl_percent != null
+    ? (stats.avg_pnl_percent >= 0 ? '+' : '') + fmtNum(stats.avg_pnl_percent, 2) + '%'
     : '—';
   const tradeCount = stats ? stats.total_trades : 0;
 
@@ -182,8 +182,8 @@ function renderStrategyCard(acct) {
             <div style="font-size:15px;font-weight:700;color:var(--text-primary);">${winRate}</div>
           </div>
           <div style="text-align:center;">
-            <div class="stat-label">Avg R</div>
-            <div style="font-size:15px;font-weight:700;color:var(--text-primary);">${avgR}</div>
+            <div class="stat-label">Avg Return</div>
+            <div style="font-size:15px;font-weight:700;color:var(--text-primary);">${avgReturn}</div>
           </div>
           <div style="text-align:center;">
             <div class="stat-label">Trades</div>
@@ -445,13 +445,13 @@ async function loadDetailTrades(strategyName) {
   const tbody = document.getElementById('detail-trades-body');
   const countEl = document.getElementById('detail-trade-count');
 
-  tbody.innerHTML = '<tr><td colspan="9" class="empty-state" style="padding:20px;">Loading&hellip;</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="11" class="empty-state" style="padding:20px;">Loading&hellip;</td></tr>';
 
   try {
     const trades = await api('/api/trades?strategy=' + encodeURIComponent(strategyName) + '&limit=50');
 
     if (!trades || trades.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" class="empty-state" style="padding:20px;">No trades yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="11" class="empty-state" style="padding:20px;">No trades yet.</td></tr>';
       if (countEl) countEl.textContent = '';
       return;
     }
@@ -465,9 +465,11 @@ async function loadDetailTrades(strategyName) {
         ? `<span class="${pnlClass(pnl)}">${fmtPnl(pnl)}</span>`
         : '<span class="text-muted">—</span>';
 
-      const rCell = t.r_multiple != null
-        ? `<span class="${pnlClass(t.r_multiple)}">${fmtNum(t.r_multiple, 2)}R</span>`
+      const pnlPct = t.pnl_percent;
+      const pctCell = pnlPct != null
+        ? `<span class="${pnlClass(pnlPct)}">${(pnlPct >= 0 ? '+' : '')}${Number(pnlPct).toFixed(2)}%</span>`
         : '<span class="text-muted">—</span>';
+      const exitTimeCell = t.exit_time ? fmtTime(t.exit_time) : '<span class="text-muted">—</span>';
 
       const statusPill = isOpen
         ? `<span class="pill pill-accent">OPEN</span>`
@@ -487,19 +489,21 @@ async function loadDetailTrades(strategyName) {
       return `<tr>
         <td style="font-weight:700;color:var(--text-primary);">${t.symbol}</td>
         <td>${dirPill}</td>
+        <td style="color:var(--text-secondary);">${t.shares != null ? fmtNum(t.shares, 0) : '—'}</td>
         <td>${t.entry_price != null ? fmtDollar(t.entry_price) : '—'}</td>
         <td>${t.exit_price != null ? fmtDollar(t.exit_price) : (isOpen ? '<span class="text-muted">open</span>' : '—')}</td>
         <td>${pnlCell}</td>
-        <td>${rCell}</td>
+        <td>${pctCell}</td>
         <td>${statusPill}</td>
         <td style="color:var(--text-secondary);">${fmtTime(t.entry_time)}</td>
+        <td style="color:var(--text-secondary);">${exitTimeCell}</td>
         <td style="color:var(--text-muted);" title="${reason}">${reasonTrunc}</td>
       </tr>`;
     }).join('');
 
   } catch (e) {
     console.error('Failed to load trades for strategy:', strategyName, e);
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-state" style="padding:20px;">Failed to load trades.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" class="empty-state" style="padding:20px;">Failed to load trades.</td></tr>';
   }
 }
 

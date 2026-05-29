@@ -536,11 +536,16 @@
             <thead><tr>
               <th>Strategy</th><th>Direction</th><th>Shares</th>
               <th class="text-right">Entry</th><th class="text-right">Exit</th>
-              <th class="text-right">P&amp;L</th><th>Status</th><th>Opened</th>
+              <th class="text-right">P&amp;L</th><th class="text-right">P&amp;L %</th>
+              <th>Status</th><th>Opened</th><th>Closed</th>
             </tr></thead>
             <tbody>
               ${trades.map(t => {
                 const pnl = t.pnl_dollars;
+                const pct = t.pnl_percent;
+                const pctCell = pct != null
+                  ? `<span class="${pnlClass(pct)}">${(pct >= 0 ? '+' : '')}${Number(pct).toFixed(2)}%</span>`
+                  : '<span class="text-muted">—</span>';
                 return `<tr>
                   <td>${stratDot(t.strategy_name)} ${t.strategy_name}</td>
                   <td><span class="pill ${t.direction === 'LONG' ? 'pill-positive' : 'pill-negative'}">${t.direction}</span></td>
@@ -548,8 +553,10 @@
                   <td class="text-right">${fmtPrice(t.entry_price)}</td>
                   <td class="text-right">${fmtPrice(t.exit_price)}</td>
                   <td class="text-right ${pnlClass(pnl)}">${fmtPnl(pnl)}</td>
+                  <td class="text-right">${pctCell}</td>
                   <td><span class="pill ${t.status === 'OPEN' ? 'pill-accent' : 'pill-muted'}">${t.status}</span></td>
                   <td>${fmtTime(t.entry_time)}</td>
+                  <td>${t.exit_time ? fmtTime(t.exit_time) : '<span class="text-muted">—</span>'}</td>
                 </tr>`;
               }).join('')}
             </tbody>

@@ -21,7 +21,8 @@ async function loadStats(strategy) {
     const s = await api(url);
 
     const winRate = s.win_rate != null ? (s.win_rate * 100).toFixed(1) + '%' : '—';
-    const avgR    = s.avg_r_multiple != null ? fmtNum(s.avg_r_multiple, 2) + 'R' : '—';
+    const avgReturn = s.avg_pnl_percent != null
+      ? (s.avg_pnl_percent >= 0 ? '+' : '') + fmtNum(s.avg_pnl_percent, 2) + '%' : '—';
     const best    = s.best_trade != null ? fmtPnl(s.best_trade) : '—';
     const worst   = s.worst_trade != null ? fmtPnl(s.worst_trade) : '—';
 
@@ -33,7 +34,7 @@ async function loadStats(strategy) {
     const cards = [
       { label: 'Total Trades', value: s.total_trades != null ? s.total_trades : '—' },
       { label: 'Win Rate',     value: winRate, cls: s.win_rate >= 0.5 ? 'text-positive' : (s.win_rate != null ? 'text-negative' : '') },
-      { label: 'Avg R',        value: avgR,    cls: s.avg_r_multiple != null ? pnlClass(s.avg_r_multiple) : '' },
+      { label: 'Avg Return',   value: avgReturn, cls: s.avg_pnl_percent != null ? pnlClass(s.avg_pnl_percent) : '' },
       { label: 'Best Trade',   value: best,    cls: 'text-positive' },
       { label: 'Worst Trade',  value: worst,   cls: s.worst_trade != null && s.worst_trade < 0 ? 'text-negative' : '' },
       { label: 'Avg Hold',     value: avgHold },

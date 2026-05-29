@@ -311,6 +311,7 @@ class TestTradeJournal:
         assert stats["wins"] == 2
         assert stats["losses"] == 1
         assert stats["total_pnl"] == 120.0
+        assert "avg_pnl_percent" in stats  # surfaced as the "Avg Return" % stat
 
     def test_compute_stats_empty(self, db_session):
         journal = TradeJournal(db_session)

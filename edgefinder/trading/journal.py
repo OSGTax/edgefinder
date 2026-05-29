@@ -127,6 +127,9 @@ class TradeJournal:
         avg_r = (
             sum(t.r_multiple or 0 for t in closed) / len(closed) if closed else 0
         )
+        avg_pnl_pct = (
+            sum(t.pnl_percent or 0 for t in closed) / len(closed) if closed else 0
+        )
 
         return {
             "total_trades": len(closed),
@@ -136,6 +139,7 @@ class TradeJournal:
             "win_rate": len(wins) / len(closed) if closed else 0,
             "total_pnl": round(total_pnl, 2),
             "avg_pnl": round(total_pnl / len(closed), 2),
+            "avg_pnl_percent": round(avg_pnl_pct, 2),
             "avg_r_multiple": round(avg_r, 2),
             "profit_factor": round(gross_profit / gross_loss, 2) if gross_loss > 0 else None,
             "largest_win": round(max((t.pnl_dollars or 0) for t in closed), 2),
