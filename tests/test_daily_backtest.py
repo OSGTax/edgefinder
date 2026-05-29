@@ -73,6 +73,26 @@ def test_backtest_unknown_strategy_raises():
         run_daily_backtest("nope", {"TEST": _series([100.0] * 40)})
 
 
+def test_precompute_matches_live_indicator_engine():
+    """The vectorised precompute must equal the live compute_indicators_from_bars
+    on each prefix — that equivalence is what keeps the fast path faithful."""
+    from edgefinder.backtest.daily_backtest import precompute_snapshots
+    from edgefinder.data.indicator_engine import compute_indicators_from_bars
+
+    df = _series(_decline_then_rally())
+    snaps = precompute_snapshots(df)
+    for i in (35, 45, 60, len(df) - 1):
+        ref = compute_indicators_from_bars(df.iloc[: i + 1])
+        got = snaps[i]
+        for field in ("close", "rsi", "macd_line", "macd_signal", "bb_lower",
+                      "ema_21", "atr", "volume_avg", "volume_ratio"):
+            r, g = getattr(ref, field), getattr(got, field)
+            if r is None:
+                assert g is None, f"{field}@{i}: expected None, got {g}"
+            else:
+                assert g is not None and abs(g - r) < 1e-6, f"{field}@{i}: {g} vs {r}"
+
+
 def test_backtest_does_not_touch_global_event_bus():
     """Backtest trades must never reach the live event bus (which persists to
     the trades table) — that leak corrupted live account balances."""

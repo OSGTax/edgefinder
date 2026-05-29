@@ -30,13 +30,76 @@ from typing import Any
 
 import pandas as pd
 
+from config.settings import settings
 from edgefinder.core.events import EventBus
-from edgefinder.data.market_data import MarketContext
+from edgefinder.data import indicator_engine as ie
+from edgefinder.data.market_data import (
+    IndicatorHistory, IndicatorSnapshot, MarketContext, MarketData,
+)
 from edgefinder.trading.arena import ArenaEngine
+
+_HIST_DAYS = 30
 
 logger = logging.getLogger(__name__)
 
 _OHLCV = ["open", "high", "low", "close", "volume"]
+
+
+def precompute_snapshots(df: pd.DataFrame) -> list[IndicatorSnapshot]:
+    """One IndicatorSnapshot per row, computed in a single vectorised pass.
+
+    Faithful to the live ``compute_indicators_from_bars``: every indicator is
+    a causal series op, so the value at row i over the full frame equals
+    computing it over the prefix [:i+1] — which is exactly what the live
+    intraday cycle does each day. Rows before MIN_BARS get a minimal snapshot
+    (OHLCV only, indicators None), mirroring the live "insufficient data" gate.
+    """
+    n = len(df)
+    close, high, low = df["close"], df["high"], df["low"]
+    open_, volume = df["open"], df["volume"]
+    nan = pd.Series([float("nan")] * n, index=df.index)
+
+    ema_9, ema_21 = ie._ema(close, 9), ie._ema(close, 21)
+    ema_50 = ie._ema(close, 50) if n >= 50 else nan
+    ema_200 = ie._ema(close, 200) if n >= 200 else nan
+    rsi = ie._rsi(close, settings.signal_rsi_period)
+    macd_line, macd_signal, macd_hist = ie._macd(
+        close, settings.signal_macd_fast, settings.signal_macd_slow, settings.signal_macd_signal)
+    bb_u, bb_m, bb_l = ie._bollinger_bands(close, settings.signal_bb_period, settings.signal_bb_std)
+    bb_width = (bb_u - bb_l) / bb_m.replace(0, float("nan"))
+    atr = ie._atr(high, low, close, settings.signal_atr_period)
+    adx, plus_di, minus_di = ie._adx(high, low, close, settings.signal_adx_period)
+    stoch_k, stoch_d = ie._stochastic_rsi(
+        close, settings.signal_stoch_rsi_period,
+        settings.signal_stoch_rsi_k, settings.signal_stoch_rsi_d)
+    williams = ie._williams_r(high, low, close, settings.signal_williams_r_period)
+    vol_avg = volume.rolling(window=settings.signal_volume_avg_period).mean()
+    vol_ratio = volume / vol_avg.replace(0, float("nan"))
+
+    def f(s, i):
+        v = s.iloc[i]
+        return float(v) if not pd.isna(v) else None
+
+    snaps: list[IndicatorSnapshot] = []
+    for i in range(n):
+        base = dict(
+            close=float(close.iloc[i]), open=float(open_.iloc[i]),
+            high=float(high.iloc[i]), low=float(low.iloc[i]), volume=float(volume.iloc[i]),
+        )
+        if i < ie.MIN_BARS - 1:
+            snaps.append(IndicatorSnapshot(**base))
+            continue
+        snaps.append(IndicatorSnapshot(
+            **base,
+            ema_9=f(ema_9, i), ema_21=f(ema_21, i), ema_50=f(ema_50, i), ema_200=f(ema_200, i),
+            rsi=f(rsi, i), macd_line=f(macd_line, i), macd_signal=f(macd_signal, i),
+            macd_histogram=f(macd_hist, i),
+            bb_upper=f(bb_u, i), bb_middle=f(bb_m, i), bb_lower=f(bb_l, i), bb_width=f(bb_width, i),
+            atr=f(atr, i), adx=f(adx, i), plus_di=f(plus_di, i), minus_di=f(minus_di, i),
+            stoch_rsi_k=f(stoch_k, i), stoch_rsi_d=f(stoch_d, i), williams_r=f(williams, i),
+            volume_avg=f(vol_avg, i), volume_ratio=f(vol_ratio, i),
+        ))
+    return snaps
 
 
 class _NullProvider:
@@ -56,6 +119,44 @@ class BacktestArena(ArenaEngine):
 
     def __init__(self, provider) -> None:
         super().__init__(provider, event_bus_override=EventBus())
+        # Set per simulated day before each cycle (precomputed indicators).
+        self._bt_snaps: dict[str, IndicatorSnapshot] = {}
+        self._bt_hist: dict[str, IndicatorHistory] = {}
+
+    def _build_market_data(self, snapshot_data, market_context):
+        """Build MarketData from precomputed snapshots instead of recomputing
+        indicators each day — same MarketData the live cycle would see, ~100x
+        faster, so full-universe replays are feasible."""
+        result = {}
+        tickers: set[str] = set()
+        for slot in self._slots.values():
+            tickers.update(slot.watchlist)
+            for pos in slot.account.positions:
+                tickers.add(pos.symbol)
+        for ticker in tickers:
+            snap = snapshot_data.get(ticker)
+            cur = self._bt_snaps.get(ticker)
+            if not snap or cur is None:
+                continue
+            current_price = snap.get("price", 0.0)
+            if not current_price:
+                continue
+            today_vol = snap.get("volume", 0.0)
+            avg_vol = cur.volume_avg or 0.0
+            # Full-day bar -> time_factor 1.0, so volume_ratio is raw.
+            volume_ratio = (today_vol / avg_vol) if avg_vol > 0 else 0.0
+            result[ticker] = MarketData(
+                ticker=ticker,
+                current=cur,
+                history=self._bt_hist.get(ticker) or IndicatorHistory(max_days=_HIST_DAYS),
+                fundamentals=self._fundamentals_cache.get(ticker),
+                context=market_context,
+                current_price=current_price,
+                today_volume=today_vol,
+                avg_daily_volume=avg_vol,
+                volume_ratio=volume_ratio,
+            )
+        return result
 
     @staticmethod
     def _minutes_since_market_open() -> float:
@@ -116,9 +217,13 @@ def run_daily_backtest(
     all_days: set[date] = set()
     for sym, df in bars_by_symbol.items():
         d = df.sort_values("date").reset_index(drop=True)
+        ohlcv = d[_OHLCV].reset_index(drop=True)
         per_sym[sym] = {
             "dates": list(d["date"]),
-            "ohlcv": d[_OHLCV].reset_index(drop=True),
+            "ohlcv": ohlcv,
+            "snaps": precompute_snapshots(ohlcv),
+            "hist": IndicatorHistory(max_days=_HIST_DAYS),
+            "added": 0,   # rolling-history high-water mark
             "ptr": 0,
         }
         all_days.update(d["date"])
@@ -131,16 +236,19 @@ def run_daily_backtest(
 
     for current_day in days:
         snapshot_data: dict[str, dict] = {}
+        bt_snaps: dict[str, IndicatorSnapshot] = {}
+        bt_hist: dict[str, IndicatorHistory] = {}
         for sym, s in per_sym.items():
             dates = s["dates"]
             ptr = s["ptr"]
             while ptr < len(dates) and dates[ptr] < current_day:
                 ptr += 1
             s["ptr"] = ptr
-            # Prior sessions -> arena bar cache (the provisional bar for
-            # `current_day` is appended from the snapshot inside the cycle).
-            if ptr >= min_history - 1:
-                arena._daily_bars_cache[sym] = s["ohlcv"].iloc[:ptr]
+            # Roll history forward to include every prior day [0, ptr) exactly
+            # once — mirrors the live daily cycle (history holds up to yesterday).
+            while s["added"] < ptr:
+                s["hist"].add(s["snaps"][s["added"]])
+                s["added"] += 1
             if ptr < len(dates) and dates[ptr] == current_day:
                 bar = s["ohlcv"].iloc[ptr]
                 snapshot_data[sym] = {
@@ -148,9 +256,13 @@ def run_daily_backtest(
                     "high": float(bar.high), "low": float(bar.low),
                     "volume": float(bar.volume),
                 }
+                bt_snaps[sym] = s["snaps"][ptr]      # indicators incl. today
+                bt_hist[sym] = s["hist"]
         if not snapshot_data:
             continue
 
+        arena._bt_snaps = bt_snaps
+        arena._bt_hist = bt_hist
         _, closed = arena.run_intraday_cycle(snapshot_data, context)
         closed_all.extend(closed)
 
