@@ -11,6 +11,8 @@ import hashlib
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from typing import Callable
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -25,7 +27,10 @@ from edgefinder.core.models import (
     TradeStatus,
     TradeType,
 )
-from edgefinder.data.indicator_engine import compute_indicators_from_bars
+from edgefinder.data.indicator_engine import (
+    compute_indicators_from_bars,
+    compute_snapshot_series,
+)
 from edgefinder.data.market_data import (
     IndicatorHistory,
     IndicatorSnapshot,
@@ -63,15 +68,29 @@ class StrategySlot:
 class ArenaEngine:
     """Orchestrates multiple strategies competing in isolated accounts."""
 
-    def __init__(self, provider: DataProvider, event_bus_override=None) -> None:
+    def __init__(
+        self,
+        provider: DataProvider,
+        event_bus_override=None,
+        bars_loader: Callable[[str], pd.DataFrame | None] | None = None,
+    ) -> None:
         self._provider = provider
         # Trade events go to the global bus in production; the backtester
         # injects an isolated bus so simulated trades are NOT persisted to the
         # live trades table (which would corrupt account balances).
         self._event_bus = event_bus_override if event_bus_override is not None else event_bus
+        # Optional DB-backed daily-bars source (the persisted `daily_bars`
+        # table). When provided, the per-ticker IndicatorHistory is seeded
+        # from it so history-dependent strategies (e.g. gambler's MACD cross)
+        # work immediately after a restart — the in-memory daily cycle alone
+        # is lost on every redeploy and only fills one snapshot per day.
+        # Returns a DataFrame with [open, high, low, close, volume] ordered
+        # oldest-first (completed days only), or None.
+        self._bars_loader = bars_loader
         self._slots: dict[str, StrategySlot] = {}
         self._fundamentals_cache: dict[str, object] = {}  # ticker -> TickerFundamentals
         self._indicator_histories: dict[str, IndicatorHistory] = {}  # per-ticker
+        self._history_seed_day: dict[str, date] = {}  # ticker -> ET date last seeded
         self._daily_bars_cache: dict[str, pd.DataFrame] = {}  # per-ticker
         self._sequence_num = 0
         self._prev_hash = ""
@@ -440,8 +459,9 @@ class ArenaEngine:
                     volume=snap.get("volume", 0.0),
                 )
 
-            # Get history buffer
-            history = self._indicator_histories.get(ticker, IndicatorHistory(max_days=30))
+            # Get history buffer (seeded from daily_bars when a loader is wired,
+            # so history.previous survives restarts / process boundaries)
+            history = self._ensure_history(ticker)
 
             # Compute time-normalized volume ratio:
             # (today_volume / avg_daily_volume) / (minutes_since_open / 390)
@@ -487,6 +507,41 @@ class ArenaEngine:
             ),
         )
         return pd.concat([bars, provisional])
+
+    def _ensure_history(self, ticker: str) -> IndicatorHistory:
+        """Return the per-ticker IndicatorHistory, seeding it from daily_bars.
+
+        Without a bars loader this is the legacy in-memory buffer (populated
+        only by ``run_daily_cycle``, and empty after every restart). With a
+        loader wired, the buffer is (re)seeded once per ET trading day from the
+        persisted ``daily_bars`` table, so ``history.previous`` is always
+        available regardless of whether the daily cycle ran in this process.
+        """
+        existing = self._indicator_histories.get(ticker)
+        if self._bars_loader is None:
+            return existing or IndicatorHistory(max_days=30)
+
+        today_et = datetime.now(ZoneInfo("America/New_York")).date()
+        if existing is not None and self._history_seed_day.get(ticker) == today_et:
+            return existing  # already seeded/fresh for today
+
+        try:
+            bars = self._bars_loader(ticker)
+        except Exception:
+            logger.exception("History seed failed for %s", ticker)
+            bars = None
+
+        if bars is None or bars.empty:
+            # Stamp the day so a known-empty ticker isn't re-queried every cycle.
+            self._history_seed_day[ticker] = today_et
+            return existing or IndicatorHistory(max_days=30)
+
+        hist = IndicatorHistory(max_days=30)
+        for snap in compute_snapshot_series(bars)[-30:]:
+            hist.add(snap)
+        self._indicator_histories[ticker] = hist
+        self._history_seed_day[ticker] = today_et
+        return hist
 
     # ── Private: Entry Logic ──────────────────────────
 

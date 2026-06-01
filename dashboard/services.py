@@ -20,6 +20,7 @@ from edgefinder.data.provider import CachedDataProvider
 from edgefinder.db.engine import get_engine, get_session_factory
 from edgefinder.db import models as db_models  # noqa: F401 — registers ORM tables
 from edgefinder.db.models import (
+    DailyBar,
     StrategyAccount,
     StrategySnapshot,
     Ticker,
@@ -165,8 +166,11 @@ def init_services() -> None:
     engine = get_engine()
     _session_factory = get_session_factory(engine)
 
-    # Arena — load strategies and set watchlist
-    _arena = ArenaEngine(_provider)
+    # Arena — load strategies and set watchlist. The bars_loader lets the
+    # arena seed each ticker's IndicatorHistory from the persisted daily_bars
+    # table, so history-dependent strategies (e.g. gambler's MACD cross) work
+    # right after a restart instead of waiting for the in-memory daily cycle.
+    _arena = ArenaEngine(_provider, bars_loader=_load_daily_bars_for_history)
     _arena.load_strategies()
 
     watchlists = _load_watchlists()
@@ -569,6 +573,51 @@ def _resolve_scan_universe() -> list[str]:
         "Dollar-volume universe was empty — falling back to get_ticker_universe"
     )
     return sorted(_provider.get_ticker_universe())
+
+
+_HISTORY_BARS = 260  # ~1 trading year — enough for every indicator (incl. ema_200)
+
+
+def _load_daily_bars_for_history(symbol: str):
+    """Load recent completed daily bars for a symbol from the daily_bars table.
+
+    Returns a DataFrame [open, high, low, close, volume] ordered oldest-first,
+    or None when unavailable. Wired into the arena so it can seed each ticker's
+    IndicatorHistory (history.previous) from persisted data after a restart.
+    """
+    if _session_factory is None:
+        return None
+    import pandas as pd
+
+    session = _session_factory()
+    try:
+        rows = (
+            session.query(
+                DailyBar.open, DailyBar.high, DailyBar.low,
+                DailyBar.close, DailyBar.volume,
+            )
+            .filter(DailyBar.symbol == symbol.upper())
+            .order_by(DailyBar.date.desc())
+            .limit(_HISTORY_BARS)
+            .all()
+        )
+        if not rows:
+            return None
+        rows = list(reversed(rows))  # newest-first -> oldest-first (causal)
+        return pd.DataFrame(
+            {
+                "open": [r.open for r in rows],
+                "high": [r.high for r in rows],
+                "low": [r.low for r in rows],
+                "close": [r.close for r in rows],
+                "volume": [r.volume for r in rows],
+            }
+        )
+    except Exception:
+        logger.exception("Failed to load daily_bars history for %s", symbol)
+        return None
+    finally:
+        session.close()
 
 
 def _run_initial_scan() -> None:
@@ -1166,6 +1215,38 @@ def _snapshot_job() -> None:
         session.close()
 
     _persist_account_state()
+
+
+def run_eod_jobs(jobs: list[str] | None = None) -> dict[str, str]:
+    """Run the post-close jobs in-process, on demand.
+
+    Triggered by the /api/admin/run-eod endpoint (hit by an external cron)
+    because the in-process scheduler can't fire these when the web service is
+    idle after market close. Each job is isolated so one failure doesn't abort
+    the rest. Returns a {job_name: "ok"|"error"|"skipped"} report.
+    """
+    # Built lazily so all callbacks below are defined regardless of file order.
+    pipeline = [
+        ("nightly_scan", _nightly_scan_job),
+        ("daily_indicators", _daily_indicator_job),
+        ("benchmark", _benchmark_job),
+        ("snapshot", _snapshot_job),
+        ("sector_rotation", _sector_rotation_job),
+        ("dividend_split", _dividend_split_job),
+    ]
+    report: dict[str, str] = {}
+    for name, fn in pipeline:
+        if jobs is not None and name not in jobs:
+            report[name] = "skipped"
+            continue
+        try:
+            fn()
+            report[name] = "ok"
+        except Exception:
+            logger.exception("EOD job '%s' failed", name)
+            report[name] = "error"
+    logger.info("EOD jobs complete: %s", report)
+    return report
 
 
 def _persist_account_state(

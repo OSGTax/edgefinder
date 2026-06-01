@@ -213,3 +213,80 @@ def compute_indicators_from_bars(df: pd.DataFrame) -> IndicatorSnapshot | None:
         volume_avg=_safe_float(vol_avg),
         volume_ratio=_safe_float(vol_ratio),
     )
+
+
+def compute_snapshot_series(df: pd.DataFrame) -> list[IndicatorSnapshot]:
+    """One IndicatorSnapshot per row, computed in a single vectorised pass.
+
+    Faithful to ``compute_indicators_from_bars``: every indicator is a causal
+    series op, so the value at row i over the full frame equals computing it
+    over the prefix ``[:i+1]`` — which is exactly what the live intraday cycle
+    does each day. Rows before ``MIN_BARS`` get a minimal snapshot (OHLCV only,
+    indicators None), mirroring the live "insufficient data" gate.
+
+    Used to (a) replay history in the backtester and (b) seed the live arena's
+    per-ticker ``IndicatorHistory`` from the persisted ``daily_bars`` table so
+    history-dependent strategies survive restarts (the in-memory daily cycle
+    is lost on every redeploy).
+
+    Args:
+        df: DataFrame with columns [open, high, low, close, volume], ordered
+            oldest-first. Returns [] for an empty frame.
+    """
+    n = len(df)
+    if n == 0:
+        return []
+
+    close, high, low = df["close"], df["high"], df["low"]
+    open_, volume = df["open"], df["volume"]
+    nan = pd.Series([float("nan")] * n, index=df.index)
+
+    ema_9, ema_21 = _ema(close, 9), _ema(close, 21)
+    ema_50 = _ema(close, 50) if n >= 50 else nan
+    ema_200 = _ema(close, 200) if n >= 200 else nan
+    rsi = _rsi(close, settings.signal_rsi_period)
+    macd_line, macd_signal, macd_hist = _macd(
+        close, settings.signal_macd_fast, settings.signal_macd_slow,
+        settings.signal_macd_signal,
+    )
+    bb_u, bb_m, bb_l = _bollinger_bands(
+        close, settings.signal_bb_period, settings.signal_bb_std
+    )
+    bb_width = (bb_u - bb_l) / bb_m.replace(0, float("nan"))
+    atr = _atr(high, low, close, settings.signal_atr_period)
+    adx, plus_di, minus_di = _adx(high, low, close, settings.signal_adx_period)
+    stoch_k, stoch_d = _stochastic_rsi(
+        close, settings.signal_stoch_rsi_period,
+        settings.signal_stoch_rsi_k, settings.signal_stoch_rsi_d,
+    )
+    williams = _williams_r(high, low, close, settings.signal_williams_r_period)
+    vol_avg = volume.rolling(window=settings.signal_volume_avg_period).mean()
+    vol_ratio = volume / vol_avg.replace(0, float("nan"))
+
+    def f(s, i):
+        v = s.iloc[i]
+        return float(v) if not pd.isna(v) else None
+
+    snaps: list[IndicatorSnapshot] = []
+    for i in range(n):
+        base = dict(
+            close=float(close.iloc[i]), open=float(open_.iloc[i]),
+            high=float(high.iloc[i]), low=float(low.iloc[i]),
+            volume=float(volume.iloc[i]),
+        )
+        if i < MIN_BARS - 1:
+            snaps.append(IndicatorSnapshot(**base))
+            continue
+        snaps.append(IndicatorSnapshot(
+            **base,
+            ema_9=f(ema_9, i), ema_21=f(ema_21, i), ema_50=f(ema_50, i),
+            ema_200=f(ema_200, i),
+            rsi=f(rsi, i), macd_line=f(macd_line, i), macd_signal=f(macd_signal, i),
+            macd_histogram=f(macd_hist, i),
+            bb_upper=f(bb_u, i), bb_middle=f(bb_m, i), bb_lower=f(bb_l, i),
+            bb_width=f(bb_width, i),
+            atr=f(atr, i), adx=f(adx, i), plus_di=f(plus_di, i), minus_di=f(minus_di, i),
+            stoch_rsi_k=f(stoch_k, i), stoch_rsi_d=f(stoch_d, i), williams_r=f(williams, i),
+            volume_avg=f(vol_avg, i), volume_ratio=f(vol_ratio, i),
+        ))
+    return snaps

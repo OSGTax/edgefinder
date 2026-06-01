@@ -133,6 +133,13 @@ class Settings(BaseSettings):
     polygon_s3_bucket: str = "flatfiles"
     flatfiles_stocks_prefix: str = "us_stocks_sip"
 
+    # ── EOD TRIGGER ──────────────────────────────────
+    # Shared secret for the POST /api/admin/run-eod endpoint, which an external
+    # scheduler (GitHub Actions cron) hits after market close to run the nightly
+    # scan + EOD jobs and wake the idle web service. Empty ⇒ endpoint disabled.
+    # Set via EDGEFINDER_EOD_TRIGGER_TOKEN.
+    eod_trigger_token: str = ""
+
     # ── CACHE ────────────────────────────────────────
     cache_dir: Path = Path("data/cache")
     # Intraday TTLs are deliberately shorter than the signal-check interval
