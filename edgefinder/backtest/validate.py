@@ -34,14 +34,37 @@ ALL_STRATEGIES = ["coward", "gambler", "degenerate"]
 
 
 def _spy_bars(db) -> pd.DataFrame:
-    rows = (
-        db.query(DailyBar.date, DailyBar.open, DailyBar.high,
-                 DailyBar.low, DailyBar.close, DailyBar.volume)
-        .filter(DailyBar.symbol == "SPY").order_by(DailyBar.date).all()
-    )
-    return pd.DataFrame(
-        rows, columns=["date", "open", "high", "low", "close", "volume"]
-    )
+    """Longest available SPY close series for the benchmark/regime tagging.
+
+    Unions daily_bars with index_daily (daily_bars wins on overlap) because
+    SPY coverage is currently split across both tables. Only date+close are
+    needed downstream, so OHLC are filled with the close.
+    """
+    from edgefinder.db.models import IndexDaily
+
+    def _to_date(x):
+        return x.date() if hasattr(x, "date") else x
+
+    by_date: dict = {}
+    for d, c in (db.query(IndexDaily.date, IndexDaily.close)
+                 .filter(IndexDaily.symbol == "SPY").all()):
+        if c:
+            by_date[_to_date(d)] = float(c)
+    for d, c in (db.query(DailyBar.date, DailyBar.close)
+                 .filter(DailyBar.symbol == "SPY").all()):
+        if c:
+            by_date[_to_date(d)] = float(c)  # daily_bars wins on overlap
+
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    if not by_date:
+        return pd.DataFrame(columns=cols)
+    items = sorted(by_date.items())
+    closes = [c for _, c in items]
+    return pd.DataFrame({
+        "date": [d for d, _ in items],
+        "open": closes, "high": closes, "low": closes, "close": closes,
+        "volume": [0.0] * len(items),
+    })
 
 
 def _format_report(scorecard: dict) -> str:
