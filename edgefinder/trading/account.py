@@ -32,6 +32,7 @@ class Position:
     entry_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     trade_id: str = ""
     market_price: float | None = None  # latest price, updated by position monitor
+    peak_price: float | None = None    # highest price seen since entry (trailing stop)
 
     @property
     def market_value(self) -> float:
@@ -144,12 +145,28 @@ class VirtualAccount:
         if symbol and self.get_position(symbol):
             return False, f"Already have open position in {symbol}"
 
+        # Max open positions — forces diversification and leaves room to trade
+        if len(self.positions) >= settings.max_open_positions:
+            return False, (
+                f"Max open positions reached ({settings.max_open_positions})"
+            )
+
         if cost > self.buying_power:
             return False, f"Insufficient buying power: need ${cost:.2f}, have ${self.buying_power:.2f}"
 
         # Ensure cash won't go negative
         if self.cash - cost < 0:
             return False, f"Would result in negative cash: ${self.cash:.2f} - ${cost:.2f}"
+
+        # Portfolio concentration — no single position above the ceiling.
+        # Per-strategy override falls back to the global setting.
+        conc_pct = self.max_concentration_pct or settings.max_portfolio_concentration_pct
+        equity = self.total_equity
+        if conc_pct and equity > 0 and cost > equity * conc_pct:
+            return False, (
+                f"Exceeds concentration cap: ${cost:.2f} > "
+                f"{conc_pct:.0%} of ${equity:.2f}"
+            )
 
         if self.drawdown_pct >= settings.drawdown_circuit_breaker_pct:
             self.is_paused = True

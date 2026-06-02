@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import math
 import statistics
-from datetime import date
+from datetime import date, datetime, time as dtime, timezone
 from typing import Any, Callable
 
 import pandas as pd
@@ -219,6 +219,10 @@ def run_daily_backtest(
 
         arena._bt_snaps = bt_snaps
         arena._bt_hist = bt_hist
+        # Drive the engine's clock off the simulated day so time-based exits
+        # (max-hold) replay faithfully instead of keying off wall-clock now().
+        cd = current_day.date() if hasattr(current_day, "date") else current_day
+        arena._clock = datetime.combine(cd, dtime(16, 0), tzinfo=timezone.utc)
         _, closed = arena.run_intraday_cycle(snapshot_data, context)
         closed_all.extend(closed)
 

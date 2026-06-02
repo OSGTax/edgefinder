@@ -46,7 +46,8 @@ def test_backtest_runs_real_engine_and_trades():
     assert trade["pnl_dollars"] is not None
     assert any(
         trade["exit_reason"].startswith(p)
-        for p in ("STOP_LOSS", "TARGET_HIT", "STRATEGY_EXIT")
+        for p in ("STOP_LOSS", "TARGET_HIT", "STRATEGY_EXIT",
+                  "TRAILING_STOP", "TIME_EXIT")
     )
     # Final equity is internally consistent: cash + marked positions.
     assert result["final_equity"] > 0

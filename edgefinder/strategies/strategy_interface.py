@@ -10,6 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from config.settings import settings
 from edgefinder.core.models import ExitIntent, TickerFundamentals, TradeIntent
 from edgefinder.data.market_data import MarketData
 
@@ -32,6 +33,27 @@ class SwingStrategy(ABC):
     @property
     @abstractmethod
     def name(self) -> str: ...
+
+    # ── Risk / exit parameters (overridable; safe defaults) ──
+    # These keep capital recycling so trades complete and produce realized
+    # P&L. They are the knobs the Phase-2 validation lab will tune per strategy.
+
+    @property
+    def max_concentration_pct(self) -> float:
+        """Max fraction of equity in a single position (hard ceiling)."""
+        return settings.max_portfolio_concentration_pct
+
+    @property
+    def max_hold_days(self) -> int:
+        """Force-exit a position after this many calendar days, so capital
+        doesn't sit idle when neither stop nor target triggers. 0 disables."""
+        return 20
+
+    @property
+    def trailing_stop_pct(self) -> float | None:
+        """Once a position is up >= 1R, trail the stop this far below the peak
+        price. None disables trailing."""
+        return 0.10
 
     @property
     @abstractmethod

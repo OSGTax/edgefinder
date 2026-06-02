@@ -55,6 +55,8 @@ class StrategySlot:
             strategy_name=strategy.name,
             starting_capital=settings.starting_capital,
             pdt_enabled=pdt_enabled,
+            max_risk_pct=getattr(strategy, "risk_pct", None),
+            max_concentration_pct=getattr(strategy, "max_concentration_pct", None),
         )
         self.executor = Executor(self.account)
         self.risk_manager = RiskManager(
@@ -94,6 +96,12 @@ class ArenaEngine:
         self._daily_bars_cache: dict[str, pd.DataFrame] = {}  # per-ticker
         self._sequence_num = 0
         self._prev_hash = ""
+        # Injectable clock: live uses wall-clock; the backtester sets this to
+        # the simulated trading day so time-based exits replay faithfully.
+        self._clock: datetime | None = None
+
+    def _now(self) -> datetime:
+        return self._clock if self._clock is not None else datetime.now(timezone.utc)
 
     # ── Strategy Loading ──────────────────────────────
 
@@ -631,10 +639,12 @@ class ArenaEngine:
             if current_price is None:
                 continue
 
-            # Update market price on position for mark-to-market
+            # Update market price + running peak for mark-to-market / trailing
             pos.market_price = current_price
+            pos.peak_price = max(pos.peak_price or pos.entry_price, current_price)
 
             rm = slot.risk_manager
+            strat = slot.strategy
 
             mdata = market_data_map.get(pos.symbol)
 
@@ -648,6 +658,30 @@ class ArenaEngine:
             # Pass 2: Profit target
             if rm.should_take_profit(pos.entry_price, current_price):
                 trade = self._close_position(slot, pos, current_price, "TARGET_HIT", mdata)
+                if trade:
+                    closed.append(trade)
+                continue
+
+            # Pass 2a: Trailing stop — only arms once the trade is up >= 1R, so
+            # it locks in gains without choking a position that hasn't run yet.
+            trail_pct = getattr(strat, "trailing_stop_pct", None)
+            if trail_pct and pos.direction == "LONG":
+                risk_per_share = pos.entry_price - pos.stop_loss
+                if risk_per_share > 0 and pos.peak_price >= pos.entry_price + risk_per_share:
+                    trail_level = pos.peak_price * (1 - trail_pct)
+                    if current_price <= trail_level:
+                        trade = self._close_position(
+                            slot, pos, current_price, "TRAILING_STOP", mdata
+                        )
+                        if trade:
+                            closed.append(trade)
+                        continue
+
+            # Pass 2b: Time-based max-hold — recycle capital when neither stop
+            # nor target fires (the live "positions sit open forever" failure).
+            max_hold = getattr(strat, "max_hold_days", 0)
+            if max_hold and (self._now() - pos.entry_time).days >= max_hold:
+                trade = self._close_position(slot, pos, current_price, "TIME_EXIT", mdata)
                 if trade:
                     closed.append(trade)
                 continue
@@ -690,11 +724,13 @@ class ArenaEngine:
         # Apply slippage
         execution_price = Executor._apply_slippage(current_price, "BUY")
 
-        # Compute position parameters
+        # Compute position parameters (concentration cap keeps any single trade
+        # from consuming the whole account — the live stall on degenerate)
         shares = rm.compute_shares(
             execution_price,
             slot.account.total_equity,
             available_cash=slot.account.buying_power,
+            max_concentration_pct=slot.account.max_concentration_pct,
         )
         if shares <= 0:
             logger.debug(
@@ -729,6 +765,7 @@ class ArenaEngine:
 
         # Create position
         trade_id = str(uuid.uuid4())
+        now = self._now()
         position = Position(
             symbol=intent.ticker,
             shares=shares,
@@ -737,9 +774,10 @@ class ArenaEngine:
             target=target,
             direction=intent.direction,
             trade_type="SWING",
-            entry_time=datetime.now(timezone.utc),
+            entry_time=now,
             trade_id=trade_id,
             market_price=current_price,
+            peak_price=current_price,
         )
 
         slot.account.open_position(position)
@@ -757,7 +795,7 @@ class ArenaEngine:
             target=target,
             confidence=0,
             status=TradeStatus.OPEN,
-            entry_time=datetime.now(timezone.utc),
+            entry_time=now,
             sequence_num=self._sequence_num,
             integrity_hash=self._compute_hash(trade_id),
             entry_reasoning=intent.reasoning,
@@ -788,7 +826,7 @@ class ArenaEngine:
         result = slot.account.close_position(position, exit_price, reason)
         self._sequence_num += 1
 
-        now = datetime.now(timezone.utc)
+        now = self._now()
         hold_hours = (now - position.entry_time).total_seconds() / 3600
         is_pdt = position.entry_time.date() == now.date()
 

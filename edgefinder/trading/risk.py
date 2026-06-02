@@ -38,10 +38,13 @@ class RiskManager:
         entry_price: float,
         equity: float,
         available_cash: float | None = None,
+        max_concentration_pct: float | None = None,
     ) -> int:
         """Position size based on risk budget and stop distance.
 
-        shares = max_loss / stop_distance, capped by available cash.
+        shares = max_loss / stop_distance, capped by available cash and (when
+        given) by the portfolio-concentration ceiling so a single trade can't
+        consume the whole account.
         """
         max_loss = equity * self.risk_pct
         stop_distance = entry_price * self.stop_pct
@@ -54,6 +57,11 @@ class RiskManager:
         if available_cash is not None:
             max_by_cash = int(available_cash / entry_price)
             shares = min(shares, max_by_cash)
+
+        # Cap by concentration (fraction of equity in a single position)
+        if max_concentration_pct is not None and max_concentration_pct > 0 and entry_price > 0:
+            max_by_conc = int(equity * max_concentration_pct / entry_price)
+            shares = min(shares, max_by_conc)
 
         return max(shares, 0)
 
