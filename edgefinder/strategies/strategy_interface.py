@@ -30,30 +30,45 @@ class SwingStrategy(ABC):
 
     stop_pct: float = 0.20  # fixed for all strategies, non-negotiable
 
+    def __init__(self, params: dict | None = None) -> None:
+        # Tunable parameters (entry/exit thresholds, risk/exit knobs). Empty by
+        # default => every getter falls back to its hard-coded default, so live
+        # behavior is unchanged until a validated config is applied. The
+        # Phase-2 optimizer searches these; Phase-3 promotes the winners.
+        self._params: dict = dict(params or {})
+
+    def configure(self, params: dict | None) -> None:
+        """Merge a parameter set in (used by the optimizer and live loader)."""
+        self._params.update(params or {})
+
+    def _p(self, key: str, default):
+        """Read a tunable parameter, falling back to its default."""
+        return self._params.get(key, default)
+
     @property
     @abstractmethod
     def name(self) -> str: ...
 
     # ── Risk / exit parameters (overridable; safe defaults) ──
     # These keep capital recycling so trades complete and produce realized
-    # P&L. They are the knobs the Phase-2 validation lab will tune per strategy.
+    # P&L. They are the knobs the Phase-2 validation lab tunes per strategy.
 
     @property
     def max_concentration_pct(self) -> float:
         """Max fraction of equity in a single position (hard ceiling)."""
-        return settings.max_portfolio_concentration_pct
+        return self._p("max_concentration_pct", settings.max_portfolio_concentration_pct)
 
     @property
     def max_hold_days(self) -> int:
         """Force-exit a position after this many calendar days, so capital
         doesn't sit idle when neither stop nor target triggers. 0 disables."""
-        return 20
+        return self._p("max_hold_days", 20)
 
     @property
     def trailing_stop_pct(self) -> float | None:
         """Once a position is up >= 1R, trail the stop this far below the peak
         price. None disables trailing."""
-        return 0.10
+        return self._p("trailing_stop_pct", 0.10)
 
     @property
     @abstractmethod

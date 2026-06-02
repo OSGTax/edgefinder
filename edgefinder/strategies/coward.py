@@ -22,11 +22,11 @@ class CowardStrategy(SwingStrategy):
 
     @property
     def risk_pct(self) -> float:
-        return 0.05
+        return self._p("risk_pct", 0.05)
 
     @property
     def target_pct(self) -> float:
-        return 0.15
+        return self._p("target_pct", 0.15)
 
     @property
     def watchlist_size(self) -> int:
@@ -43,23 +43,25 @@ class CowardStrategy(SwingStrategy):
 
     def evaluate(self, ticker: str, data: MarketData) -> TradeIntent | None:
         ind = data.current
+        rsi_oversold = self._p("rsi_oversold", 35)
+        bb_touch_pct = self._p("bb_touch_pct", 0.01)
 
-        # Entry condition 1: RSI below 35
-        if ind.rsi is not None and ind.rsi < 35:
+        # Entry condition 1: RSI oversold
+        if ind.rsi is not None and ind.rsi < rsi_oversold:
             return self.make_intent(
                 ticker, data,
-                f"RSI oversold at {ind.rsi:.1f} (threshold: 35)",
+                f"RSI oversold at {ind.rsi:.1f} (threshold: {rsi_oversold})",
             )
 
-        # Entry condition 2: Price within 1% of BB lower band
+        # Entry condition 2: Price within bb_touch_pct of BB lower band
         if (
             ind.bb_lower is not None
             and ind.close > 0
-            and abs(ind.close - ind.bb_lower) / ind.close <= 0.01
+            and abs(ind.close - ind.bb_lower) / ind.close <= bb_touch_pct
         ):
             return self.make_intent(
                 ticker, data,
-                f"Price ${ind.close:.2f} near BB lower ${ind.bb_lower:.2f} (within 1%)",
+                f"Price ${ind.close:.2f} near BB lower ${ind.bb_lower:.2f}",
             )
 
         return None
@@ -68,12 +70,13 @@ class CowardStrategy(SwingStrategy):
         self, ticker: str, data: MarketData, entry_price: float
     ) -> ExitIntent | None:
         ind = data.current
+        rsi_exit = self._p("rsi_exit", 70)
 
-        # Exit when RSI crosses above 70
-        if ind.rsi is not None and ind.rsi > 70:
+        # Exit when RSI crosses above the overbought threshold
+        if ind.rsi is not None and ind.rsi > rsi_exit:
             return self.make_exit(
                 ticker, data,
-                f"RSI overbought at {ind.rsi:.1f} (threshold: 70)",
+                f"RSI overbought at {ind.rsi:.1f} (threshold: {rsi_exit})",
             )
 
         return None

@@ -21,11 +21,11 @@ class GamblerStrategy(SwingStrategy):
 
     @property
     def risk_pct(self) -> float:
-        return 0.10
+        return self._p("risk_pct", 0.10)
 
     @property
     def target_pct(self) -> float:
-        return 0.25
+        return self._p("target_pct", 0.25)
 
     @property
     def watchlist_size(self) -> int:
@@ -49,8 +49,10 @@ class GamblerStrategy(SwingStrategy):
         if prev_hist is None:
             return None
 
+        rsi_low = self._p("rsi_low", 40)
+        rsi_high = self._p("rsi_high", 60)
         macd_crossed = prev_hist < 0 and ind.macd_histogram >= 0
-        rsi_midrange = 40 <= ind.rsi <= 60
+        rsi_midrange = rsi_low <= ind.rsi <= rsi_high
 
         if macd_crossed and rsi_midrange:
             return self.make_intent(

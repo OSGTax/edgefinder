@@ -21,11 +21,11 @@ class DegenerateStrategy(SwingStrategy):
 
     @property
     def risk_pct(self) -> float:
-        return 0.20
+        return self._p("risk_pct", 0.20)
 
     @property
     def target_pct(self) -> float:
-        return 0.50
+        return self._p("target_pct", 0.50)
 
     @property
     def watchlist_size(self) -> int:
@@ -40,8 +40,8 @@ class DegenerateStrategy(SwingStrategy):
         if ind.rsi is None or ind.ema_21 is None:
             return None
 
-        volume_spike = data.volume_ratio > 2.0
-        bullish = ind.rsi > 50 and ind.close > ind.ema_21
+        volume_spike = data.volume_ratio > self._p("volume_spike_mult", 2.0)
+        bullish = ind.rsi > self._p("rsi_min", 50) and ind.close > ind.ema_21
 
         if volume_spike and bullish:
             return self.make_intent(
@@ -60,8 +60,8 @@ class DegenerateStrategy(SwingStrategy):
         if ind.rsi is None:
             return None
 
-        volume_faded = data.volume_ratio < 1.0
-        overbought = ind.rsi > 80
+        volume_faded = data.volume_ratio < self._p("volume_fade", 1.0)
+        overbought = ind.rsi > self._p("rsi_overbought_exit", 80)
 
         if volume_faded and overbought:
             return self.make_exit(

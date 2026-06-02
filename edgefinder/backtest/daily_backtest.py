@@ -137,6 +137,7 @@ def run_daily_backtest(
     benchmark: dict | None = None,
     progress_cb: Callable[[dict], None] | None = None,
     min_history: int = 30,
+    params: dict | None = None,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
 
@@ -153,6 +154,10 @@ def run_daily_backtest(
 
     symbols = list(bars_by_symbol)
     arena.set_watchlists({strategy_name: symbols})
+    # Apply tuned parameters (rebuilds risk manager + account caps) before
+    # the run so optimizer/validated configs take effect.
+    if params:
+        arena.configure_strategy(strategy_name, params)
     slot = arena._slots[strategy_name]
     # Custom starting capital (executor references the same account object).
     slot.account.starting_capital = float(starting_cash)

@@ -8,14 +8,20 @@ from edgefinder.strategies.base import BaseStrategy, StrategyRegistry
 @pytest.fixture(autouse=True)
 def clean_registry():
     """Ensure registry is reset between tests, then reload strategies."""
-    StrategyRegistry.clear()
     import importlib
     from edgefinder.strategies import coward, gambler, degenerate_v2
-    importlib.reload(coward)
-    importlib.reload(gambler)
-    importlib.reload(degenerate_v2)
+
+    def _reload():
+        StrategyRegistry.clear()
+        importlib.reload(coward)
+        importlib.reload(gambler)
+        importlib.reload(degenerate_v2)
+
+    _reload()
     yield
-    StrategyRegistry.clear()
+    # Restore the real registry on teardown so later test modules that rely on
+    # it (e.g. backtest/walk-forward) don't see an empty registry.
+    _reload()
 
 
 class TestStrategyRegistry:

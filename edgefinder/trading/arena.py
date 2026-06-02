@@ -125,6 +125,22 @@ class ArenaEngine:
                 pdt,
             )
 
+    def configure_strategy(self, name: str, params: dict | None) -> None:
+        """Apply a tuned/validated parameter set to a loaded strategy and
+        rebuild its risk manager + account caps so risk/target/concentration
+        changes take effect. Used by the optimizer (per fold) and by the live
+        loader to apply OOS-validated configs (Phase 3). No-op if empty."""
+        slot = self._slots.get(name)
+        if slot is None or not params:
+            return
+        slot.strategy.configure(params)
+        s = slot.strategy
+        slot.risk_manager = RiskManager(
+            risk_pct=s.risk_pct, stop_pct=s.stop_pct, target_pct=s.target_pct,
+        )
+        slot.account.max_risk_pct = s.risk_pct
+        slot.account.max_concentration_pct = s.max_concentration_pct
+
     # ── Watchlist Management ──────────────────────────
 
     def set_watchlists(self, watchlists: dict[str, list[str]]) -> None:
@@ -643,6 +659,10 @@ class ArenaEngine:
             pos.market_price = current_price
             pos.peak_price = max(pos.peak_price or pos.entry_price, current_price)
 
+            # Exits trigger at the market price but FILL with slippage (a long
+            # sells into the bid) — keeps backtest P&L honest about costs.
+            exit_fill = Executor._apply_slippage(current_price, "SELL")
+
             rm = slot.risk_manager
             strat = slot.strategy
 
@@ -650,14 +670,14 @@ class ArenaEngine:
 
             # Pass 1: Non-negotiable stop loss
             if rm.should_stop_out(pos.entry_price, current_price):
-                trade = self._close_position(slot, pos, current_price, "STOP_LOSS", mdata)
+                trade = self._close_position(slot, pos, exit_fill, "STOP_LOSS", mdata)
                 if trade:
                     closed.append(trade)
                 continue
 
             # Pass 2: Profit target
             if rm.should_take_profit(pos.entry_price, current_price):
-                trade = self._close_position(slot, pos, current_price, "TARGET_HIT", mdata)
+                trade = self._close_position(slot, pos, exit_fill, "TARGET_HIT", mdata)
                 if trade:
                     closed.append(trade)
                 continue
@@ -671,7 +691,7 @@ class ArenaEngine:
                     trail_level = pos.peak_price * (1 - trail_pct)
                     if current_price <= trail_level:
                         trade = self._close_position(
-                            slot, pos, current_price, "TRAILING_STOP", mdata
+                            slot, pos, exit_fill, "TRAILING_STOP", mdata
                         )
                         if trade:
                             closed.append(trade)
@@ -681,7 +701,7 @@ class ArenaEngine:
             # nor target fires (the live "positions sit open forever" failure).
             max_hold = getattr(strat, "max_hold_days", 0)
             if max_hold and (self._now() - pos.entry_time).days >= max_hold:
-                trade = self._close_position(slot, pos, current_price, "TIME_EXIT", mdata)
+                trade = self._close_position(slot, pos, exit_fill, "TIME_EXIT", mdata)
                 if trade:
                     closed.append(trade)
                 continue
@@ -701,7 +721,7 @@ class ArenaEngine:
 
                 if exit_intent is not None:
                     reason = f"STRATEGY_EXIT:{exit_intent.reasoning[:50]}"
-                    trade = self._close_position(slot, pos, current_price, reason, mdata)
+                    trade = self._close_position(slot, pos, exit_fill, reason, mdata)
                     if trade:
                         closed.append(trade)
 
