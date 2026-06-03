@@ -11,16 +11,25 @@ but everything needed to continue is here + in git.
 
 ## Update — 2026-06-03 (validation answered + structural fixes #1/#2)
 
-**Validation ran on real data. Verdict: all three strategies FAIL OOS.**
-Completed the SPY/QQQ/IWM/DIA daily-bars backfill (full 2023-05-30 →
-2026-05-26 range, 750 bars each — the benchmark gap is closed) and ran the
-walk-forward validator (top-50, 2-fold). OOS scorecards:
-- coward: +1.59% total, Sharpe −0.03, **−5.7% vs SPY**, 1/2 folds → FAIL
-- gambler: +1.13% total, Sharpe 0.15, **−5.98% vs SPY**, 1/2 folds → FAIL
-- degenerate: +14.24% total, Sharpe 0.53, **+1.05% vs SPY**, 1/2 folds, only
-  10 trades → FAIL (beats SPY but on too few trades / 1 fold = noise)
-None show validated, SPY-beating risk-adjusted edge. Caveats stand (2 folds,
-thin trade counts, fundamentals gate off, survivorship bias).
+**Validation ran on real data. Verdict: all three strategies FAIL OOS — and
+badly, once look-ahead is removed.** Completed the SPY/QQQ/IWM/DIA daily-bars
+backfill (full 2023-05-30 → 2026-05-26, 750 bars each — benchmark gap closed)
+and ran the walk-forward validator (top-50, 2-fold). The daily backtester used
+to fill entries at the *same close that generated the signal* (look-ahead);
+v5.13.1 fixes this to **next-day-open fills**. The honest OOS scorecards:
+
+| strategy | total ret | Sharpe | vs SPY | folds>SPY | trades | win% |
+|---|---|---|---|---|---|---|
+| coward | −16.64% | −0.87 | −15.24% | 0/2 | 43 | 46.2 |
+| gambler | −6.68% | −0.58 | −9.94% | 0/2 | 42 | 34.2 |
+| degenerate | −15.30% | −1.45 | −14.46% | 0/2 | 13 | 32.5 |
+
+For comparison, the look-ahead (same-close) numbers were +1.59% / +1.13% /
++14.24%. The look-ahead inflated returns by ~18–30 points; degenerate's
+apparent "+1.05% vs SPY edge" was **entirely the bug** (now −14.46% vs SPY).
+None show validated edge — they are net losers vs SPY. Caveats still stand
+(2 folds, thin trade counts, fundamentals gate off, survivorship bias) but the
+conclusion is now firmly negative, not marginal.
 
 **Structural fixes built (v5.13.0), tested (460 pass), NOT yet cut over:**
 - #1 Liveness watchdog + GitHub-issue alerts — `system_heartbeat` table +

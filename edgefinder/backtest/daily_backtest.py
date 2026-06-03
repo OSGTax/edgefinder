@@ -71,6 +71,9 @@ class BacktestArena(ArenaEngine):
         # Set per simulated day before each cycle (precomputed indicators).
         self._bt_snaps: dict[str, IndicatorSnapshot] = {}
         self._bt_hist: dict[str, IndicatorHistory] = {}
+        # Entry intents decided on the prior day, awaiting the next session's
+        # open fill. Keyed by strategy name → list of (ticker, TradeIntent).
+        self._pending_entries: dict[str, list] = {}
 
     def _build_market_data(self, snapshot_data, market_context):
         """Build MarketData from precomputed snapshots instead of recomputing
@@ -115,6 +118,65 @@ class BacktestArena(ArenaEngine):
 
     def _fetch_daily_bars(self, ticker: str):  # noqa: D401 - rely on seeded cache
         return None
+
+    def _check_entries(self, slot, market_data_map, snapshot_data):
+        """Fill entries at the NEXT session's open, not the close that produced
+        the signal — removing same-bar look-ahead.
+
+        A signal computed from day T's *completed* bar is queued, then filled
+        at day T+1's open (the snapshot ``open``). The live arena fills at the
+        real-time current price (correct for live); only the backtest must
+        simulate the realistic next-open fill, so this override lives here and
+        the live ``_check_entries`` is untouched. Stops/targets are recomputed
+        off the actual fill price in ``_execute_intent``, so nothing carries a
+        stale signal-day level.
+        """
+        name = slot.strategy.name
+        opened: list = []
+
+        # 1. Fill intents decided yesterday at TODAY's open.
+        for ticker, intent in self._pending_entries.pop(name, []):
+            if slot.account.get_position(ticker):
+                continue
+            snap = snapshot_data.get(ticker)
+            if not snap:
+                continue  # symbol not trading today — drop the stale signal
+            open_px = snap.get("open")
+            if not open_px:
+                continue
+            trade = self._execute_intent(slot, intent, open_px)
+            if trade:
+                opened.append(trade)
+
+        # 2. Generate today's signals from the completed bar and queue them for
+        #    next session's open. Reuses the real strategy methods (qualify +
+        #    evaluate) so strategy decision logic never drifts from live.
+        queued: list = []
+        for ticker in slot.watchlist:
+            if slot.account.get_position(ticker):
+                continue
+            mdata = market_data_map.get(ticker)
+            if mdata is None:
+                continue
+            cached_fund = self._fundamentals_cache.get(ticker)
+            if cached_fund is not None:
+                try:
+                    if not slot.strategy.qualifies_stock(cached_fund):
+                        continue
+                except Exception:
+                    logger.exception(
+                        "[%s] Re-qualification raised for %s", name, ticker
+                    )
+            try:
+                intent = slot.strategy.evaluate(ticker, mdata)
+            except Exception:
+                logger.exception("[%s] evaluate() failed for %s", name, ticker)
+                continue
+            if intent is not None:
+                queued.append((ticker, intent))
+        self._pending_entries[name] = queued
+
+        return opened
 
 
 def _max_drawdown(equity: list[float]) -> float:

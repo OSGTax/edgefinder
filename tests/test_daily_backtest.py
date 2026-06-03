@@ -7,8 +7,11 @@ strategy + executor + account/risk code paths end to end.
 from datetime import date, timedelta
 
 import pandas as pd
+import pytest
 
 from edgefinder.backtest.daily_backtest import run_daily_backtest
+from edgefinder.core.models import TradeIntent
+from edgefinder.strategies.base import BaseStrategy, StrategyRegistry
 
 
 def _series(prices: list[float], symbol: str = "TEST") -> pd.DataFrame:
@@ -121,3 +124,98 @@ def test_backtest_steady_uptrend_no_entry():
     assert result["stats"]["num_closed_trades"] == 0
     assert result["stats"]["num_open_positions"] == 0
     assert result["final_equity"] == 10_000.0
+
+
+# ── look-ahead regression: entries fill at next-day open, not signal close ──
+
+
+class _OneShotBuy(BaseStrategy):
+    """Probe strategy: buys the first bar whose close >= 100, exactly once,
+    and never exits. Lets a test pin the exact signal bar so the fill price
+    is unambiguous."""
+
+    # Risk knobs the arena's RiskManager/account read off the strategy.
+    risk_pct = 0.02
+    stop_pct = 0.08
+    target_pct = 0.15
+    max_concentration_pct = 0.20  # so sizing caps within the account's cap
+
+    @property
+    def name(self) -> str:
+        return "_lookahead_probe"
+
+    @property
+    def version(self) -> str:
+        return "1.0"
+
+    @property
+    def preferred_signals(self) -> list[str]:
+        return []
+
+    def init(self) -> None:
+        pass
+
+    def generate_signals(self, ticker, bars):
+        return []
+
+    def qualifies_stock(self, fundamentals) -> bool:
+        return True
+
+    def on_trade_executed(self, notification) -> None:
+        pass
+
+    def evaluate(self, ticker, data):
+        if not getattr(self, "_fired", False) and data.current_price >= 100.0:
+            self._fired = True
+            return TradeIntent(
+                ticker=ticker, direction="LONG",
+                reasoning="probe", strategy_name=self.name,
+            )
+        return None
+
+
+@pytest.fixture
+def probe_strategy():
+    StrategyRegistry._strategies["_lookahead_probe"] = _OneShotBuy
+    try:
+        yield
+    finally:
+        StrategyRegistry._strategies.pop("_lookahead_probe", None)
+
+
+def _gap_series() -> pd.DataFrame:
+    """12 warm-up days (close < 100, no fire), a signal bar (close == 100),
+    then a gap-up open of 112 on the next bar where the fill must land."""
+    start = date(2024, 1, 1)
+    rows = []
+    for i in range(12):                       # close 85..96, all < 100
+        p = 85.0 + i
+        rows.append({"date": start + timedelta(days=i),
+                     "open": p, "high": p * 1.01, "low": p * 0.99,
+                     "close": p, "volume": 1_000_000.0})
+    # signal bar: close == 100 (probe fires). Its OWN open is 98.
+    rows.append({"date": start + timedelta(days=12),
+                 "open": 98.0, "high": 101.0, "low": 97.0,
+                 "close": 100.0, "volume": 1_000_000.0})
+    # fill bar: open gaps to 112 — the fill must land here, not at the 100 close.
+    for j in range(13, 18):
+        rows.append({"date": start + timedelta(days=j),
+                     "open": 112.0, "high": 112.5, "low": 111.5,
+                     "close": 112.0, "volume": 1_000_000.0})
+    return pd.DataFrame(rows)
+
+
+def test_entry_fills_at_next_day_open_not_signal_close(probe_strategy):
+    # The probe fires on the close=100 bar; with look-ahead removed, the fill
+    # must be the NEXT bar's open (112) — not the 100 close that generated the
+    # signal, and not that bar's own 98 open.
+    result = run_daily_backtest("_lookahead_probe", {"TEST": _gap_series()},
+                                starting_cash=10_000.0)
+    positions = result["open_positions"]
+    assert len(positions) == 1, result
+    entry = positions[0]["entry_price"]
+    assert 112.0 <= entry <= 114.0, (
+        f"entry {entry} must track the 112 next-day open (got look-ahead?)"
+    )
+    assert entry > 105.0  # decisively NOT the 100.0 signal-day close
+    assert result["stats"]["num_closed_trades"] == 0
