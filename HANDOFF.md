@@ -31,6 +31,27 @@ None show validated edge — they are net losers vs SPY. Caveats still stand
 (2 folds, thin trade counts, fundamentals gate off, survivorship bias) but the
 conclusion is now firmly negative, not marginal.
 
+**Wider walk-forward (v5.13.2): top-200, broadened param ranges, 5 rolling
+folds + a SEALED 6-month holdout (2025-11-21..2026-05-26), search-iters 20.**
+Bar = positive OOS Sharpe AND beats SPY in a majority of folds AND ≥30 trades.
+
+| strategy | OOS ret | OOS Sharpe | vs SPY | folds>SPY | trades | holdout (Sharpe / vs SPY / trades) | meets bar |
+|---|---|---|---|---|---|---|---|
+| coward | −12.39% | −0.82 | −6.95% | 1/5 | 124 | −0.16 / −14.5% / 7 | NO |
+| gambler | −10.35% | −0.47 | −6.32% | 2/5 | 88 | −1.17 / −24.9% / 43 | NO |
+| degenerate | +43.67% | **+1.10** | **+4.08%** | **3/5** | **18** | **+1.97 / +2.15% / 8** | NO* |
+
+**Plain answer: NO configuration meets the full bar.** coward/gambler fail
+outright (Sharpe-negative, lose to SPY). *degenerate is the near-miss: it hits
+positive OOS Sharpe (1.10) AND majority folds beat SPY (3/5) AND even passes the
+sealed holdout (Sharpe 1.97, +2.15% vs SPY) — but on only **18 OOS trades** (and
+8 in the holdout), below the 30-trade floor. The ≥30 bar exists precisely to
+reject thin, possibly-lucky results, and 18/8 trades cannot distinguish edge
+from variance. So it is NOT a validated edge — but it is the one signal worth a
+targeted follow-up (degenerate's volume-spike entries benefited a lot from the
+4× larger universe: top-50 → −15% FAIL, top-200 → this). Next: push its trade
+count over 30 (more history, larger/looser universe) and re-test the SAME bar.
+
 **Structural fixes built (v5.13.0), tested (460 pass), NOT yet cut over:**
 - #1 Liveness watchdog + GitHub-issue alerts — `system_heartbeat` table +
   `check_cycle_liveness` in the watchdog + `edgefinder/agents/alerts.py` +
