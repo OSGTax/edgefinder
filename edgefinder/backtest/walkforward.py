@@ -104,25 +104,36 @@ def run_walkforward(
     is_days: int = DEFAULT_IS_DAYS,
     oos_days: int = DEFAULT_OOS_DAYS,
     step_days: int = DEFAULT_STEP_DAYS,
+    holdout_days: int = 0,
     starting_cash: float = 10_000.0,
     do_optimize: bool = True,
     search_iters: int = 40,
     seed: int = 0,
     min_trades: int = 10,
+    pass_min_trades: int = 30,
     progress_cb=None,
 ) -> dict:
     """Roll IS→OOS folds, optimize on IS, score on OOS, aggregate the OOS
-    scorecard. Raises ValueError if there isn't enough history for one fold."""
+    scorecard. Raises ValueError if there isn't enough history for one fold.
+
+    If ``holdout_days`` > 0, the final ``holdout_days`` trading days are sealed
+    off: the rolling folds never touch them, then ONE config is optimized on
+    *all* pre-holdout data and scored once on the holdout — the strongest
+    single test of whether a config generalises to never-seen data.
+    """
     days = _all_dates(bars_by_symbol)
-    if len(days) < is_days + oos_days:
+    n = len(days)
+    # Rolling folds run only over the pre-holdout region.
+    wf_n = n - holdout_days if holdout_days > 0 else n
+    if wf_n < is_days + oos_days:
         raise ValueError(
-            f"not enough history: {len(days)} trading days < is+oos "
+            f"not enough history: {wf_n} pre-holdout trading days < is+oos "
             f"({is_days}+{oos_days}) — backfill more daily_bars or shrink windows"
         )
 
     folds: list[Fold] = []
     i = 0
-    while i + is_days + oos_days <= len(days):
+    while i + is_days + oos_days <= wf_n:
         is_start, is_end = days[i], days[i + is_days - 1]
         oos_start, oos_end = days[i + is_days], days[i + is_days + oos_days - 1]
 
@@ -149,10 +160,42 @@ def run_walkforward(
             progress_cb({"fold": len(folds), "oos": f"{oos_start}..{oos_end}"})
         i += step_days
 
-    return _aggregate(strategy_name, folds, is_days, oos_days, step_days)
+    # Sealed holdout: optimize on ALL pre-holdout data, score once on the end.
+    holdout = None
+    if holdout_days > 0 and wf_n >= is_days:
+        h_start, h_end = days[wf_n], days[-1]
+        pre_start, pre_end = days[0], days[wf_n - 1]
+        h_params: dict = {}
+        if do_optimize:
+            pre_bars = _slice(bars_by_symbol, pre_start, pre_end)
+            h_params, _, _ = optimize_params(
+                strategy_name, pre_bars,
+                benchmark=_benchmark_window(spy_bars, pre_start, pre_end),
+                starting_cash=starting_cash, search_iters=search_iters,
+                seed=seed, min_trades=min_trades,
+            )
+        h_bars = _slice(bars_by_symbol, h_start, h_end)
+        h_res = run_daily_backtest(
+            strategy_name, h_bars, starting_cash=starting_cash,
+            benchmark=_benchmark_window(spy_bars, h_start, h_end), params=h_params,
+        )
+        holdout = {
+            "window": f"{h_start}..{h_end}",
+            "regime": _regime(spy_bars, h_start, h_end),
+            "params": h_params,
+            "stats": h_res["stats"],
+        }
+        if progress_cb:
+            progress_cb({"holdout": holdout["window"]})
+
+    return _aggregate(
+        strategy_name, folds, is_days, oos_days, step_days,
+        holdout=holdout, pass_min_trades=pass_min_trades,
+    )
 
 
-def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_days) -> dict:
+def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_days,
+               *, holdout: dict | None = None, pass_min_trades: int = 30) -> dict:
     rets = [f.oos_stats.get("return_pct") or 0.0 for f in folds]
     sharpes = [f.oos_stats["sharpe"] for f in folds if f.oos_stats.get("sharpe") is not None]
     excess = [f.oos_stats["excess_return_pct"] for f in folds
@@ -180,6 +223,42 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
         and trades >= 10
     )
 
+    # Explicit, user-facing bar: positive OOS Sharpe AND beats SPY in a
+    # majority of folds AND >= pass_min_trades OOS trades.
+    sharpe_positive = mean_sharpe is not None and mean_sharpe > 0
+    majority_beat_spy = bool(excess) and folds_beating_spy > len(excess) / 2
+    enough_trades = trades >= pass_min_trades
+    criteria = {
+        "oos_sharpe_positive": bool(sharpe_positive),
+        "beats_spy_majority_folds": bool(majority_beat_spy),
+        "min_trades_met": bool(enough_trades),
+        "min_trades_threshold": pass_min_trades,
+        "all_met": bool(sharpe_positive and majority_beat_spy and enough_trades),
+    }
+
+    holdout_block = None
+    if holdout is not None:
+        hs = holdout["stats"]
+        h_sharpe = hs.get("sharpe")
+        h_excess = hs.get("excess_return_pct")
+        h_trades = hs.get("num_closed_trades") or 0
+        h_sharpe_pos = h_sharpe is not None and h_sharpe > 0
+        h_beats = h_excess is not None and h_excess > 0
+        holdout_block = {
+            "window": holdout["window"],
+            "regime": holdout["regime"],
+            "params": holdout["params"],
+            "return_pct": hs.get("return_pct"),
+            "sharpe": h_sharpe,
+            "excess_vs_spy_pct": h_excess,
+            "trades": h_trades,
+            "win_rate": hs.get("win_rate"),
+            "max_drawdown_pct": hs.get("max_drawdown_pct"),
+            "sharpe_positive": bool(h_sharpe_pos),
+            "beats_spy": bool(h_beats),
+            "passes": bool(h_sharpe_pos and h_beats and h_trades >= pass_min_trades),
+        }
+
     by_regime: dict[str, list] = {}
     for f in folds:
         by_regime.setdefault(f.regime, []).append(f.oos_stats.get("return_pct") or 0.0)
@@ -204,6 +283,8 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
             "mean_win_rate": round(statistics.mean(wins), 1) if wins else None,
             "worst_max_drawdown_pct": round(max(dds), 2) if dds else None,
         },
+        "criteria": criteria,
+        "holdout": holdout_block,
         "verdict": "PASS" if passed else "FAIL",
         "by_regime": regime_summary,
         "folds": [

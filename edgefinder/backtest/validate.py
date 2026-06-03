@@ -84,9 +84,29 @@ def _format_report(scorecard: dict) -> str:
         f"(folds beating SPY: {s['folds_beating_spy']})",
         f"- Total OOS trades: {s['total_trades']}  | mean win rate: {s['mean_win_rate']}%",
         f"- Worst fold max drawdown: {s['worst_max_drawdown_pct']}%",
-        "",
-        "## By regime (OOS avg return %)",
     ]
+    c = scorecard.get("criteria")
+    if c:
+        lines += [
+            "",
+            "## Bar: positive OOS Sharpe AND beats SPY in a majority of folds "
+            f"AND >= {c['min_trades_threshold']} trades",
+            f"- OOS Sharpe > 0: {c['oos_sharpe_positive']}",
+            f"- Beats SPY in majority of folds: {c['beats_spy_majority_folds']}",
+            f"- >= {c['min_trades_threshold']} trades: {c['min_trades_met']}",
+            f"- **ALL MET: {c['all_met']}**",
+        ]
+    h = scorecard.get("holdout")
+    if h:
+        lines += [
+            "",
+            f"## Sealed holdout ({h['window']}, {h['regime']})",
+            f"- return {h['return_pct']}%, sharpe {h['sharpe']}, "
+            f"excess vs SPY {h['excess_vs_spy_pct']}%, trades {h['trades']}",
+            f"- **holdout passes (Sharpe>0 & beats SPY & enough trades): {h['passes']}**",
+            f"- config: {json.dumps(h['params'])}",
+        ]
+    lines += ["", "## By regime (OOS avg return %)"]
     for regime, info in scorecard["by_regime"].items():
         lines.append(f"- {regime}: {info['avg_return_pct']}% over {info['folds']} fold(s)")
     lines += ["", "## Per-fold", ""]
@@ -101,7 +121,8 @@ def _format_report(scorecard: dict) -> str:
 
 
 def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
-        search_iters: int, write: bool) -> dict:
+        search_iters: int, write: bool, is_days: int, oos_days: int,
+        step_days: int, holdout_days: int, pass_min_trades: int) -> dict:
     engine = get_engine()
     session_factory = get_session_factory(engine)
     db = session_factory()
@@ -117,9 +138,20 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
     logger.info("Validating %s over %d symbols...", strategy, len(bars))
     scorecard = run_walkforward(
         strategy, bars, spy_bars=spy, search_iters=search_iters,
-        progress_cb=lambda i: logger.info("fold %s %s", i.get("fold"), i.get("oos")),
+        is_days=is_days, oos_days=oos_days, step_days=step_days,
+        holdout_days=holdout_days, pass_min_trades=pass_min_trades,
+        progress_cb=lambda i: logger.info(
+            "fold %s %s %s", i.get("fold"), i.get("oos"), i.get("holdout") or ""),
     )
-    print(json.dumps(scorecard["oos"] | {"verdict": scorecard["verdict"]}, indent=2))
+    summary = {
+        "strategy": strategy,
+        "config": scorecard["config"],
+        "oos": scorecard["oos"],
+        "criteria": scorecard["criteria"],
+        "holdout": scorecard["holdout"],
+        "verdict": scorecard["verdict"],
+    }
+    print(json.dumps(summary, indent=2, default=str))
 
     if write:
         import os
@@ -140,6 +172,13 @@ def main() -> None:
     ap.add_argument("--top-n", type=int, default=100)
     ap.add_argument("--symbols", default="", help="comma-separated (mode=symbols)")
     ap.add_argument("--search-iters", type=int, default=40)
+    ap.add_argument("--is-days", type=int, default=378, help="in-sample window (trading days)")
+    ap.add_argument("--oos-days", type=int, default=126, help="out-of-sample window")
+    ap.add_argument("--step-days", type=int, default=126, help="fold step")
+    ap.add_argument("--holdout-days", type=int, default=0,
+                    help="reserve a final sealed holdout of N trading days (0 = none)")
+    ap.add_argument("--pass-min-trades", type=int, default=30,
+                    help="min OOS trades for the criteria to pass")
     ap.add_argument("--write", action="store_true", help="write reviews/ report")
     args = ap.parse_args()
 
@@ -150,7 +189,9 @@ def main() -> None:
     symbols = [s for s in args.symbols.split(",") if s.strip()]
     for strat in targets:
         run(strat, mode=args.mode, top_n=args.top_n, symbols=symbols,
-            search_iters=args.search_iters, write=args.write)
+            search_iters=args.search_iters, write=args.write,
+            is_days=args.is_days, oos_days=args.oos_days, step_days=args.step_days,
+            holdout_days=args.holdout_days, pass_min_trades=args.pass_min_trades)
 
 
 if __name__ == "__main__":

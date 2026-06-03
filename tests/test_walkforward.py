@@ -98,3 +98,38 @@ def test_walkforward_without_optimization_uses_defaults():
 def test_walkforward_needs_enough_history():
     with pytest.raises(ValueError):
         run_walkforward("coward", _bars(50), is_days=378, oos_days=126)
+
+
+def test_walkforward_no_holdout_by_default():
+    sc = run_walkforward(
+        "coward", _bars(160), is_days=40, oos_days=40, step_days=40,
+        search_iters=2, seed=0, min_trades=1,
+    )
+    assert sc["holdout"] is None
+    # criteria block always present; default trade bar is 30
+    assert sc["criteria"]["min_trades_threshold"] == 30
+    for k in ("oos_sharpe_positive", "beats_spy_majority_folds",
+              "min_trades_met", "all_met"):
+        assert isinstance(sc["criteria"][k], bool)
+
+
+def test_walkforward_holdout_is_sealed_and_scored():
+    bars = _bars(200)
+    spy = _osc_series(200, base=400.0, amp=15.0, period=20.0)
+    sc = run_walkforward(
+        "coward", bars, spy_bars=spy,
+        is_days=40, oos_days=40, step_days=40, holdout_days=40,
+        search_iters=4, seed=0, min_trades=1, pass_min_trades=5,
+    )
+    h = sc["holdout"]
+    assert h is not None
+    for k in ("window", "sharpe", "excess_vs_spy_pct", "trades",
+              "sharpe_positive", "beats_spy", "passes"):
+        assert k in h
+    assert isinstance(h["passes"], bool)
+    # The holdout window must start strictly after the last rolling fold's OOS
+    # end — i.e. it was sealed off from every optimization (ISO dates sort
+    # lexicographically = chronologically).
+    last_fold_end = sc["folds"][-1]["oos"].split("..")[1]
+    holdout_start = h["window"].split("..")[0]
+    assert holdout_start > last_fold_end

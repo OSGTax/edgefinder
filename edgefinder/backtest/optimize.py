@@ -15,36 +15,38 @@ from __future__ import annotations
 import logging
 import random
 
-from edgefinder.backtest.daily_backtest import run_daily_backtest
+from edgefinder.backtest.daily_backtest import prepare_bars, run_daily_backtest
 
 logger = logging.getLogger(__name__)
 
-# Coarse, hand-bounded search spaces (kept small on purpose — more knobs/finer
-# grids invite curve-fitting on a ~3y dataset).
+# Search spaces. Deliberately wider than the original hand-bounded grids — the
+# walk-forward + sealed-holdout structure is what guards against curve-fitting,
+# so a broad search is the honest way to ask "does *any* config work?". stop_pct
+# stays fixed (non-negotiable 20% catastrophic stop), so it is not a knob here.
 PARAM_SPACE: dict[str, dict[str, list]] = {
     "coward": {
-        "rsi_oversold": [25, 30, 35, 40],
-        "rsi_exit": [65, 70, 75],
-        "target_pct": [0.10, 0.15, 0.20],
-        "risk_pct": [0.03, 0.05, 0.08],
-        "max_hold_days": [10, 20, 30],
-        "trailing_stop_pct": [0.08, 0.12, 0.20],
+        "rsi_oversold": [20, 25, 30, 35, 40, 45],
+        "rsi_exit": [55, 60, 65, 70, 75, 80],
+        "target_pct": [0.06, 0.10, 0.15, 0.20, 0.30],
+        "risk_pct": [0.02, 0.03, 0.05, 0.08, 0.10],
+        "max_hold_days": [5, 10, 20, 30, 45],
+        "trailing_stop_pct": [0.05, 0.08, 0.12, 0.20, 0.30],
     },
     "gambler": {
-        "rsi_low": [35, 40, 45],
-        "rsi_high": [55, 60, 65],
-        "target_pct": [0.15, 0.25, 0.35],
-        "risk_pct": [0.05, 0.10, 0.15],
-        "max_hold_days": [10, 20, 30],
-        "trailing_stop_pct": [0.08, 0.12, 0.20],
+        "rsi_low": [30, 35, 40, 45, 50],
+        "rsi_high": [50, 55, 60, 65, 70],
+        "target_pct": [0.10, 0.15, 0.25, 0.35, 0.50],
+        "risk_pct": [0.03, 0.05, 0.10, 0.15, 0.20],
+        "max_hold_days": [5, 10, 20, 30, 45],
+        "trailing_stop_pct": [0.05, 0.08, 0.12, 0.20, 0.30],
     },
     "degenerate": {
-        "volume_spike_mult": [1.5, 2.0, 3.0],
-        "rsi_min": [45, 50, 55],
-        "target_pct": [0.30, 0.50, 0.75],
-        "risk_pct": [0.10, 0.15, 0.20],
-        "max_hold_days": [10, 20, 30],
-        "trailing_stop_pct": [0.10, 0.15, 0.25],
+        "volume_spike_mult": [1.5, 2.0, 2.5, 3.0, 4.0],
+        "rsi_min": [40, 45, 50, 55, 60],
+        "target_pct": [0.20, 0.30, 0.50, 0.75, 1.00],
+        "risk_pct": [0.05, 0.10, 0.15, 0.20, 0.25],
+        "max_hold_days": [5, 10, 20, 30, 45],
+        "trailing_stop_pct": [0.08, 0.10, 0.15, 0.25, 0.35],
     },
 }
 
@@ -112,11 +114,16 @@ def optimize(
     best_stats: dict | None = None
     best_score = float("-inf")
 
+    # Precompute snapshots once for this window; every config reuses them
+    # (the precompute is ~2/3 of a backtest, so this ~3x's the search).
+    prepared = prepare_bars(bars_by_symbol)
+
     for cfg in sample_configs(space, search_iters, seed):
         try:
             res = run_daily_backtest(
                 strategy_name, bars_by_symbol,
                 starting_cash=starting_cash, benchmark=benchmark, params=cfg,
+                prepared=prepared,
             )
         except Exception:
             logger.exception("optimize: backtest failed (%s, %s)", strategy_name, cfg)

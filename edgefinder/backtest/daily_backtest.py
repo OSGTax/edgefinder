@@ -190,6 +190,28 @@ def _max_drawdown(equity: list[float]) -> float:
     return round(mdd, 4)
 
 
+def prepare_bars(bars_by_symbol: dict, progress_cb=None) -> tuple[dict, list]:
+    """Precompute the immutable per-symbol structures (sorted dates, OHLCV,
+    indicator snapshots) once. The optimizer reuses this across many param
+    configs so the precompute (~2/3 of a backtest's cost) runs once per window
+    instead of once per config. Returns ``(prep, sorted_days)``."""
+    prep: dict[str, dict] = {}
+    all_days: set = set()
+    items = list(bars_by_symbol.items())
+    for i, (sym, df) in enumerate(items):
+        d = df.sort_values("date").reset_index(drop=True)
+        ohlcv = d[_OHLCV].reset_index(drop=True)
+        prep[sym] = {
+            "dates": list(d["date"]),
+            "ohlcv": ohlcv,
+            "snaps": precompute_snapshots(ohlcv),
+        }
+        all_days.update(d["date"])
+        if progress_cb and (i % 50 == 0 or i == len(items) - 1):
+            progress_cb({"phase": "prepare", "done": i + 1, "total": len(items)})
+    return prep, sorted(all_days)
+
+
 def run_daily_backtest(
     strategy_name: str,
     bars_by_symbol: dict[str, pd.DataFrame],
@@ -200,12 +222,18 @@ def run_daily_backtest(
     progress_cb: Callable[[dict], None] | None = None,
     min_history: int = 30,
     params: dict | None = None,
+    prepared: tuple | None = None,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
 
     ``bars_by_symbol``: {symbol: DataFrame with columns
     [date, open, high, low, close, volume]}. Returns a dict with the equity
     curve, realized trades, end-of-run open positions, and summary stats.
+
+    ``prepared``: optional ``(prep, days)`` from ``prepare_bars`` — the
+    immutable precomputed snapshots. Pass it to reuse one precompute across
+    many param configs (the optimizer's hot loop); the per-run cursors
+    (history pointers) are always rebuilt fresh, so reuse is safe.
     """
     arena = BacktestArena(provider=_NullProvider())
     arena.load_strategies()
@@ -228,26 +256,23 @@ def run_daily_backtest(
     if fundamentals:
         arena.set_fundamentals_cache(fundamentals)
 
-    # Pre-sort each symbol once; advance a per-symbol pointer as days progress
-    # (avoids O(days^2) boolean filtering).
-    per_sym: dict[str, dict] = {}
-    all_days: set[date] = set()
-    n_symbols = len(bars_by_symbol)
-    for i, (sym, df) in enumerate(bars_by_symbol.items()):
-        d = df.sort_values("date").reset_index(drop=True)
-        ohlcv = d[_OHLCV].reset_index(drop=True)
-        per_sym[sym] = {
-            "dates": list(d["date"]),
-            "ohlcv": ohlcv,
-            "snaps": precompute_snapshots(ohlcv),
+    # Immutable precompute (sorted dates, OHLCV, indicator snapshots): reuse a
+    # cached copy across param configs when given, else compute it once here.
+    if prepared is None:
+        prep, days = prepare_bars(bars_by_symbol, progress_cb)
+    else:
+        prep, days = prepared
+    # Per-run cursors (history buffer + pointers) are always fresh — the run
+    # mutates these, never the shared immutable prep.
+    per_sym: dict[str, dict] = {
+        sym: {
+            "dates": p["dates"], "ohlcv": p["ohlcv"], "snaps": p["snaps"],
             "hist": IndicatorHistory(max_days=_HIST_DAYS),
             "added": 0,   # rolling-history high-water mark
             "ptr": 0,
         }
-        all_days.update(d["date"])
-        if progress_cb and (i % 50 == 0 or i == n_symbols - 1):
-            progress_cb({"phase": "prepare", "done": i + 1, "total": n_symbols})
-    days = sorted(all_days)
+        for sym, p in prep.items()
+    }
 
     context = MarketContext()  # neutral broad-market state
     equity_curve: list[dict] = []
