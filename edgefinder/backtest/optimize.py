@@ -41,8 +41,11 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "trailing_stop_pct": [0.05, 0.08, 0.12, 0.20, 0.30],
     },
     "degenerate": {
-        "volume_spike_mult": [1.5, 2.0, 2.5, 3.0, 4.0],
-        "rsi_min": [40, 45, 50, 55, 60],
+        # Lower volume/rsi floors than before so the optimizer can pick
+        # higher-frequency configs (raises trade count, same volume-spike
+        # + bullish-momentum thesis).
+        "volume_spike_mult": [1.25, 1.5, 2.0, 2.5, 3.0],
+        "rsi_min": [35, 40, 45, 50, 55],
         "target_pct": [0.20, 0.30, 0.50, 0.75, 1.00],
         "risk_pct": [0.05, 0.10, 0.15, 0.20, 0.25],
         "max_hold_days": [5, 10, 20, 30, 45],

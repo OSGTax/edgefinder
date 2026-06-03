@@ -105,6 +105,7 @@ def run_walkforward(
     oos_days: int = DEFAULT_OOS_DAYS,
     step_days: int = DEFAULT_STEP_DAYS,
     holdout_days: int = 0,
+    holdout_is_days: int = 0,
     starting_cash: float = 10_000.0,
     do_optimize: bool = True,
     search_iters: int = 40,
@@ -164,7 +165,11 @@ def run_walkforward(
     holdout = None
     if holdout_days > 0 and wf_n >= is_days:
         h_start, h_end = days[wf_n], days[-1]
-        pre_start, pre_end = days[0], days[wf_n - 1]
+        # Fit the holdout config on the pre-holdout data: all of it by default,
+        # or just the last holdout_is_days (keeps long-history runs tractable
+        # and mirrors the per-fold IS length).
+        opt_start_idx = max(0, wf_n - holdout_is_days) if holdout_is_days > 0 else 0
+        pre_start, pre_end = days[opt_start_idx], days[wf_n - 1]
         h_params: dict = {}
         if do_optimize:
             pre_bars = _slice(bars_by_symbol, pre_start, pre_end)

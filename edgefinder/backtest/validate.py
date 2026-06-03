@@ -122,7 +122,8 @@ def _format_report(scorecard: dict) -> str:
 
 def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         search_iters: int, write: bool, is_days: int, oos_days: int,
-        step_days: int, holdout_days: int, pass_min_trades: int) -> dict:
+        step_days: int, holdout_days: int, holdout_is_days: int,
+        pass_min_trades: int) -> dict:
     engine = get_engine()
     session_factory = get_session_factory(engine)
     db = session_factory()
@@ -139,7 +140,8 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
     scorecard = run_walkforward(
         strategy, bars, spy_bars=spy, search_iters=search_iters,
         is_days=is_days, oos_days=oos_days, step_days=step_days,
-        holdout_days=holdout_days, pass_min_trades=pass_min_trades,
+        holdout_days=holdout_days, holdout_is_days=holdout_is_days,
+        pass_min_trades=pass_min_trades,
         progress_cb=lambda i: logger.info(
             "fold %s %s %s", i.get("fold"), i.get("oos"), i.get("holdout") or ""),
     )
@@ -177,6 +179,9 @@ def main() -> None:
     ap.add_argument("--step-days", type=int, default=126, help="fold step")
     ap.add_argument("--holdout-days", type=int, default=0,
                     help="reserve a final sealed holdout of N trading days (0 = none)")
+    ap.add_argument("--holdout-is-days", type=int, default=0,
+                    help="fit the holdout config on the last N pre-holdout days "
+                         "(0 = use all pre-holdout)")
     ap.add_argument("--pass-min-trades", type=int, default=30,
                     help="min OOS trades for the criteria to pass")
     ap.add_argument("--write", action="store_true", help="write reviews/ report")
@@ -191,7 +196,8 @@ def main() -> None:
         run(strat, mode=args.mode, top_n=args.top_n, symbols=symbols,
             search_iters=args.search_iters, write=args.write,
             is_days=args.is_days, oos_days=args.oos_days, step_days=args.step_days,
-            holdout_days=args.holdout_days, pass_min_trades=args.pass_min_trades)
+            holdout_days=args.holdout_days, holdout_is_days=args.holdout_is_days,
+            pass_min_trades=args.pass_min_trades)
 
 
 if __name__ == "__main__":
