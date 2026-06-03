@@ -115,6 +115,26 @@ class Settings(BaseSettings):
     market_close_et: str = "16:00"
     position_monitor_interval_minutes: int = 5
 
+    # ── LIVENESS WATCHDOG ────────────────────────────
+    # Detect a stalled intraday cycle (no trades opening/closing during
+    # market hours). The cycle writes a heartbeat each run; check_cycle_liveness
+    # alerts if it goes stale. 15 min ≈ 2×signal_check_interval + slack, so one
+    # missed cycle is tolerated but ≥2 consecutive misses alert.
+    liveness_stale_minutes: int = 15
+    liveness_open_grace_minutes: int = 10  # suppress alerts right after 09:30 ET
+    liveness_enabled: bool = True
+
+    # ── INTRADAY DRIVER ──────────────────────────────
+    # When True, the in-process APScheduler does NOT register the intraday
+    # signal_check/position_monitor jobs — an external GitHub Actions cron
+    # (intraday-cycle.yml → POST /api/admin/run-intraday) is the single driver
+    # instead, so the loop survives the Render web service idling. Explicit
+    # opt-in (not inferred from the trigger token) so a deploy never silently
+    # changes the driver: flip EDGEFINDER_INTRADAY_EXTERNAL_DRIVER=true on
+    # Render *together with* enabling the cron. Default False keeps the
+    # in-process timer (correct for local/dev with no cron).
+    intraday_external_driver: bool = False
+
     # ── DATA SOURCE (Polygon.io) ─────────────────────
     polygon_api_key: str = ""
     polygon_base_url: str = "https://api.polygon.io"

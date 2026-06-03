@@ -30,7 +30,12 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from edgefinder.agents.config import get_agent_config
 from edgefinder.agents.journal import record_observation
-from edgefinder.db.models import AgentObservation, StrategyAccount, TradeRecord
+from edgefinder.db.models import (
+    AgentObservation,
+    StrategyAccount,
+    SystemHeartbeat,
+    TradeRecord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +206,108 @@ def check_high_drawdown(
     return specs
 
 
+# ── Cycle liveness ──────────────────────────────────────────
+
+# The intraday cycle only runs Mon-Fri 09:30-16:00 ET (the scheduler /
+# the intraday cron). Liveness is only meaningful inside that window —
+# outside it, returning no spec lets persist_checks auto-resolve any
+# open stall and never alerts overnight/weekends.
+_MARKET_OPEN_ET = time(9, 30)
+_MARKET_CLOSE_ET = time(16, 0)
+
+
+def _in_market_hours(now: datetime, grace_min: int) -> bool:
+    """True if `now` (any tz) is Mon-Fri and within 09:30+grace .. 16:00 ET.
+
+    Compares full tz-aware datetimes (not bare times) so DST is handled
+    correctly by zoneinfo for the given date.
+    """
+    et = now.astimezone(_ET)
+    if et.weekday() >= 5:  # Sat=5, Sun=6
+        return False
+    open_dt = (
+        datetime.combine(et.date(), _MARKET_OPEN_ET, tzinfo=_ET)
+        + timedelta(minutes=grace_min)
+    )
+    close_dt = datetime.combine(et.date(), _MARKET_CLOSE_ET, tzinfo=_ET)
+    return open_dt <= et <= close_dt
+
+
+def check_cycle_liveness(
+    session: Session,
+    stale_minutes: int,
+    open_grace_minutes: int,
+    now: datetime | None = None,
+    component: str = "intraday_cycle",
+) -> list[ObservationSpec]:
+    """Flag a stalled intraday trading cycle.
+
+    The cycle writes a SystemHeartbeat at the end of every run — success,
+    controlled skip, or failure. We alert only during ET market hours, so
+    overnight/weekend silence and a clean 16:00 close never fire, and any
+    open stall auto-resolves once the window ends:
+      - no heartbeat row at all       → CRITICAL "missing"
+      - last_run_at older than stale  → CRITICAL "stale"
+      - latest run errored (ok=False) → CRITICAL "error"
+
+    A controlled skip is written fresh with ok=True, so a market holiday
+    reads as healthy without this check needing a holiday calendar (which
+    it couldn't obtain in a bare runner anyway).
+    """
+    now = now or datetime.now(timezone.utc)
+    if not _in_market_hours(now, open_grace_minutes):
+        return []
+
+    hb = session.query(SystemHeartbeat).filter(
+        SystemHeartbeat.component == component
+    ).one_or_none()
+
+    if hb is None:
+        return [ObservationSpec(
+            severity="CRITICAL",
+            category="cycle_liveness",
+            message=(
+                f"No heartbeat for '{component}' during market hours — the "
+                "intraday cycle has never run (entries/exits are not firing)."
+            ),
+            metadata={"key": component, "reason": "missing"},
+            dedup_key=("cycle_liveness", component),
+        )]
+
+    last = hb.last_run_at
+    if last.tzinfo is None:  # SQLite/Postgres round-trip naive datetimes
+        last = last.replace(tzinfo=timezone.utc)
+    age_min = (now - last).total_seconds() / 60.0
+
+    if age_min > stale_minutes:
+        return [ObservationSpec(
+            severity="CRITICAL",
+            category="cycle_liveness",
+            message=(
+                f"Intraday cycle STALLED: last heartbeat {age_min:.1f} min ago "
+                f"(threshold {stale_minutes}m). Open positions are unmonitored "
+                "— no stop/target checks are running."
+            ),
+            metadata={
+                "key": component, "reason": "stale",
+                "age_min": round(age_min, 1), "last_run_at": last.isoformat(),
+            },
+            dedup_key=("cycle_liveness", component),
+        )]
+
+    if not hb.ok:
+        err = (hb.detail or {}).get("error", "unknown")
+        return [ObservationSpec(
+            severity="CRITICAL",
+            category="cycle_liveness",
+            message=f"Intraday cycle ran but ERRORED: {err}",
+            metadata={"key": component, "reason": "error", "error": err},
+            dedup_key=("cycle_liveness", component),
+        )]
+
+    return []
+
+
 # ── Orchestration ──────────────────────────────────────────
 
 
@@ -222,6 +329,14 @@ def run_checks(
     specs.extend(check_negative_cash(session))
     specs.extend(check_account_paused(session))
     specs.extend(check_high_drawdown(session, drawdown_warn, drawdown_critical))
+    if bool(cfg.get("liveness_enabled", settings.liveness_enabled)):
+        specs.extend(check_cycle_liveness(
+            session,
+            stale_minutes=int(cfg.get("liveness_stale_minutes", settings.liveness_stale_minutes)),
+            open_grace_minutes=int(
+                cfg.get("liveness_open_grace_minutes", settings.liveness_open_grace_minutes)
+            ),
+        ))
     return specs
 
 

@@ -97,6 +97,27 @@ def init_database():
                     pass  # Column likely already exists
 
     logger.info("Column migrations complete")
+
+    # New tables that create_all (skipped on Render) won't create. Idempotent
+    # CREATE TABLE IF NOT EXISTS, guarded like the column migrations above.
+    logger.info("Ensuring new tables exist...")
+    table_ddls = [
+        """CREATE TABLE IF NOT EXISTS system_heartbeat (
+            id SERIAL PRIMARY KEY,
+            component VARCHAR(50) UNIQUE NOT NULL,
+            last_run_at TIMESTAMP NOT NULL,
+            ok BOOLEAN DEFAULT TRUE,
+            detail JSON
+        )""",
+    ]
+    with engine.begin() as conn:
+        for ddl in table_ddls:
+            try:
+                conn.execute(text(ddl))
+            except Exception:
+                logger.exception("Table DDL failed (may already exist)")
+    logger.info("New-table check complete")
+
     engine.dispose()
     logger.info("Database init done")
 

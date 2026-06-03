@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from edgefinder.agents.watchdog import (
     check_account_paused,
     check_cash_drift,
+    check_cycle_liveness,
     check_high_drawdown,
     check_negative_cash,
     persist_checks,
@@ -17,6 +18,7 @@ from edgefinder.agents.watchdog import (
 from edgefinder.db.models import (
     AgentObservation,
     StrategyAccount,
+    SystemHeartbeat,
     TradeRecord,
 )
 
@@ -162,7 +164,7 @@ class TestPersistChecks:
         # paused-only scenario: cash matches correct_cash and drawdown=0
         # so this triggers exactly one check.
         _make_account(db_session, "alpha", paused=True)
-        specs = run_checks(db_session, {})
+        specs = run_checks(db_session, {"liveness_enabled": False})
         assert len(specs) == 1
         summary = persist_checks(db_session, specs, agent_name="watchdog")
         assert summary == {"new": 1, "kept": 0, "resolved": 0}
@@ -170,7 +172,7 @@ class TestPersistChecks:
 
     def test_persisting_same_spec_twice_does_not_duplicate(self, db_session):
         _make_account(db_session, "alpha", paused=True)
-        specs = run_checks(db_session, {})
+        specs = run_checks(db_session, {"liveness_enabled": False})
 
         first = persist_checks(db_session, specs, agent_name="watchdog")
         assert first["new"] == 1
@@ -181,14 +183,14 @@ class TestPersistChecks:
 
     def test_cleared_condition_auto_resolves(self, db_session):
         account = _make_account(db_session, "alpha", paused=True)
-        persist_checks(db_session, run_checks(db_session, {}), agent_name="watchdog")
+        persist_checks(db_session, run_checks(db_session, {"liveness_enabled": False}), agent_name="watchdog")
 
         # Fix the condition — unpause.
         account.is_paused = False
         db_session.commit()
 
         summary = persist_checks(
-            db_session, run_checks(db_session, {}), agent_name="watchdog"
+            db_session, run_checks(db_session, {"liveness_enabled": False}), agent_name="watchdog"
         )
         assert summary["resolved"] == 1
 
@@ -199,7 +201,7 @@ class TestPersistChecks:
     def test_different_agents_do_not_interfere(self, db_session):
         _make_account(db_session, "alpha", paused=True)
         persist_checks(
-            db_session, run_checks(db_session, {}), agent_name="watchdog"
+            db_session, run_checks(db_session, {"liveness_enabled": False}), agent_name="watchdog"
         )
         # Another agent records something else — should not affect
         # watchdog's reconciliation.
@@ -214,14 +216,14 @@ class TestPersistChecks:
         db_session.commit()
 
         summary = persist_checks(
-            db_session, run_checks(db_session, {}), agent_name="watchdog"
+            db_session, run_checks(db_session, {"liveness_enabled": False}), agent_name="watchdog"
         )
         assert summary == {"new": 0, "kept": 1, "resolved": 0}
 
     def test_multiple_conditions_each_get_own_observation(self, db_session):
         # A single account can legitimately trigger multiple checks.
         _make_account(db_session, "alpha", cash=-10.0)
-        specs = run_checks(db_session, {})
+        specs = run_checks(db_session, {"liveness_enabled": False})
         # cash_drift + negative_cash both fire on this account.
         categories = {s.category for s in specs}
         assert "cash_drift" in categories
@@ -230,3 +232,91 @@ class TestPersistChecks:
         summary = persist_checks(db_session, specs, agent_name="watchdog")
         assert summary["new"] == len(specs)
         assert db_session.query(AgentObservation).count() == len(specs)
+
+
+# ── cycle liveness ──────────────────────────────────────────
+
+# Wed 2026-06-03 14:00 UTC = 10:00 ET (EDT) — mid-session, past the open grace.
+_MID_SESSION = datetime(2026, 6, 3, 14, 0, tzinfo=timezone.utc)
+
+
+def _make_heartbeat(
+    session,
+    component: str = "intraday_cycle",
+    age_min: float = 2.0,
+    ok: bool = True,
+    detail: dict | None = None,
+    now: datetime = _MID_SESSION,
+) -> SystemHeartbeat:
+    hb = SystemHeartbeat(
+        component=component,
+        last_run_at=now - timedelta(minutes=age_min),
+        ok=ok,
+        detail=detail or {},
+    )
+    session.add(hb)
+    session.commit()
+    return hb
+
+
+class TestCheckCycleLiveness:
+    def test_fresh_heartbeat_is_healthy(self, db_session):
+        _make_heartbeat(db_session, age_min=2.0)
+        assert check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION) == []
+
+    def test_stale_heartbeat_is_critical(self, db_session):
+        _make_heartbeat(db_session, age_min=30.0)
+        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        assert len(specs) == 1
+        assert specs[0].severity == "CRITICAL"
+        assert specs[0].category == "cycle_liveness"
+        assert specs[0].dedup_key == ("cycle_liveness", "intraday_cycle")
+        assert specs[0].metadata["reason"] == "stale"
+
+    def test_stale_outside_market_hours_is_silent(self, db_session):
+        _make_heartbeat(db_session, age_min=120.0)
+        saturday = datetime(2026, 6, 6, 14, 0, tzinfo=timezone.utc)
+        assert check_cycle_liveness(db_session, 15, 10, now=saturday) == []
+
+    def test_errored_run_is_critical(self, db_session):
+        _make_heartbeat(
+            db_session, age_min=2.0, ok=False,
+            detail={"error": "ValueError: boom"},
+        )
+        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        assert len(specs) == 1
+        assert specs[0].metadata["reason"] == "error"
+        assert "boom" in specs[0].message
+
+    def test_holiday_skip_reads_healthy(self, db_session):
+        # A controlled skip writes a *fresh* ok=True heartbeat → not a stall,
+        # so the watchdog needs no holiday calendar of its own.
+        _make_heartbeat(
+            db_session, age_min=1.0, ok=True,
+            detail={"skipped": "market holiday"},
+        )
+        assert check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION) == []
+
+    def test_missing_heartbeat_is_critical(self, db_session):
+        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        assert len(specs) == 1
+        assert specs[0].metadata["reason"] == "missing"
+
+    def test_within_open_grace_is_silent(self, db_session):
+        # 13:35 UTC = 09:35 ET (EDT); grace=10 ⇒ window opens 09:40 ⇒ suppressed.
+        early = datetime(2026, 6, 3, 13, 35, tzinfo=timezone.utc)
+        _make_heartbeat(db_session, age_min=30.0, now=early)
+        assert check_cycle_liveness(db_session, 15, 10, now=early) == []
+
+    def test_reconciliation_resolves_when_fresh_again(self, db_session):
+        _make_heartbeat(db_session, age_min=30.0)
+        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        summary = persist_checks(db_session, specs, agent_name="watchdog")
+        assert summary["new"] == 1
+
+        hb = db_session.query(SystemHeartbeat).one()
+        hb.last_run_at = _MID_SESSION - timedelta(minutes=2)
+        db_session.commit()
+        specs2 = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        summary2 = persist_checks(db_session, specs2, agent_name="watchdog")
+        assert summary2["resolved"] == 1

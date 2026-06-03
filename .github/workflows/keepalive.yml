@@ -1,23 +1,27 @@
 name: Market-hours keepalive
 
-# Keeps the Render web service awake during the trading session so the
-# in-process intraday cycle (signal_check / position_monitor, every 5 min)
-# actually fires. Without this the service idles after the morning and
-# entries/exits stall mid-session — a root cause of "0 closed trades".
+# SUPERSEDED by the Intraday Cycle workflow (intraday-cycle.yml). That cron
+# now wakes the Render box every 5 min AND runs the cycle, so a separate
+# warmth ping is redundant. Set KEEPALIVE_ENABLED=false. The file is kept so
+# that reverting to the in-process timer (set EDGEFINDER_INTRADAY_EXTERNAL_DRIVER
+# =false on Render) still has its warmth helper available — just flip the
+# variable back on.
 #
-# This just pings the public /api/health endpoint; no secret required.
-# Covers both EDT and EST market hours via a wide UTC range (13:00-22:00).
+# Original purpose: keep the web service awake so the in-process intraday
+# cycle (signal_check / position_monitor, every 5 min) actually fires.
+# Pings the public /api/health endpoint; no secret required. Covers both EDT
+# and EST market hours via a wide UTC range (13:00-22:00).
 #
 # --- Enabling ---------------------------------------------------------
 # Repo -> Settings -> Secrets and variables -> Actions -> Variables:
 #   - EDGEFINDER_URL   = https://<your-app>.onrender.com
-#   - KEEPALIVE_ENABLED = true   (kill switch)
+#   - KEEPALIVE_ENABLED = true   (kill switch; leave 'false' under cron-driven mode)
 #
 # --- Stopping ---------------------------------------------------------
 # Flip KEEPALIVE_ENABLED to 'false' — the `if:` gate skips the job.
 #
 # Note: a dedicated always-on worker service is the more robust long-term
-# answer for a real-money system; this cron is the low-effort fix.
+# answer for a real-money system; the cron-driven model is the low-effort fix.
 
 on:
   schedule:

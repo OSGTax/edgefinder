@@ -234,6 +234,30 @@ class StrategySnapshot(Base):
     total_return_pct: Mapped[float] = mapped_column(Float)
 
 
+# ── system_heartbeat ────────────────────────────────────
+
+
+class SystemHeartbeat(Base):
+    """Liveness beacon written by in-process scheduled jobs.
+
+    One row per ``component`` (e.g. "intraday_cycle"). The owning job
+    upserts this at the END of every invocation — success, controlled
+    skip, or failure — so an external watchdog can distinguish "ran
+    fine", "ran but errored", and "didn't run at all" without reading
+    process memory or logs. A controlled skip (market holiday, not-ready)
+    is written *fresh* with ``ok=True`` so a legitimate no-op never reads
+    as a stall.
+    """
+
+    __tablename__ = "system_heartbeat"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    component: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    last_run_at: Mapped[datetime] = mapped_column(DateTime)  # UTC tz-aware
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    detail: Mapped[dict | None] = mapped_column(JSON)
+
+
 # ── 7. index_daily ──────────────────────────────────────
 
 

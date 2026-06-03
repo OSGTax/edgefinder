@@ -4,8 +4,45 @@ Continuation notes for picking this work up in a Codespace (or any fresh
 Claude Code session). The chat history doesn't transfer between environments,
 but everything needed to continue is here + in git.
 
-**Branch:** `claude/magical-cannon-utlBM`  •  **Version:** 5.12.1
+**Branch:** `main`  •  **Version:** 5.13.0
 **Read first:** this file, then `CLAUDE.md`.
+
+---
+
+## Update — 2026-06-03 (validation answered + structural fixes #1/#2)
+
+**Validation ran on real data. Verdict: all three strategies FAIL OOS.**
+Completed the SPY/QQQ/IWM/DIA daily-bars backfill (full 2023-05-30 →
+2026-05-26 range, 750 bars each — the benchmark gap is closed) and ran the
+walk-forward validator (top-50, 2-fold). OOS scorecards:
+- coward: +1.59% total, Sharpe −0.03, **−5.7% vs SPY**, 1/2 folds → FAIL
+- gambler: +1.13% total, Sharpe 0.15, **−5.98% vs SPY**, 1/2 folds → FAIL
+- degenerate: +14.24% total, Sharpe 0.53, **+1.05% vs SPY**, 1/2 folds, only
+  10 trades → FAIL (beats SPY but on too few trades / 1 fold = noise)
+None show validated, SPY-beating risk-adjusted edge. Caveats stand (2 folds,
+thin trade counts, fundamentals gate off, survivorship bias).
+
+**Structural fixes built (v5.13.0), tested (460 pass), NOT yet cut over:**
+- #1 Liveness watchdog + GitHub-issue alerts — `system_heartbeat` table +
+  `check_cycle_liveness` in the watchdog + `edgefinder/agents/alerts.py` +
+  `.github/workflows/liveness.yml`. Detects a stalled loop, pages via a
+  GitHub issue, auto-closes on recovery. See CLAUDE.md "Cycle liveness" + alerts.
+- #2 Cron-driven intraday loop (single driver) — `POST /api/admin/run-intraday`
+  + `run_intraday_jobs` (single-flight) + `.github/workflows/intraday-cycle.yml`
+  + `intraday_external_driver` flag; keepalive superseded. See CLAUDE.md
+  "Live trading loop — cron-driven".
+- **Cutover (all config, no code):** deploy (inert until opted in) → Render
+  `EDGEFINDER_INTRADAY_EXTERNAL_DRIVER=true` + restart → repo vars
+  `INTRADAY_CYCLE_ENABLED=true`, `LIVENESS_ENABLED=true`, `KEEPALIVE_ENABLED=false`.
+
+**DB access from a Codespace:** `DATABASE_URL` must be the **pooler** host
+(`postgresql://postgres.<ref>:<pw>@aws-1-us-east-1.pooler.supabase.com:5432/postgres`),
+NOT the direct `db.<ref>.supabase.co` host — the direct host is IPv6-only and
+unreachable from Codespaces. Tests run fine with `DATABASE_URL=` (SQLite).
+
+**Next structural step (not built):** always-on Render worker to replace the
+cron driver for real-money-grade reliability (sub-5-min, no cron drift,
+event-driven exits). The cron-driven model is the interim.
 
 ---
 
@@ -46,10 +83,11 @@ history that was never persisted.
 
 All tests green: `pytest -m "not integration" --ignore=tests/test_market.py` (440).
 
-## Known data gap (blocks the "beat SPY" verdict over full history)
-`daily_bars` spans 2023-05-30 → 2026-05-26 (~2,691 symbols), but **SPY has only
-50 rows** there and `index_daily` SPY only ~290 (since 2025-04). The SPY/QQQ/
-IWM/DIA backfill needs completing so the benchmark spans the full range.
+## Known data gap — RESOLVED (2026-06-03)
+~~`daily_bars` SPY had only 50 rows.~~ Backfilled SPY/QQQ/IWM/DIA to the full
+2023-05-30 → 2026-05-26 range (750 bars each) via
+`scripts/backfill_daily_bars.py`. The benchmark now spans the full history and
+the validator produced verdicts (see the 2026-06-03 update above).
 
 ---
 

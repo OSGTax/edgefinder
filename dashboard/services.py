@@ -9,6 +9,7 @@ Called once from app.py lifespan. Module-level singletons for router access.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 
 from config.settings import settings
@@ -23,6 +24,7 @@ from edgefinder.db.models import (
     DailyBar,
     StrategyAccount,
     StrategySnapshot,
+    SystemHeartbeat,
     Ticker,
     TickerStrategyQualification,
     TradeRecord,
@@ -49,6 +51,11 @@ _plan_access: dict[str, bool] = {}
 # resets to {} on each Render redeploy, which is the right semantics
 # (we only care about the current process's runtime state).
 _last_signal_check: dict = {}
+
+# Single-flight guard for the cron-driven intraday cycle: a slow or
+# overlapping POST /api/admin/run-intraday must never run two cycles
+# concurrently against the shared in-memory arena.
+_intraday_lock = threading.Lock()
 
 
 def get_plan_access() -> dict[str, bool]:
@@ -216,11 +223,16 @@ def init_services() -> None:
     # Event bus — persist trades and capture market snapshots
     _wire_event_bus()
 
-    # Scheduler — wire all jobs and start
+    # Scheduler — wire all jobs and start. When the external-driver flag is set
+    # (on Render, where the intraday-cycle cron drives the loop), the in-process
+    # intraday timer is disabled so the cron is the SINGLE driver — no
+    # double-execution against the shared arena. Default off, so a deploy never
+    # silently changes the driver and local/dev keeps the in-process timer.
+    _intraday_external = settings.intraday_external_driver
     _scheduler = EdgeFinderScheduler()
     _scheduler.setup(
-        signal_check_fn=_signal_check_job,
-        position_monitor_fn=_position_monitor_job,
+        signal_check_fn=None if _intraday_external else _signal_check_job,
+        position_monitor_fn=None if _intraday_external else _position_monitor_job,
         nightly_scan_fn=_nightly_scan_job,
         benchmark_collect_fn=_benchmark_job,
         snapshot_fn=_snapshot_job,
@@ -230,6 +242,11 @@ def init_services() -> None:
         daily_indicator_fn=_daily_indicator_job,
     )
     _scheduler.start()
+    if _intraday_external:
+        logger.info(
+            "Intraday cycle driven by external cron (external-driver flag on) — "
+            "in-process signal_check/position_monitor timer disabled"
+        )
 
     logger.info("Trading pipeline initialized — all services running")
 
@@ -972,6 +989,40 @@ def _daily_indicator_job() -> None:
         logger.exception("Daily indicator cycle failed")
 
 
+def _record_heartbeat(component: str, ok: bool, detail: dict) -> None:
+    """Upsert the single per-component liveness heartbeat row.
+
+    Best-effort and isolated on its own session: heartbeat bookkeeping
+    must never roll back or break the trading cycle. One row per
+    component, so a plain SELECT-then-insert/update is correct on both
+    SQLite (dev) and Postgres (prod) without dialect-specific upserts.
+    A controlled skip is written fresh with ok=True so a legitimate
+    no-op (holiday, not-ready) never reads as a stall to the watchdog.
+    """
+    if not _session_factory:
+        return
+    session = _session_factory()
+    try:
+        hb = session.query(SystemHeartbeat).filter(
+            SystemHeartbeat.component == component
+        ).one_or_none()
+        now = datetime.now(timezone.utc)
+        if hb is None:
+            session.add(SystemHeartbeat(
+                component=component, last_run_at=now, ok=ok, detail=detail
+            ))
+        else:
+            hb.last_run_at = now
+            hb.ok = ok
+            hb.detail = detail
+        session.commit()
+    except Exception:
+        logger.exception("Heartbeat upsert failed for %s", component)
+        session.rollback()
+    finally:
+        session.close()
+
+
 def _signal_check_job() -> None:
     """Called every 5 min during market hours. Runs the intraday cycle."""
     global _last_signal_check
@@ -979,10 +1030,12 @@ def _signal_check_job() -> None:
     if not _arena or not _provider:
         _last_signal_check = {"ts": cycle_start.isoformat(), "skipped": "arena/provider not ready"}
         logger.warning("Signal check skipped: arena not initialized")
+        _record_heartbeat("intraday_cycle", ok=True, detail=dict(_last_signal_check))
         return
     if _is_market_holiday():
         _last_signal_check = {"ts": cycle_start.isoformat(), "skipped": "market holiday"}
         logger.info("Signal check skipped — market holiday")
+        _record_heartbeat("intraday_cycle", ok=True, detail=dict(_last_signal_check))
         return
     try:
         from edgefinder.data.market_data import MarketContext
@@ -1023,6 +1076,7 @@ def _signal_check_job() -> None:
             "closed": len(closed),
             "success": True,
         }
+        _record_heartbeat("intraday_cycle", ok=True, detail=dict(_last_signal_check))
     except Exception as exc:
         logger.exception("Intraday cycle failed")
         _last_signal_check = {
@@ -1031,6 +1085,7 @@ def _signal_check_job() -> None:
             "success": False,
             "error": f"{type(exc).__name__}: {exc}",
         }
+        _record_heartbeat("intraday_cycle", ok=False, detail=dict(_last_signal_check))
 
 
 def _position_monitor_job() -> None:
@@ -1247,6 +1302,41 @@ def run_eod_jobs(jobs: list[str] | None = None) -> dict[str, str]:
             report[name] = "error"
     logger.info("EOD jobs complete: %s", report)
     return report
+
+
+def run_intraday_jobs() -> dict[str, str]:
+    """Run one intraday cycle on demand (entries+exits, then state/equity persist).
+
+    Triggered by POST /api/admin/run-intraday from the external cron, which is
+    the single driver of the live loop when a trigger token is configured (the
+    in-process timer is then disabled — see init_services). Reuses the exact
+    scheduler callbacks so there is no logic duplication and the dashboard's
+    last-signal-check widget stays correct for free.
+
+    Single-flight: a non-blocking lock drops an overlapping/slow fire rather
+    than running two cycles against the shared in-memory arena. Order matters —
+    signal_check (mutates positions/cash) must run before position_monitor
+    (snapshots equity) so the snapshot reflects post-cycle state.
+    """
+    if not _intraday_lock.acquire(blocking=False):
+        logger.warning("Intraday cycle already running — skipping this fire")
+        return {"status": "busy"}
+    try:
+        report: dict[str, str] = {}
+        for name, fn in (
+            ("signal_check", _signal_check_job),
+            ("position_monitor", _position_monitor_job),
+        ):
+            try:
+                fn()
+                report[name] = "ok"
+            except Exception:
+                logger.exception("Intraday job '%s' failed", name)
+                report[name] = "error"
+        logger.info("Intraday cycle complete: %s", report)
+        return report
+    finally:
+        _intraday_lock.release()
 
 
 def _persist_account_state(

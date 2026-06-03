@@ -260,8 +260,9 @@ postmortems read a single timeline alongside the trades table.
 - **watchdog** — two-phase management agent:
   1. **Deterministic checks** (`edgefinder/agents/watchdog.py`) — DB-only
      SQL checks: cash drift, negative cash, paused accounts, high
-     drawdown. Writes to `agent_observations`, reconciles against
-     prior unresolved rows (dedup + auto-resolve).
+     drawdown, **cycle liveness** (stalled intraday loop). Writes to
+     `agent_observations`, reconciles against prior unresolved rows
+     (dedup + auto-resolve).
   2. **Agentic reasoning** (`edgefinder/agents/reasoning.py`) — calls
      Claude (default `claude-opus-4-8`, adaptive thinking, prompt
      caching on system + memory) over the current observations + the
@@ -283,6 +284,27 @@ postmortems read a single timeline alongside the trades table.
   - CLI reasoning: `python -m edgefinder.agents.reasoning [--force] [--model MODEL]`.
   - Cron: `.github/workflows/watchdog.yml` (hourly, kill-switch via
     `WATCHDOG_ENABLED` repo variable).
+
+  **Cycle liveness + heartbeat (v5.13.0).** The intraday cycle writes a
+  `system_heartbeat` row (component `intraday_cycle`) at the end of every
+  run — success, controlled skip (holiday/not-ready, written fresh + ok),
+  or failure. `check_cycle_liveness` raises CRITICAL during market hours
+  if the heartbeat goes stale (>`liveness_stale_minutes`, default 15),
+  is missing, or the last run errored; it auto-resolves at the close.
+  This is the detector for a stalled loop — the original "0 closed
+  trades" failure mode. The holiday-skip-is-fresh trick means the check
+  needs no holiday calendar of its own.
+
+- **alerts** (`edgefinder/agents/alerts.py`) — projects unresolved
+  CRITICAL observations onto GitHub issues: opens a deduped issue per
+  finding (label `edgefinder-alert`, title keyed by `category/key`) and
+  auto-closes it on recovery. The issue is a pure projection of DB state,
+  so the loop is idempotent. Deterministic + quota-free (no Claude).
+  - Cron: `.github/workflows/liveness.yml` (every 15 min during market
+    hours, ET-gated, kill-switch `LIVENESS_ENABLED`). Runs the watchdog
+    deterministic checks then `alerts`. `gh` is authenticated by the
+    workflow `GITHUB_TOKEN` (`issues: write`); no PAT needed.
+  - CLI: `python -m edgefinder.agents.alerts [--dry-run] [--force] [--ignore-window]`.
 
 ### Automation model — set it once, runs itself forever
 The watchdog is designed to be fully unattended after a 5-minute
@@ -372,14 +394,42 @@ Default reasoning model is `claude-opus-4-8`. Downgrade to Sonnet 4.6
 via `WATCHDOG_REASONING_MODEL=claude-sonnet-4-6` in the workflow env
 if you want to conserve subscription quota on a larger cron schedule.
 
-### Next automation step (not yet built)
-To make the loop fully hands-off: add a step at the end of the
-workflow that reads `agent_actions` rows with `status='pending'` and
-`action_type='diagnose'` from the current tick, then calls
-`mcp__github__issue_write` (GitHub MCP) to create an issue for each
-one, and updates the row to `status='submitted'`. Then every
-escalation reaches you as a GitHub notification with no manual
-checking. Ping in a future session to build this.
+### Live trading loop — cron-driven (v5.13.0)
+Both trade entry and exit run in the in-process intraday cycle
+(`_signal_check_job` → `arena.run_intraday_cycle`). On Render the web
+service idles, so the in-process APScheduler timer stalls and positions
+go unmonitored — the root cause of "0 closed trades". The fix mirrors
+the EOD pattern: an external cron is the single driver.
+
+- Endpoint: `POST /api/admin/run-intraday` (token-guarded by
+  `eod_trigger_token`, 202 + background thread → `run_intraday_jobs`,
+  which runs `_signal_check_job` then `_position_monitor_job` under a
+  single-flight lock).
+- Cron: `.github/workflows/intraday-cycle.yml` (every 5 min, ET-gated to
+  09:30-16:00, 3×60s retry, kill-switch `INTRADAY_CYCLE_ENABLED`).
+- Single driver: when `intraday_external_driver` is true
+  (`EDGEFINDER_INTRADAY_EXTERNAL_DRIVER=true` on Render), `init_services`
+  does NOT register the in-process intraday jobs, so the cron is the only
+  driver (no double-execution). Default false ⇒ a deploy never silently
+  changes the driver; local/dev keeps the in-process timer.
+- `keepalive.yml` is superseded (set `KEEPALIVE_ENABLED=false`) — the
+  intraday cron wakes the box itself. Kept for rollback.
+- **Cutover (all config, no code):** deploy (inert) → set
+  `EDGEFINDER_INTRADAY_EXTERNAL_DRIVER=true` + restart → set repo vars
+  `INTRADAY_CYCLE_ENABLED=true`, `LIVENESS_ENABLED=true`,
+  `KEEPALIVE_ENABLED=false`. Instant rollback = flip the repo vars off.
+- **Known limits:** GitHub cron is best-effort (5-min granularity, can be
+  delayed/dropped → up to a ~5-min gap); exits are evaluated on a ~5-min
+  grid, not intrabar. An always-on Render worker is the upgrade path for
+  real money.
+
+### Auto-issue on CRITICAL — now built (v5.13.0)
+The previously-missing "escalations reach you automatically" loop is
+done: `edgefinder/agents/alerts.py` + `liveness.yml` open and auto-close
+GitHub issues for unresolved CRITICAL observations (see the **alerts**
+agent above). It projects from `agent_observations` (severity CRITICAL)
+rather than `agent_actions`, and uses the workflow `GITHUB_TOKEN` via the
+`gh` CLI — no GitHub MCP or PAT required.
 
 ### Running the watchdog from a Codespace (interactive / dev)
 The Codespace is for running ticks on demand while you iterate, not
