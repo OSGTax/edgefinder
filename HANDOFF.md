@@ -52,6 +52,30 @@ targeted follow-up (degenerate's volume-spike entries benefited a lot from the
 4× larger universe: top-50 → −15% FAIL, top-200 → this). Next: push its trade
 count over 30 (more history, larger/looser universe) and re-test the SAME bar.
 
+**Degenerate trade-count re-test (v5.13.3): extended history (backfilled
+top-300 to 2021-06, ~5y incl. the 2022 bear), top-300, looser entry
+(volume_spike_mult floor 1.25, rsi_min floor 35), 7 folds + sealed holdout,
+holdout config fit on the trailing 252d.** Result — the walk-forward criteria
+now ALL pass, but the SEALED HOLDOUT fails:
+
+- OOS: +21.72%, **Sharpe +0.63**, **+0.66% vs SPY**, **4/7 folds beat SPY**,
+  **77 trades** → criteria all_met = **TRUE** (trade-count bar finally cleared).
+- **Sealed holdout: −10.13%, Sharpe −1.69, −24.0% vs SPY, 11 trades → FAILS.**
+
+**Verdict: degenerate has NO robust edge.** The trade count went over 30 (77),
+but the moment you seal the future and stop letting the optimizer peek, it
+loses to SPY by 24% (Sharpe −1.69). And the holdout flips wildly by config:
+top-200/S20 run → holdout **+16%** (8 trades); this run → **−10%** (11 trades),
+SAME 6-month window. The walk-forward "PASS" is the optimistic number (per-fold
+re-optimization is selection bias on short adjacent OOS windows); the sealed
+holdout is the honest one, and it says no. Loosening the entry to raise trade
+count made the holdout WORSE (+16% → −10%) — the extra trades were noise. This
+is the "edge evaporates as trades rise → it was variance" outcome. **No
+configuration of any of the three strategies is a validated, SPY-beating edge.**
+Caveat: the holdout is one 6-month bull_calm window (small); but combined with
+the sign-flip across runs and the selection-biased walk-forward, the honest
+read is firmly negative.
+
 **Structural fixes built (v5.13.0), tested (460 pass), NOT yet cut over:**
 - #1 Liveness watchdog + GitHub-issue alerts — `system_heartbeat` table +
   `check_cycle_liveness` in the watchdog + `edgefinder/agents/alerts.py` +
