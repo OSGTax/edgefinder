@@ -224,6 +224,7 @@ def run_daily_backtest(
     params: dict | None = None,
     prepared: tuple | None = None,
     trade_start=None,
+    spy_bars: pd.DataFrame | None = None,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
 
@@ -242,6 +243,12 @@ def run_daily_backtest(
     200 bars) are None for the whole window — the bug that silently crippled
     every fold result before 2026-06-05. Stats (days, exposure, Sharpe) cover
     only the scored region.
+
+    ``spy_bars``: optional full SPY daily frame (date/close). When given, each
+    simulated day gets a REAL MarketContext (spy_price, spy_change_pct,
+    spy_sma_200) computed from SPY closes up to THAT day — so regime-gated
+    strategies are testable. Without it the context is neutral (all zeros =
+    "unknown"), matching the pre-2026-06 behavior.
     """
     arena = BacktestArena(provider=_NullProvider())
     arena.load_strategies()
@@ -282,7 +289,28 @@ def run_daily_backtest(
         for sym, p in prep.items()
     }
 
-    context = MarketContext()  # neutral broad-market state
+    # Broad-market context: real per-day SPY state when spy_bars is given
+    # (price, day change, 200dma — no look-ahead: day T uses closes <= T),
+    # else a neutral context (all zeros = unknown).
+    neutral_context = MarketContext()
+    context_by_day: dict = {}
+    if spy_bars is not None and len(spy_bars) > 0:
+        sdf = spy_bars.sort_values("date").reset_index(drop=True)
+        closes = sdf["close"].astype(float)
+        sma200 = closes.rolling(200).mean()
+        prev_close = closes.shift(1)
+        chg = ((closes - prev_close) / prev_close * 100).fillna(0.0)
+        for idx in range(len(sdf)):
+            d = sdf["date"].iloc[idx]
+            key = d.date() if hasattr(d, "date") else d
+            context_by_day[key] = MarketContext(
+                spy_price=float(closes.iloc[idx]),
+                spy_change_pct=round(float(chg.iloc[idx]), 4),
+                spy_sma_200=(
+                    float(sma200.iloc[idx]) if pd.notna(sma200.iloc[idx]) else 0.0
+                ),
+            )
+
     equity_curve: list[dict] = []
     closed_all: list = []
     exposure_days = 0
@@ -325,7 +353,8 @@ def run_daily_backtest(
         # (max-hold) replay faithfully instead of keying off wall-clock now().
         cd = current_day.date() if hasattr(current_day, "date") else current_day
         arena._clock = datetime.combine(cd, dtime(16, 0), tzinfo=timezone.utc)
-        _, closed = arena.run_intraday_cycle(snapshot_data, context)
+        day_context = context_by_day.get(cd, neutral_context)
+        _, closed = arena.run_intraday_cycle(snapshot_data, day_context)
         closed_all.extend(closed)
 
         # Mark held positions to the day's close and record equity.

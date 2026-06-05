@@ -94,6 +94,18 @@ class MarketContext:
     vix_level: float = 0.0
     market_regime: str = "sideways"
     sector_performance: dict = field(default_factory=dict)
+    # SPY trend state (0.0/None = unknown — strategies must treat absence as
+    # "no information", NOT as bearish). Live fills these from daily_bars;
+    # the backtester from its SPY series, so regime-gated entries are
+    # testable with the same semantics in both.
+    spy_sma_200: float = 0.0
+
+    @property
+    def spy_uptrend(self) -> bool | None:
+        """True/False when both SPY price and its 200dma are known; else None."""
+        if self.spy_price > 0 and self.spy_sma_200 > 0:
+            return self.spy_price > self.spy_sma_200
+        return None
 
 
 @dataclass

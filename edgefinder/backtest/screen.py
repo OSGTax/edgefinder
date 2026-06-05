@@ -56,7 +56,7 @@ def screen(strategy: str, *, mode: str = "top", top_n: int = 300,
     )
     res = run_daily_backtest(
         strategy, dev_bars, starting_cash=starting_cash,
-        benchmark=benchmark, params=params or {},
+        benchmark=benchmark, params=params or {}, spy_bars=spy,
     )
     return res["stats"] | {
         "strategy": strategy,

@@ -155,13 +155,14 @@ def run_walkforward(
                 benchmark=_benchmark_window(spy_bars, is_start, is_end),
                 starting_cash=starting_cash, search_iters=search_iters,
                 seed=seed, min_trades=min_trades, trade_start=is_start,
+                spy_bars=spy_bars,
             )
 
         oos_bars = _slice(bars_by_symbol, oos_warm_start, oos_end)
         res = run_daily_backtest(
             strategy_name, oos_bars, starting_cash=starting_cash,
             benchmark=_benchmark_window(spy_bars, oos_start, oos_end), params=params,
-            trade_start=oos_start,
+            trade_start=oos_start, spy_bars=spy_bars,
         )
         folds.append(Fold(
             len(folds), oos_start, oos_end, params, res["stats"],
@@ -192,12 +193,13 @@ def run_walkforward(
                 benchmark=_benchmark_window(spy_bars, pre_start, pre_end),
                 starting_cash=starting_cash, search_iters=search_iters,
                 seed=seed, min_trades=min_trades, trade_start=pre_start,
+                spy_bars=spy_bars,
             )
         h_warm_start = days[max(0, wf_n - warmup_days)]
         h_bars = _slice(bars_by_symbol, h_warm_start, h_end)
         h_res = run_daily_backtest(
             strategy_name, h_bars, starting_cash=starting_cash,
-            trade_start=h_start,
+            trade_start=h_start, spy_bars=spy_bars,
             benchmark=_benchmark_window(spy_bars, h_start, h_end), params=h_params,
         )
         holdout = {

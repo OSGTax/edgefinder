@@ -265,3 +265,53 @@ def test_trade_start_warmup_enables_indicators():
     opened = res["stats"]["num_closed_trades"] + res["stats"]["num_open_positions"]
     assert opened >= 1, res["stats"]
     assert res["stats"]["days"] <= 63  # equity curve covers scored days only
+
+
+# ── market context: real per-day SPY state reaches strategies ────
+
+
+class _ContextProbe(BaseStrategy):
+    """Records the MarketContext it sees each day; never trades."""
+
+    risk_pct = 0.02
+    stop_pct = 0.20
+    target_pct = 0.15
+    max_concentration_pct = 0.20
+    seen: list = []
+
+    @property
+    def name(self): return "_context_probe"
+    @property
+    def version(self): return "1.0"
+    @property
+    def preferred_signals(self): return []
+    def init(self): pass
+    def generate_signals(self, ticker, bars): return []
+    def qualifies_stock(self, fundamentals): return True
+    def on_trade_executed(self, n): pass
+
+    def evaluate(self, ticker, data):
+        type(self).seen.append(
+            (data.context.spy_price, data.context.spy_sma_200,
+             data.context.spy_uptrend))
+        return None
+
+
+def test_per_day_spy_context_reaches_strategies():
+    StrategyRegistry._strategies["_context_probe"] = _ContextProbe
+    _ContextProbe.seen = []
+    try:
+        bars = {"TEST": _series([100.0 + i * 0.1 for i in range(260)])}
+        spy = _series([400.0 + i * 0.5 for i in range(260)])  # rising SPY
+        run_daily_backtest("_context_probe", {"TEST": bars["TEST"]},
+                           starting_cash=10_000.0, spy_bars=spy)
+        assert _ContextProbe.seen, "probe never evaluated"
+        # Every day saw a real SPY price (not the neutral 0.0)
+        assert all(p > 0 for p, _, _ in _ContextProbe.seen)
+        # Early days: sma200 unknown -> spy_uptrend is None (no information)
+        assert _ContextProbe.seen[0][2] is None
+        # Late days (>200 bars): sma200 known and rising SPY => uptrend True
+        assert _ContextProbe.seen[-1][1] > 0
+        assert _ContextProbe.seen[-1][2] is True
+    finally:
+        StrategyRegistry._strategies.pop("_context_probe", None)
