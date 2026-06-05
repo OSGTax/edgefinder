@@ -94,6 +94,29 @@ read is firmly negative.
 NOT the direct `db.<ref>.supabase.co` host — the direct host is IPv6-only and
 unreachable from Codespaces. Tests run fine with `DATABASE_URL=` (SQLite).
 
+## Update — 2026-06-05 PM (dashboard verifiability roadmap shipped)
+
+v5.14.0–v5.16.0, all deployed + verified live the same day:
+- **P1 Live Proof** (`edgefinder/analytics/live_scorecard.py`, GET
+  /api/strategies/scorecard): the offline validation bar (Sharpe>0 AND beats
+  SPY AND >=30 trades) applied continuously to LIVE data; PASS/FAIL card on
+  the dashboard. All three strategies currently FAIL it — by design.
+- **P2 validation_runs** table + GET /api/strategies/validation: every lab run
+  persists its scorecard; dashboard shows offline verdict beside live evidence
+  ("validated" = criteria.all_met AND sealed holdout passes). Seeded with the
+  2026-06-03 results.
+- **P4** trade timeline fixed (reasoning/indicators now serialized).
+- **P5 hash chain v2**: chain now computed at persist time in TradeJournal,
+  anchored to stored rows (v1 was unverifiable: in-memory anchor + discarded
+  close hashes). verify_chain() + GET /api/trades/integrity + trades-page
+  badge. Existing 8 trades = legacy (2 verify); new trades verify end-to-end.
+- **P6 ops panel**: GET /api/ops/health + System Health card (heartbeat age,
+  alerts, scheduler).
+
+**Remaining roadmap: P3 promotion pipeline** (strategy_parameters → only
+validated configs trade) — deferred until something passes validation.
+Strategy research through the honest lab is the open frontier.
+
 ## Update — 2026-06-05 (Render incident root-caused + real URL)
 
 - **The real live service is `https://edgefinder-pm8h.onrender.com`** (service
