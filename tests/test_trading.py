@@ -215,16 +215,17 @@ class TestExecutor:
         assert len(closed) == 1
         assert closed[0].exit_reason == "TARGET_HIT"
 
-    def test_integrity_hash_chain(self):
+    def test_chain_fields_assigned_at_persist_not_execution(self):
+        # v2 (2026-06-05): the hash chain is computed by TradeJournal at
+        # persist time, anchored to stored rows — the old in-memory executor
+        # chain reset every restart and discarded close hashes, making the
+        # stored chain unverifiable. Events no longer carry chain fields.
+        # Chain behavior is covered in tests/test_integrity.py.
         acct = VirtualAccount("alpha")
         executor = Executor(acct)
-        s1 = self._make_signal(ticker="AAPL")
-        s2 = self._make_signal(ticker="MSFT")
-        t1 = executor.execute_signal(s1)
-        t2 = executor.execute_signal(s2)
-        assert t1.integrity_hash != t2.integrity_hash
-        assert t1.sequence_num == 1
-        assert t2.sequence_num == 2
+        t1 = executor.execute_signal(self._make_signal(ticker="AAPL"))
+        assert t1.sequence_num is None
+        assert t1.integrity_hash is None
 
 
 # ── Arena Tests ──────────────────────────────────────────

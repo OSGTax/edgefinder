@@ -467,10 +467,28 @@ function initFilters() {
   });
 }
 
+// ── Integrity badge ──────────────────────────────────────────
+
+async function loadIntegrityBadge() {
+  const el = document.getElementById('integrity-badge');
+  if (!el) return;
+  try {
+    const r = await api('/api/trades/integrity');
+    const t = r.totals || {};
+    const legacy = (t.legacy_unverified || 0) + (t.unsequenced || 0);
+    el.innerHTML = r.ok
+      ? `<span class="pill pill-positive" title="Every trade's hash chain recomputed from stored rows">CHAIN VERIFIED · ${t.verified}</span>`
+      : `<span class="pill pill-warning" title="${r.note || ''}">CHAIN: ${t.verified} verified · ${legacy} legacy</span>`;
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
 // ── Init ─────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', async () => {
   initFilters();
+  loadIntegrityBadge();
   await Promise.all([
     loadStrategyFilter(),
     loadStats(''),

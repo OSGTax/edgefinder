@@ -38,7 +38,10 @@ class TradeJournal:
         )
 
         if existing:
-            # Update existing trade (e.g., closing an open trade)
+            # Update existing trade (e.g., closing an open trade).
+            # NOTE: sequence_num/integrity_hash are intentionally never
+            # touched here — the hash chain covers row INSERTION order and
+            # must stay immutable for verification (see _next_chain_link).
             existing.exit_price = trade.exit_price
             existing.exit_time = trade.exit_time
             existing.status = trade.status.value
@@ -52,6 +55,7 @@ class TradeJournal:
             existing.pdt_flag = getattr(trade, 'pdt_flag', False)
             existing.hold_duration_hours = getattr(trade, 'hold_duration_hours', None)
         else:
+            sequence_num, integrity_hash = self._next_chain_link(trade)
             record = TradeRecord(
                 trade_id=trade.trade_id,
                 strategy_name=trade.strategy_name,
@@ -75,8 +79,8 @@ class TradeJournal:
                 sentiment_score=trade.sentiment_score,
                 sentiment_data=trade.sentiment_data,
                 technical_signals=trade.technical_signals,
-                sequence_num=trade.sequence_num,
-                integrity_hash=trade.integrity_hash,
+                sequence_num=sequence_num,
+                integrity_hash=integrity_hash,
                 entry_reasoning=getattr(trade, 'entry_reasoning', None),
                 indicators_at_entry=getattr(trade, 'indicators_at_entry', None),
                 fundamentals_at_entry=getattr(trade, 'fundamentals_at_entry', None),
@@ -86,6 +90,42 @@ class TradeJournal:
 
         if commit:
             self._session.commit()
+
+    def _next_chain_link(self, trade: Trade) -> tuple[int, str]:
+        """Next (sequence_num, integrity_hash) for this strategy's hash chain.
+
+        v2 scheme (2026-06-05): the chain is computed at PERSISTENCE time,
+        per strategy, anchored to the previous STORED row — so it survives
+        process restarts and every link is verifiable from the DB alone:
+
+            hash_n = sha256(f"{trade_id}:{seq_n}:{hash_(n-1)}")   (hash_0 = "")
+
+        The old scheme chained in-memory executor state: close events
+        advanced the chain but their hashes were never stored, and the
+        anchor reset every boot — making stored rows structurally
+        unverifiable. Rows written before this fix remain a legacy segment;
+        the first v2 row chains onto the last legacy row's stored hash,
+        which also freezes the legacy tail against silent edits.
+        """
+        import hashlib
+
+        prev = (
+            self._session.query(
+                TradeRecord.sequence_num, TradeRecord.integrity_hash
+            )
+            .filter(
+                TradeRecord.strategy_name == trade.strategy_name,
+                TradeRecord.sequence_num.is_not(None),
+            )
+            .order_by(TradeRecord.sequence_num.desc())
+            .first()
+        )
+        seq = (prev[0] + 1) if prev and prev[0] else 1
+        prev_hash = (prev[1] or "") if prev else ""
+        digest = hashlib.sha256(
+            f"{trade.trade_id}:{seq}:{prev_hash}".encode()
+        ).hexdigest()
+        return seq, digest
 
     def get_trades(
         self,

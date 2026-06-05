@@ -6,7 +6,6 @@ and manages the lifecycle of trades in virtual accounts.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -24,8 +23,6 @@ class Executor:
 
     def __init__(self, account: VirtualAccount) -> None:
         self.account = account
-        self._sequence_num = 0
-        self._prev_hash = ""
 
     def execute_signal(
         self,
@@ -84,7 +81,6 @@ class Executor:
         )
 
         self.account.open_position(position)
-        self._sequence_num += 1
 
         trade = Trade(
             trade_id=trade_id,
@@ -100,8 +96,8 @@ class Executor:
             status=TradeStatus.OPEN,
             technical_signals=signal.indicators,
             entry_time=datetime.now(timezone.utc),
-            sequence_num=self._sequence_num,
-            integrity_hash=self._compute_hash(trade_id),
+            # sequence_num/integrity_hash: assigned by TradeJournal at persist
+            # time (DB-anchored hash chain — see journal._next_chain_link).
         )
 
         event_bus.publish("trade.opened", trade)
@@ -127,7 +123,6 @@ class Executor:
 
             if reason:
                 result = self.account.close_position(position, price, reason)
-                self._sequence_num += 1
 
                 trade = Trade(
                     trade_id=result["trade_id"],
@@ -147,8 +142,6 @@ class Executor:
                     r_multiple=result["r_multiple"],
                     exit_reason=reason,
                     exit_time=datetime.now(timezone.utc),
-                    sequence_num=self._sequence_num,
-                    integrity_hash=self._compute_hash(result["trade_id"]),
                 )
                 closed_trades.append(trade)
                 event_bus.publish("trade.closed", trade)
@@ -159,7 +152,6 @@ class Executor:
         """Close an open position due to a bearish exit signal."""
         reason = f"SIGNAL_EXIT:{signal_pattern}"
         result = self.account.close_position(position, price, reason)
-        self._sequence_num += 1
 
         trade = Trade(
             trade_id=result["trade_id"],
@@ -179,8 +171,6 @@ class Executor:
             r_multiple=result["r_multiple"],
             exit_reason=reason,
             exit_time=datetime.now(timezone.utc),
-            sequence_num=self._sequence_num,
-            integrity_hash=self._compute_hash(result["trade_id"]),
         )
         event_bus.publish("trade.closed", trade)
         return trade
@@ -241,9 +231,3 @@ class Executor:
             return round(price + slip, 2)
         return round(price - slip, 2)
 
-    def _compute_hash(self, trade_id: str) -> str:
-        """SHA-256 hash chaining for audit trail."""
-        data = f"{trade_id}:{self._sequence_num}:{self._prev_hash}"
-        h = hashlib.sha256(data.encode()).hexdigest()
-        self._prev_hash = h
-        return h

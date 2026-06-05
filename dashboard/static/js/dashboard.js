@@ -123,7 +123,7 @@ async function loadEquityCurve(days = 90) {
 
     if (equityData.length === 0) {
       // Show flat line at starting capital
-      equityData.push({ time: Math.floor(Date.now() / 1000), value: STARTING_CAPITAL });
+      equityData.push({ time: Math.floor(Date.now() / 1000), value: FALLBACK_STARTING_CAPITAL });
     }
 
     const container = document.getElementById('equity-chart');
@@ -554,6 +554,54 @@ function initProofTabs() {
   });
 }
 
+// ── System Health (ops) ─────────────────────────────────────
+
+async function loadOpsHealth() {
+  const el = document.getElementById('ops-body');
+  if (!el) return;
+  try {
+    const ops = await api('/api/ops/health');
+    const badge = document.getElementById('ops-alert-badge');
+    const counts = ops.observation_counts || {};
+    if (badge) {
+      badge.innerHTML = counts.critical
+        ? `<span class="pill pill-negative">${counts.critical} CRITICAL</span>`
+        : (counts.warn
+            ? `<span class="pill pill-warning">${counts.warn} WARN</span>`
+            : `<span class="pill pill-positive">HEALTHY</span>`);
+    }
+
+    const hbRows = (ops.heartbeats || []).map(h => {
+      const okPill = h.ok
+        ? '<span class="pill pill-positive">OK</span>'
+        : '<span class="pill pill-negative">ERROR</span>';
+      const age = h.age_minutes == null ? '—' : `${h.age_minutes}m ago`;
+      const d = h.detail || {};
+      const extra = d.skipped ? ` · skipped: ${d.skipped}`
+        : (d.opened != null ? ` · opened ${d.opened} / closed ${d.closed}` : '');
+      return `<div class="data-row"><span class="label">${h.component}</span>
+        <span class="value">${age} ${okPill}<span style="color:var(--text-secondary);font-size:11px;">${extra}</span></span></div>`;
+    }).join('') || '<div class="data-row"><span class="label">heartbeat</span><span class="value">none yet</span></div>';
+
+    const obsRows = (ops.observations || []).slice(0, 5).map(o =>
+      `<div class="data-row"><span class="label">${o.severity} · ${o.category}</span>
+        <span class="value" style="font-size:11px;">${(o.message || '').slice(0, 90)}</span></div>`
+    ).join('');
+
+    const sched = ops.scheduler || {};
+    const lsc = sched.last_signal_check || {};
+    const schedLine = `<div class="data-row"><span class="label">scheduler</span>
+      <span class="value">${sched.running ? 'running' : 'stopped'}` +
+      (lsc.ts ? ` · last cycle ${timeAgo(lsc.ts)}${lsc.success === false ? ' (error)' : ''}` : '') +
+      `</span></div>`;
+
+    el.innerHTML = hbRows + schedLine +
+      (obsRows ? `<div style="margin-top:8px;font-size:11px;color:var(--text-secondary);">Unresolved observations</div>${obsRows}` : '');
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div>Ops data unavailable.</div>';
+  }
+}
+
 // ── Auto-Refresh ────────────────────────────────────────────
 
 function startAutoRefresh() {
@@ -562,6 +610,7 @@ function startAutoRefresh() {
     loadStats();
     loadPositions();
     loadMarketOverview();
+    loadOpsHealth();
     lastUpdate = Date.now();
   }, 60000);
   refreshTimerInterval = setInterval(updateRefreshStatus, 1000);
@@ -606,6 +655,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadLiveProof(90);
   loadPositions();
   loadMarketOverview();
+  loadOpsHealth();
   initEquityTabs();
   initComparisonTabs();
   initProofTabs();

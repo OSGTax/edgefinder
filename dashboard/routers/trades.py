@@ -153,3 +153,16 @@ def losses(strategy: str | None = Query(None), db: Session = Depends(get_db)):
     return [
         _enrich_trade(t) for t in trades if t.pnl_dollars and t.pnl_dollars <= 0
     ]
+
+
+@router.get("/integrity")
+def trade_integrity(strategy: str | None = Query(None), db: Session = Depends(get_db)):
+    """Verify the trades hash chain — recomputed from stored rows alone.
+
+    A verified row proves its identity AND that the prior row's hash was
+    untouched; any silent edit/delete breaks every later link. Rows written
+    before the v2 chain (2026-06-05) are reported as legacy_unverified.
+    """
+    from edgefinder.trading.integrity import verify_chain
+
+    return verify_chain(db, strategy)

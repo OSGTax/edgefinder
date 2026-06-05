@@ -7,7 +7,7 @@ objects, and lets strategies evaluate entries/exits against shared data.
 
 from __future__ import annotations
 
-import hashlib
+
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -94,8 +94,6 @@ class ArenaEngine:
         self._indicator_histories: dict[str, IndicatorHistory] = {}  # per-ticker
         self._history_seed_day: dict[str, date] = {}  # ticker -> ET date last seeded
         self._daily_bars_cache: dict[str, pd.DataFrame] = {}  # per-ticker
-        self._sequence_num = 0
-        self._prev_hash = ""
         # Injectable clock: live uses wall-clock; the backtester sets this to
         # the simulated trading day so time-based exits replay faithfully.
         self._clock: datetime | None = None
@@ -801,7 +799,6 @@ class ArenaEngine:
         )
 
         slot.account.open_position(position)
-        self._sequence_num += 1
 
         trade = Trade(
             trade_id=trade_id,
@@ -816,8 +813,8 @@ class ArenaEngine:
             confidence=0,
             status=TradeStatus.OPEN,
             entry_time=now,
-            sequence_num=self._sequence_num,
-            integrity_hash=self._compute_hash(trade_id),
+            # sequence_num/integrity_hash: assigned by TradeJournal at persist
+            # time (DB-anchored hash chain — see journal._next_chain_link).
             entry_reasoning=intent.reasoning,
             indicators_at_entry=intent.indicators_snapshot,
             fundamentals_at_entry=intent.fundamentals_snapshot,
@@ -844,7 +841,6 @@ class ArenaEngine:
     ) -> Trade | None:
         """Close a position and create a Trade object."""
         result = slot.account.close_position(position, exit_price, reason)
-        self._sequence_num += 1
 
         now = self._now()
         hold_hours = (now - position.entry_time).total_seconds() / 3600
@@ -869,8 +865,6 @@ class ArenaEngine:
             exit_reason=reason,
             exit_reasoning=reason,
             exit_time=now,
-            sequence_num=self._sequence_num,
-            integrity_hash=self._compute_hash(result["trade_id"]),
             indicators_at_exit=market_data.current.to_dict() if market_data else None,
             pdt_flag=is_pdt,
             hold_duration_hours=round(hold_hours, 2),
@@ -918,12 +912,6 @@ class ArenaEngine:
             logger.debug("Failed to fetch daily bars for %s", ticker)
             return None
 
-    def _compute_hash(self, trade_id: str) -> str:
-        """SHA-256 hash chaining for audit trail."""
-        data = f"{trade_id}:{self._sequence_num}:{self._prev_hash}"
-        h = hashlib.sha256(data.encode()).hexdigest()
-        self._prev_hash = h
-        return h
 
 
 # ── Monkey-patch StrategySlot with notification helper ──
