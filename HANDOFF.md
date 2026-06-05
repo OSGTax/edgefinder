@@ -143,6 +143,68 @@ holding-period/portfolio variants that capture cross-quarter carry; fresh
 defaults, screen first; holdout stays sealed until a fixed config passes
 folds.
 
+## Update — 2026-06-05 EVE (Round 2 complete: all candidates dead, holdout still sealed)
+
+Run as a continuous research loop. Protocol held throughout: every
+candidate's defaults pre-registered + committed BEFORE its first screen
+(4c37284, 34b8118, 795e457); dev window = all data minus the sealed final
+126d; the holdout was never evaluated.
+
+**Round-2 lab improvements (shipped first):**
+- v5.18.0: real per-day market context in the lab (spy_price/change/sma_200
+  per simulated day — context-gated strategies now testable).
+- v5.18.1: `validate.py --fixed` (defaults-only folds, no per-fold
+  optimizer — the selection-bias-free test) + `optimized: true/false`
+  disclosed in every recorded scorecard. **Methodology change, disclosed:**
+  all fold tests now use the uniform 126d OOS window default (round-1 fold
+  runs used 63d windows, which clip cross-quarter carry).
+
+**Round-2 candidates (top-300 dev screens, all DEAD):**
+1. **trend_dip** (Connors-family: 3-day stretch above 200dma, W%R ≤ −90,
+   exit RSI ≥ 60) — PF 1.14, 263 trades, but **avg $3.23/trade**, under
+   the ~$5/trade friction floor (slippage both sides). The trend gate DID
+   fix coward's negative expectancy (coward bought knives, this doesn't) —
+   the effect is real but too thin to harvest at retail cost. DEAD.
+2. **gap_drift_v2** (ATR-normalized gap threshold, one variable changed
+   from v1) — +18.7%, Sharpe 0.72, PF 1.62, 95 trades vs v1's +54.5% /
+   1.12 / 1.92 / 131 on the same window. Dominated by v1 on every metric:
+   the "absolute thresholds miscalibrate across vol regimes" hypothesis is
+   falsified. DEAD.
+3. **gap_carry** (v1's exact entry, exits rebuilt to hold the drift: 21EMA
+   trail, 6% fail-stop, 30% target, 45d max hold) — +36.7%, Sharpe 0.69,
+   PF 1.58, 127 trades, max DD 13.8% at **73% exposure** vs v1's 53%.
+   Dominated by v1 on every metric while using more capital: holding
+   individual winners longer gives profit back. **Key learning: v1's
+   cross-quarter carry lives in re-entry compounding across gap events,
+   not in longer per-trade holds.** DEAD.
+
+**The decisive test — gap_drift v1, FIXED defaults, uniform 126d folds**
+(`--fixed --oos-days 126 --step-days 126 --holdout-days 126
+--no-holdout-eval`, top-300, recorded in validation_runs with
+optimized:false): mean Sharpe **+0.49** (was −0.29 at 63d), OOS compounded
+**+26.99%**, 114 trades, worst fold DD 11.4% — but mean excess vs SPY
+**−1.90%** and only **2/5 folds beat SPY**. Verdict **FAIL**. The longer
+windows confirmed half the carry diagnosis (Sharpe flipped strongly
+positive) but the strategy is a lower-vol/lower-return profile that does
+not beat SPY. gap_drift stays PARKED; with all three variants dead, the
+gap family is closed for this round. **Holdout: still sealed — zero looks
+burned across rounds 1 and 2.**
+
+**Cumulative scoreboard (8 candidates tested honestly):** coward, gambler,
+degenerate — falsified (round 0). pullback_rider, turtle_adx — screen-
+killed. trend_dip, gap_drift_v2, gap_carry — dead (round 2). gap_drift —
+parked (profitable, sub-SPY). Nothing has earned a holdout look.
+
+**Round 3 directions (intent, not yet pre-registered):** (a) regime/
+portfolio layer over gap_drift — accept its absolute-return profile and
+test leverage-free ways to close the SPY gap (e.g. SPY overlay when flat:
+strategy is in cash 47% of the time; the idle-cash drag IS the excess-
+return gap), (b) candidates from effect families not yet tried
+(cross-sectional momentum, post-earnings drift with actual earnings dates
+from Polygon, index-fund-flow seasonality), (c) accept-and-publish: the
+honest conclusion that nothing tested beats SPY after costs is itself a
+defensible research output the dashboard can display.
+
 ## Update — 2026-06-05 PM (dashboard verifiability roadmap shipped)
 
 v5.14.0–v5.16.0, all deployed + verified live the same day:
