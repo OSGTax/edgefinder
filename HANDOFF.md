@@ -292,6 +292,39 @@ holdout look (`--fixed --cash-overlay --holdout-days 126`, eval ON) and
 nothing else may touch the sealed region first. This round's look was
 already burned on gap_drift+overlay (failed).
 
+## Round 3 CLOSED — 2026-06-05 (final)
+
+**tom_seasonality (pre-registered 760653c, first calendar candidate):
+screen DEAD on both kill criteria** — $1.30/trade (< $5 floor), PF 1.04
+(< 1.10), Sharpe 0.06, win 48.2%. The TOM effect in 2021-25 large-caps,
+if any, is far below single-stock friction. No fold test warranted.
+
+**Round-3 final ledger:** 5 candidates evaluated (gap_carry dead,
+gap_drift+overlay fold-pass→holdout-FAIL, xsec_mom fold-PASS 5/5 →
+round-4 finalist, tom_seasonality dead; PEAD not run — blocked on a
+Polygon earnings-date backfill, the next research-infra investment).
+Lab improvements shipped: --fixed defaults-only folds + methodology
+disclosure in scorecards (v5.18.1), zero-knob SPY cash overlay
+(v5.18.2), MarketContext.as_of date for calendar/cross-sectional
+strategies lab+live (v5.19.0). One holdout look burned, honestly, on
+gap_drift+overlay: FAIL. Cumulative: 11 honest tests, 0 validated, 1
+strong finalist awaiting round 4.
+
+**Round 4 plan (pre-registered intent):**
+1. FIRST ACTION, before any other evaluation: the finalist's holdout
+   look — xsec_mom frozen defaults + overlay,
+   `--fixed --cash-overlay --holdout-days 126` (eval ON). Pass ⇒ first
+   VALIDATED strategy (dashboard flips automatically); fail ⇒ the
+   strongest fold result the lab has produced was still selection noise
+   — strong evidence the +2-3pp band should widen.
+2. Strongly preferred before/alongside: live paper evidence. Promoting
+   xsec_mom to live needs (a) live overlay mechanics (virtual accounts
+   hold idle cash as SPY — engine work), (b) live watchlist = the same
+   top-300 cross-section, (c) live_strategies allowlist entry. The live
+   scorecard then applies the same bar to real-time data.
+3. PEAD infra: backfill real earnings dates from Polygon, then
+   pre-register a post-earnings-drift candidate.
+
 ## Update — 2026-06-05 PM (dashboard verifiability roadmap shipped)
 
 v5.14.0–v5.16.0, all deployed + verified live the same day:
