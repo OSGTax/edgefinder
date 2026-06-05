@@ -249,6 +249,49 @@ cross-sectional momentum, PEAD with real Polygon earnings dates,
 seasonality) — pre-register before screening, NEW holdout look not
 available until next round per one-look-per-round.**
 
+## Update — 2026-06-05 LATE (Round 3 ws2: xsec_mom passes 5/5 folds — ROUND-4 FINALIST, holdout deferred)
+
+**Engine extension (v5.19.0, 6c730f8):** `MarketContext.as_of` — strategies
+now know the session date (simulated day in the lab, ET date live), enabling
+calendar-aware and cross-sectional designs with identical lab/live behavior.
+
+**xsec_mom pre-registered + committed before any screen (6c730f8):**
+cross-sectional momentum (Jegadeesh-Titman family — first try from the most
+evidence-backed class). Score = close/ema_200 − 1 (the long-horizon momentum
+proxy the 30d history window allows; doubles as trend gate). Per-day rank
+buffer filled by the engine's daily watchlist sweep; entries rank on
+YESTERDAY'S completed cross-section (no look-ahead; at most top_k qualify
+per day so no slot-order bias); exit on decay out of 3×top_k (derived) or
+max_hold; target fixed wide 0.50. Searched: top_k [3,5,10], max_hold
+[21,42,63]. Kill criteria: <$5/trade or PF<1.10.
+
+**Screen (top-300 dev): SURVIVED** — $13.59/trade, PF 1.58, Sharpe 0.61,
+win 53.3%, max DD 5.2%, 105 trades… at **8.5% exposure** (trend gate flat
+through the 2022 bear + 200dma warmup; rank churn). Raw it cannot beat SPY
+(−41% excess) — disclosed skip of raw folds; the honest portfolio
+construction for a 91.5%-cash strategy is the zero-knob SPY overlay.
+
+**Fixed-defaults 126d folds + overlay: PASS — strongest result ever.**
+Sharpe **1.98**, mean excess **+7.86%** (far above the noise band),
+**5/5 folds beat SPY**, +100.1% compounded OOS, 137 trades, win 59.1%,
+worst fold DD 22.3% (SPY beta). Recorded in validation_runs
+(optimized:false, cash_overlay:true).
+
+**Disclosed caveats:** (1) all five OOS windows land in the 2023–2025
+bull — the 2022 bear only ever appears in IS windows, so the momentum
+tilt's bear behavior is OOS-untested (the trend gate held it flat through
+2022 in the screen, which is why exposure is 8.5%); (2) 9th candidate
+tested — one strong pass among nine could be selection luck; the sealed
+holdout adjudicates; (3) entries are one day staler than necessary
+(T−1 ranks, T+1 fills) — conservative direction.
+
+**ROUND-4 FINALIST (frozen now, pre-registered):** xsec_mom pure committed
+defaults (top_k=5, max_hold=42, exit_rank=15 derived, target 0.50,
+risk 0.03) + zero-knob SPY cash overlay. Round 4 opens with its ONE
+holdout look (`--fixed --cash-overlay --holdout-days 126`, eval ON) and
+nothing else may touch the sealed region first. This round's look was
+already burned on gap_drift+overlay (failed).
+
 ## Update — 2026-06-05 PM (dashboard verifiability roadmap shipped)
 
 v5.14.0–v5.16.0, all deployed + verified live the same day:
