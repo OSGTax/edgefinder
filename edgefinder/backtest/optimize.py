@@ -64,6 +64,11 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "max_hold_days": [10, 15, 20],
         "trend_gate": [True, False],
     },
+    "tom_seasonality": {
+        # Calendar window edges only; everything else fixed by design.
+        "entry_day": [23, 25, 27],
+        "exit_day": [3, 5, 8],
+    },
     "xsec_mom": {
         # Score definition and exit_rank (3x top_k) are FIXED by design —
         # only portfolio breadth and the recycle horizon are searched.

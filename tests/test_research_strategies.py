@@ -322,3 +322,40 @@ class TestXsecMom:
         md = self._md_with_date("WIN", 150.0, 100.0, None)
         assert strat.evaluate("WIN", md) is None
         assert strat.should_exit("WIN", md, 140.0) is None
+
+
+class TestTomSeasonality:
+    """tom_seasonality: hold only through the turn-of-month window."""
+
+    def _md_on(self, day):
+        from datetime import date
+        cur = _snap(close=100.0)
+        md = _md(cur, [])
+        md.context = MarketContext(as_of=date(2026, 3, day) if day else None)
+        return md
+
+    def test_entry_fires_late_month(self):
+        from edgefinder.strategies.tom_seasonality import TomSeasonalityStrategy
+        intent = TomSeasonalityStrategy().evaluate("TEST", self._md_on(26))
+        assert intent is not None and "turn-of-month" in intent.reasoning.lower()
+
+    def test_no_entry_mid_month_or_early_month(self):
+        from edgefinder.strategies.tom_seasonality import TomSeasonalityStrategy
+        strat = TomSeasonalityStrategy()
+        assert strat.evaluate("TEST", self._md_on(15)) is None
+        # Early month is INSIDE the hold window but NOT an entry point.
+        assert strat.evaluate("TEST", self._md_on(2)) is None
+
+    def test_exit_after_window_holds_inside(self):
+        from edgefinder.strategies.tom_seasonality import TomSeasonalityStrategy
+        strat = TomSeasonalityStrategy()
+        assert strat.should_exit("TEST", self._md_on(28), 100.0) is None  # in window
+        assert strat.should_exit("TEST", self._md_on(3), 100.0) is None   # still in
+        exit_intent = strat.should_exit("TEST", self._md_on(6), 100.0)    # past it
+        assert exit_intent is not None and "over" in exit_intent.reasoning.lower()
+
+    def test_no_date_no_action(self):
+        from edgefinder.strategies.tom_seasonality import TomSeasonalityStrategy
+        strat = TomSeasonalityStrategy()
+        assert strat.evaluate("TEST", self._md_on(None)) is None
+        assert strat.should_exit("TEST", self._md_on(None), 100.0) is None

@@ -10,4 +10,4 @@ from edgefinder.strategies import gap_drift, gap_drift_v2, pullback_rider, trend
 from edgefinder.strategies import gap_carry  # noqa: F401
 
 # Research candidates (2026-06-05 round 3).
-from edgefinder.strategies import xsec_mom  # noqa: F401
+from edgefinder.strategies import tom_seasonality, xsec_mom  # noqa: F401
