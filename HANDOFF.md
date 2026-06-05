@@ -205,6 +205,50 @@ from Polygon, index-fund-flow seasonality), (c) accept-and-publish: the
 honest conclusion that nothing tested beats SPY after costs is itself a
 defensible research output the dashboard can display.
 
+## Update — 2026-06-05 NIGHT (Round 3 ws1: HOLDOUT BURNED — overlay passes folds, fails holdout)
+
+Owner picked round-3 direction "both, overlay first". Workstream 1 ran
+start to finish:
+
+**SPY cash-overlay built + pre-registered (v5.18.2, 32eb6cb, committed
+before any run):** idle cash parks in SPY; 5 bps per conversion at the
+day's close; ZERO tunable knobs; provably does not change which trades
+happen (engine sizes/fills off raw cash — overlay is pure equity
+accounting). `validate.py --cash-overlay`; `cash_overlay` disclosed in
+every recorded scorecard config.
+
+**Fold test (fixed v1 defaults + overlay, 126d folds, top-300):**
+**PASS — first all_met in project history.** Sharpe 0.49→**1.30**, mean
+excess −1.90%→**+4.34%** (above the +2–3pp noise band), 3/5 folds beat
+SPY, +65.5% compounded OOS, 114 trades. The idle-cash-drag hypothesis
+confirmed on dev data — and the invested slice beat the SPY it displaced.
+Cost: worst fold DD 11.4%→26.4% (SPY beta in the 2022 fold).
+
+**THE HOLDOUT LOOK (first ever burned, per the pre-agreed rule that a
+clearly-passing FIXED config earns one):** window 2025-11-21..2026-05-26
+(bull_calm), params {} (pure pre-registered defaults), overlay on.
+Result: +12.26%, Sharpe 1.36, 39 trades, win 46.2%, DD 12.9% —
+**excess vs SPY −1.63% → holdout FAILS the beat-SPY criterion.**
+
+**Honest verdict: gap_drift + overlay ≈ SPY + noise.** Its excess
+oscillates around zero (+4.3pp folds, −1.6pp holdout, both small). Superb
+absolute profile (made money in every window ever tested, fold Sharpe
+1.30, holdout Sharpe 1.36) but no reliable edge OVER the index. The
+sealed holdout did exactly its job: caught a dev-region pass that didn't
+generalize, on the first config good enough to reach it. Disclosed
+caveat upheld: the overlay idea was motivated by dev-region diagnostics;
+the holdout was the unbiased test and it said no.
+
+Dashboard state is automatically correct: the validation_runs row records
+criteria all_met=true WITH an evaluated holdout passes=false → NOT
+validated (v5.17.2 semantics). Round-3 holdout budget: SPENT.
+
+**Status after rounds 1–3ws1: 9 honest tests, 0 validated strategies.
+Remaining round-3 queue: workstream 2 (new effect families:
+cross-sectional momentum, PEAD with real Polygon earnings dates,
+seasonality) — pre-register before screening, NEW holdout look not
+available until next round per one-look-per-round.**
+
 ## Update — 2026-06-05 PM (dashboard verifiability roadmap shipped)
 
 v5.14.0–v5.16.0, all deployed + verified live the same day:
