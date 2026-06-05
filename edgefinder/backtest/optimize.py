@@ -64,6 +64,12 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "max_hold_days": [10, 15, 20],
         "trend_gate": [True, False],
     },
+    "gap_carry": {
+        # Entry is FIXED at gap_drift v1's pre-registered defaults by design
+        # (one variable at a time) — only the exit side is searched.
+        "fail_pct": [0.04, 0.06, 0.08],
+        "max_hold_days": [30, 45, 60],
+    },
     "trend_dip": {
         "wr_entry": [-95, -90, -85],
         "down_days_min": [2, 3, 4],

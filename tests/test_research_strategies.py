@@ -193,3 +193,53 @@ class TestGapDriftV2:
         cur = self._cur(open=101.3, close=101.8, high=101.9, low=101.0)
         md = _md(cur, [self._prev(atr=0.5)])
         assert GapDriftV2Strategy().evaluate("TEST", md) is None
+
+
+class TestGapCarry:
+    """gap_carry: gap_drift v1's entry FIXED, exits = fail-stop + 21EMA trail."""
+
+    def _cur(self, **over):
+        base = dict(open=106.0, close=107.0, high=107.2, low=105.0,
+                    ema_200=90.0, volume_ratio=2.0)
+        base.update(over)
+        return _snap(**base)
+
+    def test_held_gap_fires(self):
+        from edgefinder.strategies.gap_carry import GapCarryStrategy
+        prev = _snap(close=100.0)
+        intent = GapCarryStrategy().evaluate("TEST", _md(self._cur(), [prev]))
+        assert intent is not None and "gap" in intent.reasoning.lower()
+
+    def test_entry_identical_to_v1(self):
+        # The whole design: any screen difference is attributable to exits.
+        from edgefinder.strategies.gap_carry import GapCarryStrategy
+        for prev_close, cur_kw in [
+            (103.0, {}),                                    # small gap
+            (100.0, dict(close=105.3, low=105.0, high=108.0)),  # weak close
+            (100.0, dict(volume_ratio=1.2)),                # quiet volume
+            (100.0, dict(ema_200=120.0)),                   # below 200dma
+        ]:
+            md = _md(self._cur(**cur_kw), [_snap(close=prev_close)])
+            assert GapDriftStrategy().evaluate("TEST", md) is None
+            assert GapCarryStrategy().evaluate("TEST", md) is None
+
+    def test_fail_stop_exit(self):
+        from edgefinder.strategies.gap_carry import GapCarryStrategy
+        strat = GapCarryStrategy()
+        failed = _snap(close=99.0, ema_21=95.0)  # 106 fill → -6.6% < -6% default
+        assert strat.should_exit("TEST", _md(failed, []), 106.0) is not None
+
+    def test_ema21_trail_exit(self):
+        from edgefinder.strategies.gap_carry import GapCarryStrategy
+        strat = GapCarryStrategy()
+        lost = _snap(close=110.0, ema_21=112.0)  # well above fail-stop, lost trail
+        exit_intent = strat.should_exit("TEST", _md(lost, []), 106.0)
+        assert exit_intent is not None and "drift over" in exit_intent.reasoning.lower()
+        riding = _snap(close=120.0, ema_21=112.0)
+        assert strat.should_exit("TEST", _md(riding, []), 106.0) is None
+
+    def test_wide_target_and_long_hold(self):
+        from edgefinder.strategies.gap_carry import GapCarryStrategy
+        strat = GapCarryStrategy()
+        assert strat.target_pct == 0.30
+        assert strat.max_hold_days == 45
