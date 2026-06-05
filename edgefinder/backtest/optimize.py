@@ -56,6 +56,14 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "max_hold_days": [10, 15, 20],
         "trend_gate": [True, False],
     },
+    "gap_drift_v2": {
+        "atr_mult": [1.5, 2.0, 2.5, 3.0],
+        "close_loc": [0.5, 0.65, 0.8],
+        "fail_pct": [0.04, 0.06, 0.08],
+        "target_pct": [0.10, 0.15, 0.20],
+        "max_hold_days": [10, 15, 20],
+        "trend_gate": [True, False],
+    },
     "trend_dip": {
         "wr_entry": [-95, -90, -85],
         "down_days_min": [2, 3, 4],

@@ -163,3 +163,33 @@ class TestTrendDip:
         assert strat.should_exit("TEST", _md(recovered, []), 100.0) is not None
         waiting = _snap(close=98.0, rsi=40.0)
         assert strat.should_exit("TEST", _md(waiting, []), 100.0) is None
+
+
+class TestGapDriftV2:
+    def _cur(self, **over):
+        # prev: close 100, ATR 2 → 2.5 ATRs = $5 gap needed (and >= 2% floor)
+        base = dict(open=106.0, close=107.0, high=107.2, low=105.0,
+                    ema_200=90.0, volume_ratio=2.0)
+        base.update(over)
+        return _snap(**base)
+
+    def _prev(self, atr=2.0):
+        return _snap(close=100.0, atr=atr)
+
+    def test_atr_sized_gap_fires(self):
+        from edgefinder.strategies.gap_drift_v2 import GapDriftV2Strategy
+        intent = GapDriftV2Strategy().evaluate("TEST", _md(self._cur(), [self._prev()]))
+        assert intent is not None and "atr" in intent.reasoning.lower()
+
+    def test_same_gap_blocked_on_volatile_name(self):
+        # Same $6 gap, but the stock's normal day is $4 → only 1.5 ATRs < 2.5.
+        from edgefinder.strategies.gap_drift_v2 import GapDriftV2Strategy
+        md = _md(self._cur(), [self._prev(atr=4.0)])
+        assert GapDriftV2Strategy().evaluate("TEST", md) is None
+
+    def test_absolute_floor_blocks_micro_gaps(self):
+        # Quiet name: ATR 0.5 → 2.5 ATRs = $1.25 gap = 1.25% < 2% floor.
+        from edgefinder.strategies.gap_drift_v2 import GapDriftV2Strategy
+        cur = self._cur(open=101.3, close=101.8, high=101.9, low=101.0)
+        md = _md(cur, [self._prev(atr=0.5)])
+        assert GapDriftV2Strategy().evaluate("TEST", md) is None
