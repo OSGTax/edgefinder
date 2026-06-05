@@ -80,14 +80,17 @@ class TestValidationEndpoint:
         assert by_name["gambler"]["validated"] is True
         assert by_name["degenerate"]["verdict"] == "PASS"  # raw verdict preserved
 
-    def test_no_holdout_falls_back_to_criteria(self, db_session):
+    def test_sealed_unevaluated_holdout_is_not_validated(self, db_session):
+        # Research-stage runs reserve the holdout without evaluating it:
+        # criteria can pass, but "validated" requires a PASSING holdout.
         record_validation_run(
             db_session, _scorecard("coward", all_met=True, holdout_passes=None,
                                    verdict="PASS"),
             universe="top-50",
         )
         body = self._client(db_session).get("/api/strategies/validation").json()
-        assert body[0]["validated"] is True
+        assert body[0]["validated"] is False
+        assert body[0]["verdict"] == "PASS"  # raw verdict still visible
 
 
 class TestTradeTimelineSerialization:

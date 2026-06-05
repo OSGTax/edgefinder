@@ -94,6 +94,55 @@ read is firmly negative.
 NOT the direct `db.<ref>.supabase.co` host — the direct host is IPv6-only and
 unreachable from Codespaces. Tests run fine with `DATABASE_URL=` (SQLite).
 
+## Update — 2026-06-05 EVE (strategy research round 1)
+
+**Protocol** (committed before results): forensics on the failed three →
+6 candidates → adversarial selection of 3 → PRE-REGISTERED defaults committed
+to git (fa71fb9) → cheap screen (fixed defaults, dev window = all data minus
+the sealed final 126d) → walk-forward folds → at most ONE holdout look/round.
+New tooling: edgefinder/backtest/screen.py; --no-holdout-eval (seal without
+burning); settings.live_strategies allowlist (candidates are lab-only).
+
+**Round-1 results (top-300, dev region 2021-06..2025-11):**
+- pullback_rider (21EMA-reclaim-in-uptrend): screen KILL — PF 0.80, −14.9%.
+- turtle_adx (30d-high breakout + ADX): screen KILL — PF 0.66, W/L 1.13
+  (the asymmetric-exit thesis didn't materialize).
+- gap_drift (held gap-up continuation / PEAD proxy, survivorship control):
+  - Screen PASS, strongly: +54.5% (≈SPY) at 53% exposure, PF 1.92, Sharpe
+    1.12, max DD 8.4% (SPY −25% in 2022), median trade +$28, top quarter
+    only 14.4% of gross P&L, ~flat through the 2022 bear.
+  - Fixed-defaults folds (no optimizer): FAIL — Sharpe −0.29, excess −2.32%,
+    3/7 folds. One fold (+19.4%, PF 3.77) carries; the effect is
+    time-concentrated and relies on cross-quarter carry a fresh 63d account
+    can't harvest.
+  - Optimized folds (warm harness): criteria ALL MET and legacy PASS —
+    +24.04%, Sharpe 0.22, excess +0.84%, 4/7 folds, 119 trades (recorded in
+    validation_runs). BUT +0.84% is inside the survivorship/variance noise
+    band, and defaults-fail/optimized-pass means the fold edge needs
+    per-fold adaptation (possible selection bias — degenerate's signature).
+  - **Holdout: NOT evaluated — still sealed.** The pre-agreed rule (holdout
+    only if fixed defaults pass folds) held. gap_drift is PARKED: real
+    effect in the dev aggregate, not yet harvestable to the bar.
+
+**Lab bug #3 found & fixed (v5.17.1): cold-fold indicators.** Every prior
+fold ran its window with NO indicator warmup (ema_200 None for whole 63d
+OOS windows; RSI/MACD/BB dead for the first 3-5 weeks). Discovered when
+gap_drift's defaults produced 0 fold trades vs 131 in the screen. Fix:
+warmup_days=210 of preceding bars feed indicators/history; trading starts
+at trade_start (live-faithful — live seeds history from daily_bars). All
+pre-fix fold numbers (including the old three's) are understated/distorted;
+verdicts stand on their margins.
+
+**`validated` semantics tightened (v5.17.2):** a run with a sealed,
+unevaluated holdout is criteria-passing but NOT validated on the dashboard.
+
+**Round 2 directions (pre-registered intent, not yet run):** make
+gap_drift's regime-adaptation explicit instead of optimizer-implied (e.g.
+a per-ticker trend/vol state machine choosing gap thresholds), or test
+holding-period/portfolio variants that capture cross-quarter carry; fresh
+defaults, screen first; holdout stays sealed until a fixed config passes
+folds.
+
 ## Update — 2026-06-05 PM (dashboard verifiability roadmap shipped)
 
 v5.14.0–v5.16.0, all deployed + verified live the same day:

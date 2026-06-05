@@ -217,7 +217,9 @@ def validation_runs(db: Session = Depends(get_db)):
     """Latest offline validation verdict per strategy (walk-forward lab).
 
     ``validated`` is the honest summary: the explicit criteria bar was met
-    AND the sealed holdout (when present) also passed. Shown on the
+    AND the sealed holdout was evaluated AND passed. A run whose holdout was
+    deliberately left sealed (research stages) is criteria-passing but NOT
+    validated — the holdout is the only test that counts. Shown on the
     dashboard beside the Live Proof card — offline claim vs live evidence.
     """
     from edgefinder.db.models import ValidationRun
@@ -237,7 +239,8 @@ def validation_runs(db: Session = Depends(get_db)):
         holdout = r.holdout
         validated = bool(
             criteria.get("all_met")
-            and (holdout is None or holdout.get("passes"))
+            and holdout is not None
+            and holdout.get("passes")
         )
         out.append({
             "strategy_name": r.strategy_name,
