@@ -324,6 +324,15 @@ def _restore_open_positions() -> None:
             # Skip if already have this position (shouldn't happen, but be safe)
             if account.get_position(tr.symbol):
                 continue
+            # DB DateTime columns round-trip naive; the arena compares
+            # entry_time against tz-aware UTC now (max-hold, hold-hours), so
+            # coerce at the restore boundary — same pattern as
+            # _restore_close_cooldowns. A naive entry_time here crashed every
+            # intraday cycle with "can't subtract offset-naive and
+            # offset-aware datetimes" (caught by the heartbeat, 2026-06-05).
+            entry_time = tr.entry_time
+            if entry_time is not None and entry_time.tzinfo is None:
+                entry_time = entry_time.replace(tzinfo=timezone.utc)
             position = Position(
                 symbol=tr.symbol,
                 shares=tr.shares,
@@ -332,7 +341,7 @@ def _restore_open_positions() -> None:
                 target=tr.target,
                 direction=tr.direction,
                 trade_type=tr.trade_type,
-                entry_time=tr.entry_time,
+                entry_time=entry_time,
                 trade_id=tr.trade_id,
             )
             # Add position only — cash already reflects this from _restore_account_state()

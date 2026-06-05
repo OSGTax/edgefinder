@@ -94,6 +94,30 @@ read is firmly negative.
 NOT the direct `db.<ref>.supabase.co` host — the direct host is IPv6-only and
 unreachable from Codespaces. Tests run fine with `DATABASE_URL=` (SQLite).
 
+## Update — 2026-06-05 (Render incident root-caused + real URL)
+
+- **The real live service is `https://edgefinder-pm8h.onrender.com`** (service
+  `srv-d7agnd6a2pns73dg6qeg`, Starter $7/mo, always-on, Oregon, auto-deploy on
+  `main`). **`edgefinder.onrender.com` is NOT ours** — onrender subdomains are
+  global and the bare name belongs to some other Render customer (a Node stub
+  whose `/api/health` masquerades convincingly). Never probe the bare URL.
+- **June 3 deploys all failed fast (`update_failed`)**, not stuck: startup
+  migrations crashed with `password authentication failed` against the pooler
+  (`aws-1-us-east-1.pooler.supabase.com:6543`) — the Render `DATABASE_URL` had
+  a bad credential at deploy time. The May-29 instance (v5.9.1, commit 86dd489)
+  kept serving because env edits only apply to new deploys.
+- **Consequence of serving v5.9.1:** the live engine ran with pre-v5.10 bugs —
+  8 OPEN trades (May 28–Jun 2), 0 ever closed, degenerate ~100% concentrated in
+  PNFP, no exits firing. The v5.13.x deploy activates enforced caps + working
+  exits + the heartbeat.
+- **Always-on is confirmed** (paid instance) ⇒ the **in-process scheduler is
+  the production driver** (`intraday_external_driver` stays false). The cron
+  cutover plan is shelved; `intraday-cycle.yml` stays dormant as break-glass.
+  Enable only the detector: repo var `LIVENESS_ENABLED=true`.
+- Render access for agents: `render` CLI (`render login` device flow; shim
+  `xdg-open` to a no-op first or the CLI exits before polling). Workspace
+  `tea-d70q01nkijhs73a20j1g`.
+
 **Next structural step (not built):** always-on Render worker to replace the
 cron driver for real-money-grade reliability (sub-5-min, no cron drift,
 event-driven exits). The cron-driven model is the interim.

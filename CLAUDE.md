@@ -394,12 +394,27 @@ Default reasoning model is `claude-opus-4-8`. Downgrade to Sonnet 4.6
 via `WATCHDOG_REASONING_MODEL=claude-sonnet-4-6` in the workflow env
 if you want to conserve subscription quota on a larger cron schedule.
 
-### Live trading loop — cron-driven (v5.13.0)
+### Live trading loop — in-process driver (decision updated 2026-06-05)
 Both trade entry and exit run in the in-process intraday cycle
-(`_signal_check_job` → `arena.run_intraday_cycle`). On Render the web
-service idles, so the in-process APScheduler timer stalls and positions
-go unmonitored — the root cause of "0 closed trades". The fix mirrors
-the EOD pattern: an external cron is the single driver.
+(`_signal_check_job` → `arena.run_intraday_cycle`).
+
+**Production reality check (2026-06-05):** the Render service is a PAID
+Starter instance and never idles (verified: multi-week uptime, no cold
+starts). The free-tier-idling premise behind the cron-driven cutover was
+wrong, so **the in-process APScheduler is the production driver**:
+`intraday_external_driver` stays `false`, `INTRADAY_CYCLE_ENABLED` and
+`KEEPALIVE_ENABLED` stay off. The cron machinery below is kept as a
+**break-glass fallback** (flip the repo vars, no deploy). The liveness
+watchdog (heartbeat → CRITICAL → GitHub issue) is the detector either
+way — keep `LIVENESS_ENABLED=true`.
+
+**The real service URL is `https://edgefinder-pm8h.onrender.com`**
+(`edgefinder.onrender.com` belongs to another Render customer — never
+point probes or `EDGEFINDER_URL` at the bare name). Historic root cause
+of "0 closed trades" was pre-v5.10 engine bugs (unenforced caps, exits
+never firing), not idling.
+
+#### Cron-driven fallback (built v5.13.0, dormant)
 
 - Endpoint: `POST /api/admin/run-intraday` (token-guarded by
   `eod_trigger_token`, 202 + background thread → `run_intraday_jobs`,
