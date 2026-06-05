@@ -1048,6 +1048,8 @@ def _signal_check_job() -> None:
         _record_heartbeat("intraday_cycle", ok=True, detail=dict(_last_signal_check))
         return
     try:
+        from zoneinfo import ZoneInfo
+
         from edgefinder.data.market_data import MarketContext
 
         # Get bulk snapshot data (one API call). Pass the watchlist as
@@ -1067,6 +1069,7 @@ def _signal_check_job() -> None:
             dia_price=snapshot_data.get("DIA", {}).get("price", 0),
             dia_change_pct=0,
             vix_level=snapshot_data.get("VIX", {}).get("price", 0),
+            as_of=datetime.now(ZoneInfo("US/Eastern")).date(),
         )
 
         # Run the intraday cycle (entries + exits)

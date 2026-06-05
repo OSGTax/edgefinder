@@ -99,6 +99,11 @@ class MarketContext:
     # the backtester from its SPY series, so regime-gated entries are
     # testable with the same semantics in both.
     spy_sma_200: float = 0.0
+    # The session date this context describes (datetime.date | None; None =
+    # unknown). The backtester sets the simulated day; live sets the current
+    # ET date — so calendar-aware strategies (seasonality) and cross-sectional
+    # strategies (per-day rank buffers) behave identically in both.
+    as_of: object = None
 
     @property
     def spy_uptrend(self) -> bool | None:

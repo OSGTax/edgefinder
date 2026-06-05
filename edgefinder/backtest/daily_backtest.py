@@ -302,7 +302,6 @@ def run_daily_backtest(
     # Broad-market context: real per-day SPY state when spy_bars is given
     # (price, day change, 200dma — no look-ahead: day T uses closes <= T),
     # else a neutral context (all zeros = unknown).
-    neutral_context = MarketContext()
     context_by_day: dict = {}
     if spy_bars is not None and len(spy_bars) > 0:
         sdf = spy_bars.sort_values("date").reset_index(drop=True)
@@ -319,6 +318,7 @@ def run_daily_backtest(
                 spy_sma_200=(
                     float(sma200.iloc[idx]) if pd.notna(sma200.iloc[idx]) else 0.0
                 ),
+                as_of=key,
             )
 
     if cash_overlay and not context_by_day:
@@ -373,7 +373,8 @@ def run_daily_backtest(
         # (max-hold) replay faithfully instead of keying off wall-clock now().
         cd = current_day.date() if hasattr(current_day, "date") else current_day
         arena._clock = datetime.combine(cd, dtime(16, 0), tzinfo=timezone.utc)
-        day_context = context_by_day.get(cd, neutral_context)
+        # Even without a SPY bar for this day, the simulated date is known.
+        day_context = context_by_day.get(cd) or MarketContext(as_of=cd)
         _, closed = arena.run_intraday_cycle(snapshot_data, day_context)
         closed_all.extend(closed)
 

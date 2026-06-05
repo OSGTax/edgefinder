@@ -64,6 +64,12 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "max_hold_days": [10, 15, 20],
         "trend_gate": [True, False],
     },
+    "xsec_mom": {
+        # Score definition and exit_rank (3x top_k) are FIXED by design —
+        # only portfolio breadth and the recycle horizon are searched.
+        "top_k": [3, 5, 10],
+        "max_hold_days": [21, 42, 63],
+    },
     "gap_carry": {
         # Entry is FIXED at gap_drift v1's pre-registered defaults by design
         # (one variable at a time) — only the exit side is searched.

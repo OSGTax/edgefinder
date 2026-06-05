@@ -243,3 +243,82 @@ class TestGapCarry:
         strat = GapCarryStrategy()
         assert strat.target_pct == 0.30
         assert strat.max_hold_days == 45
+
+
+class TestXsecMom:
+    """xsec_mom: top-K cross-sectional momentum on a one-day-stale rank buffer."""
+
+    def _md_with_date(self, ticker, close, ema_200, as_of):
+        from datetime import date as _d  # noqa: F401
+        cur = _snap(close=close, ema_200=ema_200)
+        md = _md(cur, [])
+        md.ticker = ticker
+        md.context = MarketContext(as_of=as_of)
+        return md
+
+    def _seed_day(self, strat, day, n=60, top_ticker="WIN", top_score=0.50):
+        # n names above their 200dma with ascending scores; WIN is strongest.
+        for i in range(n):
+            md = self._md_with_date(f"T{i:03d}", 100.0 + i * 0.1, 100.0, day)
+            strat.evaluate(f"T{i:03d}", md)
+        strat.evaluate(top_ticker, self._md_with_date(
+            top_ticker, 100.0 * (1 + top_score), 100.0, day))
+
+    def test_no_entry_on_first_day(self):
+        from datetime import date
+        from edgefinder.strategies.xsec_mom import XsecMomStrategy
+        strat = XsecMomStrategy()
+        d1 = date(2026, 1, 5)
+        md = self._md_with_date("WIN", 150.0, 100.0, d1)
+        assert strat.evaluate("WIN", md) is None  # no completed prior day
+
+    def test_top_rank_enters_on_stale_cross_section(self):
+        from datetime import date
+        from edgefinder.strategies.xsec_mom import XsecMomStrategy
+        strat = XsecMomStrategy()
+        d1, d2 = date(2026, 1, 5), date(2026, 1, 6)
+        self._seed_day(strat, d1)
+        intent = strat.evaluate("WIN", self._md_with_date("WIN", 151.0, 100.0, d2))
+        assert intent is not None and "rank #1" in intent.reasoning.lower()
+
+    def test_midpack_rank_blocked(self):
+        from datetime import date
+        from edgefinder.strategies.xsec_mom import XsecMomStrategy
+        strat = XsecMomStrategy()
+        d1, d2 = date(2026, 1, 5), date(2026, 1, 6)
+        self._seed_day(strat, d1)
+        # T030 sits mid-pack (~rank 31 of 61) — far outside top_k=5
+        md = self._md_with_date("T030", 103.0, 100.0, d2)
+        assert strat.evaluate("T030", md) is None
+
+    def test_small_cross_section_blocked(self):
+        from datetime import date
+        from edgefinder.strategies.xsec_mom import XsecMomStrategy
+        strat = XsecMomStrategy()
+        d1, d2 = date(2026, 1, 5), date(2026, 1, 6)
+        self._seed_day(strat, d1, n=20)  # 21 names < _MIN_UNIVERSE
+        md = self._md_with_date("WIN", 151.0, 100.0, d2)
+        assert strat.evaluate("WIN", md) is None
+
+    def test_exit_on_rank_decay(self):
+        from datetime import date
+        from edgefinder.strategies.xsec_mom import XsecMomStrategy
+        strat = XsecMomStrategy()
+        d1, d2 = date(2026, 1, 5), date(2026, 1, 6)
+        self._seed_day(strat, d1, top_ticker="HELD", top_score=0.50)
+        # still #1 yesterday → hold
+        md = self._md_with_date("HELD", 150.0, 100.0, d2)
+        assert strat.should_exit("HELD", md, 140.0) is None
+        # next day's buffer has HELD collapsed to the bottom → exit on d3
+        d3 = date(2026, 1, 7)
+        self._seed_day(strat, d2, top_ticker="HELD", top_score=-0.05)
+        md3 = self._md_with_date("HELD", 95.0, 100.0, d3)
+        exit_intent = strat.should_exit("HELD", md3, 140.0)
+        assert exit_intent is not None and "decayed" in exit_intent.reasoning.lower()
+
+    def test_no_date_no_action(self):
+        from edgefinder.strategies.xsec_mom import XsecMomStrategy
+        strat = XsecMomStrategy()
+        md = self._md_with_date("WIN", 150.0, 100.0, None)
+        assert strat.evaluate("WIN", md) is None
+        assert strat.should_exit("WIN", md, 140.0) is None
