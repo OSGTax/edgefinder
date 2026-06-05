@@ -4,4 +4,4 @@
 from edgefinder.strategies import coward, gambler, degenerate_v2  # noqa: F401
 
 # Research candidates (2026-06-05 round 1) — lab-only, not in live_strategies.
-from edgefinder.strategies import gap_drift, pullback_rider, turtle_adx  # noqa: F401
+from edgefinder.strategies import gap_drift, pullback_rider, trend_dip, turtle_adx  # noqa: F401

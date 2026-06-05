@@ -124,3 +124,42 @@ class TestTurtleAdx:
         assert strat.should_exit("TEST", _md(cur, []), 91.0) is not None
         riding = _snap(close=95.0, ema_21=86.0)
         assert strat.should_exit("TEST", _md(riding, []), 91.0) is None
+
+
+class TestTrendDip:
+    def _stretch_md(self, *, closes_hist, cur_close, wr=-95.0, ema_200=90.0, rsi=25.0):
+        from edgefinder.strategies.trend_dip import TrendDipStrategy  # noqa: F401
+        hist = [_snap(close=c) for c in closes_hist]
+        cur = _snap(close=cur_close, ema_200=ema_200, williams_r=wr, rsi=rsi)
+        return _md(cur, hist)
+
+    def test_three_day_stretch_in_uptrend_fires(self):
+        from edgefinder.strategies.trend_dip import TrendDipStrategy
+        md = self._stretch_md(closes_hist=[100.0, 99.0, 98.0], cur_close=97.0)
+        intent = TrendDipStrategy().evaluate("TEST", md)
+        assert intent is not None and "stretch" in intent.reasoning.lower()
+
+    def test_below_200dma_blocked(self):
+        from edgefinder.strategies.trend_dip import TrendDipStrategy
+        md = self._stretch_md(closes_hist=[100.0, 99.0, 98.0], cur_close=97.0,
+                              ema_200=120.0)  # below trend
+        assert TrendDipStrategy().evaluate("TEST", md) is None
+
+    def test_shallow_wr_blocked(self):
+        from edgefinder.strategies.trend_dip import TrendDipStrategy
+        md = self._stretch_md(closes_hist=[100.0, 99.0, 98.0], cur_close=97.0,
+                              wr=-50.0)  # not stretched
+        assert TrendDipStrategy().evaluate("TEST", md) is None
+
+    def test_too_few_down_days_blocked(self):
+        from edgefinder.strategies.trend_dip import TrendDipStrategy
+        md = self._stretch_md(closes_hist=[100.0, 99.0, 99.5], cur_close=97.0)
+        assert TrendDipStrategy().evaluate("TEST", md) is None  # only 1 down day
+
+    def test_recovery_exit(self):
+        from edgefinder.strategies.trend_dip import TrendDipStrategy
+        strat = TrendDipStrategy()
+        recovered = _snap(close=102.0, rsi=65.0)
+        assert strat.should_exit("TEST", _md(recovered, []), 100.0) is not None
+        waiting = _snap(close=98.0, rsi=40.0)
+        assert strat.should_exit("TEST", _md(waiting, []), 100.0) is None

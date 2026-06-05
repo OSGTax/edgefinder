@@ -56,6 +56,13 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "max_hold_days": [10, 15, 20],
         "trend_gate": [True, False],
     },
+    "trend_dip": {
+        "wr_entry": [-95, -90, -85],
+        "down_days_min": [2, 3, 4],
+        "rsi_exit": [55, 60, 65],
+        "max_hold_days": [4, 6, 10],
+        "risk_pct": [0.02, 0.03],
+    },
     "turtle_adx": {
         "adx_min": [18, 22, 26],
         "vol_min": [1.0, 1.2, 1.5],
