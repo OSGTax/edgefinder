@@ -103,14 +103,23 @@ class ArenaEngine:
 
     # ── Strategy Loading ──────────────────────────────
 
-    def load_strategies(self, pdt_config: dict[str, bool] | None = None) -> None:
-        """Load all registered strategies into the arena.
+    def load_strategies(
+        self,
+        pdt_config: dict[str, bool] | None = None,
+        only: list[str] | None = None,
+    ) -> None:
+        """Load registered strategies into the arena.
 
         Args:
             pdt_config: Optional dict of {strategy_name: pdt_enabled}.
+            only: Optional allowlist of strategy names. The live arena passes
+                settings.live_strategies so unvalidated research candidates
+                stay lab-only until promoted; the backtester loads everything.
         """
         pdt_config = pdt_config or {}
         for strategy in StrategyRegistry.get_instances():
+            if only is not None and strategy.name not in only:
+                continue
             pdt = pdt_config.get(strategy.name, False)
             slot = StrategySlot(strategy, pdt_enabled=pdt)
             self._slots[strategy.name] = slot

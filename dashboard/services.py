@@ -178,7 +178,8 @@ def init_services() -> None:
     # table, so history-dependent strategies (e.g. gambler's MACD cross) work
     # right after a restart instead of waiting for the in-memory daily cycle.
     _arena = ArenaEngine(_provider, bars_loader=_load_daily_bars_for_history)
-    _arena.load_strategies()
+    # Live allowlist: research candidates stay lab-only until promoted.
+    _arena.load_strategies(only=list(settings.live_strategies))
 
     watchlists = _load_watchlists()
     if not watchlists or not _has_fundamentals():

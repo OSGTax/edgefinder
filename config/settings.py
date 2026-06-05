@@ -124,6 +124,13 @@ class Settings(BaseSettings):
     liveness_open_grace_minutes: int = 10  # suppress alerts right after 09:30 ET
     liveness_enabled: bool = True
 
+    # ── LIVE STRATEGY ALLOWLIST ──────────────────────
+    # Only these strategies get live (paper) accounts. Research candidates
+    # (pullback_rider, gap_drift, turtle_adx, ...) are registry-visible for
+    # the backtest lab but must pass validation before being added here —
+    # the seed of the promotion pipeline.
+    live_strategies: list[str] = Field(default=["coward", "gambler", "degenerate"])
+
     # ── INTRADAY DRIVER ──────────────────────────────
     # When True, the in-process APScheduler does NOT register the intraday
     # signal_check/position_monitor jobs — an external GitHub Actions cron

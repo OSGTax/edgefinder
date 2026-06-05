@@ -40,6 +40,30 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "max_hold_days": [5, 10, 20, 30, 45],
         "trailing_stop_pct": [0.05, 0.08, 0.12, 0.20, 0.30],
     },
+    "pullback_rider": {
+        "rsi_floor": [35, 40, 45],
+        "rsi_exit": [65, 70, 75],
+        "target_pct": [0.06, 0.08, 0.10, 0.12],
+        "max_hold_days": [10, 15, 20],
+        "adx_min": [0, 15, 20],
+        "risk_pct": [0.02, 0.03],
+    },
+    "gap_drift": {
+        "gap_min": [0.03, 0.05, 0.07],
+        "close_loc": [0.5, 0.65, 0.8],
+        "fail_pct": [0.04, 0.06, 0.08],
+        "target_pct": [0.10, 0.15, 0.20],
+        "max_hold_days": [10, 15, 20],
+        "trend_gate": [True, False],
+    },
+    "turtle_adx": {
+        "adx_min": [18, 22, 26],
+        "vol_min": [1.0, 1.2, 1.5],
+        "target_pct": [0.25, 0.40, 0.60],
+        "trailing_stop_pct": [0.08, 0.12, 0.15],
+        "max_hold_days": [30, 45, 60],
+        "risk_pct": [0.02, 0.03],
+    },
     "degenerate": {
         # Lower volume/rsi floors than before so the optimizer can pick
         # higher-frequency configs (raises trade count, same volume-spike
