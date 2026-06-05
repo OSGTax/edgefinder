@@ -315,3 +315,67 @@ def test_per_day_spy_context_reaches_strategies():
         assert _ContextProbe.seen[-1][2] is True
     finally:
         StrategyRegistry._strategies.pop("_context_probe", None)
+
+
+# ── SPY cash-overlay: idle cash parked in SPY (zero-knob accounting layer) ────
+
+
+def _spy_series(n: int, *, start_price: float = 100.0, daily_ret: float = 0.0,
+                start: date = date(2024, 1, 1)) -> pd.DataFrame:
+    rows, p = [], start_price
+    for i in range(n):
+        rows.append({"date": start + timedelta(days=i), "close": p})
+        p *= (1 + daily_ret)
+    return pd.DataFrame(rows)
+
+
+def test_cash_overlay_idle_cash_earns_spy():
+    # Steady uptrend → coward never enters → 100% idle cash the whole run.
+    prices = [100.0 * (1.002 ** i) for i in range(60)]
+    bars = {"TEST": _series(prices)}
+    spy = _spy_series(60, daily_ret=0.01)  # SPY grinds up 1%/day
+
+    plain = run_daily_backtest("coward", bars, starting_cash=10_000.0,
+                               spy_bars=spy)
+    overlay = run_daily_backtest("coward", bars, starting_cash=10_000.0,
+                                 spy_bars=spy, cash_overlay=True)
+
+    assert plain["stats"]["num_closed_trades"] == 0
+    assert plain["final_equity"] == 10_000.0  # idle cash earns nothing
+    assert overlay["stats"]["cash_overlay"] is True
+    assert "cash_overlay" not in plain["stats"]
+
+    # Overlay equity = initial sweep (5 bps fee) compounding at SPY's return
+    # from the FIRST SCORED day's close to the last.
+    first = date.fromisoformat(overlay["equity_curve"][0]["date"])
+    days_held = (date(2024, 1, 1) + timedelta(days=59) - first).days
+    expected = 10_000.0 * (1 - 0.0005) * (1.01 ** days_held)
+    assert overlay["final_equity"] == pytest.approx(expected, rel=1e-3)
+    assert overlay["final_equity"] > plain["final_equity"]
+
+
+def test_cash_overlay_requires_spy_bars():
+    bars = {"TEST": _series([100.0] * 40)}
+    with pytest.raises(ValueError, match="spy_bars"):
+        run_daily_backtest("coward", bars, starting_cash=10_000.0,
+                           cash_overlay=True)
+
+
+def test_cash_overlay_flat_spy_only_costs_fees(probe_strategy):
+    # Flat SPY → the sweep adds no yield; the only difference vs the plain
+    # run is conversion friction. The probe buys once (entries consume cash
+    # mid-run) so this exercises the flow accounting, not just the accrual.
+    bars = {"TEST": _gap_series()}
+    spy = _spy_series(len(_gap_series()), daily_ret=0.0)
+
+    plain = run_daily_backtest("_lookahead_probe", bars,
+                               starting_cash=10_000.0, spy_bars=spy)
+    overlay = run_daily_backtest("_lookahead_probe", bars,
+                                 starting_cash=10_000.0, spy_bars=spy,
+                                 cash_overlay=True)
+
+    assert len(overlay["open_positions"]) == 1  # trades unchanged by overlay
+    assert overlay["open_positions"] == plain["open_positions"]
+    diff = plain["final_equity"] - overlay["final_equity"]
+    # initial sweep fee (~$5) + sell-to-fund fee (~$1) — small and positive
+    assert 0 < diff < 25.0, f"flat-SPY overlay drift should be fees only: {diff}"

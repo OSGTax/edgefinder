@@ -225,6 +225,7 @@ def run_daily_backtest(
     prepared: tuple | None = None,
     trade_start=None,
     spy_bars: pd.DataFrame | None = None,
+    cash_overlay: bool = False,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
 
@@ -249,6 +250,15 @@ def run_daily_backtest(
     spy_sma_200) computed from SPY closes up to THAT day — so regime-gated
     strategies are testable. Without it the context is neutral (all zeros =
     "unknown"), matching the pre-2026-06 behavior.
+
+    ``cash_overlay``: park idle cash in SPY (requires ``spy_bars``). ZERO
+    tunable knobs by design: friction is the engine's fixed 5 bps per
+    conversion, both ways. The overlay NEVER changes which trades happen —
+    the engine still sizes and fills off raw cash; only the equity
+    accounting sweeps that cash into SPY between uses. Conversions are
+    modeled at the day's CLOSE (spy_bars is close-only), so a flow's price
+    can differ from its true open-fill moment by one overnight SPY gap —
+    small, sign-random noise across many conversions, disclosed here.
     """
     arena = BacktestArena(provider=_NullProvider())
     arena.load_strategies()
@@ -311,9 +321,19 @@ def run_daily_backtest(
                 ),
             )
 
+    if cash_overlay and not context_by_day:
+        raise ValueError("cash_overlay=True requires spy_bars")
+
     equity_curve: list[dict] = []
     closed_all: list = []
     exposure_days = 0
+
+    # SPY cash-overlay state: swept_value tracks what the idle cash is worth
+    # while parked in SPY; flows in/out pay the fixed conversion fee.
+    _OVERLAY_FEE = 0.0005  # 5 bps, same as the engine's slippage model
+    swept_value: float | None = None
+    prev_spy_close: float | None = None
+    prev_cash = float(starting_cash)
 
     n_days = len(days)
     for day_idx, current_day in enumerate(days):
@@ -364,14 +384,41 @@ def run_daily_backtest(
                 pos.market_price = px
         if slot.account.positions:
             exposure_days += 1
+
+        equity = slot.account.total_equity
+        if cash_overlay:
+            spy_close = day_context.spy_price if day_context.spy_price else None
+            if swept_value is None:
+                if spy_close:  # initial buy-in at the first scored close
+                    swept_value = slot.account.cash * (1 - _OVERLAY_FEE)
+                    prev_spy_close = spy_close
+                    prev_cash = slot.account.cash
+            else:
+                if spy_close and prev_spy_close:
+                    swept_value *= spy_close / prev_spy_close
+                    prev_spy_close = spy_close
+                flow = slot.account.cash - prev_cash
+                if flow > 0:        # exits returned cash → buy SPY (pay fee)
+                    swept_value += flow * (1 - _OVERLAY_FEE)
+                elif flow < 0:      # entries consumed cash → sell SPY (pay fee)
+                    swept_value += flow / (1 - _OVERLAY_FEE)
+                prev_cash = slot.account.cash
+            if swept_value is not None:
+                # positions market value + cash-in-SPY value
+                equity = (equity - slot.account.cash) + swept_value
+
         equity_curve.append({
             "date": current_day.isoformat(),
-            "equity": round(slot.account.total_equity, 2),
+            "equity": round(equity, 2),
         })
 
     return _summarize(
         slot, strategy_name, starting_cash, equity_curve, closed_all,
         exposure_days=exposure_days, benchmark=benchmark,
+        final_equity_override=(
+            equity_curve[-1]["equity"] if cash_overlay and equity_curve else None
+        ),
+        cash_overlay=cash_overlay,
     )
 
 
@@ -394,7 +441,9 @@ def _cagr(start: float, end: float, n_days: int) -> float | None:
 
 
 def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades,
-               *, exposure_days: int = 0, benchmark: dict | None = None) -> dict:
+               *, exposure_days: int = 0, benchmark: dict | None = None,
+               final_equity_override: float | None = None,
+               cash_overlay: bool = False) -> dict:
     closed = [
         {
             "symbol": t.symbol,
@@ -415,7 +464,10 @@ def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades,
         for p in slot.account.positions
     ]
 
-    final_equity = round(slot.account.total_equity, 2)
+    final_equity = round(
+        final_equity_override if final_equity_override is not None
+        else slot.account.total_equity, 2,
+    )
     wins = [t for t in closed if (t["pnl_dollars"] or 0) > 0]
     losses = [t for t in closed if (t["pnl_dollars"] or 0) <= 0]
     eq_vals = [p["equity"] for p in equity_curve] or [starting_cash]
@@ -440,6 +492,10 @@ def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades,
         "realized_pnl": round(slot.account.realized_pnl, 2),
         "days": n_days,
     }
+    if cash_overlay:
+        # Disclosed: equity/return/Sharpe include the SPY sweep on idle cash;
+        # realized_pnl and per-trade stats remain pure stock-trade numbers.
+        stats["cash_overlay"] = True
 
     # Benchmark (e.g., SPY buy-hold over the overlapping window)
     if benchmark and benchmark.get("return_pct") is not None:

@@ -110,6 +110,7 @@ def run_walkforward(
     warmup_days: int = 210,
     starting_cash: float = 10_000.0,
     do_optimize: bool = True,
+    cash_overlay: bool = False,
     search_iters: int = 40,
     seed: int = 0,
     min_trades: int = 10,
@@ -162,7 +163,7 @@ def run_walkforward(
         res = run_daily_backtest(
             strategy_name, oos_bars, starting_cash=starting_cash,
             benchmark=_benchmark_window(spy_bars, oos_start, oos_end), params=params,
-            trade_start=oos_start, spy_bars=spy_bars,
+            trade_start=oos_start, spy_bars=spy_bars, cash_overlay=cash_overlay,
         )
         folds.append(Fold(
             len(folds), oos_start, oos_end, params, res["stats"],
@@ -199,7 +200,7 @@ def run_walkforward(
         h_bars = _slice(bars_by_symbol, h_warm_start, h_end)
         h_res = run_daily_backtest(
             strategy_name, h_bars, starting_cash=starting_cash,
-            trade_start=h_start, spy_bars=spy_bars,
+            trade_start=h_start, spy_bars=spy_bars, cash_overlay=cash_overlay,
             benchmark=_benchmark_window(spy_bars, h_start, h_end), params=h_params,
         )
         holdout = {
@@ -214,13 +215,13 @@ def run_walkforward(
     return _aggregate(
         strategy_name, folds, is_days, oos_days, step_days,
         holdout=holdout, pass_min_trades=pass_min_trades,
-        optimized=do_optimize,
+        optimized=do_optimize, cash_overlay=cash_overlay,
     )
 
 
 def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_days,
                *, holdout: dict | None = None, pass_min_trades: int = 30,
-               optimized: bool = True) -> dict:
+               optimized: bool = True, cash_overlay: bool = False) -> dict:
     rets = [f.oos_stats.get("return_pct") or 0.0 for f in folds]
     sharpes = [f.oos_stats["sharpe"] for f in folds if f.oos_stats.get("sharpe") is not None]
     excess = [f.oos_stats["excess_return_pct"] for f in folds
@@ -300,6 +301,8 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
             # Disclose the methodology: fixed pre-registered defaults vs
             # per-fold IS optimization (a defaults-pass is the stronger claim).
             "optimized": bool(optimized),
+            # Disclose the SPY sweep on idle cash (zero-knob accounting layer).
+            "cash_overlay": bool(cash_overlay),
         },
         "oos": {
             "total_return_pct": oos_total_return,
