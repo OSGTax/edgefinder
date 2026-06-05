@@ -70,7 +70,28 @@ def _enrich_trade(t, live_prices: dict[str, float] | None = None) -> dict:
         "exit_reason": t.exit_reason,
         "entry_time": _to_et(t.entry_time),
         "exit_time": _to_et(t.exit_time),
+        # Timeline fields — the trades-page expandable reasoning view reads
+        # these; they were captured in the DB but never serialized (the UI
+        # silently showed "No reasoning captured" for every trade).
+        "entry_reasoning": t.entry_reasoning,
+        "exit_reasoning": t.exit_reasoning,
+        "indicators_at_entry": _as_dict(t.indicators_at_entry),
+        "indicators_at_exit": _as_dict(t.indicators_at_exit),
+        "hold_duration_hours": t.hold_duration_hours,
     }
+
+
+def _as_dict(raw):
+    """JSON columns return dicts on PG; tolerate string-stored values too."""
+    if raw is None or isinstance(raw, dict):
+        return raw
+    try:
+        import json
+
+        v = json.loads(raw)
+        return v if isinstance(v, dict) else None
+    except Exception:
+        return None
 
 
 def _get_live_prices(symbols: list[str]) -> dict[str, float]:

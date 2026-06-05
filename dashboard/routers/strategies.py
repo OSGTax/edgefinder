@@ -212,6 +212,48 @@ def scorecard(
     return compute_all_scorecards(db, days=days)
 
 
+@router.get("/validation")
+def validation_runs(db: Session = Depends(get_db)):
+    """Latest offline validation verdict per strategy (walk-forward lab).
+
+    ``validated`` is the honest summary: the explicit criteria bar was met
+    AND the sealed holdout (when present) also passed. Shown on the
+    dashboard beside the Live Proof card — offline claim vs live evidence.
+    """
+    from edgefinder.db.models import ValidationRun
+
+    rows = (
+        db.query(ValidationRun)
+        .order_by(ValidationRun.run_at.desc(), ValidationRun.id.desc())
+        .limit(100)
+        .all()
+    )
+    latest: dict[str, ValidationRun] = {}
+    for r in rows:  # newest first → first row per strategy wins
+        latest.setdefault(r.strategy_name, r)
+    out = []
+    for r in latest.values():
+        criteria = r.criteria or {}
+        holdout = r.holdout
+        validated = bool(
+            criteria.get("all_met")
+            and (holdout is None or holdout.get("passes"))
+        )
+        out.append({
+            "strategy_name": r.strategy_name,
+            "run_at": r.run_at.isoformat() if r.run_at else None,
+            "git_sha": r.git_sha,
+            "universe": r.universe,
+            "config": r.config,
+            "oos": r.oos,
+            "criteria": criteria,
+            "holdout": holdout,
+            "verdict": r.verdict,
+            "validated": validated,
+        })
+    return sorted(out, key=lambda x: x["strategy_name"])
+
+
 @router.get("/scheduler")
 def scheduler_status():
     """Get scheduler status, next run times, and last cycle result."""

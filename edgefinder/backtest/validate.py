@@ -26,11 +26,46 @@ from edgefinder.backtest.jobs import _load_bars, resolve_universe
 from edgefinder.backtest.walkforward import run_walkforward
 from edgefinder.core.logging_config import configure_logging
 from edgefinder.db.engine import get_engine, get_session_factory
-from edgefinder.db.models import DailyBar
+from edgefinder.db.models import DailyBar, ValidationRun
 
 logger = logging.getLogger(__name__)
 
 ALL_STRATEGIES = ["coward", "gambler", "degenerate"]
+
+
+def record_validation_run(
+    session, scorecard: dict, *, universe: str, git_sha: str | None = None
+) -> int:
+    """Persist a walk-forward scorecard to validation_runs (offline evidence).
+
+    The dashboard reads the latest row per strategy to show the offline
+    verdict beside the live scorecard.
+    """
+    row = ValidationRun(
+        strategy_name=scorecard["strategy"],
+        git_sha=git_sha,
+        universe=universe,
+        config=scorecard.get("config"),
+        oos=scorecard.get("oos"),
+        criteria=scorecard.get("criteria"),
+        holdout=scorecard.get("holdout"),
+        verdict=scorecard.get("verdict", "FAIL"),
+    )
+    session.add(row)
+    session.commit()
+    return row.id
+
+
+def _current_git_sha() -> str | None:
+    try:
+        import subprocess
+
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=True, timeout=10,
+        ).stdout.strip() or None
+    except Exception:
+        return None
 
 
 def _spy_bars(db) -> pd.DataFrame:
@@ -154,6 +189,22 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         "verdict": scorecard["verdict"],
     }
     print(json.dumps(summary, indent=2, default=str))
+
+    # Persist the scorecard as the offline evidence record (best-effort —
+    # a DB hiccup must never void a completed validation run).
+    try:
+        db = session_factory()
+        try:
+            record_validation_run(
+                db, scorecard,
+                universe=f"{mode}-{top_n}" if mode == "top" else mode,
+                git_sha=_current_git_sha(),
+            )
+            logger.info("Recorded validation run for %s", strategy)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("Failed to record validation run for %s", strategy)
 
     if write:
         import os

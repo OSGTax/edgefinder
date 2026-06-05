@@ -234,6 +234,36 @@ class StrategySnapshot(Base):
     total_return_pct: Mapped[float] = mapped_column(Float)
 
 
+# ── validation_runs ─────────────────────────────────────
+
+
+class ValidationRun(Base):
+    """Walk-forward validation scorecards — the offline evidence record.
+
+    One row per validate.py run per strategy. The dashboard shows the
+    latest verdict beside the Live Proof card so offline claims and live
+    evidence sit side by side, both auditable. ``verdict`` is the lab's
+    printed verdict; consumers should treat a run as truly validated only
+    when ``criteria.all_met`` AND the sealed ``holdout`` passes.
+    """
+
+    __tablename__ = "validation_runs"
+    __table_args__ = (
+        Index("idx_validation_runs_strat_ts", "strategy_name", "run_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy_name: Mapped[str] = mapped_column(String(50), index=True)
+    run_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    git_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    universe: Mapped[str | None] = mapped_column(String(50), nullable=True)  # e.g. "top-200"
+    config: Mapped[dict | None] = mapped_column(JSON)    # is/oos/step/holdout windows, iters
+    oos: Mapped[dict | None] = mapped_column(JSON)       # aggregate OOS scorecard
+    criteria: Mapped[dict | None] = mapped_column(JSON)  # sharpe/beats-SPY/trades bar
+    holdout: Mapped[dict | None] = mapped_column(JSON)   # sealed-holdout result
+    verdict: Mapped[str] = mapped_column(String(10))     # PASS | FAIL
+
+
 # ── system_heartbeat ────────────────────────────────────
 
 

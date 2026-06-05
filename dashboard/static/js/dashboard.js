@@ -492,11 +492,16 @@ async function loadLiveProof(days = 90) {
   const el = document.getElementById('live-proof-body');
   if (!el) return;
   try {
-    const cards = await api('/api/strategies/scorecard?days=' + days);
+    const [cards, offline] = await Promise.all([
+      api('/api/strategies/scorecard?days=' + days),
+      api('/api/strategies/validation').catch(() => []),
+    ]);
     if (!Array.isArray(cards) || cards.length === 0) {
       el.innerHTML = '<div class="empty-state"><div class="icon">&#9744;</div>No scorecard data.</div>';
       return;
     }
+    const offlineBy = {};
+    (offline || []).forEach(o => { offlineBy[o.strategy_name] = o; });
     el.innerHTML = '<div class="grid-3">' + cards.map(c => {
       const crit = c.criteria || {};
       const sharpeTxt = c.sharpe == null ? '—' : fmtNum(c.sharpe, 2);
@@ -505,6 +510,12 @@ async function loadLiveProof(days = 90) {
       const windowNote = c.status === 'ok'
         ? `${c.window.points} trading days (${c.window.start} → ${c.window.end})`
         : 'insufficient data in window';
+      const off = offlineBy[c.strategy_name];
+      const offlineRow = off
+        ? `<div class="data-row"><span class="label">Offline (lab)</span>
+            <span class="value" title="${off.universe || ''} — walk-forward + sealed holdout">
+            ${fmtDate(off.run_at)} ${passPill(off.validated)}</span></div>`
+        : '';
       return `
         <div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
@@ -518,12 +529,14 @@ async function loadLiveProof(days = 90) {
             <span class="value">${excessTxt} ${passPill(crit.beats_spy)}</span></div>
           <div class="data-row"><span class="label">Trades &ge; ${c.min_trades_threshold}</span>
             <span class="value">${c.trades} / ${c.min_trades_threshold} ${passPill(crit.min_trades_met)}</span></div>
+          ${offlineRow}
           <div style="margin-top:6px;font-size:11px;color:var(--text-secondary);">${windowNote}</div>
         </div>`;
     }).join('') + '</div>'
       + '<div style="margin-top:10px;font-size:11px;color:var(--text-secondary);">'
-      + 'Same bar as offline validation: positive Sharpe AND beats SPY AND enough closed trades. '
-      + 'Computed from stored equity marks, SPY closes, and closed trades — fully verifiable.</div>';
+      + 'Live = same bar as offline validation (positive Sharpe AND beats SPY AND enough closed trades), '
+      + 'computed from stored equity marks, SPY closes, and closed trades. '
+      + 'Offline = latest walk-forward + sealed-holdout lab verdict.</div>';
   } catch (e) {
     el.innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div>Scorecard unavailable.</div>';
   }

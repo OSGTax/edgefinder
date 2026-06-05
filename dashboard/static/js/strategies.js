@@ -282,7 +282,10 @@ async function loadDetailScorecard(name, days) {
   const body = document.getElementById('detail-proof-body');
   if (!body) return;
   try {
-    const cards = await api(`/api/strategies/scorecard?days=${days}&strategy=${encodeURIComponent(name)}`);
+    const [cards, offline] = await Promise.all([
+      api(`/api/strategies/scorecard?days=${days}&strategy=${encodeURIComponent(name)}`),
+      api('/api/strategies/validation').catch(() => []),
+    ]);
     const c = Array.isArray(cards)
       ? cards.find(x => x.strategy_name === name) || cards[0]
       : null;
@@ -290,6 +293,7 @@ async function loadDetailScorecard(name, days) {
       body.innerHTML = '<div class="empty-state">No scorecard data.</div>';
       return;
     }
+    const off = (offline || []).find(o => o.strategy_name === name);
     const crit = c.criteria || {};
     const ts = c.trade_stats || {};
     const sharpeTxt = c.sharpe == null ? '—' : fmtNum(c.sharpe, 2);
@@ -313,7 +317,10 @@ async function loadDetailScorecard(name, days) {
       <div class="data-row"><span class="label">Trades &ge; ${c.min_trades_threshold}</span>
         <span class="value">${c.trades} / ${c.min_trades_threshold} ${passPill(crit.min_trades_met)}</span></div>
       <div class="data-row"><span class="label">Win rate / PF</span>
-        <span class="value">${ts.win_rate == null ? '—' : fmtPctRaw(ts.win_rate)} / ${ts.profit_factor == null ? '—' : fmtNum(ts.profit_factor, 2)}</span></div>`;
+        <span class="value">${ts.win_rate == null ? '—' : fmtPctRaw(ts.win_rate)} / ${ts.profit_factor == null ? '—' : fmtNum(ts.profit_factor, 2)}</span></div>
+      ${off ? `<div class="data-row"><span class="label">Offline validation</span>
+        <span class="value" title="walk-forward + sealed holdout (${off.universe || ''})">
+        ${fmtDate(off.run_at)} ${passPill(off.validated)}</span></div>` : ''}`;
   } catch (e) {
     body.innerHTML = '<div class="empty-state">Scorecard unavailable.</div>';
   }

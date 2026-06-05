@@ -109,6 +109,20 @@ def init_database():
             ok BOOLEAN DEFAULT TRUE,
             detail JSON
         )""",
+        """CREATE TABLE IF NOT EXISTS validation_runs (
+            id SERIAL PRIMARY KEY,
+            strategy_name VARCHAR(50) NOT NULL,
+            run_at TIMESTAMP DEFAULT NOW(),
+            git_sha VARCHAR(40),
+            universe VARCHAR(50),
+            config JSON,
+            oos JSON,
+            criteria JSON,
+            holdout JSON,
+            verdict VARCHAR(10) NOT NULL
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_validation_runs_strat_ts
+            ON validation_runs (strategy_name, run_at)""",
     ]
     with engine.begin() as conn:
         for ddl in table_ddls:
