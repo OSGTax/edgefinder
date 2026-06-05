@@ -219,3 +219,49 @@ def test_entry_fills_at_next_day_open_not_signal_close(probe_strategy):
     )
     assert entry > 105.0  # decisively NOT the 100.0 signal-day close
     assert result["stats"]["num_closed_trades"] == 0
+
+
+# ── warmup regression: folds must not run indicator-cold ────
+
+
+def _gap_event_series(n_warm: int = 250) -> pd.DataFrame:
+    """Flat-ish warmup, then a held 7% gap-up on heavy volume (gap_drift bait)."""
+    start = date(2024, 1, 1)
+    rows = []
+    for i in range(n_warm):
+        p = 100.0 + (i % 5) * 0.3  # mild noise so indicators are sane
+        rows.append({"date": start + timedelta(days=i),
+                     "open": p, "high": p * 1.01, "low": p * 0.99,
+                     "close": p, "volume": 1_000_000.0})
+    # gap day: opens +7%, holds into a strong close, 3x volume
+    rows.append({"date": start + timedelta(days=n_warm),
+                 "open": 107.0, "high": 108.2, "low": 106.8,
+                 "close": 108.0, "volume": 3_000_000.0})
+    # fill day + a few quiet days after
+    for j in range(n_warm + 1, n_warm + 6):
+        rows.append({"date": start + timedelta(days=j),
+                     "open": 108.0, "high": 109.0, "low": 107.0,
+                     "close": 108.0, "volume": 1_000_000.0})
+    return pd.DataFrame(rows)
+
+
+def test_fold_without_warmup_is_indicator_cold():
+    # A 63-bar cold slice cannot satisfy gap_drift's ema_200 trend gate —
+    # the bug that zeroed every fold before the warmup fix.
+    df = _gap_event_series()
+    tail = df.iloc[-63:].reset_index(drop=True)
+    res = run_daily_backtest("gap_drift", {"TEST": tail}, starting_cash=10_000.0)
+    assert res["stats"]["num_closed_trades"] == 0
+    assert res["stats"]["num_open_positions"] == 0
+
+
+def test_trade_start_warmup_enables_indicators():
+    # Same window, but with warmup bars + trade_start: ema_200 is live and
+    # the held gap fires; stats cover only the scored region.
+    df = _gap_event_series()
+    scored_start = df.iloc[-63]["date"]
+    res = run_daily_backtest("gap_drift", {"TEST": df}, starting_cash=10_000.0,
+                             trade_start=scored_start)
+    opened = res["stats"]["num_closed_trades"] + res["stats"]["num_open_positions"]
+    assert opened >= 1, res["stats"]
+    assert res["stats"]["days"] <= 63  # equity curve covers scored days only

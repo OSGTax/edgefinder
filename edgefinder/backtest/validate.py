@@ -30,7 +30,13 @@ from edgefinder.db.models import DailyBar, ValidationRun
 
 logger = logging.getLogger(__name__)
 
-ALL_STRATEGIES = ["coward", "gambler", "degenerate"]
+# All registered strategies (live + research candidates) — the lab validates
+# anything in the registry; live trading is gated separately by
+# settings.live_strategies.
+import edgefinder.strategies  # noqa: F401,E402 — import populates the registry
+from edgefinder.strategies.base import StrategyRegistry  # noqa: E402
+
+ALL_STRATEGIES = sorted(StrategyRegistry.get_all().keys())
 
 
 def record_validation_run(
@@ -158,7 +164,7 @@ def _format_report(scorecard: dict) -> str:
 def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         search_iters: int, write: bool, is_days: int, oos_days: int,
         step_days: int, holdout_days: int, holdout_is_days: int,
-        pass_min_trades: int) -> dict:
+        pass_min_trades: int, holdout_eval: bool = True) -> dict:
     engine = get_engine()
     session_factory = get_session_factory(engine)
     db = session_factory()
@@ -176,7 +182,7 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         strategy, bars, spy_bars=spy, search_iters=search_iters,
         is_days=is_days, oos_days=oos_days, step_days=step_days,
         holdout_days=holdout_days, holdout_is_days=holdout_is_days,
-        pass_min_trades=pass_min_trades,
+        holdout_eval=holdout_eval, pass_min_trades=pass_min_trades,
         progress_cb=lambda i: logger.info(
             "fold %s %s %s", i.get("fold"), i.get("oos"), i.get("holdout") or ""),
     )
@@ -235,6 +241,9 @@ def main() -> None:
                          "(0 = use all pre-holdout)")
     ap.add_argument("--pass-min-trades", type=int, default=30,
                     help="min OOS trades for the criteria to pass")
+    ap.add_argument("--no-holdout-eval", action="store_true",
+                    help="reserve the holdout region but do NOT evaluate it "
+                         "(research stages; only the finalist burns the holdout)")
     ap.add_argument("--write", action="store_true", help="write reviews/ report")
     args = ap.parse_args()
 
@@ -248,7 +257,8 @@ def main() -> None:
             search_iters=args.search_iters, write=args.write,
             is_days=args.is_days, oos_days=args.oos_days, step_days=args.step_days,
             holdout_days=args.holdout_days, holdout_is_days=args.holdout_is_days,
-            pass_min_trades=args.pass_min_trades)
+            pass_min_trades=args.pass_min_trades,
+            holdout_eval=not args.no_holdout_eval)
 
 
 if __name__ == "__main__":

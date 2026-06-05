@@ -223,6 +223,7 @@ def run_daily_backtest(
     min_history: int = 30,
     params: dict | None = None,
     prepared: tuple | None = None,
+    trade_start=None,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
 
@@ -234,6 +235,13 @@ def run_daily_backtest(
     immutable precomputed snapshots. Pass it to reuse one precompute across
     many param configs (the optimizer's hot loop); the per-run cursors
     (history pointers) are always rebuilt fresh, so reuse is safe.
+
+    ``trade_start``: optional date — bars before it are WARMUP only (indicators
+    and history accumulate; no trading, no equity marks). Fold-based tests must
+    pass warmup bars + trade_start or long-lookback indicators (ema_200 needs
+    200 bars) are None for the whole window — the bug that silently crippled
+    every fold result before 2026-06-05. Stats (days, exposure, Sharpe) cover
+    only the scored region.
     """
     arena = BacktestArena(provider=_NullProvider())
     arena.load_strategies()
@@ -281,6 +289,8 @@ def run_daily_backtest(
 
     n_days = len(days)
     for day_idx, current_day in enumerate(days):
+        if trade_start is not None and current_day < trade_start:
+            continue  # warmup: indicators/history only (advanced lazily below)
         if progress_cb and (day_idx % 25 == 0 or day_idx == n_days - 1):
             progress_cb({"phase": "simulate", "done": day_idx + 1, "total": n_days})
         snapshot_data: dict[str, dict] = {}

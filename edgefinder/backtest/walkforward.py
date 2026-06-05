@@ -106,6 +106,8 @@ def run_walkforward(
     step_days: int = DEFAULT_STEP_DAYS,
     holdout_days: int = 0,
     holdout_is_days: int = 0,
+    holdout_eval: bool = True,
+    warmup_days: int = 210,
     starting_cash: float = 10_000.0,
     do_optimize: bool = True,
     search_iters: int = 40,
@@ -137,21 +139,29 @@ def run_walkforward(
     while i + is_days + oos_days <= wf_n:
         is_start, is_end = days[i], days[i + is_days - 1]
         oos_start, oos_end = days[i + is_days], days[i + is_days + oos_days - 1]
+        # Warmup: include up to warmup_days of bars BEFORE each window so
+        # long-lookback indicators (ema_200 etc.) are live from the window's
+        # first scored day; trading starts at trade_start. Without this every
+        # fold ran cold (ema_200 None for an entire 63d OOS window — the bug
+        # that silently crippled all pre-2026-06-05 fold results).
+        is_warm_start = days[max(0, i - warmup_days)]
+        oos_warm_start = days[max(0, i + is_days - warmup_days)]
 
         params: dict = {}
         if do_optimize:
-            is_bars = _slice(bars_by_symbol, is_start, is_end)
+            is_bars = _slice(bars_by_symbol, is_warm_start, is_end)
             params, _, _ = optimize_params(
                 strategy_name, is_bars,
                 benchmark=_benchmark_window(spy_bars, is_start, is_end),
                 starting_cash=starting_cash, search_iters=search_iters,
-                seed=seed, min_trades=min_trades,
+                seed=seed, min_trades=min_trades, trade_start=is_start,
             )
 
-        oos_bars = _slice(bars_by_symbol, oos_start, oos_end)
+        oos_bars = _slice(bars_by_symbol, oos_warm_start, oos_end)
         res = run_daily_backtest(
             strategy_name, oos_bars, starting_cash=starting_cash,
             benchmark=_benchmark_window(spy_bars, oos_start, oos_end), params=params,
+            trade_start=oos_start,
         )
         folds.append(Fold(
             len(folds), oos_start, oos_end, params, res["stats"],
@@ -162,26 +172,32 @@ def run_walkforward(
         i += step_days
 
     # Sealed holdout: optimize on ALL pre-holdout data, score once on the end.
+    # With holdout_eval=False the region is RESERVED (folds never touch it)
+    # but not evaluated — research stages iterate on the dev region without
+    # burning the holdout; only the one finalist gets holdout_eval=True.
     holdout = None
-    if holdout_days > 0 and wf_n >= is_days:
+    if holdout_days > 0 and holdout_eval and wf_n >= is_days:
         h_start, h_end = days[wf_n], days[-1]
         # Fit the holdout config on the pre-holdout data: all of it by default,
         # or just the last holdout_is_days (keeps long-history runs tractable
         # and mirrors the per-fold IS length).
         opt_start_idx = max(0, wf_n - holdout_is_days) if holdout_is_days > 0 else 0
         pre_start, pre_end = days[opt_start_idx], days[wf_n - 1]
+        pre_warm_start = days[max(0, opt_start_idx - warmup_days)]
         h_params: dict = {}
         if do_optimize:
-            pre_bars = _slice(bars_by_symbol, pre_start, pre_end)
+            pre_bars = _slice(bars_by_symbol, pre_warm_start, pre_end)
             h_params, _, _ = optimize_params(
                 strategy_name, pre_bars,
                 benchmark=_benchmark_window(spy_bars, pre_start, pre_end),
                 starting_cash=starting_cash, search_iters=search_iters,
-                seed=seed, min_trades=min_trades,
+                seed=seed, min_trades=min_trades, trade_start=pre_start,
             )
-        h_bars = _slice(bars_by_symbol, h_start, h_end)
+        h_warm_start = days[max(0, wf_n - warmup_days)]
+        h_bars = _slice(bars_by_symbol, h_warm_start, h_end)
         h_res = run_daily_backtest(
             strategy_name, h_bars, starting_cash=starting_cash,
+            trade_start=h_start,
             benchmark=_benchmark_window(spy_bars, h_start, h_end), params=h_params,
         )
         holdout = {

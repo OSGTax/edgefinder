@@ -127,6 +127,7 @@ def optimize(
     search_iters: int = 40,
     seed: int = 0,
     min_trades: int = MIN_TRADES,
+    trade_start=None,
 ) -> tuple[dict, dict | None, float]:
     """Search ``PARAM_SPACE[strategy]`` on the given (in-sample) bars.
 
@@ -150,7 +151,7 @@ def optimize(
             res = run_daily_backtest(
                 strategy_name, bars_by_symbol,
                 starting_cash=starting_cash, benchmark=benchmark, params=cfg,
-                prepared=prepared,
+                prepared=prepared, trade_start=trade_start,
             )
         except Exception:
             logger.exception("optimize: backtest failed (%s, %s)", strategy_name, cfg)
