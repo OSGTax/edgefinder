@@ -187,6 +187,31 @@ def equity_curve(
     return result
 
 
+@router.get("/scorecard")
+def scorecard(
+    strategy: str | None = Query(None),
+    days: int = Query(90, le=365),
+    db: Session = Depends(get_db),
+):
+    """Live-vs-SPY scorecard: the offline validation bar applied to live data.
+
+    Per strategy, over the trailing ``days`` window: annualized Sharpe of the
+    daily equity series (last strategy_snapshots mark per ET day), excess
+    return vs SPY (index_daily closes, inner-joined on common dates), and
+    closed-trade stats — with the same criteria block the walk-forward lab
+    emits (sharpe_positive / beats_spy / min_trades_met / all_met). Every
+    number is recomputable from strategy_snapshots + index_daily + trades.
+    """
+    from edgefinder.analytics.live_scorecard import (
+        compute_all_scorecards,
+        compute_scorecard,
+    )
+
+    if strategy:
+        return [compute_scorecard(db, strategy, days=days)]
+    return compute_all_scorecards(db, days=days)
+
+
 @router.get("/scheduler")
 def scheduler_status():
     """Get scheduler status, next run times, and last cycle result."""

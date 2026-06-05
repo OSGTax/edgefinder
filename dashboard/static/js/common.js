@@ -82,6 +82,11 @@ function pnlSign(n) {
   return n >= 0 ? '\u25B2' : '\u25BC';
 }
 
+function passPill(ok) {
+  // Shared PASS/FAIL pill so Live Proof markup is identical on every page.
+  return `<span class="pill ${ok ? 'pill-positive' : 'pill-negative'}">${ok ? 'PASS' : 'FAIL'}</span>`;
+}
+
 // ── Time Formatting ──────────────────────────────────────────
 
 function fmtTime(iso) {

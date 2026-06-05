@@ -11,6 +11,7 @@ let _selectedStrategy = null;
 let _detailChart = null;
 let _detailSeries = null;
 let _detailDays = 30;
+let _proofDays = 90;      // Live Proof scorecard window
 
 // Per-strategy risk config (mirrors config/settings.py)
 const STRATEGY_RISK = {
@@ -263,14 +264,78 @@ async function showDetail(name) {
   // Render account body
   renderDetailAccount(name, acct);
 
-  // Load equity curve and trades in parallel
+  // Load equity curve, trades, and live scorecard in parallel
   await Promise.all([
     loadDetailEquityCurve(name, _detailDays),
     loadDetailTrades(name),
+    loadDetailScorecard(name, _proofDays),
   ]);
 
   // Wire up time-range tabs
   initDetailTabs(name);
+  initDetailProofTabs(name);
+}
+
+// ── Live Proof (offline validation bar applied to live results) ──
+
+async function loadDetailScorecard(name, days) {
+  const body = document.getElementById('detail-proof-body');
+  if (!body) return;
+  try {
+    const cards = await api(`/api/strategies/scorecard?days=${days}&strategy=${encodeURIComponent(name)}`);
+    const c = Array.isArray(cards)
+      ? cards.find(x => x.strategy_name === name) || cards[0]
+      : null;
+    if (!c) {
+      body.innerHTML = '<div class="empty-state">No scorecard data.</div>';
+      return;
+    }
+    const crit = c.criteria || {};
+    const ts = c.trade_stats || {};
+    const sharpeTxt = c.sharpe == null ? '—' : fmtNum(c.sharpe, 2);
+    const retTxt = c.return_pct == null ? '—' : fmtPctRaw(c.return_pct);
+    const spyTxt = c.spy_return_pct == null ? '—' : fmtPctRaw(c.spy_return_pct);
+    const excessTxt = c.excess_vs_spy_pct == null ? '—' : fmtPctRaw(c.excess_vs_spy_pct);
+    const windowNote = c.status === 'ok'
+      ? `${c.window.points} trading days (${c.window.start} → ${c.window.end})`
+      : 'insufficient data in window';
+    body.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+        <strong>Verdict</strong> ${passPill(crit.all_met)}
+        <span style="font-size:11px;color:var(--text-secondary);">${windowNote}</span>
+      </div>
+      <div class="data-row"><span class="label">Sharpe &gt; 0</span>
+        <span class="value">${sharpeTxt} ${passPill(crit.sharpe_positive)}</span></div>
+      <div class="data-row"><span class="label">Return / SPY</span>
+        <span class="value">${retTxt} / ${spyTxt}</span></div>
+      <div class="data-row"><span class="label">Beats SPY</span>
+        <span class="value">${excessTxt} ${passPill(crit.beats_spy)}</span></div>
+      <div class="data-row"><span class="label">Trades &ge; ${c.min_trades_threshold}</span>
+        <span class="value">${c.trades} / ${c.min_trades_threshold} ${passPill(crit.min_trades_met)}</span></div>
+      <div class="data-row"><span class="label">Win rate / PF</span>
+        <span class="value">${ts.win_rate == null ? '—' : fmtPctRaw(ts.win_rate)} / ${ts.profit_factor == null ? '—' : fmtNum(ts.profit_factor, 2)}</span></div>`;
+  } catch (e) {
+    body.innerHTML = '<div class="empty-state">Scorecard unavailable.</div>';
+  }
+}
+
+function initDetailProofTabs(strategyName) {
+  const tabs = document.getElementById('detail-proof-tabs');
+  if (!tabs) return;
+
+  // Remove old listeners by cloning (same pattern as initDetailTabs —
+  // showDetail can run repeatedly, once per card click)
+  const fresh = tabs.cloneNode(true);
+  tabs.parentNode.replaceChild(fresh, tabs);
+
+  fresh.addEventListener('click', async (e) => {
+    const tab = e.target.closest('.filter-tab');
+    if (!tab) return;
+    fresh.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    _proofDays = parseInt(tab.dataset.days, 10);
+    await loadDetailScorecard(strategyName, _proofDays);
+  });
 }
 
 function renderDetailAccount(name, acct) {

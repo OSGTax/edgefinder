@@ -2,7 +2,8 @@
    EdgeFinder — Dashboard Page
    ═══════════════════════════════════════════════════════════════ */
 
-const STARTING_CAPITAL = 30000; // 3 strategies x $10,000
+// Fallback only — real totals are summed from each account's starting_capital.
+const FALLBACK_STARTING_CAPITAL = 30000;
 const STRATEGY_TARGETS = { coward: 0.15, gambler: 0.25, degenerate: 0.50 };
 let equityChart = null;
 let equitySeries = null;
@@ -21,16 +22,19 @@ async function loadStats() {
       api('/api/trades/stats'),
     ]);
 
-    // Total equity = sum of each strategy's total_equity
+    // Total equity = sum of each strategy's total_equity; starting capital is
+    // summed from the same accounts (no hardcoded total).
     let totalEquity = 0;
     let totalUnrealized = 0;
     let totalPositions = 0;
+    let totalStarting = 0;
 
     if (Array.isArray(accounts)) {
       for (const a of accounts) {
         totalEquity += (a.total_equity || a.cash || 0);
         totalUnrealized += (a.unrealized_pnl || 0);
         totalPositions += (a.position_count || a.open_positions || 0);
+        totalStarting += (a.starting_capital || 0);
       }
     } else if (accounts && typeof accounts === 'object') {
       for (const [, a] of Object.entries(accounts)) {
@@ -39,13 +43,15 @@ async function loadStats() {
         totalEquity += (acct.total_equity || acct.cash || 0);
         totalUnrealized += (acct.unrealized_pnl || 0);
         totalPositions += (acct.position_count || acct.open_positions || 0);
+        totalStarting += (acct.starting_capital || 0);
       }
     }
 
-    // If no accounts returned, show starting capital
-    if (totalEquity === 0) totalEquity = STARTING_CAPITAL;
+    // If no accounts returned, show the fallback so the card isn't $0/NaN
+    if (totalEquity === 0) totalEquity = FALLBACK_STARTING_CAPITAL;
+    if (totalStarting === 0) totalStarting = FALLBACK_STARTING_CAPITAL;
 
-    const equityChg = (totalEquity - STARTING_CAPITAL) / STARTING_CAPITAL;
+    const equityChg = (totalEquity - totalStarting) / totalStarting;
 
     document.getElementById('stat-equity').textContent = fmtDollar(totalEquity);
     const chgEl = document.getElementById('stat-equity-chg');
@@ -480,6 +486,61 @@ function initComparisonTabs() {
   });
 }
 
+// ── Live Proof (offline validation bar applied to live results) ──
+
+async function loadLiveProof(days = 90) {
+  const el = document.getElementById('live-proof-body');
+  if (!el) return;
+  try {
+    const cards = await api('/api/strategies/scorecard?days=' + days);
+    if (!Array.isArray(cards) || cards.length === 0) {
+      el.innerHTML = '<div class="empty-state"><div class="icon">&#9744;</div>No scorecard data.</div>';
+      return;
+    }
+    el.innerHTML = '<div class="grid-3">' + cards.map(c => {
+      const crit = c.criteria || {};
+      const sharpeTxt = c.sharpe == null ? '—' : fmtNum(c.sharpe, 2);
+      const excessTxt = c.excess_vs_spy_pct == null
+        ? '—' : fmtPctRaw(c.excess_vs_spy_pct) + ' vs SPY';
+      const windowNote = c.status === 'ok'
+        ? `${c.window.points} trading days (${c.window.start} → ${c.window.end})`
+        : 'insufficient data in window';
+      return `
+        <div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            ${stratDot(c.strategy_name)}
+            <strong style="text-transform:capitalize;">${c.strategy_name}</strong>
+            ${passPill(crit.all_met)}
+          </div>
+          <div class="data-row"><span class="label">Sharpe &gt; 0</span>
+            <span class="value">${sharpeTxt} ${passPill(crit.sharpe_positive)}</span></div>
+          <div class="data-row"><span class="label">Beats SPY</span>
+            <span class="value">${excessTxt} ${passPill(crit.beats_spy)}</span></div>
+          <div class="data-row"><span class="label">Trades &ge; ${c.min_trades_threshold}</span>
+            <span class="value">${c.trades} / ${c.min_trades_threshold} ${passPill(crit.min_trades_met)}</span></div>
+          <div style="margin-top:6px;font-size:11px;color:var(--text-secondary);">${windowNote}</div>
+        </div>`;
+    }).join('') + '</div>'
+      + '<div style="margin-top:10px;font-size:11px;color:var(--text-secondary);">'
+      + 'Same bar as offline validation: positive Sharpe AND beats SPY AND enough closed trades. '
+      + 'Computed from stored equity marks, SPY closes, and closed trades — fully verifiable.</div>';
+  } catch (e) {
+    el.innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div>Scorecard unavailable.</div>';
+  }
+}
+
+function initProofTabs() {
+  const tabs = document.getElementById('proof-range-tabs');
+  if (!tabs) return;
+  tabs.addEventListener('click', (e) => {
+    const tab = e.target.closest('.filter-tab');
+    if (!tab) return;
+    tabs.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    loadLiveProof(parseInt(tab.dataset.days, 10));
+  });
+}
+
 // ── Auto-Refresh ────────────────────────────────────────────
 
 function startAutoRefresh() {
@@ -529,10 +590,12 @@ document.addEventListener('DOMContentLoaded', () => {
   loadStats();
   loadEquityCurve(90);
   loadComparisonChart(90);
+  loadLiveProof(90);
   loadPositions();
   loadMarketOverview();
   initEquityTabs();
   initComparisonTabs();
+  initProofTabs();
   lastUpdate = Date.now();
   if (autoRefreshEnabled) startAutoRefresh();
   updateRefreshStatus();
