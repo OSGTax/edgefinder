@@ -214,11 +214,13 @@ def run_walkforward(
     return _aggregate(
         strategy_name, folds, is_days, oos_days, step_days,
         holdout=holdout, pass_min_trades=pass_min_trades,
+        optimized=do_optimize,
     )
 
 
 def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_days,
-               *, holdout: dict | None = None, pass_min_trades: int = 30) -> dict:
+               *, holdout: dict | None = None, pass_min_trades: int = 30,
+               optimized: bool = True) -> dict:
     rets = [f.oos_stats.get("return_pct") or 0.0 for f in folds]
     sharpes = [f.oos_stats["sharpe"] for f in folds if f.oos_stats.get("sharpe") is not None]
     excess = [f.oos_stats["excess_return_pct"] for f in folds
@@ -295,6 +297,9 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
         "config": {
             "is_days": is_days, "oos_days": oos_days,
             "step_days": step_days, "num_folds": len(folds),
+            # Disclose the methodology: fixed pre-registered defaults vs
+            # per-fold IS optimization (a defaults-pass is the stronger claim).
+            "optimized": bool(optimized),
         },
         "oos": {
             "total_return_pct": oos_total_return,

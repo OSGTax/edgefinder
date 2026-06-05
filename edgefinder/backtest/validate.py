@@ -164,7 +164,8 @@ def _format_report(scorecard: dict) -> str:
 def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         search_iters: int, write: bool, is_days: int, oos_days: int,
         step_days: int, holdout_days: int, holdout_is_days: int,
-        pass_min_trades: int, holdout_eval: bool = True) -> dict:
+        pass_min_trades: int, holdout_eval: bool = True,
+        do_optimize: bool = True) -> dict:
     engine = get_engine()
     session_factory = get_session_factory(engine)
     db = session_factory()
@@ -183,6 +184,7 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         is_days=is_days, oos_days=oos_days, step_days=step_days,
         holdout_days=holdout_days, holdout_is_days=holdout_is_days,
         holdout_eval=holdout_eval, pass_min_trades=pass_min_trades,
+        do_optimize=do_optimize,
         progress_cb=lambda i: logger.info(
             "fold %s %s %s", i.get("fold"), i.get("oos"), i.get("holdout") or ""),
     )
@@ -244,6 +246,10 @@ def main() -> None:
     ap.add_argument("--no-holdout-eval", action="store_true",
                     help="reserve the holdout region but do NOT evaluate it "
                          "(research stages; only the finalist burns the holdout)")
+    ap.add_argument("--fixed", action="store_true",
+                    help="skip per-fold IS optimization — score the strategy's "
+                         "pre-registered defaults on every OOS window (the "
+                         "stronger, selection-bias-free test)")
     ap.add_argument("--write", action="store_true", help="write reviews/ report")
     args = ap.parse_args()
 
@@ -258,7 +264,8 @@ def main() -> None:
             is_days=args.is_days, oos_days=args.oos_days, step_days=args.step_days,
             holdout_days=args.holdout_days, holdout_is_days=args.holdout_is_days,
             pass_min_trades=args.pass_min_trades,
-            holdout_eval=not args.no_holdout_eval)
+            holdout_eval=not args.no_holdout_eval,
+            do_optimize=not args.fixed)
 
 
 if __name__ == "__main__":
