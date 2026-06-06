@@ -333,6 +333,41 @@ control — score excess vs the menu's own EW return alongside SPY ("beat
 your own menu" = skill; beats-SPY-but-not-menu = bias harvest), (3) only
 then resume candidate testing; holdout budget preserved.
 
+## Update — 2026-06-06 PM (GRAVEYARD RESTORED — xsec_mom edge fully falsified; honest baseline starts here)
+
+The graveyard backfill ran (`--top-per-day 1000`, 1,251 days, 1.25M bars,
+0 failures): daily_bars now holds each day's top-1000 common stocks by
+dollar volume drawn from Polygon reference tickers ACTIVE AND DELISTED
+(5,288 + 6,498). Result: 6,160 symbols, **3,082 with histories that END
+mid-range** (396 died in 2021, 432 in '22, 469 in '23, 501 in '24, 918
+in '25). The old table had 13.
+
+**Menu tilt re-measured on the honest menu (EW buy-hold vs SPY,
+PIT cut 2022-11-29):** −2.4, −1.9, +12.2, +0.7, −1.2pp per fold
+(fold 3 = the genuine Dec-23..Jun-24 small/mid rally), holdout window
++1.4pp. The systematic survivors-only free lunch (+2.9..+3.5pp mean) is
+GONE. Beating SPY on this menu now means beating SPY.
+
+**xsec_mom+overlay, frozen config, honest menu, fixed-defaults 126d
+folds: FAIL.** Mean excess **−1.30pp** (negative), 2/5 folds beat SPY,
+win rate 44.1% (was 59.1% on the rigged menu), Sharpe 0.93, 123 trades.
+Full decomposition of the lab's best-ever result:
+rigged menu +7.86pp 5/5 → fair ranking (survivors-only) +2.16pp 3/5 →
+honest market **−1.30pp 2/5**. The entire edge was data bias. The
+holdout was never spent on it — protocol held; round-4 look preserved.
+
+**Blanket void:** every pre-graveyard positive result (gap_drift's PF
+1.92 screen, both overlay fold passes, every screen survival) was
+measured on survivors-only data and is hereby treated as void. The
+honest research baseline starts at this commit. The criteria bar is
+unchanged; the data finally deserves it.
+
+**Engine note (known, accepted):** a position whose symbol stops
+trading mid-run freezes at its last print until run end (no forced
+delisting close). Final prints of collapses are in the data and the 20%
+stop fires on the way down, so the distortion is small; a "delist ⇒
+force-close at last bar" engine rule is queued as a small fidelity item.
+
 ## Round 3 CLOSED — 2026-06-05 (final)
 
 **tom_seasonality (pre-registered 760653c, first calendar candidate):
