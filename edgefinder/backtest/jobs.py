@@ -69,18 +69,34 @@ def spy_benchmark(db: Session, start, end) -> dict | None:
 # ── universe resolution + bar loading ─────────────────────────────────
 
 
-def resolve_universe(db: Session, mode: str, symbols: list[str], top_n: int) -> list[str]:
-    """Turn a universe spec into a concrete symbol list from daily_bars."""
+def resolve_universe(db: Session, mode: str, symbols: list[str], top_n: int,
+                     as_of=None) -> list[str]:
+    """Turn a universe spec into a concrete symbol list from daily_bars.
+
+    ``as_of`` (date, "top" mode only): rank by dollar volume using ONLY bars
+    dated <= as_of, and require the name to be alive near as_of (a bar within
+    the prior 30 days). Without it the ranking sees the WHOLE table — i.e.
+    the future relative to any backtest window — which selects tomorrow's
+    winners into yesterday's universe (measured at ~+3pp/126d of free excess
+    vs SPY on this data). Point-in-time runs should always pass the day
+    before their first scored day.
+    """
     if mode == "symbols":
         return sorted({s.strip().upper() for s in symbols if s.strip()})
     if mode == "full":
         rows = db.query(DailyBar.symbol).distinct().all()
         return sorted(r[0] for r in rows)
     if mode == "top":
+        q = db.query(DailyBar.symbol)
+        if as_of is not None:
+            from datetime import timedelta
+            q = q.filter(DailyBar.date <= as_of)
+            alive_cutoff = as_of - timedelta(days=30)
+        q = q.group_by(DailyBar.symbol)
+        if as_of is not None:
+            q = q.having(func.max(DailyBar.date) >= alive_cutoff)
         rows = (
-            db.query(DailyBar.symbol)
-            .group_by(DailyBar.symbol)
-            .order_by(func.avg(DailyBar.close * DailyBar.volume).desc())
+            q.order_by(func.avg(DailyBar.close * DailyBar.volume).desc())
             .limit(top_n).all()
         )
         return [r[0] for r in rows]

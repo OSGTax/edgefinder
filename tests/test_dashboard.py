@@ -417,6 +417,36 @@ class TestBacktestJobs:
         assert set(resolve_universe(db_session, "full", [], 0)) == {"TEST", "HIGHV", "LOWV"}
         assert resolve_universe(db_session, "top", [], 1) == ["HIGHV"]  # top dollar-volume
 
+    def test_resolve_universe_point_in_time(self, db_session):
+        """as_of must hide future dollar-volume (no future-selection bias)
+        and exclude names already dead at the cut."""
+        from datetime import date, timedelta
+        from edgefinder.backtest.jobs import resolve_universe
+        from edgefinder.db.models import DailyBar
+        start = date(2024, 1, 1)
+        # LATER: tiny volume before the cut, explodes after (future winner).
+        for i in range(40):
+            vol = 100.0 if i < 20 else 50_000_000.0
+            db_session.add(DailyBar(symbol="LATER", date=start + timedelta(days=i),
+                open=50.0, high=50.5, low=49.5, close=50.0, volume=vol))
+        # STEADY: solid volume throughout.
+        for i in range(40):
+            db_session.add(DailyBar(symbol="STEADY", date=start + timedelta(days=i),
+                open=50.0, high=50.5, low=49.5, close=50.0, volume=1_000_000.0))
+        # DEAD: huge volume but last bar long before the cut (delisted).
+        for i in range(5):
+            db_session.add(DailyBar(symbol="DEAD", date=start - timedelta(days=200 - i),
+                open=50.0, high=50.5, low=49.5, close=50.0, volume=90_000_000.0))
+        db_session.commit()
+
+        cut = start + timedelta(days=19)
+        # Full-table ranking picks the long-dead name AND the future winner
+        # over the genuinely tradable steady name...
+        assert resolve_universe(db_session, "top", [], 2) == ["DEAD", "LATER"]
+        # ...the point-in-time cut ranks only what was knowable and alive.
+        assert resolve_universe(db_session, "top", [], 2, as_of=cut) == ["STEADY", "LATER"]
+        assert "DEAD" not in resolve_universe(db_session, "top", [], 10, as_of=cut)
+
     def test_execute_backtest_direct(self, db_session):
         from edgefinder.backtest.jobs import BacktestJob, _execute_backtest
         self._seed_multi(db_session)

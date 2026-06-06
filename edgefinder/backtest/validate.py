@@ -165,12 +165,13 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         search_iters: int, write: bool, is_days: int, oos_days: int,
         step_days: int, holdout_days: int, holdout_is_days: int,
         pass_min_trades: int, holdout_eval: bool = True,
-        do_optimize: bool = True, cash_overlay: bool = False) -> dict:
+        do_optimize: bool = True, cash_overlay: bool = False,
+        universe_as_of=None) -> dict:
     engine = get_engine()
     session_factory = get_session_factory(engine)
     db = session_factory()
     try:
-        universe = resolve_universe(db, mode, symbols, top_n)
+        universe = resolve_universe(db, mode, symbols, top_n, as_of=universe_as_of)
         bars, _, _ = _load_bars(db, universe, None, None)
         if not bars:
             raise SystemExit("no daily_bars for that universe — run the backfill first")
@@ -203,9 +204,12 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
     try:
         db = session_factory()
         try:
+            uni_label = f"{mode}-{top_n}" if mode == "top" else mode
+            if universe_as_of is not None:
+                uni_label += f"@{universe_as_of}"  # point-in-time ranking cut
             record_validation_run(
                 db, scorecard,
-                universe=f"{mode}-{top_n}" if mode == "top" else mode,
+                universe=uni_label,
                 git_sha=_current_git_sha(),
             )
             logger.info("Recorded validation run for %s", strategy)
@@ -253,6 +257,11 @@ def main() -> None:
     ap.add_argument("--cash-overlay", action="store_true",
                     help="park idle cash in SPY (zero-knob accounting layer; "
                          "5 bps per conversion; trades unchanged)")
+    ap.add_argument("--universe-as-of", default=None,
+                    help="YYYY-MM-DD: rank the top-N universe by dollar volume "
+                         "using only bars up to this date (point-in-time — no "
+                         "future-selection bias). Use the day before the first "
+                         "scored fold day.")
     ap.add_argument("--write", action="store_true", help="write reviews/ report")
     args = ap.parse_args()
 
@@ -268,7 +277,9 @@ def main() -> None:
             holdout_days=args.holdout_days, holdout_is_days=args.holdout_is_days,
             pass_min_trades=args.pass_min_trades,
             holdout_eval=not args.no_holdout_eval,
-            do_optimize=not args.fixed, cash_overlay=args.cash_overlay)
+            do_optimize=not args.fixed, cash_overlay=args.cash_overlay,
+            universe_as_of=(date.fromisoformat(args.universe_as_of)
+                            if args.universe_as_of else None))
 
 
 if __name__ == "__main__":
