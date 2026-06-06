@@ -87,7 +87,31 @@ def _parse_day(s: str) -> date:
     return datetime.strptime(s, "%Y-%m-%d").date()
 
 
-def run_backfill(client, engine, days, *, symbols=None, use_cache=True):
+def _common_stock_symbols() -> set[str]:
+    """All US common-stock tickers Polygon knows — ACTIVE AND DELISTED.
+
+    The delisted half is the graveyard: without it any top-per-day filter
+    would re-create survivorship bias by only keeping names alive today.
+    """
+    try:
+        from massive import RESTClient
+    except ImportError:  # pragma: no cover - legacy SDK name
+        from polygon import RESTClient
+
+    client = RESTClient(settings.polygon_api_key)
+    out: set[str] = set()
+    for active in (True, False):
+        n0 = len(out)
+        for t in client.list_tickers(market="stocks", type="CS",
+                                     active=active, limit=1000):
+            out.add(t.ticker)
+        logger.info("Reference tickers: %d %s common stocks",
+                    len(out) - n0, "active" if active else "DELISTED")
+    return out
+
+
+def run_backfill(client, engine, days, *, symbols=None, use_cache=True,
+                 top_per_day=None, keep_symbols=None):
     """Download + upsert each day independently.
 
     A failed day (missing/corrupt file, transient S3 error, dropped DB
@@ -95,12 +119,22 @@ def run_backfill(client, engine, days, *, symbols=None, use_cache=True):
     so one bad day can't forfeit the rest of a multi-year backfill (which is
     exactly what truncated the first 3-year run at 2025-08-22). Returns
     ``(total_rows, failed)`` where ``failed`` is a list of ``(day, error)``.
+
+    ``top_per_day``: survivorship-free ingest — read the FULL market file and
+    keep that day's top N rows by dollar volume (restricted to ``keep_symbols``
+    when given, e.g. common stocks incl. delisted + benchmark ETFs). Which
+    names later died plays no part in what gets kept.
     """
     total_rows = 0
     failed: list[tuple[date, str]] = []
     for d in days:
         try:
             df = client.read_day_aggs(d, symbols=symbols, use_cache=use_cache)
+            if top_per_day:
+                if keep_symbols:
+                    df = df[df["ticker"].isin(keep_symbols)]
+                dv = df["close"] * df["volume"]
+                df = df.loc[dv.nlargest(top_per_day).index]
             rows = day_aggs_to_rows(df)
             n = upsert_daily_bars(engine, rows)
             total_rows += n
@@ -132,6 +166,10 @@ def main() -> int:
     p.add_argument("--symbols", default=None, help="comma-separated symbol filter (default: all)")
     p.add_argument("--universe", action="store_true",
                    help="filter to symbols in the tickers table (bounds DB size to the tracked universe)")
+    p.add_argument("--top-per-day", type=int, default=None, metavar="N",
+                   help="survivorship-free ingest: keep each day's top N common "
+                        "stocks by dollar volume (active AND delisted), plus the "
+                        "benchmark ETFs. Mutually exclusive with --symbols/--universe.")
     p.add_argument("--no-benchmarks", action="store_true",
                    help="don't auto-include the benchmark index ETFs (settings.index_symbols) "
                         "in a scoped backfill (they're added by default so the backtest "
@@ -146,6 +184,8 @@ def main() -> int:
         p.error("--start must be on or before --end")
 
     symbols = [s.strip().upper() for s in args.symbols.split(",")] if args.symbols else None
+    if args.top_per_day and (symbols or args.universe):
+        p.error("--top-per-day reads the full market file; drop --symbols/--universe")
     if args.universe and not symbols:
         symbols = _load_universe(args.db_url)
         if not symbols:
@@ -186,8 +226,16 @@ def main() -> int:
     # Single-table bootstrap (checkfirst avoids full-schema reflection).
     DailyBar.__table__.create(engine, checkfirst=True)
 
+    keep_symbols = None
+    if args.top_per_day:
+        keep_symbols = _common_stock_symbols()
+        keep_symbols |= {s.strip().upper() for s in settings.index_symbols if s.strip()}
+        logger.info("Keep-set: %d common stocks (active+delisted) + benchmark ETFs",
+                    len(keep_symbols))
+
     total_rows, failed = run_backfill(
-        client, engine, days, symbols=symbols, use_cache=not args.no_cache
+        client, engine, days, symbols=symbols, use_cache=not args.no_cache,
+        top_per_day=args.top_per_day, keep_symbols=keep_symbols,
     )
 
     if failed:
