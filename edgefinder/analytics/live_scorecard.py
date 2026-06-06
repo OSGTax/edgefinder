@@ -215,13 +215,15 @@ def compute_all_scorecards(
 ) -> list[dict]:
     """Scorecards for the live strategy set.
 
-    Enumerates from the StrategyRegistry (not strategy_accounts — that table
-    carries dead legacy rows), unless an explicit list is passed.
+    Defaults to the ``live_strategies`` allowlist — the strategies actually
+    trading. Research candidates are registered in the StrategyRegistry too,
+    but they are lab-only by definition and have no live evidence to score;
+    listing them on the Live Proof panel just reads as noise.
     """
     if strategies is None:
-        from edgefinder.strategies.base import StrategyRegistry
+        from config.settings import settings
 
-        strategies = sorted(StrategyRegistry.get_all().keys())
+        strategies = sorted(settings.live_strategies)
     return [
         compute_scorecard(
             session, s, days=days, pass_min_trades=pass_min_trades, now=now
