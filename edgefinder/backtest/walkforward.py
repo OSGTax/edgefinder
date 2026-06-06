@@ -254,12 +254,18 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
     sharpe_positive = mean_sharpe is not None and mean_sharpe > 0
     majority_beat_spy = bool(excess) and folds_beating_spy > len(excess) / 2
     enough_trades = trades >= pass_min_trades
+    # Majority-of-folds alone lets "wins small, loses big" through (e.g.
+    # 3/5 folds beaten with a NEGATIVE mean excess) — the average must be
+    # positive too. Added 2026-06-06; disclosed methodology tightening.
+    excess_positive = mean_excess is not None and mean_excess > 0
     criteria = {
         "oos_sharpe_positive": bool(sharpe_positive),
         "beats_spy_majority_folds": bool(majority_beat_spy),
+        "mean_excess_positive": bool(excess_positive),
         "min_trades_met": bool(enough_trades),
         "min_trades_threshold": pass_min_trades,
-        "all_met": bool(sharpe_positive and majority_beat_spy and enough_trades),
+        "all_met": bool(sharpe_positive and majority_beat_spy
+                        and excess_positive and enough_trades),
     }
 
     holdout_block = None
