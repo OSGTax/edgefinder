@@ -292,6 +292,47 @@ holdout look (`--fixed --cash-overlay --holdout-days 126`, eval ON) and
 nothing else may touch the sealed region first. This round's look was
 already burned on gap_drift+overlay (failed).
 
+## Update — 2026-06-06 (benchmark audit: FINALIST DEMOTED — edge was universe bias)
+
+Owner challenged the benchmark ("is beating 55% realistic?"). Full audit:
+
+**The benchmark itself is clean.** SPY +55.24% dev-window verified against
+raw closes (420.33 → 652.53, ~10.3%/yr price-only); per-window comparison
+is relative; price-only is slightly SOFT vs total-return reality.
+
+**The bias is the universe (two layers, both measured):**
+1. *Future-selection*: "top-300" ranked by FULL-PERIOD dollar volume —
+   tomorrow's winners selected into yesterday's menus. FIXED in v5.19.1:
+   `resolve_universe(as_of=...)` + `--universe-as-of` (validate + screen),
+   disclosed in validation_runs labels (`top-300@2022-11-29`).
+2. *Survivors-only table (graveyard missing)*: 2679/2692 daily_bars
+   symbols alive to table end, zero ending before 2024 — delisted losers
+   absent entirely. NOT yet fixed; needs a Polygon `active=false`
+   delisted-ticker backfill (now the top research-infra priority).
+
+**Measured do-nothing tilt** (equal-weight buy-hold of the menu vs SPY,
+per 126d window): full-period menu +0.4..+7.0pp (mean +2.9pp), holdout
+window +4.8pp. Point-in-time menu (layer-1 fixed, layer-2 remains):
++1.3..+8.0pp (mean **+3.5pp**), holdout window **+5.5pp**.
+
+**xsec_mom+overlay re-test on the point-in-time universe (fixed defaults,
+126d folds, holdout still sealed):** mean excess **+7.86pp → +2.16pp**,
+5/5 → 3/5 folds, Sharpe 1.98 → 1.37, win 59.1% → 49.5%. Criteria
+technically all_met, BUT the remaining +2.16pp is BELOW the same menu's
++3.5pp do-nothing tilt — i.e. relative to its own opportunity set the
+strategy adds ~−1.3pp of selection value. **The entire original edge is
+explained by menu bias. DEMOTED — no holdout look will be spent on it.**
+Decomposition: ~5.7pp future-selection + remainder within survivors-only
+tilt.
+
+**Blanket consequence:** every positive lab result to date sits inside
+menu bias (gap_drift's fold passes face the same discount). The lab
+cannot certify ANY SPY-beating strategy until the graveyard is restored.
+Round-4 plan REVISED: (1) delisted-ticker backfill infra, (2) interim
+control — score excess vs the menu's own EW return alongside SPY ("beat
+your own menu" = skill; beats-SPY-but-not-menu = bias harvest), (3) only
+then resume candidate testing; holdout budget preserved.
+
 ## Round 3 CLOSED — 2026-06-05 (final)
 
 **tom_seasonality (pre-registered 760653c, first calendar candidate):
