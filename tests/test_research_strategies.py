@@ -398,3 +398,32 @@ class TestMicroReversal:
         strat = MicroReversalStrategy()
         assert strat.should_exit("TEST", _md(_snap(rsi=60.0), []), 100.0) is not None
         assert strat.should_exit("TEST", _md(_snap(rsi=40.0), []), 100.0) is None
+
+
+class TestTrendTimer:
+    """trend_timer: hold the index above its 200-EMA, go to cash below it."""
+
+    def test_holds_above_200ema(self):
+        from edgefinder.strategies.trend_timer import TrendTimerStrategy
+        md = _md(_snap(close=110.0, ema_200=100.0), [])
+        intent = TrendTimerStrategy().evaluate("SPY", md)
+        assert intent is not None and "risk-on" in intent.reasoning.lower()
+
+    def test_no_entry_below_200ema(self):
+        from edgefinder.strategies.trend_timer import TrendTimerStrategy
+        md = _md(_snap(close=95.0, ema_200=100.0), [])
+        assert TrendTimerStrategy().evaluate("SPY", md) is None
+
+    def test_exits_below_200ema(self):
+        from edgefinder.strategies.trend_timer import TrendTimerStrategy
+        strat = TrendTimerStrategy()
+        assert strat.should_exit("SPY", _md(_snap(close=95.0, ema_200=100.0), []), 100.0) is not None
+        assert strat.should_exit("SPY", _md(_snap(close=110.0, ema_200=100.0), []), 100.0) is None
+
+    def test_sizes_near_full_equity(self):
+        # risk_pct 0.20 + fixed 20% stop + concentration 1.0 → ~full investment.
+        from edgefinder.strategies.trend_timer import TrendTimerStrategy
+        s = TrendTimerStrategy()
+        assert s.risk_pct == 0.20
+        assert s.max_concentration_pct == 1.0
+        assert s.max_hold_days == 0 and s.trailing_stop_pct is None

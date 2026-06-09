@@ -133,3 +133,45 @@ def test_walkforward_holdout_is_sealed_and_scored():
     last_fold_end = sc["folds"][-1]["oos"].split("..")[1]
     holdout_start = h["window"].split("..")[0]
     assert holdout_start > last_fold_end
+
+
+def test_benchmark_window_computes_sharpe_and_drawdown():
+    # SPY series with a clear drawdown → benchmark dict carries sharpe + maxDD.
+    from edgefinder.backtest.walkforward import _benchmark_window
+    closes = [100, 102, 101, 95, 90, 96, 104, 110]  # ~18% drawdown to the 90 low
+    df = pd.DataFrame({
+        "date": [date(2024, 1, 1) + timedelta(days=i) for i in range(len(closes))],
+        "close": [float(c) for c in closes],
+    })
+    b = _benchmark_window(df, date(2024, 1, 1), date(2024, 1, 8))
+    assert b["symbol"] == "SPY"
+    assert b["sharpe"] is not None
+    # peak 102 → low 90 = 11.76% drawdown
+    assert b["max_drawdown_pct"] == pytest.approx(11.76, abs=0.1)
+
+
+def test_risk_adjusted_criteria_scores_sharpe_and_drawdown_not_return():
+    # trend_timer on a synthetic index that trends up, dips below its EMA, and
+    # recovers — scored risk-adjusted, the scorecard exposes the Sharpe/DD bar.
+    import numpy as np  # noqa: F401 - only pandas needed
+    prices = ([100 + i * 0.4 for i in range(260)]      # long uptrend (build EMA)
+              + [204 - i * 1.5 for i in range(40)]      # sharp drop below EMA
+              + [144 + i * 0.5 for i in range(120)])    # recovery
+    df = pd.DataFrame({
+        "date": [date(2023, 1, 1) + timedelta(days=i) for i in range(len(prices))],
+        "open": prices, "high": [p * 1.005 for p in prices],
+        "low": [p * 0.995 for p in prices], "close": prices,
+        "volume": [1_000_000.0] * len(prices),
+    })
+    sc = run_walkforward(
+        "trend_timer", {"SPY": df}, spy_bars=df[["date", "close"]],
+        is_days=180, oos_days=90, step_days=90, do_optimize=False,
+        warmup_days=200, risk_adjusted=True,
+    )
+    assert sc["config"]["risk_adjusted"] is True
+    assert sc["criteria"]["mode"] == "risk_adjusted"
+    # the risk-adjusted keys are present (Sharpe edge + drawdown bar)
+    for k in ("sharpe_beats_spy", "majority_folds_higher_sharpe",
+              "lower_drawdown_than_spy", "all_met"):
+        assert k in sc["criteria"]
+    assert "mean_excess_sharpe" in sc["oos"]

@@ -166,7 +166,8 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         step_days: int, holdout_days: int, holdout_is_days: int,
         pass_min_trades: int, holdout_eval: bool = True,
         do_optimize: bool = True, cash_overlay: bool = False,
-        universe_as_of=None, rank_offset: int = 0, cost_model=None) -> dict:
+        universe_as_of=None, rank_offset: int = 0, cost_model=None,
+        risk_adjusted: bool = False) -> dict:
     engine = get_engine()
     session_factory = get_session_factory(engine)
     db = session_factory()
@@ -188,6 +189,7 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         holdout_days=holdout_days, holdout_is_days=holdout_is_days,
         holdout_eval=holdout_eval, pass_min_trades=pass_min_trades,
         do_optimize=do_optimize, cash_overlay=cash_overlay, cost_model=cost_model,
+        risk_adjusted=risk_adjusted,
         progress_cb=lambda i: logger.info(
             "fold %s %s %s", i.get("fold"), i.get("oos"), i.get("holdout") or ""),
     )
@@ -277,6 +279,11 @@ def main() -> None:
                          "model (microcap mode); optimizer searches net-of-cost.")
     ap.add_argument("--microcap", action="store_true",
                     help="convenience: --rank-offset 1000 --top-n 2000 --costed.")
+    ap.add_argument("--risk-adjusted", action="store_true",
+                    help="score on the 'SPY return, less risk' bar: beat SPY's "
+                         "Sharpe in a majority of folds AND lower max-drawdown, "
+                         "instead of positive mean excess RETURN. For trend/"
+                         "regime timers that trade rarely (no >=30-trade floor).")
     ap.add_argument("--write", action="store_true", help="write reviews/ report")
     args = ap.parse_args()
 
@@ -308,7 +315,8 @@ def main() -> None:
             do_optimize=not args.fixed, cash_overlay=args.cash_overlay,
             universe_as_of=(date.fromisoformat(args.universe_as_of)
                             if args.universe_as_of else None),
-            rank_offset=rank_offset, cost_model=cost_model)
+            rank_offset=rank_offset, cost_model=cost_model,
+            risk_adjusted=args.risk_adjusted)
 
 
 if __name__ == "__main__":

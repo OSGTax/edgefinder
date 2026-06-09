@@ -11,17 +11,22 @@ def clean_registry():
     import importlib
     from edgefinder.strategies import coward, gambler, degenerate_v2
 
-    def _reload():
-        StrategyRegistry.clear()
-        importlib.reload(coward)
-        importlib.reload(gambler)
-        importlib.reload(degenerate_v2)
-
-    _reload()
+    # Setup: these tests assert exactly the 3 live strategies are registered.
+    StrategyRegistry.clear()
+    importlib.reload(coward)
+    importlib.reload(gambler)
+    importlib.reload(degenerate_v2)
     yield
-    # Restore the real registry on teardown so later test modules that rely on
-    # it (e.g. backtest/walk-forward) don't see an empty registry.
-    _reload()
+    # Teardown: restore the FULL registry — research candidates included — or
+    # later modules that backtest them in-process (walk-forward) hit an unknown
+    # strategy. Reload every strategy submodule (robust to future additions).
+    import pkgutil
+    import edgefinder.strategies as pkg
+    StrategyRegistry.clear()
+    for m in pkgutil.iter_modules(pkg.__path__):
+        if m.name in ("base", "strategy_interface"):
+            continue
+        importlib.reload(importlib.import_module(f"edgefinder.strategies.{m.name}"))
 
 
 class TestStrategyRegistry:

@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
+import edgefinder.strategies  # noqa: F401 — populate StrategyRegistry (all candidates)
 from config.settings import settings
 from edgefinder.backtest.costs import corwin_schultz_spread
 from edgefinder.core.events import EventBus
@@ -633,6 +634,19 @@ def _summarize(slot, strategy_name, starting_cash, equity_curve, closed_trades,
         stats["benchmark_return_pct"] = round(benchmark["return_pct"], 2)
         stats["benchmark_period"] = benchmark.get("period")
         stats["excess_return_pct"] = round(return_pct - benchmark["return_pct"], 2)
+        # Risk-adjusted comparison (for the "SPY return, less risk" goal): the
+        # benchmark's own Sharpe and max-drawdown over the same window, plus the
+        # strategy's edge on each. Higher excess_sharpe + a smaller drawdown =
+        # beating SPY risk-adjusted even when raw return lags.
+        if benchmark.get("sharpe") is not None:
+            stats["benchmark_sharpe"] = round(benchmark["sharpe"], 2)
+            stats["excess_sharpe"] = round(
+                (stats["sharpe"] or 0.0) - benchmark["sharpe"], 2)
+        if benchmark.get("max_drawdown_pct") is not None:
+            stats["benchmark_max_drawdown_pct"] = round(
+                benchmark["max_drawdown_pct"], 2)
+            stats["drawdown_reduction_pct"] = round(
+                benchmark["max_drawdown_pct"] - stats["max_drawdown_pct"], 2)
 
     return {
         "strategy": strategy_name,

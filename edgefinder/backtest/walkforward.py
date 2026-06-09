@@ -52,16 +52,35 @@ def _slice(bars_by_symbol: dict, start, end) -> dict:
 
 
 def _benchmark_window(spy_bars: pd.DataFrame | None, start, end) -> dict | None:
-    """SPY buy-hold return over [start, end] (the per-window benchmark)."""
+    """SPY buy-hold over [start, end]: return, AND its own Sharpe + max drawdown
+    (so a strategy can be scored risk-adjusted vs buy-and-hold, not just on
+    raw return)."""
     if spy_bars is None or len(spy_bars) == 0:
         return None
     sub = spy_bars[(spy_bars["date"] >= start) & (spy_bars["date"] <= end)].sort_values("date")
     closes = [c for c in sub["close"].tolist() if c]
     if len(closes) < 2 or closes[0] <= 0:
         return None
+    # SPY daily-return Sharpe (annualised, rf=0) and max drawdown over the window
+    # — same conventions as the strategy's _sharpe/_max_drawdown.
+    import math as _math
+    rets = [closes[i] / closes[i - 1] - 1.0 for i in range(1, len(closes))]
+    sharpe = None
+    if len(rets) >= 2:
+        mean = sum(rets) / len(rets)
+        var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+        sd = _math.sqrt(var)
+        if sd > 0:
+            sharpe = (mean / sd) * _math.sqrt(252)
+    peak, max_dd = closes[0], 0.0
+    for c in closes:
+        peak = max(peak, c)
+        max_dd = max(max_dd, (peak - c) / peak)
     return {
         "symbol": "SPY",
         "return_pct": (closes[-1] - closes[0]) / closes[0] * 100,
+        "sharpe": sharpe,
+        "max_drawdown_pct": round(max_dd * 100, 2),
         "period": f"{start}..{end}",
     }
 
@@ -112,6 +131,7 @@ def run_walkforward(
     do_optimize: bool = True,
     cash_overlay: bool = False,
     cost_model=None,
+    risk_adjusted: bool = False,
     search_iters: int = 40,
     seed: int = 0,
     min_trades: int = 10,
@@ -219,14 +239,14 @@ def run_walkforward(
         strategy_name, folds, is_days, oos_days, step_days,
         holdout=holdout, pass_min_trades=pass_min_trades,
         optimized=do_optimize, cash_overlay=cash_overlay,
-        costed=cost_model is not None,
+        costed=cost_model is not None, risk_adjusted=risk_adjusted,
     )
 
 
 def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_days,
                *, holdout: dict | None = None, pass_min_trades: int = 30,
                optimized: bool = True, cash_overlay: bool = False,
-               costed: bool = False) -> dict:
+               costed: bool = False, risk_adjusted: bool = False) -> dict:
     rets = [f.oos_stats.get("return_pct") or 0.0 for f in folds]
     sharpes = [f.oos_stats["sharpe"] for f in folds if f.oos_stats.get("sharpe") is not None]
     excess = [f.oos_stats["excess_return_pct"] for f in folds
@@ -263,15 +283,45 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
     # 3/5 folds beaten with a NEGATIVE mean excess) — the average must be
     # positive too. Added 2026-06-06; disclosed methodology tightening.
     excess_positive = mean_excess is not None and mean_excess > 0
-    criteria = {
-        "oos_sharpe_positive": bool(sharpe_positive),
-        "beats_spy_majority_folds": bool(majority_beat_spy),
-        "mean_excess_positive": bool(excess_positive),
-        "min_trades_met": bool(enough_trades),
-        "min_trades_threshold": pass_min_trades,
-        "all_met": bool(sharpe_positive and majority_beat_spy
-                        and excess_positive and enough_trades),
-    }
+
+    # Risk-adjusted edge vs SPY buy-hold: per-fold Sharpe edge + drawdown
+    # reduction. The "SPY return, less risk" goal is scored on THESE, not on
+    # raw excess return (a trend/regime timer deliberately gives up some return
+    # for much less drawdown, so it fails the return bar but can win here).
+    ex_sharpes = [f.oos_stats["excess_sharpe"] for f in folds
+                  if f.oos_stats.get("excess_sharpe") is not None]
+    dd_reductions = [f.oos_stats["drawdown_reduction_pct"] for f in folds
+                     if f.oos_stats.get("drawdown_reduction_pct") is not None]
+    mean_excess_sharpe = round(statistics.mean(ex_sharpes), 2) if ex_sharpes else None
+    mean_dd_reduction = round(statistics.mean(dd_reductions), 2) if dd_reductions else None
+    folds_higher_sharpe = sum(1 for s in ex_sharpes if s > 0)
+
+    if risk_adjusted:
+        sharpe_edge_pos = mean_excess_sharpe is not None and mean_excess_sharpe > 0
+        majority_higher_sharpe = bool(ex_sharpes) and folds_higher_sharpe > len(ex_sharpes) / 2
+        lower_dd = mean_dd_reduction is not None and mean_dd_reduction > 0
+        # A timer trades rarely — only require it actually took positions.
+        traded = trades >= 3
+        criteria = {
+            "mode": "risk_adjusted",
+            "sharpe_beats_spy": bool(sharpe_edge_pos),
+            "majority_folds_higher_sharpe": bool(majority_higher_sharpe),
+            "lower_drawdown_than_spy": bool(lower_dd),
+            "traded": bool(traded),
+            "all_met": bool(sharpe_edge_pos and majority_higher_sharpe
+                            and lower_dd and traded),
+        }
+    else:
+        criteria = {
+            "mode": "total_return",
+            "oos_sharpe_positive": bool(sharpe_positive),
+            "beats_spy_majority_folds": bool(majority_beat_spy),
+            "mean_excess_positive": bool(excess_positive),
+            "min_trades_met": bool(enough_trades),
+            "min_trades_threshold": pass_min_trades,
+            "all_met": bool(sharpe_positive and majority_beat_spy
+                            and excess_positive and enough_trades),
+        }
 
     holdout_block = None
     if holdout is not None:
@@ -281,6 +331,16 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
         h_trades = hs.get("num_closed_trades") or 0
         h_sharpe_pos = h_sharpe is not None and h_sharpe > 0
         h_beats = h_excess is not None and h_excess > 0
+        h_ex_sharpe = hs.get("excess_sharpe")
+        h_dd_red = hs.get("drawdown_reduction_pct")
+        if risk_adjusted:
+            h_passes = bool(
+                h_ex_sharpe is not None and h_ex_sharpe > 0
+                and h_dd_red is not None and h_dd_red > 0
+                and h_trades >= 3
+            )
+        else:
+            h_passes = bool(h_sharpe_pos and h_beats and h_trades >= pass_min_trades)
         holdout_block = {
             "window": holdout["window"],
             "regime": holdout["regime"],
@@ -288,12 +348,14 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
             "return_pct": hs.get("return_pct"),
             "sharpe": h_sharpe,
             "excess_vs_spy_pct": h_excess,
+            "excess_sharpe": h_ex_sharpe,
+            "drawdown_reduction_pct": h_dd_red,
             "trades": h_trades,
             "win_rate": hs.get("win_rate"),
             "max_drawdown_pct": hs.get("max_drawdown_pct"),
             "sharpe_positive": bool(h_sharpe_pos),
             "beats_spy": bool(h_beats),
-            "passes": bool(h_sharpe_pos and h_beats and h_trades >= pass_min_trades),
+            "passes": h_passes,
         }
 
     by_regime: dict[str, list] = {}
@@ -316,6 +378,8 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
             "cash_overlay": bool(cash_overlay),
             # Disclose the realistic spread/impact/delist cost model (microcap).
             "costed": bool(costed),
+            # Disclose the scoring bar: total-return vs risk-adjusted (Sharpe/DD).
+            "risk_adjusted": bool(risk_adjusted),
         },
         "oos": {
             "total_return_pct": oos_total_return,
@@ -323,13 +387,17 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
             "mean_sharpe": mean_sharpe,
             "mean_excess_vs_spy_pct": mean_excess,
             "folds_beating_spy": f"{folds_beating_spy}/{len(excess)}" if excess else "n/a",
+            # Risk-adjusted scoreboard (the "SPY return, less risk" bar).
+            "mean_excess_sharpe": mean_excess_sharpe,
+            "folds_higher_sharpe": f"{folds_higher_sharpe}/{len(ex_sharpes)}" if ex_sharpes else "n/a",
+            "mean_drawdown_reduction_pct": mean_dd_reduction,
             "total_trades": trades,
             "mean_win_rate": round(statistics.mean(wins), 1) if wins else None,
             "worst_max_drawdown_pct": round(max(dds), 2) if dds else None,
         },
         "criteria": criteria,
         "holdout": holdout_block,
-        "verdict": "PASS" if passed else "FAIL",
+        "verdict": "PASS" if criteria.get("all_met") else "FAIL",
         "by_regime": regime_summary,
         "folds": [
             {
