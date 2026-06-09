@@ -41,6 +41,40 @@ full-period (not PIT) universe ranking. Fold validation (PIT, net-of-cost,
 +overlay since ~90% cash) is the next gate; the low frequency likely fails the
 ≥30-trades-per-fold criterion at fixed defaults.
 
+## Update — 2026-06-09 PM (micro_reversal fold validation — FAIL, but the closest yet)
+
+Fold validation, rank 1000-2000 band, costed (net-of-cost), PIT
+(`--universe-as-of 2022-11-29`), +cash-overlay (≈90% cash), holdout reserved
+NOT burned:
+- **Fixed defaults:** Sharpe **1.13**, **3/5 folds beat SPY**, 58 trades (clears
+  the ≥30 floor), BUT mean excess **−0.74pp** → FAIL on the positive-mean-excess
+  criterion. Essentially SPY-EQUIVALENT, a hair under — the closest any strategy
+  has come on honest data (liquid strategies failed by −1.3 to −6pp).
+- **Optimized (net-of-cost, 12 iters):** Sharpe 0.53, 2/5 folds, excess
+  **−4.2pp**, 164 trades. Forcing frequency by loosening the washout DILUTES the
+  edge and feeds costs — the optimizer's higher-turnover configs generalize
+  WORSE OOS than the rarer fixed-default washouts. Classic overfit/dilution.
+
+**Verdict: micro_reversal FAILS — it MATCHES SPY net-of-cost but does not beat
+it.** The screen's per-trade edge (PF 1.41) was real but, once measured against
+the SPY it displaces (overlay) across out-of-sample regimes, it nets to ~flat.
+Holdout stays sealed (correct — no clear fold pass).
+
+**Microcap thesis status:** partially supported, not closed. The small-cap
+reversal edge SURVIVES realistic costs at the per-trade level (unlike anything
+liquid) but is too thin to beat SPY in the rank-1000-2000 band. TRUE microcaps
+(deeper than a top-3000 ingest, where the documented edge is larger but costs
+worse) remain UNTESTED — the door isn't fully shut, but testing them needs a
+deeper/illiquid data pull and even more conservative cost modelling. The
+cumulative honest finding across ~10 strategies and 2 universes stands: a
+net-of-cost SPY-beating edge in tradeable US equities is very hard to find, and
+the lab now proves that rather than faking the opposite.
+
+**Build delivered (v5.20.0):** the realistic cost engine (costs.py — spread,
+impact, participation cap, delist force-close, gap-through-stop) is the durable
+asset — it makes every future backtest in this lab trustworthy, and it is what
+turned a screen that "passed" (PF 1.41) into an honest fold FAIL.
+
 ## Update — 2026-06-06 (free-data-source vetting — adversarially verified)
 
 Owner asked: can we add alternative free datasets to find an edge bar-data
