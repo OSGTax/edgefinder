@@ -54,6 +54,24 @@ class TestEngine:
         except Exception:
             pass  # Expected — no PG server. Point is it didn't crash on URL rewrite.
 
+    def test_direct_supabase_rewritten_to_pooler_in_codespaces(self, monkeypatch):
+        from edgefinder.db.engine import _rewrite_direct_supabase_to_pooler
+
+        direct = "postgresql://postgres:p%40ss@db.abcdef123456.supabase.co:5432/postgres"
+        monkeypatch.setenv("CODESPACES", "true")
+        assert _rewrite_direct_supabase_to_pooler(direct) == (
+            "postgresql://postgres.abcdef123456:p%40ss"
+            "@aws-1-us-east-1.pooler.supabase.com:5432/postgres"
+        )
+
+        # Untouched outside Codespaces, and for non-direct URLs anywhere.
+        monkeypatch.delenv("CODESPACES")
+        assert _rewrite_direct_supabase_to_pooler(direct) == direct
+        monkeypatch.setenv("CODESPACES", "true")
+        pooler = "postgresql://postgres.x:p@aws-1-us-east-1.pooler.supabase.com:5432/postgres"
+        assert _rewrite_direct_supabase_to_pooler(pooler) == pooler
+        assert _rewrite_direct_supabase_to_pooler("sqlite:///:memory:") == "sqlite:///:memory:"
+
 
 class TestTicker:
     def test_create_and_query(self, db_session):

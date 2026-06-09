@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -27,6 +28,35 @@ def _ensure_ssl(url: str) -> str:
     return url + separator + "sslmode=require"
 
 
+_DIRECT_SUPABASE = re.compile(
+    r"^(?P<scheme>postgresql(?:\+\w+)?://)postgres:(?P<pw>.*)"
+    r"@db\.(?P<ref>[a-z0-9]+)\.supabase\.co:\d+/(?P<rest>.*)$"
+)
+
+
+def _rewrite_direct_supabase_to_pooler(url: str) -> str:
+    """Rewrite a direct Supabase URL to the session-pooler form in Codespaces.
+
+    The direct host (db.<ref>.supabase.co) is IPv6-only and unreachable from
+    GitHub Codespaces, which are IPv4-only. The pooler accepts the same
+    credentials with the username qualified by the project ref.
+    """
+    if not os.getenv("CODESPACES"):
+        return url
+    m = _DIRECT_SUPABASE.match(url)
+    if not m:
+        return url
+    logger.warning(
+        "DATABASE_URL uses the direct Supabase host (IPv6-only, unreachable from "
+        "Codespaces) — rewriting to the session pooler. Update the Codespaces "
+        "secret to the pooler URL to silence this."
+    )
+    return (
+        f"{m['scheme']}postgres.{m['ref']}:{m['pw']}"
+        f"@aws-1-us-east-1.pooler.supabase.com:5432/{m['rest']}"
+    )
+
+
 def get_engine(url: str | None = None, echo: bool | None = None):
     """Create SQLAlchemy engine.
 
@@ -40,11 +70,13 @@ def get_engine(url: str | None = None, echo: bool | None = None):
     - SSL is enforced automatically (sslmode=require appended if missing)
     - pool_recycle handles Supavisor retiring idle connections
     """
-    db_url = url or os.getenv("DATABASE_URL", "") or settings.database_url
+    db_url = (url or os.getenv("DATABASE_URL", "") or settings.database_url).strip()
 
     # Render/Supabase may use postgres:// but SQLAlchemy 2.x requires postgresql://
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+    db_url = _rewrite_direct_supabase_to_pooler(db_url)
 
     is_sqlite = db_url.startswith("sqlite")
     _echo = echo if echo is not None else settings.db_echo
