@@ -123,7 +123,10 @@ runs untouched until the new one is proven. Old engine is otherwise not importan
   deleting it to fit a free tier — the opposite of the vision.)
 - **Git:** commit + push directly to `main`; format `[vX.Y] short description`; bump
   `__version__` in `dashboard/app.py` for functional changes; run
-  `pytest -m "not integration"` before committing code.
+  `pytest -m "not integration"` before committing code. If `git push` fails with a
+  Git LFS hook error (`git-lfs not found`), use `git push --no-verify` — the repo has
+  vestigial LFS hooks but no LFS-tracked files. The devcontainer now installs git-lfs,
+  so this should be resolved after the next rebuild.
 - **Autonomy:** finish the project autonomously, phase by phase, committing as you go;
   surface decisions only when they genuinely change direction.
 

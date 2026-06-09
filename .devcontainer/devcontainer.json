@@ -3,7 +3,8 @@
   "name": "EdgeFinder",
   "image": "mcr.microsoft.com/devcontainers/python:3.11",
   "features": {
-    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" },
+    "ghcr.io/devcontainers/features/git-lfs:1": {}
   },
   "postCreateCommand": "pip install -e '.[dev]' && npm install -g @anthropic-ai/claude-code",
   "secrets": {
@@ -12,6 +13,18 @@
     },
     "CLAUDE_CODE_OAUTH_TOKEN": {
       "description": "Generate locally with `claude setup-token`. Used by `claude -p` in the watchdog reasoning step."
+    },
+    "R2_ACCESS_KEY_ID": {
+      "description": "Cloudflare R2 access key id (Phase 4 two-tier storage: Parquet history in R2). See HANDOFF.md."
+    },
+    "R2_SECRET_ACCESS_KEY": {
+      "description": "Cloudflare R2 secret access key (shown once at token creation)."
+    },
+    "R2_ENDPOINT": {
+      "description": "Cloudflare R2 S3 endpoint, e.g. https://<accountid>.r2.cloudflarestorage.com"
+    },
+    "R2_BUCKET": {
+      "description": "Cloudflare R2 bucket name, e.g. edgefinder-data."
     }
   },
   "customizations": {
