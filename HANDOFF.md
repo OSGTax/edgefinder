@@ -75,6 +75,45 @@ impact, participation cap, delist force-close, gap-through-stop) is the durable
 asset — it makes every future backtest in this lab trustworthy, and it is what
 turned a screen that "passed" (PF 1.41) into an honest fold FAIL.
 
+## Update — 2026-06-09 EVE (strategic-direction panel — all 5 low-probability; the goal needs disambiguation)
+
+10-agent adversarial panel over 5 forward directions, scored vs the user's real
+goal (beat SPY in backtest, prove it, deploy to a small personal account). ALL
+FIVE came back LOW or VERY_LOW probability of a backtest-provable, net-of-cost,
+SPY-RETURN-beating edge. Specifics:
+- **True microcaps** — LOW. Decisive correction to the "edge grows as universe
+  shrinks" reframe: short-term reversal profit IS the bid-ask spread earned by
+  PROVIDING liquidity; a retail account CROSSES (pays) that spread — the opposite.
+  PF 1.41 was a gross/per-trade figure; net-of-SPY already FAILED (-0.74pp) and
+  going deeper makes the trader pay MORE of the spread that IS the edge. Daily-
+  OHLCV backtests are least trustworthy exactly there. ONE cheap decisive test
+  worth doing: re-screen costed + PIT on the existing thin band, measured net-of-
+  cost vs SPY AND vs the menu's own equal-weight buy-hold ("beat your own menu");
+  if <=0, the microcap door closes cheaply.
+- **Ensemble** — LOW, provability fails: components (reversal+momentum) aren't
+  error-independent, so no diversification benefit to push -0.74pp across zero.
+- **Untried families (low-vol / 52wk-high / value+quality)** — LOW on the RETURN
+  bar but the MOST provable (liquid, low-turnover, trustworthy data, ~1.5wk, no
+  live proof). Low-vol's verdict is already public: USMV +45% vs SPY +92% over
+  2021-2026 — it's a Sharpe/drawdown play, a guaranteed FAIL on positive-mean-
+  excess-RETURN.
+- **Live-forward-proof pipeline** — premature: it would forward-prove a strategy
+  that fails the offline gate; the scorecard is the eventual final gate, activates
+  only once something passes offline. Don't build now.
+- **Instruments (options/leverage/vol-target)** — VERY_LOW. Vol-targeting SPY
+  lever-DOWN is pre-falsified by identity (excess <=0 vs SPY); options
+  un-backtestable on our data; leveraged-ETF rotation is a regime-timing bet.
+
+**THE REAL FINDING — the goal contains a tension that decides tractability:**
+"beat SPY" splits into (a) beat SPY on TOTAL RETURN — the lab's current bar
+(positive mean excess return), which ~10 honest falsifications + the academic
+consensus say is near-impossible net of cost in tradeable US equities; vs
+(b) beat SPY RISK-ADJUSTED (Sharpe/drawdown) — which IS achievable and provable
+(low-vol, vol-targeting, regime gates) but trades raw return for much less risk,
+and only beats SPY on RETURN if levered (retail-constrained). The project has
+implicitly chased (a). The highest-value next step is the OWNER choosing (a) vs
+(b) — it determines whether the search is tractable at all. Pending owner call.
+
 ## Update — 2026-06-06 (free-data-source vetting — adversarially verified)
 
 Owner asked: can we add alternative free datasets to find an edge bar-data
