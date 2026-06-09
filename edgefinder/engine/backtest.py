@@ -111,7 +111,7 @@ def _execute_to_target(
             target[s] = int((w * equity) / open_px[s])
 
     deltas = {}
-    for s in set(holdings) | set(target):
+    for s in sorted(set(holdings) | set(target)):   # deterministic fill order
         if s not in open_px:           # untradeable today — leave the holding
             continue
         d = target.get(s, 0) - holdings.get(s, 0)
@@ -155,8 +155,12 @@ def run_backtest(
     log_weights: bool = False,
 ) -> BacktestResult:
     """Replay ``strategy`` over ``bars_by_symbol`` and return the equity curve,
-    trades, and stats. ``benchmark`` is an optional (date, close) frame scored
-    the same way for an apples-to-apples comparison.
+    trades, and stats. ``benchmark`` is an optional (date, open, close) frame;
+    its return/Sharpe/drawdown are computed from raw prices (frictionless
+    buy-and-hold, return anchored at the first bar's open) — strategy stats
+    carry costs and integer-share flooring, the benchmark does not. Use a
+    ``start_cash`` large enough that flooring is negligible relative to the
+    effect being measured.
 
     ``trade_start`` (a date) overrides ``warmup_days`` (a calendar index): bars
     before it feed indicators/history only — no trading AND no equity marks, so
@@ -211,7 +215,11 @@ def run_backtest(
                 del holdings[sym]
 
         # rebalance (decision uses data through YESTERDAY; fill at today's open)
-        if i >= warm_idx and _is_rebalance(i, calendar, schedule):
+        # The first scored bar always rebalances — without this, a weekly/
+        # monthly fold sits in cash until the next schedule boundary while its
+        # benchmark is invested from day 1 (a measured ~-1.8pp/fold artifact).
+        if i >= warm_idx and (
+                i == max(warm_idx, 1) or _is_rebalance(i, calendar, schedule)):
             ctx = _build_context(prep, calendar[i - 1], fundamentals)
             weights = strategy.rebalance(ctx) or {}
             total = sum(w for w in weights.values() if w and w > 0)
@@ -248,9 +256,16 @@ def _summarize(equity_curve, trades, start_cash, holdings, benchmark) -> dict:
     }
     if benchmark is not None and len(benchmark) > 1:
         b = benchmark.sort_values("date")
-        bc = [c for c in b["close"].tolist() if c and c > 0]
+        b = b[b["close"] > 0]
+        bc = b["close"].tolist()
         if len(bc) > 1:
-            bret = (bc[-1] - bc[0]) / bc[0] * 100
+            # Return is anchored at the first bar's OPEN (falling back to its
+            # close) because the strategy's first fill is at that open — a
+            # close-anchored benchmark would skip day one's open->close move
+            # that the strategy curve includes.
+            first_open = float(b["open"].iloc[0]) if "open" in b.columns else 0.0
+            base = first_open if first_open > 0 else bc[0]
+            bret = (bc[-1] - base) / base * 100
             brets = [bc[i] / bc[i - 1] - 1 for i in range(1, len(bc))]
             bsh = (statistics.mean(brets) / statistics.stdev(brets) * math.sqrt(252)
                    if len(brets) > 1 and statistics.stdev(brets) > 0 else None)

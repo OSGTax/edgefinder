@@ -10,7 +10,7 @@ from edgefinder.db.engine import Base, get_engine, get_session_factory
 from edgefinder.engine.backtest import run_backtest
 from edgefinder.engine.record import record_validation_run
 from edgefinder.engine.strategy import BuyAndHold, EqualWeight
-from edgefinder.engine.walkforward import Fold, _aggregate, run_walkforward
+from edgefinder.engine.walkforward import Fold, _aggregate, _slice, run_walkforward
 
 
 def _bars(n: int, start_price: float = 100.0, drift: float = 0.1,
@@ -51,6 +51,28 @@ class TestTradeStart:
                            cost_bps=0.0, warmup_days=2)
         assert len(res.equity_curve) == 100   # warmup days still marked
 
+    def test_first_scored_bar_rebalances_on_slow_schedules(self):
+        # trade_start mid-month must fill immediately, not wait for the next
+        # month boundary — the fold-start dead-cash artifact (review finding)
+        bars = {"AAA": _bars(100)}
+        ts = bars["AAA"]["date"][40]            # mid-month by construction
+        assert ts.day not in (1, 2)
+        res = run_backtest(bars, BuyAndHold("AAA"), schedule="monthly",
+                           cost_bps=0.0, trade_start=ts)
+        assert res.trades and res.trades[0]["date"] == ts
+
+    def test_self_benchmark_measures_zero_excess(self):
+        # buy-and-hold scored against its own bars must read ~0 excess —
+        # the open-anchored benchmark kills the day-one half-day mismatch
+        bars = {"AAA": _bars(100)}
+        ts = bars["AAA"]["date"][40]
+        res = run_backtest(bars, BuyAndHold("AAA"), schedule="daily",
+                           cost_bps=0.0, start_cash=1_000_000.0,
+                           trade_start=ts,
+                           benchmark=_slice(bars["AAA"], ts,
+                                            bars["AAA"]["date"][99]))
+        assert res.stats["excess_return_pct"] == pytest.approx(0.0, abs=0.05)
+
 
 class TestFoldGeometry:
     def test_fold_count_windows_and_sealed_holdout(self):
@@ -63,6 +85,8 @@ class TestFoldGeometry:
         assert card["config"]["num_folds"] == 5
         assert card["holdout"] is None
         assert card["config"]["holdout_evaluated"] is False
+        # the sealed boundary is pinned in the record even though unevaluated
+        assert card["config"]["holdout_window"] == f"{days[370]}..{days[419]}"
         # no fold may touch the final 50 days (the sealed region)
         last_oos_end = max(
             date.fromisoformat(f["window"].split("..")[1]) for f in card["folds"])
@@ -139,6 +163,38 @@ class TestCriteria:
         card = _aggregate("s", folds, risk_adjusted=True, **_AGG_KW)
         assert card["criteria"]["lower_drawdown_than_spy"] is False
         assert card["criteria"]["all_met"] is False
+
+    def test_all_cash_folds_count_in_sharpe_denominator(self):
+        # a flat fold (sharpe None) with a known benchmark Sharpe is imputed
+        # excess_sharpe = -benchmark_sharpe, so a bull fold a cash-timer sat
+        # out counts AGAINST it (review finding: the silent-drop hole)
+        flat_bull = Fold(
+            index=2, oos_start=date(2021, 1, 1), oos_end=date(2021, 6, 30),
+            regime="bull_calm",
+            stats={"return_pct": 0.0, "sharpe": None,
+                   "excess_return_pct": -10.0, "benchmark_sharpe": 1.5,
+                   "drawdown_reduction_pct": 8.0,
+                   "max_drawdown_pct": 0.0, "num_trades": 0})
+        folds = [_fold(0, 0.5, 2.0), _fold(1, 0.4, 1.0), flat_bull]
+        card = _aggregate("s", folds, risk_adjusted=True, **_AGG_KW)
+        assert card["oos"]["folds_higher_sharpe"] == "2/3"   # not 2/2
+        assert card["folds"][2]["excess_sharpe"] == -1.5
+        # and a flat fold in a BEAR counts positively (symmetric)
+        flat_bear = Fold(
+            index=2, oos_start=date(2022, 1, 1), oos_end=date(2022, 6, 30),
+            regime="bear_volatile",
+            stats={"return_pct": 0.0, "sharpe": None,
+                   "excess_return_pct": 15.0, "benchmark_sharpe": -1.2,
+                   "drawdown_reduction_pct": 20.0,
+                   "max_drawdown_pct": 0.0, "num_trades": 0})
+        card2 = _aggregate("s", [flat_bear], risk_adjusted=True, **_AGG_KW)
+        assert card2["folds"][0]["excess_sharpe"] == 1.2
+
+    def test_compounded_return_omitted_when_folds_overlap(self):
+        folds = [_fold(0, 0.5, 2.0), _fold(1, 0.4, 1.0)]
+        kw = dict(_AGG_KW, step_days=25)        # step < oos: windows overlap
+        card = _aggregate("s", folds, risk_adjusted=True, **kw)
+        assert card["oos"]["total_return_pct"] is None
 
 
 class TestScorecardPlumbing:

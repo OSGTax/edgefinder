@@ -75,6 +75,20 @@ class Fold:
     regime: str
 
 
+def _excess_sharpe(stats: dict) -> float | None:
+    """A window's excess Sharpe, imputing Sharpe 0 for a flat (all-cash)
+    equity curve. Without this, windows a cash-timer sat out vanish from the
+    Sharpe criteria denominator (a bull fold it skipped should count as
+    'did not beat SPY') while still collecting drawdown-reduction credit —
+    an anti-conservative hole in the gate. The imputation is symmetric: an
+    all-cash window in a bear (negative SPY Sharpe) counts positively."""
+    if stats.get("excess_sharpe") is not None:
+        return stats["excess_sharpe"]
+    if stats.get("sharpe") is None and stats.get("benchmark_sharpe") is not None:
+        return round(0.0 - stats["benchmark_sharpe"], 2)
+    return None
+
+
 def _all_dates(bars_by_symbol: dict[str, pd.DataFrame]) -> list:
     days: set = set()
     for df in bars_by_symbol.values():
@@ -97,7 +111,7 @@ def run_walkforward(
     holdout_days: int = 0,
     holdout_eval: bool = True,
     warmup_days: int = 210,
-    start_cash: float = 10_000.0,
+    start_cash: float = 1_000_000.0,
     schedule: str = "monthly",
     cost_bps: float = 2.0,
     risk_adjusted: bool = True,
@@ -109,7 +123,13 @@ def run_walkforward(
     ``strategy_factory`` builds a FRESH strategy instance per window, so
     stateful strategies cannot leak across folds. With ``holdout_days > 0`` the
     final stretch of the calendar is carved off and untouchable by folds;
-    ``holdout_eval=False`` reserves it without burning the one look.
+    ``holdout_eval=False`` reserves it without burning the one look (the
+    sealed window's dates are still disclosed in config so the boundary is
+    pinned in the record even as new bars accrue).
+
+    ``start_cash`` defaults high so integer-share flooring is negligible —
+    at $10k across 7 ETFs the flooring alone measured ~-1.3pp/fold of phantom
+    deficit against the frictionless benchmark.
     """
     days = _all_dates(bars_by_symbol)
     n = len(days)
@@ -155,8 +175,9 @@ def run_walkforward(
             trade_start=h_start,
             benchmark=_slice(spy_bars, h_start, h_end) if spy_bars is not None else None,
         ).stats
+        h_exs = _excess_sharpe(h)
         if risk_adjusted:
-            h_passes = ((h.get("excess_sharpe") or 0) > 0
+            h_passes = ((h_exs or 0) > 0
                         and (h.get("drawdown_reduction_pct") or 0) > 0
                         and h.get("num_trades", 0) >= 3)
         else:
@@ -170,7 +191,7 @@ def run_walkforward(
             "return_pct": h.get("return_pct"),
             "sharpe": h.get("sharpe"),
             "excess_vs_spy_pct": h.get("excess_return_pct"),
-            "excess_sharpe": h.get("excess_sharpe"),
+            "excess_sharpe": h_exs,
             "drawdown_reduction_pct": h.get("drawdown_reduction_pct"),
             "max_drawdown_pct": h.get("max_drawdown_pct"),
             "trades": h.get("num_trades", 0),
@@ -179,13 +200,18 @@ def run_walkforward(
             "passes": h_passes,
         }
 
-    return _aggregate(
+    card = _aggregate(
         strategy_name, folds,
         is_days=is_days, oos_days=oos_days, step_days=step_days,
         warmup_days=warmup_days, schedule=schedule, cost_bps=cost_bps,
         start_cash=start_cash, holdout=holdout, holdout_days=holdout_days,
         holdout_eval=holdout_eval, risk_adjusted=risk_adjusted,
         pass_min_trades=pass_min_trades)
+    if holdout_days > 0:
+        # pin the sealed boundary in the record — the carve is count-relative,
+        # so without this the "sealed" region would drift as new bars accrue
+        card["config"]["holdout_window"] = _window(days[wf_n], days[-1])
+    return card
 
 
 def _mean(xs: list) -> float | None:
@@ -204,14 +230,16 @@ def _aggregate(
     rets = [f.stats.get("return_pct") for f in folds]
     sharpes = [f.stats.get("sharpe") for f in folds]
     excess_rets = [f.stats.get("excess_return_pct") for f in folds]
-    excess_sharpes = [f.stats.get("excess_sharpe") for f in folds]
+    excess_sharpes = [_excess_sharpe(f.stats) for f in folds]   # flat folds imputed
     dd_reductions = [f.stats.get("drawdown_reduction_pct") for f in folds]
     total_trades = sum(f.stats.get("num_trades", 0) for f in folds)
 
-    compounded = 1.0
-    for r in rets:
-        if r is not None:
-            compounded *= 1 + r / 100
+    # compounding only makes calendar sense when folds tile exactly
+    compounded = 1.0 if step_days == oos_days else None
+    if compounded is not None:
+        for r in rets:
+            if r is not None:
+                compounded *= 1 + r / 100
 
     ex_known = [e for e in excess_rets if e is not None]
     exs_known = [e for e in excess_sharpes if e is not None]
@@ -219,7 +247,8 @@ def _aggregate(
     higher_sharpe = sum(1 for e in exs_known if e > 0)
 
     oos = {
-        "total_return_pct": round((compounded - 1) * 100, 2),
+        "total_return_pct": (round((compounded - 1) * 100, 2)
+                             if compounded is not None else None),
         "mean_fold_return_pct": _mean(rets),
         "mean_sharpe": _mean(sharpes),
         "mean_excess_vs_spy_pct": _mean(excess_rets),
@@ -260,8 +289,9 @@ def _aggregate(
     for f in folds:
         slot = by_regime.setdefault(f.regime, {"folds": 0, "excess_sharpes": []})
         slot["folds"] += 1
-        if f.stats.get("excess_sharpe") is not None:
-            slot["excess_sharpes"].append(f.stats["excess_sharpe"])
+        exs = _excess_sharpe(f.stats)
+        if exs is not None:
+            slot["excess_sharpes"].append(exs)
     by_regime = {
         reg: {"folds": s["folds"], "mean_excess_sharpe": _mean(s["excess_sharpes"])}
         for reg, s in by_regime.items()}
@@ -297,7 +327,7 @@ def _aggregate(
                 "return_pct": f.stats.get("return_pct"),
                 "sharpe": f.stats.get("sharpe"),
                 "excess_vs_spy_pct": f.stats.get("excess_return_pct"),
-                "excess_sharpe": f.stats.get("excess_sharpe"),
+                "excess_sharpe": _excess_sharpe(f.stats),
                 "drawdown_reduction_pct": f.stats.get("drawdown_reduction_pct"),
                 "max_drawdown_pct": f.stats.get("max_drawdown_pct"),
                 "trades": f.stats.get("num_trades", 0),

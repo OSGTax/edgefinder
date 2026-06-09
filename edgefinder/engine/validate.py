@@ -3,14 +3,15 @@
 The committed, reproducible runner for engine-v2 validation (the Phase-1
 headline numbers were ad-hoc REPL runs — this replaces that). Examples:
 
-    # the 21-year ETF lane, holdout reserved (sealed, not burned)
+    # the 21-year ETF lane — the holdout is RESERVED (sealed) by default;
+    # burning the one look requires the explicit --burn-holdout flag
     python -m edgefinder.engine.validate --strategy equal_weight \
         --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA --schedule monthly \
-        --holdout-days 126 --no-holdout-eval --record
+        --holdout-days 126 --record
 
     # null control: buy-and-hold SPY must NOT pass (harness honesty check)
     python -m edgefinder.engine.validate --strategy buy_and_hold:SPY \
-        --symbols SPY --holdout-days 126 --no-holdout-eval
+        --symbols SPY --holdout-days 126
 """
 
 from __future__ import annotations
@@ -62,11 +63,13 @@ def main(argv: list[str] | None = None) -> dict:
     p.add_argument("--oos-days", type=int, default=126)
     p.add_argument("--step-days", type=int, default=126)
     p.add_argument("--holdout-days", type=int, default=0)
-    p.add_argument("--no-holdout-eval", action="store_true",
-                   help="reserve the holdout without burning the one look")
+    p.add_argument("--burn-holdout", action="store_true",
+                   help="EVALUATE the sealed holdout — spends the one "
+                        "look-per-round; without this flag the holdout is "
+                        "reserved (carved off, never scored)")
     p.add_argument("--warmup-days", type=int, default=210)
     p.add_argument("--cost-bps", type=float, default=2.0)
-    p.add_argument("--start-cash", type=float, default=10_000.0)
+    p.add_argument("--start-cash", type=float, default=1_000_000.0)
     p.add_argument("--total-return", action="store_true",
                    help="score on the total-return bar instead of risk-adjusted")
     p.add_argument("--record", action="store_true",
@@ -92,7 +95,7 @@ def main(argv: list[str] | None = None) -> dict:
         bars, factory,
         spy_bars=spy,
         is_days=args.is_days, oos_days=args.oos_days, step_days=args.step_days,
-        holdout_days=args.holdout_days, holdout_eval=not args.no_holdout_eval,
+        holdout_days=args.holdout_days, holdout_eval=args.burn_holdout,
         warmup_days=args.warmup_days, start_cash=args.start_cash,
         schedule=args.schedule, cost_bps=args.cost_bps,
         risk_adjusted=not args.total_return,

@@ -44,32 +44,35 @@ def load_bars(
 
 
 def spy_series(db: Session) -> pd.DataFrame:
-    """Longest available SPY close series for benchmarking/regime tagging.
+    """Longest available SPY series for benchmarking/regime tagging.
 
     Unions daily_bars with index_daily (daily_bars wins on overlap) because
-    SPY coverage is split across both tables. Only date+close are consumed
-    downstream, so OHLC are filled with the close.
+    SPY coverage is split across both tables. Real opens are kept where
+    available — the engine anchors the benchmark return at the first bar's
+    open to match the strategy's first fill; missing opens fall back to the
+    close. High/low are filled with the close (nothing reads them).
     """
     def _to_date(x):
         return x.date() if hasattr(x, "date") else x
 
-    by_date: dict = {}
+    by_date: dict = {}   # date -> (open or None, close)
     for d, c in (db.query(IndexDaily.date, IndexDaily.close)
                  .filter(IndexDaily.symbol == "SPY").all()):
         if c:
-            by_date[_to_date(d)] = float(c)
-    for d, c in (db.query(DailyBar.date, DailyBar.close)
-                 .filter(DailyBar.symbol == "SPY").all()):
+            by_date[_to_date(d)] = (None, float(c))
+    for d, o, c in (db.query(DailyBar.date, DailyBar.open, DailyBar.close)
+                    .filter(DailyBar.symbol == "SPY").all()):
         if c:
-            by_date[_to_date(d)] = float(c)  # daily_bars wins on overlap
+            by_date[_to_date(d)] = (float(o) if o else None, float(c))
 
     cols = ["date", "open", "high", "low", "close", "volume"]
     if not by_date:
         return pd.DataFrame(columns=cols)
     items = sorted(by_date.items())
-    closes = [c for _, c in items]
+    closes = [c for _, (_, c) in items]
     return pd.DataFrame({
         "date": [d for d, _ in items],
-        "open": closes, "high": closes, "low": closes, "close": closes,
+        "open": [o if o else c for _, (o, c) in items],
+        "high": closes, "low": closes, "close": closes,
         "volume": [0.0] * len(items),
     })
