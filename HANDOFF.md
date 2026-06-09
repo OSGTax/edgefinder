@@ -9,6 +9,38 @@ but everything needed to continue is here + in git.
 
 ---
 
+## Update — 2026-06-09 (MICROCAP BUILD — Layers 1-3 + first net-of-cost survivor)
+
+Built the "go where edges live" microcap workbench end-to-end (v5.20.0):
+- **Layer 1 universe:** ingested top-3000/day (3.75M bars, delisted-incl.);
+  `resolve_universe(rank_offset=N)` selects the small-cap/illiquid band
+  (ranks 1000-3000, ADV ~$10-58M/day — small-cap, NOT true microcap, which
+  trades thinner than a top-3000 pull reaches; disclosed).
+- **Layer 2 cost engine** (`edgefinder/backtest/costs.py`): replaces the flat
+  5bps with Corwin-Schultz half-spread + sqrt market impact + participation
+  cap; plus delist force-close (dead names realize their loss, not freeze) and
+  gap-through-stop (stop fires on the day's low, fills at the gap). FIXED cost
+  assumptions, never optimized. Opt-in: cost_model=None ⇒ liquid path
+  byte-identical. 20+ tests.
+- **Cost threading:** cost_model flows through optimize→walkforward→holdout, so
+  the optimizer searches NET-of-cost. validate/screen `--microcap`
+  (=`--rank-offset 1000 --top-n 2000 --costed`); disclosed in scorecard
+  (`costed`) + validation_runs label.
+- **Layer 3 strategy:** `micro_reversal` (Connors-style: buy a multi-day
+  washout above the 200dma, sell the RSI recovery) — pre-registered + committed
+  (682d6a6) before any screen.
+
+**First honest microcap result (screen, rank 1000-1500, fixed defaults):**
+gross PF 2.17 / +5.95% → **costed PF 1.41 / +2.1%**, 35 trades, win 45.7%,
+~$9 net/trade, 9.9% exposure. The cost engine ate ~65% of the gross edge but
+**did NOT kill it — the first strategy in the project with a positive edge
+after realistic costs** (every liquid strategy died honestly). HEAVILY
+caveated: survived a SCREEN not validation; only 35 trades / 4.5yr at ~10%
+exposure (thin, mostly cash); small-cap not true-micro; screen used
+full-period (not PIT) universe ranking. Fold validation (PIT, net-of-cost,
++overlay since ~90% cash) is the next gate; the low frequency likely fails the
+≥30-trades-per-fold criterion at fixed defaults.
+
 ## Update — 2026-06-06 (free-data-source vetting — adversarially verified)
 
 Owner asked: can we add alternative free datasets to find an edge bar-data
