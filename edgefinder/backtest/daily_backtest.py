@@ -127,6 +127,19 @@ class BacktestArena(ArenaEngine):
             slot, intent, execution_price, shares, stop, target, current_price
         )
 
+    def _stop_exit(self, position, snap, current_price, rm):
+        """Gap-through-stop: the stop fires when the day's LOW breaches the stop
+        level (not merely when the close does), and fills at ``min(open, stop)``
+        — a name that gaps open below the stop fills at the open, not the stop.
+        Conservative by design (only adverse stop gaps are modelled; favourable
+        target gaps still fill at the close)."""
+        stop = position.stop_loss
+        low = snap.get("low") if snap else None
+        if stop and low is not None and low <= stop:
+            open_px = snap.get("open") or current_price
+            return True, self._exit_fill_price(position, min(open_px, stop))
+        return super()._stop_exit(position, snap, current_price, rm)
+
     def force_close_delisted(self, last_date: dict, last_close: dict, current_day):
         """Close any open position whose symbol has no more bars (delisted /
         permanently halted). Without this a dead name freezes at its last

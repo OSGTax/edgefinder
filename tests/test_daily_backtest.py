@@ -205,6 +205,27 @@ def _gap_series() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _gap_down_after_entry():
+    """Warm-up <100, signal bar (close 100, probe fires), fill+hold at ~112
+    (stop ~103), then a LATER bar GAPS DOWN to an open of 80 (low 78) — a
+    stop-through gap that must fill at the 80 open, not the 103 stop level."""
+    start = date(2024, 1, 1)
+    rows = []
+    for i in range(12):
+        p = 85.0 + i
+        rows.append({"date": start + timedelta(days=i), "open": p, "high": p*1.01,
+                     "low": p*0.99, "close": p, "volume": 1_000_000.0})
+    rows.append({"date": start + timedelta(days=12), "open": 98.0, "high": 101.0,
+                 "low": 97.0, "close": 100.0, "volume": 1_000_000.0})
+    for j in (13, 14):  # fill + hold at ~112 → entry well above the eventual gap
+        rows.append({"date": start + timedelta(days=j), "open": 112.0, "high": 113.0,
+                     "low": 111.0, "close": 112.0, "volume": 1_000_000.0})
+    for j in (15, 16):  # gap down through the stop
+        rows.append({"date": start + timedelta(days=j), "open": 80.0, "high": 81.0,
+                     "low": 78.0, "close": 80.0, "volume": 1_000_000.0})
+    return pd.DataFrame(rows)
+
+
 def test_entry_fills_at_next_day_open_not_signal_close(probe_strategy):
     # The probe fires on the close=100 bar; with look-ahead removed, the fill
     # must be the NEXT bar's open (112) — not the 100 close that generated the
@@ -436,3 +457,16 @@ def test_delisted_position_is_force_closed_not_frozen(probe_strategy):
     assert delisted[0]["symbol"] == "DEADCO"
     assert delisted[0]["exit_price"] == pytest.approx(105.0, rel=0.01)
     assert all(p["symbol"] != "DEADCO" for p in result["open_positions"])
+
+
+def test_gap_through_stop_fills_at_the_open_not_the_stop(probe_strategy):
+    # Probe buys at ~$112; stop is 8% below (~$103). The post-entry bar GAPS
+    # open to $80 (well below the stop) — the fill must be the $80 open, not
+    # the ~$103 stop level and not the close.
+    bars = {"TEST": _gap_down_after_entry()}
+    result = run_daily_backtest("_lookahead_probe", bars, starting_cash=10_000.0)
+    stops = [t for t in result["trades"] if (t["exit_reason"] or "").startswith("STOP_LOSS")]
+    assert len(stops) == 1, result["trades"]
+    # Filled near the $80 gap-open, decisively below the ~$103 stop level.
+    assert stops[0]["exit_price"] < 95.0
+    assert stops[0]["exit_price"] == pytest.approx(80.0, abs=2.0)

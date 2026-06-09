@@ -677,9 +677,11 @@ class ArenaEngine:
 
             mdata = market_data_map.get(pos.symbol)
 
-            # Pass 1: Non-negotiable stop loss
-            if rm.should_stop_out(pos.entry_price, current_price):
-                trade = self._close_position(slot, pos, exit_fill, "STOP_LOSS", mdata)
+            # Pass 1: Non-negotiable stop loss. The fill comes from a seam so the
+            # backtest can model gap-through-stop on the day's low/open.
+            stopped, stop_fill = self._stop_exit(pos, snap, current_price, rm)
+            if stopped:
+                trade = self._close_position(slot, pos, stop_fill, "STOP_LOSS", mdata)
                 if trade:
                     closed.append(trade)
                 continue
@@ -780,6 +782,18 @@ class ArenaEngine:
         spread + market-impact cost model for thin names; the live path keeps
         flat slippage."""
         return Executor._apply_slippage(current_price, "SELL")
+
+    def _stop_exit(self, position: Position, snap: dict, current_price: float, rm):
+        """Whether the catastrophic stop triggered, and at what fill price.
+
+        Base path is close-based — the live cycle has no intrabar low. The
+        backtest overrides this to fire on the day's LOW and fill at
+        ``min(open, stop)``, modelling gap-through-stop (a name that gaps open
+        below the stop fills at the open, not the stop level). Returns
+        ``(triggered, fill_price)``."""
+        if rm.should_stop_out(position.entry_price, current_price):
+            return True, self._exit_fill_price(position, current_price)
+        return False, None
 
     def _finalize_open(
         self,
