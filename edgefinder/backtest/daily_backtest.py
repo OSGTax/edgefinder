@@ -277,6 +277,34 @@ def _max_drawdown(equity: list[float]) -> float:
     return round(mdd, 4)
 
 
+def _sanitize_ohlcv(ohlcv: pd.DataFrame) -> pd.DataFrame:
+    """Repair impossible OHLC bars (bad prints) before they distort a backtest.
+
+    A single corrupt low (e.g. SPY 2026-02-02 printed low=69 instead of ~690, a
+    dropped digit) trips the catastrophic stop and fabricates a ~-20% trade —
+    in ANY strategy. Daily OHLC must satisfy low <= min(open,close) <=
+    max(open,close) <= high; a low far below (or high far above) the open/close
+    body is a data error, not a real intrabar move. We clamp the offending
+    extreme back to the open/close body (conservative: never invents a move),
+    leaving valid bars untouched.
+    """
+    o, h, l, c = ohlcv["open"], ohlcv["high"], ohlcv["low"], ohlcv["close"]
+    body_lo = pd.concat([o, c], axis=1).min(axis=1)
+    body_hi = pd.concat([o, c], axis=1).max(axis=1)
+    # A low below 50% of the body low (or non-positive) is an impossible
+    # single-session move → clamp to the body low. Symmetric for highs.
+    bad_low = (l < body_lo * 0.5) | (l <= 0)
+    bad_high = h > body_hi * 2.0
+    if bad_low.any() or bad_high.any():
+        ohlcv = ohlcv.copy()
+        ohlcv.loc[bad_low, "low"] = body_lo[bad_low]
+        ohlcv.loc[bad_high, "high"] = body_hi[bad_high]
+        # Also enforce ordinary consistency (low <= body, high >= body).
+        ohlcv["low"] = pd.concat([ohlcv["low"], body_lo], axis=1).min(axis=1)
+        ohlcv["high"] = pd.concat([ohlcv["high"], body_hi], axis=1).max(axis=1)
+    return ohlcv
+
+
 def prepare_bars(bars_by_symbol: dict, progress_cb=None) -> tuple[dict, list]:
     """Precompute the immutable per-symbol structures (sorted dates, OHLCV,
     indicator snapshots) once. The optimizer reuses this across many param
@@ -287,7 +315,7 @@ def prepare_bars(bars_by_symbol: dict, progress_cb=None) -> tuple[dict, list]:
     items = list(bars_by_symbol.items())
     for i, (sym, df) in enumerate(items):
         d = df.sort_values("date").reset_index(drop=True)
-        ohlcv = d[_OHLCV].reset_index(drop=True)
+        ohlcv = _sanitize_ohlcv(d[_OHLCV].reset_index(drop=True))
         prep[sym] = {
             "dates": list(d["date"]),
             "ohlcv": ohlcv,
@@ -501,6 +529,11 @@ def run_daily_backtest(
         # (max-hold) replay faithfully instead of keying off wall-clock now().
         cd = current_day.date() if hasattr(current_day, "date") else current_day
         arena._clock = datetime.combine(cd, dtime(16, 0), tzinfo=timezone.utc)
+        # Drive each account's cooldown clock off the simulated day too, so the
+        # minute-scale re-entry/revenge/PDT cooldowns measure simulated time
+        # (a wall-clock backtest runs in seconds → would lock tickers for life).
+        for _sl in arena._slots.values():
+            _sl.account._clock = arena._clock
         # Even without a SPY bar for this day, the simulated date is known.
         day_context = context_by_day.get(cd) or MarketContext(as_of=cd)
         _, closed = arena.run_intraday_cycle(snapshot_data, day_context)

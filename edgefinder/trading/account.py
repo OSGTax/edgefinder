@@ -101,6 +101,16 @@ class VirtualAccount:
         # the (cost, trade_type, symbol) overload below.
         self._last_close_per_ticker: dict[str, datetime] = {}
 
+        # Clock source. Live = wall clock (None). The backtest sets this to the
+        # SIMULATED day so the minute-scale cooldowns (re-entry, revenge, PDT)
+        # are measured in simulated time — otherwise a backtest that runs in
+        # seconds of real time locks a ticker out for the whole run after its
+        # first close (fatal for single-ticker strategies like trend_timer).
+        self._clock: datetime | None = None
+
+    def _now(self) -> datetime:
+        return self._clock if self._clock is not None else datetime.now(timezone.utc)
+
     # ── Properties ───────────────────────────────────
 
     @property
@@ -193,7 +203,7 @@ class VirtualAccount:
         if last_close is None:
             return False
         cooldown = timedelta(minutes=settings.ticker_reentry_cooldown_minutes)
-        now = datetime.now(timezone.utc)
+        now = self._now()
         if now - last_close >= cooldown:
             # Expired — prune it
             del self._last_close_per_ticker[symbol]
@@ -202,7 +212,7 @@ class VirtualAccount:
 
     def _can_day_trade(self) -> bool:
         """Check PDT compliance: max 3 day trades per 5 rolling business days."""
-        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.pdt_window_days)
+        cutoff = self._now() - timedelta(days=settings.pdt_window_days)
         recent = [dt for dt in self._day_trades if dt > cutoff]
         # Prune old entries to prevent unbounded growth
         self._day_trades = recent
@@ -212,7 +222,7 @@ class VirtualAccount:
         if self._last_stop_out is None:
             return False
         cooldown = timedelta(minutes=settings.revenge_trade_cooldown_minutes)
-        return datetime.now(timezone.utc) - self._last_stop_out < cooldown
+        return self._now() - self._last_stop_out < cooldown
 
     # ── Position Management ──────────────────────────
 
@@ -248,14 +258,14 @@ class VirtualAccount:
 
         # Track day trades for PDT
         if position.trade_type == "DAY":
-            self._day_trades.append(datetime.now(timezone.utc))
+            self._day_trades.append(self._now())
 
         # Track stop-outs for revenge trade cooldown
         if reason in ("STOP_HIT", "STOP_LOSS"):
-            self._last_stop_out = datetime.now(timezone.utc)
+            self._last_stop_out = self._now()
 
         # Per-ticker re-entry cooldown: gates the next open on this symbol
-        self._last_close_per_ticker[position.symbol] = datetime.now(timezone.utc)
+        self._last_close_per_ticker[position.symbol] = self._now()
 
         logger.info(
             "[%s] Closed %s %s: %d shares @ $%.2f | P&L: $%.2f (%.1fR) | Reason: %s",

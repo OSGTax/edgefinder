@@ -914,7 +914,8 @@ class ArenaEngine:
             r_multiple=result["r_multiple"],
             exit_reason=reason,
             exit_reasoning=reason,
-            exit_time=now,
+            entry_time=position.entry_time,  # carry the (simulated) entry time;
+            exit_time=now,                   # else it defaults to wall-clock now
             indicators_at_exit=market_data.current.to_dict() if market_data else None,
             pdt_flag=is_pdt,
             hold_duration_hours=round(hold_hours, 2),

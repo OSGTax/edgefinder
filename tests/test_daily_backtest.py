@@ -470,3 +470,39 @@ def test_gap_through_stop_fills_at_the_open_not_the_stop(probe_strategy):
     # Filled near the $80 gap-open, decisively below the ~$103 stop level.
     assert stops[0]["exit_price"] < 95.0
     assert stops[0]["exit_price"] == pytest.approx(80.0, abs=2.0)
+
+
+def test_sanitize_ohlcv_clamps_bad_print_low():
+    # A dropped-digit low (69 instead of ~690) must clamp to the open/close
+    # body, not trip a phantom stop; valid bars are untouched.
+    from edgefinder.backtest.daily_backtest import _sanitize_ohlcv
+    df = pd.DataFrame({
+        "open": [690.0, 100.0], "high": [697.0, 101.0],
+        "low": [69.0, 99.0], "close": [695.0, 100.5],
+        "volume": [1e6, 1e6],
+    })
+    out = _sanitize_ohlcv(df)
+    assert out["low"].iloc[0] == 690.0   # clamped to body low (min(open,close))
+    assert out["low"].iloc[1] == 99.0    # valid bar untouched
+
+
+def test_reentry_cooldown_uses_simulated_clock():
+    # The re-entry cooldown must measure SIMULATED time — a backtest runs in
+    # seconds of wall-clock, so a wall-clock cooldown would lock a ticker out
+    # for the whole run after its first close (the trend_timer-on-SPY bug).
+    from datetime import datetime, timezone, timedelta
+    from edgefinder.trading.account import VirtualAccount, Position
+    from config.settings import settings
+    acct = VirtualAccount("t", starting_capital=10_000.0)
+    t0 = datetime(2023, 1, 3, 16, tzinfo=timezone.utc)
+    acct._clock = t0
+    pos = Position(symbol="SPY", shares=1, entry_price=100.0, stop_loss=80.0,
+                   target=120.0, direction="LONG", trade_type="SWING", entry_time=t0)
+    acct.positions.append(pos)
+    acct.cash -= 100.0
+    acct.close_position(pos, 101.0, "exit")
+    # same simulated instant → still in cooldown
+    assert acct.can_open_position(100.0, "SWING", symbol="SPY")[0] is False
+    # advance the SIMULATED clock past the cooldown → re-entry allowed
+    acct._clock = t0 + timedelta(minutes=settings.ticker_reentry_cooldown_minutes + 1)
+    assert acct.can_open_position(100.0, "SWING", symbol="SPY")[0] is True
