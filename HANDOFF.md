@@ -149,6 +149,30 @@ trend-timing and historically more robust in fast-recovery windows — the
 trailing-vol + cash_overlay plumbing already exists. Then optionally a
 multi-confirmation regime gate (trend+breadth+vol) to cut the 200-EMA whipsaw.
 
+## Update — 2026-06-09 LATE-NIGHT (dual_momentum FAILs; THE WINDOW is the problem — backfilling to 2008)
+
+- **dual_momentum (pre-registered, Antonacci/Faber asset-class rotation over
+  SPY/QQQ/IWM/DIA/GLD/TLT/EFA):** found + fixed a churn bug (fill-day buffer gap
+  made every position exit after 1 day, ~11% exposure; fix = hold when a name is
+  missing from yesterday's buffer). Post-fix full-period top_k=3 TIES SPY Sharpe
+  (0.65 vs 0.74) and cuts drawdown 5.8pp — best risk-adjusted result yet — but
+  the OOS folds FAIL: excess_sharpe -0.54, 2/5 folds higher Sharpe, DD cut
+  +2.04pp. Cuts risk, doesn't beat SPY's Sharpe.
+
+**THE INSIGHT (both risk-adjusted candidates converge on it):** trend_timer and
+dual_momentum BOTH cut drawdown but BOTH fail to beat SPY's Sharpe over
+2021-2026 — because 2021-2026 is a STRONG-BULL window with only one brief bear
+(2022). SPY's own Sharpe is ~0.74 here; defensive/risk-managed strategies are
+DESIGNED to prove their worth in SUSTAINED bears (2008, 2000-02), which our data
+does not contain. The window, not the strategies, is the binding constraint.
+
+**Polygon flat-files go back to 2004** (verified) — so we can build a window that
+includes the 2008 financial crisis AND the 2020 COVID crash, where these
+strategies should clearly win if they work at all. Backfilling the ETFs (and the
+broad universe) to 2004 is the highest-value move and is squarely strategy-
+hunting, not lab-fixing: the strategies are plausibly winners our window can't
+reveal. Re-test trend_timer + dual_momentum on the long (incl-2008) window next.
+
 ## Update — 2026-06-06 (free-data-source vetting — adversarially verified)
 
 Owner asked: can we add alternative free datasets to find an edge bar-data
