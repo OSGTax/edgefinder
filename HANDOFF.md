@@ -114,6 +114,41 @@ and only beats SPY on RETURN if levered (retail-constrained). The project has
 implicitly chased (a). The highest-value next step is the OWNER choosing (a) vs
 (b) — it determines whether the search is tractable at all. Pending owner call.
 
+## Update — 2026-06-09 NIGHT (risk-adjusted pivot built; trend_timer FAILs; 3 engine bugs fixed)
+
+Owner chose the tractable goal: SPY-like return with much less RISK (beat SPY
+on Sharpe/drawdown), not raw-return alpha. Built + tested:
+- **Risk-adjusted scoring (v5.21.0):** benchmark now computes SPY's own Sharpe
+  + max-drawdown per window; new `--risk-adjusted` criteria mode (beat SPY's
+  Sharpe in a majority of folds AND a smaller drawdown; no >=30-trade floor).
+- **trend_timer (pre-registered):** hold SPY above its 200-EMA, cash below
+  (Faber). FAILS the risk-adjusted bar 2021-2026: fold mean Sharpe 0.91 vs SPY,
+  excess_sharpe **-0.36**, only **1/5 folds** higher Sharpe, drawdown cut
+  +2.41pp. Full-period agrees: +40.7% / Sharpe 0.69 / maxDD 22.3% vs SPY +75% /
+  0.74 / 25.4% — TIES SPY risk-adjusted, doesn't beat it. 2021-26 is a known-hard
+  window for trend-following (sharp V-recovery → whipsaw + late re-entry); its
+  drawdown-avoidance benefit never triggered. Holdout untouched.
+
+**THREE backtest-engine bugs found while validating a single-ticker strategy
+(all silently distorted EVERY prior backtest, masked by multi-ticker books):**
+1. Re-entry/revenge/PDT cooldowns compared vs WALL-CLOCK now() — a backtest runs
+   in seconds, so a ticker was locked out for the whole run after its first
+   close (trend_timer traded once). Fixed: VirtualAccount._clock injectable,
+   driven off the simulated day.
+2. A corrupt data bar (SPY 2026-02-02 low=69 vs ~690) tripped the 20% stop →
+   fabricated -20%/-$2158 trade, turning trend_timer's honest +41% into -13%.
+   Fixed: _sanitize_ohlcv clamps impossible OHLC in the precompute (protects all
+   runs; matters most for microcaps). Note: prior microcap/liquid results may
+   shift slightly now that bad prints can't trip phantom stops.
+3. Closed-trade entry_time defaulted to wall-clock (cosmetic; max-hold used the
+   position's correct simulated entry_time). Fixed: carry it onto the trade.
+
+**Next within risk-adjusted (intent):** VOL-TARGETING SPY (scale exposure to a
+constant vol target; de-risk in high-vol regimes). It is the complement to
+trend-timing and historically more robust in fast-recovery windows — the
+trailing-vol + cash_overlay plumbing already exists. Then optionally a
+multi-confirmation regime gate (trend+breadth+vol) to cut the 200-EMA whipsaw.
+
 ## Update — 2026-06-06 (free-data-source vetting — adversarially verified)
 
 Owner asked: can we add alternative free datasets to find an edge bar-data
