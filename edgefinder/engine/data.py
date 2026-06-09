@@ -1,0 +1,75 @@
+"""Bar loading for the portfolio engine — the one seam between DB and engine.
+
+Phase 4 (two-tier storage) will put the R2 Parquet bar-store behind this same
+interface; everything above it (walk-forward, CLI, future promotion runs)
+already speaks only ``{symbol: DataFrame[date, open, high, low, close,
+volume]}``.
+"""
+
+from __future__ import annotations
+
+import pandas as pd
+from sqlalchemy.orm import Session
+
+from edgefinder.db.models import DailyBar, IndexDaily
+
+_IN_CHUNK = 500  # keep IN() clauses bounded for the pooler
+
+
+def load_bars(
+    db: Session, symbols: list[str], start=None, end=None,
+) -> dict[str, pd.DataFrame]:
+    """Bulk-load daily bars for ``symbols`` as the engine's input shape."""
+    rows: list = []
+    for i in range(0, len(symbols), _IN_CHUNK):
+        q = db.query(
+            DailyBar.symbol, DailyBar.date, DailyBar.open, DailyBar.high,
+            DailyBar.low, DailyBar.close, DailyBar.volume,
+        ).filter(DailyBar.symbol.in_(symbols[i:i + _IN_CHUNK]))
+        if start is not None:
+            q = q.filter(DailyBar.date >= start)
+        if end is not None:
+            q = q.filter(DailyBar.date <= end)
+        rows.extend(q.all())
+
+    by_symbol: dict[str, list] = {}
+    for sym, dt, o, h, lo, c, v in rows:
+        by_symbol.setdefault(sym, []).append((dt, o, h, lo, c, v))
+
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    return {
+        sym: pd.DataFrame(data, columns=cols)
+        for sym, data in by_symbol.items()
+    }
+
+
+def spy_series(db: Session) -> pd.DataFrame:
+    """Longest available SPY close series for benchmarking/regime tagging.
+
+    Unions daily_bars with index_daily (daily_bars wins on overlap) because
+    SPY coverage is split across both tables. Only date+close are consumed
+    downstream, so OHLC are filled with the close.
+    """
+    def _to_date(x):
+        return x.date() if hasattr(x, "date") else x
+
+    by_date: dict = {}
+    for d, c in (db.query(IndexDaily.date, IndexDaily.close)
+                 .filter(IndexDaily.symbol == "SPY").all()):
+        if c:
+            by_date[_to_date(d)] = float(c)
+    for d, c in (db.query(DailyBar.date, DailyBar.close)
+                 .filter(DailyBar.symbol == "SPY").all()):
+        if c:
+            by_date[_to_date(d)] = float(c)  # daily_bars wins on overlap
+
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    if not by_date:
+        return pd.DataFrame(columns=cols)
+    items = sorted(by_date.items())
+    closes = [c for _, c in items]
+    return pd.DataFrame({
+        "date": [d for d, _ in items],
+        "open": closes, "high": closes, "low": closes, "close": closes,
+        "volume": [0.0] * len(items),
+    })

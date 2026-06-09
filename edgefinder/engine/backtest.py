@@ -17,6 +17,7 @@ Correct by construction:
 
 from __future__ import annotations
 
+import bisect
 import math
 import statistics
 from dataclasses import dataclass, field
@@ -148,13 +149,20 @@ def run_backtest(
     schedule: str = "weekly",
     cost_bps: float = 2.0,
     warmup_days: int = 200,
+    trade_start: date | None = None,
     benchmark: pd.DataFrame | None = None,
     fundamentals: dict | None = None,
     log_weights: bool = False,
 ) -> BacktestResult:
     """Replay ``strategy`` over ``bars_by_symbol`` and return the equity curve,
     trades, and stats. ``benchmark`` is an optional (date, close) frame scored
-    the same way for an apples-to-apples comparison."""
+    the same way for an apples-to-apples comparison.
+
+    ``trade_start`` (a date) overrides ``warmup_days`` (a calendar index): bars
+    before it feed indicators/history only — no trading AND no equity marks, so
+    stats cover exactly the scored region. This is the fold-warmup discipline a
+    walk-forward harness needs (a fold sliced ``[start-warmup .. end]`` scores
+    ``[start .. end]``); without it, flat warmup days dilute Sharpe."""
     cost_rate = cost_bps / 1e4
 
     prep: dict[str, dict] = {}
@@ -171,6 +179,8 @@ def run_backtest(
                      "last_close": float(ohlcv["close"].iloc[-1]) if len(ohlcv) else 0.0}
         all_dates.update(dates)
     calendar = sorted(all_dates)
+    warm_idx = (bisect.bisect_left(calendar, trade_start)
+                if trade_start is not None else warmup_days)
 
     holdings: dict[str, int] = {}
     cash = float(start_cash)
@@ -201,7 +211,7 @@ def run_backtest(
                 del holdings[sym]
 
         # rebalance (decision uses data through YESTERDAY; fill at today's open)
-        if i >= warmup_days and _is_rebalance(i, calendar, schedule):
+        if i >= warm_idx and _is_rebalance(i, calendar, schedule):
             ctx = _build_context(prep, calendar[i - 1], fundamentals)
             weights = strategy.rebalance(ctx) or {}
             total = sum(w for w in weights.values() if w and w > 0)
@@ -212,11 +222,12 @@ def run_backtest(
             if log_weights:
                 weights_log.append({"date": dt, "weights": dict(weights)})
 
-        # mark to market at close
-        eq = cash
-        for sym, sh in holdings.items():
-            eq += sh * today_close.get(sym, last_price.get(sym, 0.0))
-        equity_curve.append((dt, round(eq, 2)))
+        # mark to market at close (with trade_start, only the scored region)
+        if trade_start is None or i >= warm_idx:
+            eq = cash
+            for sym, sh in holdings.items():
+                eq += sh * today_close.get(sym, last_price.get(sym, 0.0))
+            equity_curve.append((dt, round(eq, 2)))
 
     stats = _summarize(equity_curve, trades, start_cash, holdings, benchmark)
     return BacktestResult(equity_curve, trades, stats, weights_log)
@@ -226,8 +237,6 @@ def _summarize(equity_curve, trades, start_cash, holdings, benchmark) -> dict:
     eq = [e for _, e in equity_curve] or [start_cash]
     final = eq[-1]
     n = len(eq)
-    exposure = sum(1 for _, e in equity_curve)  # placeholder; refined below
-    invested_days = 0  # not tracked per-day cheaply; report position turnover instead
     stats = {
         "return_pct": round((final - start_cash) / start_cash * 100, 2) if start_cash else 0.0,
         "sharpe": round(_sharpe(eq), 2) if _sharpe(eq) is not None else None,
