@@ -81,13 +81,41 @@ runs untouched until the new one is proven. Old engine is otherwise not importan
   lags raw return (+413% vs +524%), modest +0.09 Sharpe edge, known diversification
   effect, NOT yet through the fold + sealed-holdout gate.
 
-### ROADMAP — resume here
+### PHASE 2 — DONE ✅ (v5.23.0 `88147b8` + v5.23.1 `9053382`; 599 tests pass)
 
-- **PHASE 2 — Honest validation harness on the new engine ← NEXT.** Port walk-forward
-  folds + sealed holdout + risk-adjusted acceptance criteria (beat SPY's Sharpe / cut
-  drawdown, net of real costs) onto `engine/`. Then properly validate equal-weight
-  (and variants). Reuse logic from `edgefinder/backtest/` + `tests/test_walkforward.py`
-  but drive the new pure engine.
+Built: `engine/walkforward.py` (rolling IS→OOS folds + sealed holdout + both criteria
+modes, fixed pre-registered params only — no per-fold optimizer), `engine/data.py`
+(the one DB→engine seam; Phase 4's R2 store slots in behind it), `engine/record.py`
+(validation_runs recording, engine:'v2' tagged), `engine/validate.py` (reproducible
+CLI: `python -m edgefinder.engine.validate ...`; burning the holdout requires explicit
+`--burn-holdout`), `engine/strategies.py` (dual_momentum_v2 + trend_timer_v2 ported
+verbatim from their pre-registrations), and a `trade_start` engine affordance (warmup
+bars feed indicators only — no trading, no equity marks).
+
+**A 13-agent adversarial review then de-biased the harness itself** (v5.23.1): the
+fold geometry carried a ~−1.8pp/fold structural handicap (fold-start dead-cash gap +
+int-share flooring at $10k vs a frictionless day-1-invested benchmark) — nearly the
+whole initially-reported deficit. After fixes, the **null control (buy_and_hold:SPY
+vs SPY) reads 0.00 excess Sharpe / −0.02pp** — the instrument is honest to ~2bps.
+Also fixed: all-cash folds now count in the Sharpe-majority denominator (imputed
+excess = −benchmark_sharpe, symmetric), sealed-holdout dates pinned in the record,
+deterministic fill order, open-anchored benchmark return.
+
+**Clean-engine verdicts (21yr ETF lane, 38 folds incl 2008+2020, holdout SEALED):**
+- `equal_weight` etf7 monthly: −0.04 excess Sharpe, 19/38 folds, +2.66pp dd cut →
+  **FAIL by a hair** (the Phase-1 "beats SPY" full-period claim does not survive fold
+  granularity; most of the earlier −0.18 deficit was harness artifact). SPY-equivalent
+  with a drawdown cushion — closest candidate yet.
+- `dual_momentum_v2` monthly: −0.34, 11/38, +3.03pp dd cut, worst fold dd 16.75% →
+  **FAIL**; crash protection real, Sharpe edge absent (matches the old-engine verdict).
+- `trend_timer_spy_v2` daily: −0.60, 2/38 → **decisive FAIL**.
+- **The rebuild's motivating question is answered:** the old engine's 4 bugs
+  exaggerated deficits but flipped no verdict. The calibrated instrument is the win.
+- Engine note: daily-schedule runs re-true to exact weights every day (dual_momentum
+  daily = 13k fills of churn). A no-trade band is a sensible future engine feature;
+  monthly cadence is the canonical workaround meanwhile.
+
+### ROADMAP — resume here
 - **PHASE 3 — Promotion pipeline (the loop the owner wants).** `backtest clears bar →
   auto-deploy to self-running paper trading → shows on dashboard.` Pieces exist
   (plugins, virtual accounts, intraday loop, dashboard, `live_strategies` allowlist);
