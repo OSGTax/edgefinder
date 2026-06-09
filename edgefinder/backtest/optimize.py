@@ -69,6 +69,10 @@ PARAM_SPACE: dict[str, dict[str, list]] = {
         "entry_day": [23, 25, 27],
         "exit_day": [3, 5, 8],
     },
+    "dual_momentum": {
+        "top_k": [2, 3, 4],
+        # lookback_ema reserved; score uses ema_200 (fixed) for now.
+    },
     "micro_reversal": {
         # Washout definition + recovery exit. risk_pct/target_pct FIXED.
         "lookback": [2, 3, 5],

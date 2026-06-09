@@ -427,3 +427,55 @@ class TestTrendTimer:
         assert s.risk_pct == 0.20
         assert s.max_concentration_pct == 1.0
         assert s.max_hold_days == 0 and s.trailing_stop_pct is None
+
+
+class TestDualMomentum:
+    """dual_momentum: rotate into the top-k trending low-correlation assets."""
+
+    def _md(self, ticker, close, ema_200, as_of):
+        cur = _snap(close=close, ema_200=ema_200)
+        m = _md(cur, [])
+        m.ticker = ticker
+        m.context = MarketContext(as_of=as_of)
+        return m
+
+    def _seed(self, strat, day, scores):
+        # scores: {ticker: close/ema_200 implied via close with ema_200=100}
+        for tk, close in scores.items():
+            strat.evaluate(tk, self._md(tk, close, 100.0, day))
+
+    def test_top_asset_enters_when_trending(self):
+        from datetime import date
+        from edgefinder.strategies.dual_momentum import DualMomentumStrategy
+        s = DualMomentumStrategy()
+        d1, d2 = date(2026, 1, 5), date(2026, 1, 6)
+        # SPY strongest (+20%), GLD +10%, TLT below EMA (-5%)
+        self._seed(s, d1, {"SPY": 120.0, "GLD": 110.0, "TLT": 95.0, "QQQ": 105.0})
+        intent = s.evaluate("SPY", self._md("SPY", 121.0, 100.0, d2))
+        assert intent is not None and "dual-momentum" in intent.reasoning.lower()
+
+    def test_below_own_200ema_blocked_even_if_top_rank(self):
+        from datetime import date
+        from edgefinder.strategies.dual_momentum import DualMomentumStrategy
+        s = DualMomentumStrategy()
+        d1, d2 = date(2026, 1, 5), date(2026, 1, 6)
+        # everything below its EMA → nothing eligible (absolute filter)
+        self._seed(s, d1, {"SPY": 95.0, "GLD": 96.0, "TLT": 94.0})
+        assert s.evaluate("SPY", self._md("SPY", 95.0, 100.0, d2)) is None
+
+    def test_exits_when_drops_out_of_top_k(self):
+        from datetime import date
+        from edgefinder.strategies.dual_momentum import DualMomentumStrategy
+        s = DualMomentumStrategy()  # top_k 3
+        d1, d2 = date(2026, 1, 5), date(2026, 1, 6)
+        # TLT ranks 4th of 4 (weakest) → should exit a held TLT
+        self._seed(s, d1, {"SPY": 120.0, "GLD": 115.0, "QQQ": 110.0, "TLT": 101.0})
+        ex = s.should_exit("TLT", self._md("TLT", 101.0, 100.0, d2), 100.0)
+        assert ex is not None and "rotate out" in ex.reasoning.lower()
+
+    def test_equal_weight_sizing(self):
+        from edgefinder.strategies.dual_momentum import DualMomentumStrategy
+        s = DualMomentumStrategy({"top_k": 4})
+        assert s.top_k == 4
+        assert s.risk_pct == 0.05            # 0.20/4 → ~25% each vs 20% stop
+        assert 0.0 < s.max_concentration_pct <= 1.0

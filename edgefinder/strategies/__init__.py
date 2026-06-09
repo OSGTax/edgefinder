@@ -16,4 +16,4 @@ from edgefinder.strategies import tom_seasonality, xsec_mom  # noqa: F401
 from edgefinder.strategies import micro_reversal  # noqa: F401
 
 # Risk-adjusted candidates (2026-06-09) — beat SPY on Sharpe/drawdown, not return.
-from edgefinder.strategies import trend_timer  # noqa: F401
+from edgefinder.strategies import dual_momentum, trend_timer  # noqa: F401
