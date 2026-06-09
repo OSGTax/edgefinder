@@ -379,3 +379,43 @@ def test_cash_overlay_flat_spy_only_costs_fees(probe_strategy):
     diff = plain["final_equity"] - overlay["final_equity"]
     # initial sweep fee (~$5) + sell-to-fund fee (~$1) — small and positive
     assert 0 < diff < 25.0, f"flat-SPY overlay drift should be fees only: {diff}"
+
+
+# ── microcap cost model wiring (spread + impact + participation cap) ────
+
+
+def test_cost_model_untradeable_thin_name_opens_nothing(probe_strategy):
+    # With a min-ADV floor above the name's dollar volume, the liquidity cap
+    # forces 0 shares — no position opens — while the no-cost path trades.
+    from edgefinder.backtest.costs import CostModel
+    bars = {"TEST": _gap_series()}
+    no_cost = run_daily_backtest("_lookahead_probe", bars, starting_cash=10_000.0)
+    capped = run_daily_backtest("_lookahead_probe", bars, starting_cash=10_000.0,
+                                cost_model=CostModel(min_adv_dollars=1e12))
+    assert len(no_cost["open_positions"]) == 1
+    assert len(capped["open_positions"]) == 0
+
+
+def test_cost_model_makes_entry_fill_worse(probe_strategy):
+    # Same signal, same fill bar — the cost model pays the spread (+impact) so
+    # the entry lands HIGHER than the flat-5bps fill.
+    from edgefinder.backtest.costs import CostModel
+    bars = {"TEST": _gap_series()}
+    no_cost = run_daily_backtest("_lookahead_probe", bars, starting_cash=10_000.0)
+    costed = run_daily_backtest("_lookahead_probe", bars, starting_cash=10_000.0,
+                                cost_model=CostModel())
+    assert len(costed["open_positions"]) == 1
+    assert costed["open_positions"][0]["entry_price"] > \
+        no_cost["open_positions"][0]["entry_price"]
+
+
+def test_cost_model_only_reduces_pnl_end_to_end():
+    # High-volume name (cap never binds), so the cost model changes ONLY fill
+    # prices — round-trips can therefore only cost money, never make it.
+    from edgefinder.backtest.costs import CostModel
+    bars = {"TEST": _series(_decline_then_rally())}  # volume 1e6 → ADV huge
+    no_cost = run_daily_backtest("coward", bars, starting_cash=10_000.0)
+    costed = run_daily_backtest("coward", bars, starting_cash=10_000.0,
+                                cost_model=CostModel())
+    assert costed["stats"]["num_closed_trades"] == no_cost["stats"]["num_closed_trades"]
+    assert costed["final_equity"] <= no_cost["final_equity"]

@@ -667,8 +667,10 @@ class ArenaEngine:
             pos.peak_price = max(pos.peak_price or pos.entry_price, current_price)
 
             # Exits trigger at the market price but FILL with slippage (a long
-            # sells into the bid) — keeps backtest P&L honest about costs.
-            exit_fill = Executor._apply_slippage(current_price, "SELL")
+            # sells into the bid) — keeps backtest P&L honest about costs. The
+            # fill price goes through a seam so the backtest can substitute a
+            # richer spread + market-impact model for thin names.
+            exit_fill = self._exit_fill_price(pos, current_price)
 
             rm = slot.risk_manager
             strat = slot.strategy
@@ -768,6 +770,31 @@ class ArenaEngine:
 
         stop = rm.compute_stop(execution_price)
         target = rm.compute_target(execution_price)
+        return self._finalize_open(
+            slot, intent, execution_price, shares, stop, target, current_price
+        )
+
+    def _exit_fill_price(self, position: Position, current_price: float) -> float:
+        """Sell-side fill price for an exit. A long sells into the bid, so flat
+        slippage applies. The backtest overrides this to inject the richer
+        spread + market-impact cost model for thin names; the live path keeps
+        flat slippage."""
+        return Executor._apply_slippage(current_price, "SELL")
+
+    def _finalize_open(
+        self,
+        slot: StrategySlot,
+        intent: TradeIntent,
+        execution_price: float,
+        shares: int,
+        stop: float,
+        target: float,
+        mark_price: float,
+    ) -> Trade | None:
+        """Shared tail of order execution: minimum-cost + account-rule checks,
+        then create and register the Position and Trade. Sizing and fill pricing
+        differ between the live path and the cost-aware backtest; everything from
+        here down is identical, so both call into this."""
         cost = shares * execution_price
 
         # Minimum position cost — reject micro-positions
@@ -803,8 +830,8 @@ class ArenaEngine:
             trade_type="SWING",
             entry_time=now,
             trade_id=trade_id,
-            market_price=current_price,
-            peak_price=current_price,
+            market_price=mark_price,
+            peak_price=mark_price,
         )
 
         slot.account.open_position(position)

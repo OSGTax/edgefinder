@@ -31,6 +31,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from config.settings import settings
+from edgefinder.backtest.costs import corwin_schultz_spread
 from edgefinder.core.events import EventBus
 from edgefinder.data import indicator_engine as ie
 from edgefinder.data.market_data import (
@@ -39,6 +40,7 @@ from edgefinder.data.market_data import (
 from edgefinder.trading.arena import ArenaEngine
 
 _HIST_DAYS = 30
+_COST_WINDOW = 20  # trailing days for ADV / volatility in microcap cost mode
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,56 @@ class BacktestArena(ArenaEngine):
         # Entry intents decided on the prior day, awaiting the next session's
         # open fill. Keyed by strategy name → list of (ticker, TradeIntent).
         self._pending_entries: dict[str, list] = {}
+        # Optional realistic cost model (microcap mode). None ⇒ flat slippage,
+        # i.e. the base behaviour, so the liquid lab is unchanged. When set,
+        # _bt_cost_ctx[sym] = (adv_dollars, daily_vol, spread_frac) per day.
+        self._cost_model = None
+        self._bt_cost_ctx: dict[str, tuple] = {}
+
+    def _exit_fill_price(self, position, current_price: float) -> float:
+        """Sell-side fill with the spread + market-impact model when active."""
+        cm = self._cost_model
+        if cm is None:
+            return super()._exit_fill_price(position, current_price)
+        adv, vol, spread = self._bt_cost_ctx.get(position.symbol, (0.0, 0.0, 0.0))
+        return cm.fill_price(
+            current_price, "SELL",
+            order_dollars=position.shares * current_price,
+            adv_dollars=adv, volatility=vol, spread_frac=spread,
+        )
+
+    def _execute_intent(self, slot, intent, current_price):
+        """Cost-aware entry: size on the spread-adjusted price, clip to the
+        participation cap, then fill including square-root impact for the actual
+        (capped) order size. Falls back to the base path when no cost model is
+        set, so the liquid lab is byte-for-byte unchanged."""
+        cm = self._cost_model
+        if cm is None:
+            return super()._execute_intent(slot, intent, current_price)
+        adv, vol, spread = self._bt_cost_ctx.get(intent.ticker, (0.0, 0.0, 0.0))
+        rm = slot.risk_manager
+        # Size against the half-spread-adjusted price (impact, which needs the
+        # order size, is added once shares are known — a small, conservative
+        # under-count of the sizing price).
+        sized_price = current_price * (1.0 + cm.half_spread(spread))
+        shares = rm.compute_shares(
+            sized_price, slot.account.total_equity,
+            available_cash=slot.account.buying_power,
+            max_concentration_pct=slot.account.max_concentration_pct,
+        )
+        shares = cm.cap_shares(shares, sized_price, adv)  # liquidity cap
+        if shares <= 0:
+            return None
+        execution_price = cm.fill_price(
+            current_price, "BUY",
+            order_dollars=shares * current_price,
+            adv_dollars=adv, volatility=vol, spread_frac=spread,
+        )
+        stop = rm.compute_stop(execution_price)
+        target = rm.compute_target(execution_price)
+        return self._finalize_open(
+            slot, intent, execution_price, shares, stop, target, current_price
+        )
 
     def _build_market_data(self, snapshot_data, market_context):
         """Build MarketData from precomputed snapshots instead of recomputing
@@ -226,6 +278,7 @@ def run_daily_backtest(
     trade_start=None,
     spy_bars: pd.DataFrame | None = None,
     cash_overlay: bool = False,
+    cost_model=None,
 ) -> dict:
     """Replay ``bars_by_symbol`` through ``strategy_name`` day by day.
 
@@ -299,6 +352,20 @@ def run_daily_backtest(
         for sym, p in prep.items()
     }
 
+    # Microcap cost mode: precompute per-symbol look-ahead-free liquidity stats
+    # once (trailing dollar-volume + return vol), aligned to each bar index, so
+    # the day loop just reads index ptr-1 (data strictly before today).
+    arena._cost_model = cost_model
+    if cost_model is not None:
+        for sym, s in per_sym.items():
+            o = s["ohlcv"]
+            dollar = (o["close"] * o["volume"])
+            s["adv"] = dollar.rolling(_COST_WINDOW, min_periods=2).mean().to_numpy()
+            s["vol"] = o["close"].pct_change().rolling(
+                _COST_WINDOW, min_periods=2).std().to_numpy()
+            s["high"] = o["high"].to_numpy()
+            s["low"] = o["low"].to_numpy()
+
     # Broad-market context: real per-day SPY state when spy_bars is given
     # (price, day change, 200dma — no look-ahead: day T uses closes <= T),
     # else a neutral context (all zeros = unknown).
@@ -344,6 +411,7 @@ def run_daily_backtest(
         snapshot_data: dict[str, dict] = {}
         bt_snaps: dict[str, IndicatorSnapshot] = {}
         bt_hist: dict[str, IndicatorHistory] = {}
+        cost_ctx: dict[str, tuple] = {}
         for sym, s in per_sym.items():
             dates = s["dates"]
             ptr = s["ptr"]
@@ -364,11 +432,26 @@ def run_daily_backtest(
                 }
                 bt_snaps[sym] = s["snaps"][ptr]      # indicators incl. today
                 bt_hist[sym] = s["hist"]
+                # Look-ahead-free cost context: liquidity stats through ptr-1,
+                # spread from the two completed days before today (ptr-2, ptr-1).
+                if cost_model is not None and ptr >= 2:
+                    adv = s["adv"][ptr - 1]
+                    vol = s["vol"][ptr - 1]
+                    spread = corwin_schultz_spread(
+                        s["high"][ptr - 2], s["low"][ptr - 2],
+                        s["high"][ptr - 1], s["low"][ptr - 1],
+                    )
+                    cost_ctx[sym] = (
+                        float(adv) if adv == adv else 0.0,   # NaN-safe
+                        float(vol) if vol == vol else 0.0,
+                        spread,
+                    )
         if not snapshot_data:
             continue
 
         arena._bt_snaps = bt_snaps
         arena._bt_hist = bt_hist
+        arena._bt_cost_ctx = cost_ctx
         # Drive the engine's clock off the simulated day so time-based exits
         # (max-hold) replay faithfully instead of keying off wall-clock now().
         cd = current_day.date() if hasattr(current_day, "date") else current_day
