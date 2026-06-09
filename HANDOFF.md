@@ -173,6 +173,48 @@ broad universe) to 2004 is the highest-value move and is squarely strategy-
 hunting, not lab-fixing: the strategies are plausibly winners our window can't
 reveal. Re-test trend_timer + dual_momentum on the long (incl-2008) window next.
 
+## Update — 2026-06-09 ENDGAME (21-year test incl. 2008: defensive strategies HALVE drawdown but don't beat SPY's Sharpe)
+
+Polygon can't serve pre-2021 (aggs API ~5yr cap; flat-files 403 for old days).
+Got the deep ETF history FREE from Yahoo (2005-2021, spliced cleanly with
+Polygon 2021+, both split-adj/div-unadj). ETFs now span 2005-2026 (~21yr, incl.
+the 2008 crisis + 2020 COVID). Tested trend_timer (SPY) and dual_momentum
+(top_k=3, 7 ETFs). Sub-period Sharpe/return/maxDD:
+
+```
+period               SPY ret/Sh/DD      trend_timer        dual_momentum
+2008 crisis          -48% -0.96  56%    -15% -1.63  16%    -9% -0.46  18%
+recovery+bull 09-20  297%  0.92  20%     83%  0.54  20%    68%  0.49  18%
+covid crash          -10% -0.45  34%    -10% -2.33  15%    -6% -1.19  15%
+2021-26              104%  0.87  25%     60%  0.81  27%    45%  0.69  23%
+FULL 05-26           524%  0.55  56%    197%  0.50  27%   179%  0.48  23%
+```
+
+**The honest verdict — a genuine result, just not the hoped-one:**
+- DRAWDOWN: the strategies WIN decisively. SPY's worst loss was **-56% (2008)**;
+  trend_timer -27%, dual_momentum **-23%** — less than HALF. In 2008 itself
+  dual_momentum lost only **-9% vs SPY's -48%.** Provable, robust crash
+  protection across 2008 AND 2020.
+- SHARPE: they LOSE, narrowly. Full-period 0.48-0.50 vs SPY 0.55. Halving the
+  drawdown does NOT flip Sharpe because Sharpe penalizes VOLATILITY not tail
+  loss, and the bull decades (SPY Sharpe 0.87-0.92) dominate 21 years — the
+  defensive bull-lag drags full-period Sharpe just below SPY's.
+- RETURN: they lag a lot (+179/197% vs +524%) — the price of sitting defensive
+  through long bulls.
+
+**So "SPY return with much less risk" splits again:** if RISK = max drawdown
+(don't lose half in a crash), dual_momentum is a real, deployable, provable win
+(half the drawdown, -9% vs -48% in 2008) — at the cost of ~1/3 the return and
+~equal Sharpe. If RISK = volatility/Sharpe, NO canonical strategy beats SPY even
+across 2008. Leverage can't rescue it (Sharpe 0.48 < 0.55, so a levered version
+is worse risk-adjusted). This converges with the academic consensus: trend/
+momentum's durable benefit is CRASH PROTECTION, not Sharpe improvement.
+
+Costs negligible here (liquid ETFs, infrequent trades). Owner decision: is
+"half the drawdown / proven crash protection / lower return / ~equal Sharpe" the
+deployable win, or keep hunting a true Sharpe-beater (evidence says it's very
+unlikely to exist after costs)?
+
 ## Update — 2026-06-06 (free-data-source vetting — adversarially verified)
 
 Owner asked: can we add alternative free datasets to find an edge bar-data
