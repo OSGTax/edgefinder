@@ -140,14 +140,15 @@ class DualMomentumStrategy(SwingStrategy):
         if today is None:
             return None
         snap = self._yesterday(today)
-        if snap is None:
+        if snap is None or ticker not in snap:
+            # No completed ranking for this name yet (the fill-day gap: a just-
+            # filled asset isn't in yesterday's buffer). Hold rather than churn.
             return None
         rank = self._rank(snap, ticker)
         # Exit if it left the top_k OR lost its uptrend (absolute momentum off).
-        if rank is None or rank > self.top_k or snap.get(ticker, 0) <= 0:
-            shown = rank if rank is not None else "n/a"
+        if rank > self.top_k or snap[ticker] <= 0:
             return self.make_exit(
                 ticker, data,
-                f"Dual-momentum: {ticker} rank {shown} / trend lost — rotate out",
+                f"Dual-momentum: {ticker} rank {rank} / trend lost — rotate out",
             )
         return None
