@@ -447,6 +447,16 @@ class TestBacktestJobs:
         assert resolve_universe(db_session, "top", [], 2, as_of=cut) == ["STEADY", "LATER"]
         assert "DEAD" not in resolve_universe(db_session, "top", [], 10, as_of=cut)
 
+    def test_resolve_universe_rank_offset_band(self, db_session):
+        # rank_offset skips the most-liquid names → the lower-liquidity band.
+        from edgefinder.backtest.jobs import resolve_universe
+        self._seed_multi(db_session)
+        # full ranking by dollar volume: HIGHV > TEST > LOWV
+        assert resolve_universe(db_session, "top", [], 3) == ["HIGHV", "TEST", "LOWV"]
+        # skip the top 1 → band starts at rank 1
+        assert resolve_universe(db_session, "top", [], 2, rank_offset=1) == ["TEST", "LOWV"]
+        assert resolve_universe(db_session, "top", [], 1, rank_offset=2) == ["LOWV"]
+
     def test_execute_backtest_direct(self, db_session):
         from edgefinder.backtest.jobs import BacktestJob, _execute_backtest
         self._seed_multi(db_session)

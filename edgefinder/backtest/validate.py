@@ -166,12 +166,13 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         step_days: int, holdout_days: int, holdout_is_days: int,
         pass_min_trades: int, holdout_eval: bool = True,
         do_optimize: bool = True, cash_overlay: bool = False,
-        universe_as_of=None) -> dict:
+        universe_as_of=None, rank_offset: int = 0, cost_model=None) -> dict:
     engine = get_engine()
     session_factory = get_session_factory(engine)
     db = session_factory()
     try:
-        universe = resolve_universe(db, mode, symbols, top_n, as_of=universe_as_of)
+        universe = resolve_universe(db, mode, symbols, top_n,
+                                    as_of=universe_as_of, rank_offset=rank_offset)
         bars, _, _ = _load_bars(db, universe, None, None)
         if not bars:
             raise SystemExit("no daily_bars for that universe — run the backfill first")
@@ -179,13 +180,14 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
     finally:
         db.close()
 
-    logger.info("Validating %s over %d symbols...", strategy, len(bars))
+    logger.info("Validating %s over %d symbols%s...", strategy, len(bars),
+                " (realistic cost model)" if cost_model is not None else "")
     scorecard = run_walkforward(
         strategy, bars, spy_bars=spy, search_iters=search_iters,
         is_days=is_days, oos_days=oos_days, step_days=step_days,
         holdout_days=holdout_days, holdout_is_days=holdout_is_days,
         holdout_eval=holdout_eval, pass_min_trades=pass_min_trades,
-        do_optimize=do_optimize, cash_overlay=cash_overlay,
+        do_optimize=do_optimize, cash_overlay=cash_overlay, cost_model=cost_model,
         progress_cb=lambda i: logger.info(
             "fold %s %s %s", i.get("fold"), i.get("oos"), i.get("holdout") or ""),
     )
@@ -205,8 +207,12 @@ def run(strategy: str, *, mode: str, top_n: int, symbols: list[str],
         db = session_factory()
         try:
             uni_label = f"{mode}-{top_n}" if mode == "top" else mode
+            if rank_offset:
+                uni_label += f"+{rank_offset}"  # rank band (microcap segment)
             if universe_as_of is not None:
                 uni_label += f"@{universe_as_of}"  # point-in-time ranking cut
+            if cost_model is not None:
+                uni_label += "+costed"  # realistic spread/impact/delist model
             record_validation_run(
                 db, scorecard,
                 universe=uni_label,
@@ -262,16 +268,38 @@ def main() -> None:
                          "using only bars up to this date (point-in-time — no "
                          "future-selection bias). Use the day before the first "
                          "scored fold day.")
+    ap.add_argument("--rank-offset", type=int, default=0,
+                    help="skip the N most-liquid names before taking --top-n "
+                         "(rank band). --rank-offset 1000 --top-n 2000 = the "
+                         "small-cap/illiquid segment (ranks 1000-3000).")
+    ap.add_argument("--costed", action="store_true",
+                    help="apply the realistic spread+impact+participation cost "
+                         "model (microcap mode); optimizer searches net-of-cost.")
+    ap.add_argument("--microcap", action="store_true",
+                    help="convenience: --rank-offset 1000 --top-n 2000 --costed.")
     ap.add_argument("--write", action="store_true", help="write reviews/ report")
     args = ap.parse_args()
 
     if not args.all and not args.strategy:
         ap.error("pass --strategy NAME or --all")
 
+    rank_offset = args.rank_offset
+    top_n = args.top_n
+    costed = args.costed
+    if args.microcap:
+        rank_offset = rank_offset or 1000
+        if top_n == 100:  # untouched default
+            top_n = 2000
+        costed = True
+    cost_model = None
+    if costed:
+        from edgefinder.backtest.costs import CostModel
+        cost_model = CostModel()
+
     targets = ALL_STRATEGIES if args.all else [args.strategy]
     symbols = [s for s in args.symbols.split(",") if s.strip()]
     for strat in targets:
-        run(strat, mode=args.mode, top_n=args.top_n, symbols=symbols,
+        run(strat, mode=args.mode, top_n=top_n, symbols=symbols,
             search_iters=args.search_iters, write=args.write,
             is_days=args.is_days, oos_days=args.oos_days, step_days=args.step_days,
             holdout_days=args.holdout_days, holdout_is_days=args.holdout_is_days,
@@ -279,7 +307,8 @@ def main() -> None:
             holdout_eval=not args.no_holdout_eval,
             do_optimize=not args.fixed, cash_overlay=args.cash_overlay,
             universe_as_of=(date.fromisoformat(args.universe_as_of)
-                            if args.universe_as_of else None))
+                            if args.universe_as_of else None),
+            rank_offset=rank_offset, cost_model=cost_model)
 
 
 if __name__ == "__main__":

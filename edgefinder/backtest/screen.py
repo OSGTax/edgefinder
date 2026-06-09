@@ -30,11 +30,13 @@ logger = logging.getLogger(__name__)
 
 def screen(strategy: str, *, mode: str = "top", top_n: int = 300,
            holdout_days: int = 126, params: dict | None = None,
-           starting_cash: float = 10_000.0, universe_as_of=None) -> dict:
+           starting_cash: float = 10_000.0, universe_as_of=None,
+           rank_offset: int = 0, cost_model=None) -> dict:
     """One fixed-config backtest over the dev window. Returns the stats dict."""
     db = get_session_factory(get_engine())()
     try:
-        universe = resolve_universe(db, mode, [], top_n, as_of=universe_as_of)
+        universe = resolve_universe(db, mode, [], top_n,
+                                    as_of=universe_as_of, rank_offset=rank_offset)
         bars, _, _ = _load_bars(db, universe, None, None)
         if not bars:
             raise SystemExit("no daily_bars for that universe — run the backfill first")
@@ -57,12 +59,15 @@ def screen(strategy: str, *, mode: str = "top", top_n: int = 300,
     res = run_daily_backtest(
         strategy, dev_bars, starting_cash=starting_cash,
         benchmark=benchmark, params=params or {}, spy_bars=spy,
+        cost_model=cost_model,
     )
     return res["stats"] | {
         "strategy": strategy,
         "dev_window": f"{dev_start}..{dev_end}",
         "params": params or {},
         "universe_as_of": str(universe_as_of) if universe_as_of else None,
+        "rank_offset": rank_offset,
+        "costed": cost_model is not None,
     }
 
 
@@ -77,14 +82,31 @@ def main() -> None:
     ap.add_argument("--params", default="", help="JSON param overrides")
     ap.add_argument("--universe-as-of", default=None,
                     help="YYYY-MM-DD: point-in-time universe ranking cut")
+    ap.add_argument("--rank-offset", type=int, default=0,
+                    help="skip the N most-liquid names (rank band / microcap segment)")
+    ap.add_argument("--costed", action="store_true",
+                    help="apply the realistic spread+impact cost model")
+    ap.add_argument("--microcap", action="store_true",
+                    help="convenience: --rank-offset 1000 --top-n 2000 --costed")
     args = ap.parse_args()
 
     params = json.loads(args.params) if args.params else None
     from datetime import date as _date
     as_of = _date.fromisoformat(args.universe_as_of) if args.universe_as_of else None
-    stats = screen(args.strategy, mode=args.mode, top_n=args.top_n,
+    rank_offset, top_n, costed = args.rank_offset, args.top_n, args.costed
+    if args.microcap:
+        rank_offset = rank_offset or 1000
+        if top_n == 300:
+            top_n = 2000
+        costed = True
+    cost_model = None
+    if costed:
+        from edgefinder.backtest.costs import CostModel
+        cost_model = CostModel()
+    stats = screen(args.strategy, mode=args.mode, top_n=top_n,
                    holdout_days=args.holdout_days, params=params,
-                   universe_as_of=as_of)
+                   universe_as_of=as_of, rank_offset=rank_offset,
+                   cost_model=cost_model)
     print(json.dumps(stats, indent=2, default=str))
 
 

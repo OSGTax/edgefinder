@@ -70,7 +70,7 @@ def spy_benchmark(db: Session, start, end) -> dict | None:
 
 
 def resolve_universe(db: Session, mode: str, symbols: list[str], top_n: int,
-                     as_of=None) -> list[str]:
+                     as_of=None, rank_offset: int = 0) -> list[str]:
     """Turn a universe spec into a concrete symbol list from daily_bars.
 
     ``as_of`` (date, "top" mode only): rank by dollar volume using ONLY bars
@@ -80,6 +80,11 @@ def resolve_universe(db: Session, mode: str, symbols: list[str], top_n: int,
     winners into yesterday's universe (measured at ~+3pp/126d of free excess
     vs SPY on this data). Point-in-time runs should always pass the day
     before their first scored day.
+
+    ``rank_offset`` (int, "top" mode only): skip the N most-liquid names before
+    taking ``top_n``. ``rank_offset=1000, top_n=2000`` yields dollar-volume
+    ranks 1000-3000 — the small-cap / lower-liquidity band where the documented
+    edges live and where the realistic cost model bites hardest.
     """
     if mode == "symbols":
         return sorted({s.strip().upper() for s in symbols if s.strip()})
@@ -97,7 +102,7 @@ def resolve_universe(db: Session, mode: str, symbols: list[str], top_n: int,
             q = q.having(func.max(DailyBar.date) >= alive_cutoff)
         rows = (
             q.order_by(func.avg(DailyBar.close * DailyBar.volume).desc())
-            .limit(top_n).all()
+            .limit(top_n).offset(max(rank_offset, 0)).all()
         )
         return [r[0] for r in rows]
     raise ValueError(f"unknown universe mode {mode!r}")

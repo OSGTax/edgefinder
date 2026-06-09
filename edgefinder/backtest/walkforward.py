@@ -111,6 +111,7 @@ def run_walkforward(
     starting_cash: float = 10_000.0,
     do_optimize: bool = True,
     cash_overlay: bool = False,
+    cost_model=None,
     search_iters: int = 40,
     seed: int = 0,
     min_trades: int = 10,
@@ -156,7 +157,7 @@ def run_walkforward(
                 benchmark=_benchmark_window(spy_bars, is_start, is_end),
                 starting_cash=starting_cash, search_iters=search_iters,
                 seed=seed, min_trades=min_trades, trade_start=is_start,
-                spy_bars=spy_bars,
+                spy_bars=spy_bars, cost_model=cost_model,
             )
 
         oos_bars = _slice(bars_by_symbol, oos_warm_start, oos_end)
@@ -164,6 +165,7 @@ def run_walkforward(
             strategy_name, oos_bars, starting_cash=starting_cash,
             benchmark=_benchmark_window(spy_bars, oos_start, oos_end), params=params,
             trade_start=oos_start, spy_bars=spy_bars, cash_overlay=cash_overlay,
+            cost_model=cost_model,
         )
         folds.append(Fold(
             len(folds), oos_start, oos_end, params, res["stats"],
@@ -194,7 +196,7 @@ def run_walkforward(
                 benchmark=_benchmark_window(spy_bars, pre_start, pre_end),
                 starting_cash=starting_cash, search_iters=search_iters,
                 seed=seed, min_trades=min_trades, trade_start=pre_start,
-                spy_bars=spy_bars,
+                spy_bars=spy_bars, cost_model=cost_model,
             )
         h_warm_start = days[max(0, wf_n - warmup_days)]
         h_bars = _slice(bars_by_symbol, h_warm_start, h_end)
@@ -202,6 +204,7 @@ def run_walkforward(
             strategy_name, h_bars, starting_cash=starting_cash,
             trade_start=h_start, spy_bars=spy_bars, cash_overlay=cash_overlay,
             benchmark=_benchmark_window(spy_bars, h_start, h_end), params=h_params,
+            cost_model=cost_model,
         )
         holdout = {
             "window": f"{h_start}..{h_end}",
@@ -216,12 +219,14 @@ def run_walkforward(
         strategy_name, folds, is_days, oos_days, step_days,
         holdout=holdout, pass_min_trades=pass_min_trades,
         optimized=do_optimize, cash_overlay=cash_overlay,
+        costed=cost_model is not None,
     )
 
 
 def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_days,
                *, holdout: dict | None = None, pass_min_trades: int = 30,
-               optimized: bool = True, cash_overlay: bool = False) -> dict:
+               optimized: bool = True, cash_overlay: bool = False,
+               costed: bool = False) -> dict:
     rets = [f.oos_stats.get("return_pct") or 0.0 for f in folds]
     sharpes = [f.oos_stats["sharpe"] for f in folds if f.oos_stats.get("sharpe") is not None]
     excess = [f.oos_stats["excess_return_pct"] for f in folds
@@ -309,6 +314,8 @@ def _aggregate(strategy_name: str, folds: list[Fold], is_days, oos_days, step_da
             "optimized": bool(optimized),
             # Disclose the SPY sweep on idle cash (zero-knob accounting layer).
             "cash_overlay": bool(cash_overlay),
+            # Disclose the realistic spread/impact/delist cost model (microcap).
+            "costed": bool(costed),
         },
         "oos": {
             "total_return_pct": oos_total_return,
