@@ -419,3 +419,20 @@ def test_cost_model_only_reduces_pnl_end_to_end():
                                 cost_model=CostModel())
     assert costed["stats"]["num_closed_trades"] == no_cost["stats"]["num_closed_trades"]
     assert costed["final_equity"] <= no_cost["final_equity"]
+
+
+def test_delisted_position_is_force_closed_not_frozen(probe_strategy):
+    # DEADCO trades for 15 days then its data ends (delisting) while ALIVE keeps
+    # the calendar running to day 30. The held DEADCO position must close at its
+    # last price with reason DELISTED — never freeze open to run-end.
+    bars = {
+        "ALIVE": _series([50.0] * 30),    # never triggers the probe (<100)
+        "DEADCO": _series([105.0] * 15),  # triggers buy, then delists
+    }
+    result = run_daily_backtest("_lookahead_probe", bars, starting_cash=10_000.0)
+    delisted = [t for t in result["trades"]
+                if (t["exit_reason"] or "").startswith("DELISTED")]
+    assert len(delisted) == 1, result["trades"]
+    assert delisted[0]["symbol"] == "DEADCO"
+    assert delisted[0]["exit_price"] == pytest.approx(105.0, rel=0.01)
+    assert all(p["symbol"] != "DEADCO" for p in result["open_positions"])

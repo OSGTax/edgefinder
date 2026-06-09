@@ -127,6 +127,27 @@ class BacktestArena(ArenaEngine):
             slot, intent, execution_price, shares, stop, target, current_price
         )
 
+    def force_close_delisted(self, last_date: dict, last_close: dict, current_day):
+        """Close any open position whose symbol has no more bars (delisted /
+        permanently halted). Without this a dead name freezes at its last
+        price forever — wildly overstating equity in a graveyard-inclusive
+        universe, where delistings are routinely -50% to -100%. Fills at the
+        last available close (acquisitions captured at the deal price, failures
+        at the collapsed price), through the same sell-side cost seam."""
+        closed: list = []
+        for slot in self._slots.values():
+            for pos in list(slot.account.positions):
+                ld = last_date.get(pos.symbol)
+                if ld is None or current_day <= ld:
+                    continue  # still trading (or unknown) — leave it open
+                px = last_close.get(pos.symbol) or pos.market_price or pos.entry_price
+                trade = self._close_position(
+                    slot, pos, self._exit_fill_price(pos, px), "DELISTED", None
+                )
+                if trade:
+                    closed.append(trade)
+        return closed
+
     def _build_market_data(self, snapshot_data, market_context):
         """Build MarketData from precomputed snapshots instead of recomputing
         indicators each day — same MarketData the live cycle would see, ~100x
@@ -352,6 +373,16 @@ def run_daily_backtest(
         for sym, p in prep.items()
     }
 
+    # Each symbol's final bar — used to force-close positions when a name
+    # delists/halts (its data ends before the run does) instead of freezing
+    # them at the last price. Applies to every backtest, not just cost mode.
+    def _as_date(x):
+        return x.date() if hasattr(x, "date") else x
+    last_date = {sym: _as_date(s["dates"][-1]) for sym, s in per_sym.items()
+                 if len(s["dates"])}
+    last_close = {sym: float(s["ohlcv"]["close"].iloc[-1]) for sym, s in per_sym.items()
+                  if len(s["dates"])}
+
     # Microcap cost mode: precompute per-symbol look-ahead-free liquidity stats
     # once (trailing dollar-volume + return vol), aligned to each bar index, so
     # the day loop just reads index ptr-1 (data strictly before today).
@@ -460,6 +491,8 @@ def run_daily_backtest(
         day_context = context_by_day.get(cd) or MarketContext(as_of=cd)
         _, closed = arena.run_intraday_cycle(snapshot_data, day_context)
         closed_all.extend(closed)
+        # Force-close names that delisted on/before today (data has ended).
+        closed_all.extend(arena.force_close_delisted(last_date, last_close, cd))
 
         # Mark held positions to the day's close and record equity.
         for pos in slot.account.positions:
