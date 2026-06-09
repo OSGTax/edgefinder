@@ -9,6 +9,51 @@ but everything needed to continue is here + in git.
 
 ---
 
+## Update — 2026-06-06 (free-data-source vetting — adversarially verified)
+
+Owner asked: can we add alternative free datasets to find an edge bar-data
+alone can't? Vetted 5 candidates with live probes + a 10-agent adversarial
+workflow (5 analysts web-searching current OOS evidence, 5 skeptics
+refuting). Verdict on the literal three axes (add / reliable / free):
+
+**No standalone alpha among them for our liquid top-1000 universe.** The
+honest scorecard:
+- **PEAD** — free (on plan), reliable=NO, edge=NO. Two killers: (1) Polygon
+  serves only 10-K/10-Q, NOT 8-K, so the announcement-timestamp premise is
+  unbuildable from Polygon; filing_date lags the press release 10-14d, inside
+  the drift window (signal decay + look-ahead); filing_date was even None on
+  SIVB's actual earnings quarter. (2) Martineau 2022 "Rest in Peace PEAD" +
+  2024-25 replications: drift t-stat 2.18→1.43 (insignificant) ex-microcaps;
+  survives only in microcaps where ~10% round-trip cost eats it. Top-1000 =
+  the dead segment. USE ONLY as (a) a known-dead falsification control, (b)
+  motivation to build an EDGAR 8-K item-2.02 event clock as PIT infra.
+- **Insider clusters (Form 4)** — free (SEC), reliable=NO out of box, edge=YES
+  but decayed + microcap-bound (CMP 82bps/mo; 2018-24 microcap OOS AUC 0.70,
+  gross). Needs delisted ticker→CIK backfill (company_tickers.json is
+  active-only). Most engineering (~9d). Real, but capacity-constrained to where
+  this lab can barely trade.
+- **Regime gates (VIX + breadth + credit)** — reliable=YES, edge=risk-mgmt
+  only (cuts drawdowns ~hugely at ~1.5pp/yr CAGR cost; Sharpe +0.1..0.3, no new
+  alpha). Cheapest (~3d). LIVE CAVEAT the skeptic caught: FRED is truncating the
+  ICE BofA OAS credit-spread family to 3yr history starting April 2026 — do NOT
+  architect on it; lean on VIX (CBOE free) + our-own-breadth (% of universe
+  above 200dma, one SQL query on bars we already have, bulletproof PIT).
+- **Short interest** — Polygon endpoint is STALE (probe: all tickers return
+  ~2017). FINRA files are the free alternative but the edge is short-side,
+  small-cap, net-of-borrow ~zero (Muravyev-Pearson-Pollet 2025) — uncapturable
+  by a long-only top-1000 lab. CUT.
+- **Macro/FRED** — needs free key; reliable=with care (NFCI/ANFCI ARE revised →
+  need ALFRED vintages; only DGS10-DGS2 + credit spreads safe from current
+  FRED). Edge=risk-mgmt only. Same family as regime gates.
+
+**Takeaway:** none is an "add data → beat SPY" button. Highest-value builds
+if pursued: (1) regime/breadth OVERLAY on existing strategies — cheap,
+reliable, improves drawdown/Sharpe of what we have (uses the cash_overlay
+plumbing already built); (2) EDGAR event-clock + PEAD as an integrity control
+proving the survivorship-corrected lab manufactures no phantom alpha. Insider
+clusters only if willing to fund the CIK backfill and accept microcap costs.
+No build started — owner deciding.
+
 ## Update — 2026-06-03 (validation answered + structural fixes #1/#2)
 
 **Validation ran on real data. Verdict: all three strategies FAIL OOS — and
