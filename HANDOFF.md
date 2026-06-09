@@ -54,6 +54,59 @@ proving the survivorship-corrected lab manufactures no phantom alpha. Insider
 clusters only if willing to fund the CIK backfill and accept microcap costs.
 No build started — owner deciding.
 
+## Update — 2026-06-06 PM (FMP + historical-sentiment vetting — live-probed)
+
+Extends the data-source vetting. 8-agent adversarial workflow + live probes
+(Polygon API direct; FMP MCP authenticated this session).
+
+**FMP — DEAD for this lab, empirically confirmed.** User's FMP tier returns
+ONLY real-time quotes: `income-statement` DENIED (needs higher plan), `news`
+DENIED (needs Starter+), `quote` works. So zero historical/fundamental/news
+value at the current tier. Even on paid: "as-reported" ≠ point-in-time (no
+restatement vintage → look-ahead), documented data-quality failures (e.g. AA
+reported NEGATIVE revenue per Trustpilot; no internal reconciliation), and
+fully redundant with Polygon flat-files + Polygon news already owned. Do NOT
+add or upgrade.
+
+**Polygon news sentiment — the surprise, then the disqualifier (live-probed).**
+Polygon news text goes back to 2017 and covers delisted names (SIVB/FRC), BUT
+the per-ticker `insights.sentiment` label was probed across time:
+AAPL Jun-2021 0% / Jun-2022 0% / Mar-2024 0% / Sep-2024 100% / Sep-2025 100%;
+SIVB-2023 0%. The label TURNS ON ~mid-2024 and is NOT backfilled. Consequence:
+(+) no hindsight look-ahead, but (−) NO sentiment for 2021–mid-2024 and ZERO on
+the delisted graveyard names. Unusable as a historical feature for the
+2021-2026 survivorship-corrected folds. Only two honest uses: (a) self-score
+sentiment from the raw news TEXT (which IS 2017+, delisted-covered, original
+timestamps — point-in-time clean) as a build; (b) bank Polygon's forward
+sentiment from now and validate live over time. Both real, neither a shortcut;
+and Tetlock-family evidence says news-sentiment alpha is ~arbitraged in liquid
+large-caps anyway (lives in small/illiquid).
+
+**GDELT — not for single-name equity.** Free DOC API is a rolling 3-month
+window only (useless for 2021+ history); full history = multi-TB raw-file ETL
+(~12d). Documented edge is macro/FX/index-level, not cross-sectional
+single-name; entity→ticker mapping is noisy. Possible future macro/regime
+overlay input, not a stock picker.
+
+**Other free news datasets (Alpha Vantage, Tiingo, FNSPID, etc.) — skip.**
+All either survivorship-biased (FNSPID = current S&P500 membership, delisted
+names absent), too short, or strictly dominated by the already-owned Polygon
+news.
+
+**STRATEGIC INFLECTION (the real takeaway):** ~9 data/signal angles vetted
+across two sessions (PEAD, insiders, short-interest, regime gates, macro/FRED,
+FMP, Polygon-sentiment, GDELT, other-news) ALL converge on the same finding:
+in the liquid top-1000 universe, every documented edge is arbitraged to ~0
+after costs, lives in microcaps we can't trade cheaply, or is
+risk-management-only. The data is NOT the bottleneck — market efficiency in
+liquid large-caps is. Adding sources keeps re-confirming the textbook result.
+Realistic forward options: (1) accept + publish the honest negative result as
+the dashboard's product; (2) go where edges live (microcaps) with brutal
+explicit cost modeling — lab not currently built for it; (3) pursue
+risk-management/regime overlays (improve drawdown/Sharpe of existing
+strategies, won't beat SPY on return); (4) forward live sentiment experiment
+(slow, honest, uncertain). No build started — owner deciding direction.
+
 ## Update — 2026-06-03 (validation answered + structural fixes #1/#2)
 
 **Validation ran on real data. Verdict: all three strategies FAIL OOS — and
