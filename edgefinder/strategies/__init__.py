@@ -11,3 +11,6 @@ from edgefinder.strategies import gap_carry  # noqa: F401
 
 # Research candidates (2026-06-05 round 3).
 from edgefinder.strategies import tom_seasonality, xsec_mom  # noqa: F401
+
+# Microcap research candidates (2026-06-09) — small-cap/illiquid band + cost model.
+from edgefinder.strategies import micro_reversal  # noqa: F401

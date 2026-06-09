@@ -359,3 +359,42 @@ class TestTomSeasonality:
         strat = TomSeasonalityStrategy()
         assert strat.evaluate("TEST", self._md_on(None)) is None
         assert strat.should_exit("TEST", self._md_on(None), 100.0) is None
+
+
+class TestMicroReversal:
+    """micro_reversal: washout-above-200dma reversion buy, RSI-recovery exit."""
+
+    def _wash_md(self, *, hist_closes, cur_close, ema_200=90.0, rsi=25.0):
+        from edgefinder.strategies.micro_reversal import MicroReversalStrategy  # noqa
+        hist = [_snap(close=c) for c in hist_closes]
+        cur = _snap(close=cur_close, ema_200=ema_200, rsi=rsi)
+        return _md(cur, hist)
+
+    def test_washout_in_uptrend_fires(self):
+        from edgefinder.strategies.micro_reversal import MicroReversalStrategy
+        # 3-day ref 110 → today 96 = -12.7% washout, above 200dma, RSI 25.
+        md = self._wash_md(hist_closes=[110.0, 105.0, 100.0], cur_close=96.0)
+        intent = MicroReversalStrategy().evaluate("TEST", md)
+        assert intent is not None and "washout" in intent.reasoning.lower()
+
+    def test_below_200dma_blocked(self):
+        from edgefinder.strategies.micro_reversal import MicroReversalStrategy
+        md = self._wash_md(hist_closes=[110.0, 105.0, 100.0], cur_close=96.0, ema_200=120.0)
+        assert MicroReversalStrategy().evaluate("TEST", md) is None
+
+    def test_shallow_dip_blocked(self):
+        from edgefinder.strategies.micro_reversal import MicroReversalStrategy
+        # ref 110 → 108 = -1.8%, below the 10% washout threshold.
+        md = self._wash_md(hist_closes=[110.0, 109.0, 109.0], cur_close=108.0)
+        assert MicroReversalStrategy().evaluate("TEST", md) is None
+
+    def test_not_oversold_blocked(self):
+        from edgefinder.strategies.micro_reversal import MicroReversalStrategy
+        md = self._wash_md(hist_closes=[110.0, 105.0, 100.0], cur_close=96.0, rsi=55.0)
+        assert MicroReversalStrategy().evaluate("TEST", md) is None
+
+    def test_exit_on_rsi_recovery(self):
+        from edgefinder.strategies.micro_reversal import MicroReversalStrategy
+        strat = MicroReversalStrategy()
+        assert strat.should_exit("TEST", _md(_snap(rsi=60.0), []), 100.0) is not None
+        assert strat.should_exit("TEST", _md(_snap(rsi=40.0), []), 100.0) is None
