@@ -12,6 +12,17 @@ multi-source sentiment analysis, and multi-strategy competition in isolated virt
 - Per-strategy views everywhere — no aggregate P&L
 - AI meta-strategy interfaces are built in (future Phase 8)
 
+> ## 🎯 ACTIVE INITIATIVE — read `HANDOFF.md` first
+> The project has pivoted to a **clean-engine rebuild + general workbench** (drop in
+> ANY strategy → honest backtest → auto-promote to self-running paper trading →
+> monitor on the dashboard; a permanent, growing data asset; a wide Lynch-style hunt
+> for anything that beats the market). **Phase 1 is committed (`48771df`, v5.22.0);
+> resume at Phase 2.** The full vision, design principles, roadmap, working
+> agreements, and the Cloudflare R2 storage plan are in **`HANDOFF.md` → "CURRENT
+> INITIATIVE"**. If asked to "continue" or "finish autonomously," read that first.
+> Note: conversation history does NOT survive a Codespace rebuild — only this repo
+> does, so durable context lives in `HANDOFF.md`, not chat.
+
 ## Architecture
 ```
 Dashboard (FastAPI) — Research | Trades | Strategies | Benchmarks | Inject

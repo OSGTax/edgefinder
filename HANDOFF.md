@@ -4,8 +4,138 @@ Continuation notes for picking this work up in a Codespace (or any fresh
 Claude Code session). The chat history doesn't transfer between environments,
 but everything needed to continue is here + in git.
 
-**Branch:** `main`  •  **Version:** 5.13.0
-**Read first:** this file, then `CLAUDE.md`.
+**Branch:** `main`  •  **Version:** 5.22.0
+**Read first:** the CURRENT INITIATIVE section immediately below, then `CLAUDE.md`.
+Everything under "Update — 2026-06-09 (MICROCAP BUILD…)" and earlier is the prior
+research log — valuable history and honest negative results, but the project has
+since PIVOTED (see below). Read it for context, not as the current plan.
+
+---
+
+## 🎯 CURRENT INITIATIVE (2026-06-09) — CLEAN ENGINE REBUILD + GENERAL WORKBENCH
+
+> **If you are a fresh session asked to "continue" or "finish the project
+> autonomously," THIS is the plan. Resume at Phase 2 (below).**
+
+### The goal (owner's vision — this is what matters most)
+
+The owner (Mike, a Peter Lynch fan) wants **a permanent trading research lab**, not
+a single strategy:
+
+1. **A permanent, growing database of stock history + live data.** It just *exists*
+   — it is the asset, the foundation. **Never delete it.** We build on it.
+2. **A fully general workbench:** throw in *any* strategy idea — technical,
+   fundamental/GARP, or **deliberately dumb** ("buy the top-traded stocks starting
+   with B every Tuesday") — have it **honestly backtested**, then **auto-promoted to
+   self-running paper trading**, and **monitored on the dashboard**. Drop in an idea;
+   the machine does the rest.
+3. **A wide, ongoing search** — typical or weird — for *anything that consistently
+   beats the market.*
+
+**Peter Lynch ethos — this CORRECTS the prior failure mode.** The market *can* be
+beaten by curiosity and breadth. Do NOT get fatalistic. The research log below
+concludes "very hard to beat SPY net of cost" — but that hunt ran on an OLD engine
+with **at least 4 trading-sequence bugs** (wall-clock cooldowns, phantom stop on a
+bad print, daily churn, wall-clock timestamps), each of which silently corrupted
+results. So some "strategy failures" were really PLUMBING failures. And the
+**fundamentals table (earnings growth, PEG) has never had a strategy built on it** —
+the most on-brand Lynch lane is entirely unexplored. Go wide; stay curious.
+
+### The rebuild decision
+
+The owner authorized a **clean-slate engine**. Build a backtest core where the
+trading sequence is **correct by construction and fully tested**, so a strategy
+failure is the strategy's, not a bug's. Keep the old engine only so the live system
+runs untouched until the new one is proven. Old engine is otherwise not important.
+
+### Design principles (established in Phase 1)
+
+- **A backtest is a PURE function:** `(bars, strategy, costs) -> equity curve`. No
+  account state machine, no cooldown/PDT/revenge, no wall-clock — those are exactly
+  where the old bugs lived, so they are absent here.
+- **One general strategy interface:** `rebalance(ctx) -> {symbol: target_weight}`.
+  The strategy sees the WHOLE universe point-in-time (every symbol's bars,
+  indicators, fundamentals, the date) and returns the portfolio it wants. Weights in
+  `[0,1]`; their sum is the invested fraction (rest cash). Expresses technical,
+  fundamental, cross-sectional, calendar, or dumb strategies IDENTICALLY — and a
+  strategy CANNOT have a trading-sequence bug (order mechanics live in one tested
+  place).
+- **Correct by construction:** point-in-time decision (data through *yesterday*) →
+  next-open fill → realistic costs (bps of traded notional) → mark-to-market. Bad
+  OHLC sanitized; delisted holdings closed at last real price.
+- **Honesty is the foundation:** survivorship correction, real costs, point-in-time,
+  walk-forward folds + sealed holdout. Every result must be trustworthy enough to
+  auto-promote to paper trading.
+
+### PHASE 1 — DONE ✅ (committed `48771df`, v5.22.0; additive, 577 tests pass)
+
+- `edgefinder/engine/strategy.py` — general interface: `AssetView`,
+  `RebalanceContext`, `Strategy` protocol, reference `BuyAndHold` / `EqualWeight`.
+- `edgefinder/engine/backtest.py` — pure `run_backtest(...)` + `BacktestResult` +
+  the single tested trade loop.
+- `tests/test_engine.py` — 8 correctness tests incl. the buy-and-hold anchor.
+- **Validation:** `BuyAndHold(SPY)` = +523.1% vs SPY actual +523.9% over 21 yr
+  (matches to a fraction of a %, same Sharpe 0.55, same maxDD 56%) → sequence is
+  provably right. First real strategy beats SPY risk-adjusted: equal-weight 7 ETFs,
+  monthly → Sharpe 0.64 vs 0.55, maxDD 40% vs 56% (incl. 2008+2020). **Caveats:**
+  lags raw return (+413% vs +524%), modest +0.09 Sharpe edge, known diversification
+  effect, NOT yet through the fold + sealed-holdout gate.
+
+### ROADMAP — resume here
+
+- **PHASE 2 — Honest validation harness on the new engine ← NEXT.** Port walk-forward
+  folds + sealed holdout + risk-adjusted acceptance criteria (beat SPY's Sharpe / cut
+  drawdown, net of real costs) onto `engine/`. Then properly validate equal-weight
+  (and variants). Reuse logic from `edgefinder/backtest/` + `tests/test_walkforward.py`
+  but drive the new pure engine.
+- **PHASE 3 — Promotion pipeline (the loop the owner wants).** `backtest clears bar →
+  auto-deploy to self-running paper trading → shows on dashboard.` Pieces exist
+  (plugins, virtual accounts, intraday loop, dashboard, `live_strategies` allowlist);
+  mostly wiring + a clean "promote" action. (This is the long-deferred P3.)
+- **PHASE 4 — Storage: two-tier (R2), parallel & non-blocking.** History (`daily_bars`,
+  ~1.3 GB, write-once/read-heavy) → **Parquet on Cloudflare R2** (10 GB free, zero
+  egress, S3-compatible; ~1.3 GB → ~200-400 MB compressed). `data/flatfiles.py`
+  already speaks boto3/S3; `data/cache.py` already does Parquet. Route the data layer
+  through a "bar store" abstraction instead of reading `daily_bars` directly (few
+  choke points — not a rewrite). Live/operational data (<30 MB) stays in **Supabase**,
+  lean. **R2 secrets** the owner is adding as GitHub → Codespaces → Secrets (scoped to
+  `OSGTax/edgefinder`, injected as env vars every session):
+  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`
+  (`https://<accountid>.r2.cloudflarestorage.com`), `R2_BUCKET=edgefinder-data`.
+  **On resume verify first:** `env | grep -E '^R2_'` (never print secret values). If
+  present, wire the bar store to R2; if absent, build on current data and note it's
+  pending (non-blocking).
+- **PHASE 5 — Go wide (the actual hunt).** Stop hand-crafting one strategy at a time;
+  use the honest lab as a high-throughput screen. Port the old strategies onto the new
+  interface and re-test HONESTLY (some "failures" were the old bugs). **Build the
+  untouched fundamental/Lynch lane** (e.g. "hold 20 lowest-PEG names with >15% earnings
+  growth, equal-weight, monthly"). Add a few deliberately-dumb ones. Batch through
+  validation; surface survivors. With ultracode/workflows on, fan out: many backtests
+  in parallel, survivors adversarially re-validated, winners promoted.
+
+### Working agreements (how the owner wants this run)
+
+- **Keep the live system running and untouched** until the new engine is proven; all
+  engine work is additive.
+- **Small phases, each with tests + a `/code-review` pass** before moving on. The owner
+  explicitly wants major review work to keep the code clean — bake it into every phase.
+- **Keep all data. Never delete the database.** (A prior session wrongly proposed
+  deleting it to fit a free tier — the opposite of the vision.)
+- **Git:** commit + push directly to `main`; format `[vX.Y] short description`; bump
+  `__version__` in `dashboard/app.py` for functional changes; run
+  `pytest -m "not integration"` before committing code.
+- **Autonomy:** finish the project autonomously, phase by phase, committing as you go;
+  surface decisions only when they genuinely change direction.
+
+### ⚠️ Codespace persistence warning (why this section exists)
+
+Conversation transcripts and the agent memory dir live under `~/.claude/`, which is
+**wiped on every Codespace rebuild** — only `/workspaces` (this git repo) survives. So
+**persist all durable context to the repo, not to chat or memory.** When you make
+material progress or change the plan, UPDATE THIS SECTION and commit, so the next
+session continues seamlessly after any rebuild. (Cloud sessions can also be recovered
+via `claude --teleport <session-id>` in a real terminal — but the committed handoff is
+the reliable mechanism.)
 
 ---
 
