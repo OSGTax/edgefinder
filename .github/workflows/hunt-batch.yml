@@ -42,7 +42,8 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 6   # be kind to the Supabase pooler
+      max-parallel: 4   # be kind to the Supabase pooler (6 exhausted
+                        # Session-mode checkouts; 3 records were lost)
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     name: ${{ matrix.id }}

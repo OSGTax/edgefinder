@@ -1,65 +1,17 @@
 {
-  "wave": "hunt-r3-w1",
+  "wave": "hunt-r3-rechecks-redo",
   "runs": [
     {
-      "id": "null-control",
-      "args": "--strategy buy_and_hold:SPY --symbols SPY --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r3:null"
+      "id": "rc-btv-shift-minus",
+      "args": "--strategy barbell_trend_value --universe top:500 --start 2021-06-01 --is-days 357 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --warmup-days 290 --universe-label hunt-r3:recheck-shift-"
     },
     {
-      "id": "mom-spy-vol-brake",
-      "args": "--strategy mom_spy_vol_brake --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500 --warmup-days 290"
+      "id": "rc-fg-shift-plus",
+      "args": "--strategy fast_growers --universe top:500 --start 2021-06-01 --is-days 399 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --universe-label hunt-r3:recheck-shift+"
     },
     {
-      "id": "mom-soft-gate",
-      "args": "--strategy mom_soft_gate --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500 --warmup-days 290"
-    },
-    {
-      "id": "mom-52w-high",
-      "args": "--strategy mom_52w_high --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500 --warmup-days 290"
-    },
-    {
-      "id": "barbell-trend-value",
-      "args": "--strategy barbell_trend_value --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500-pit --pit-fundamentals --warmup-days 290"
-    },
-    {
-      "id": "value-mom-rank-blend",
-      "args": "--strategy value_mom_rank_blend --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500-pit --pit-fundamentals --warmup-days 290"
-    },
-    {
-      "id": "quality-roe-top",
-      "args": "--strategy quality_roe_top --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "quality-momentum",
-      "args": "--strategy quality_momentum --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500-pit --pit-fundamentals --warmup-days 290"
-    },
-    {
-      "id": "fast-growers",
-      "args": "--strategy fast_growers --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "fcf-yield-top",
-      "args": "--strategy fcf_yield_top --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "dividend-value",
-      "args": "--strategy dividend_value --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "ew-top100",
-      "args": "--strategy ew_top100 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500"
-    },
-    {
-      "id": "seasonal-spy",
-      "args": "--strategy seasonal_spy --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500"
-    },
-    {
-      "id": "random-20-s41",
-      "args": "--strategy random_20_s41 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500"
-    },
-    {
-      "id": "random-20-s43",
-      "args": "--strategy random_20_s43 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r3:top500"
+      "id": "rc-fg-late",
+      "args": "--strategy fast_growers --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --universe-label hunt-r3:recheck-late"
     }
   ]
 }
