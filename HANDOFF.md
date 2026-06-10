@@ -359,6 +359,50 @@ menu control −3.3pp (no tilt), dumb sweep 0/6 false positives (noise floor
   workflow (waves of ~10-25; stock/Lynch lanes should now use
   `--bars-from r2`).
 
+### 🎨 DASHBOARD REDESIGN — IN PROGRESS (plan approved 2026-06-10)
+
+Full plan: `/root/.claude/plans/` is session-local — the AUTHORITATIVE spec
+is reproduced here. Goal: dark trading-terminal, mobile-equal, data-rich,
+reliable. 10 phases, each shippable; cutover in-place page by page.
+
+**DONE:**
+- ✅ Phase 0 (v5.36): lightweight-charts 4.1.0 vendored (CDN killed);
+  static guards in tests/test_dashboard_static.py
+- ✅ Phase 1 (v5.37): css/{tokens,base,components,charts}.css (dark :root,
+  light via html[data-theme]; legacy var aliases); js/core/{net,fmt,dom,
+  theme,charts,poll,nav}.js (AbortController+retry+dedup fetch, epoch-sec
+  time boundary, error cards, pane-sync charts, hard-stop poller);
+  js/components/{sparkline,heatmap}.js; bottom tab bar + More sheet
+- ✅ Phase 2 (v5.38): dashboard/{ttl_cache,symbol_service}.py +
+  routers/symbols.py — /api/symbols/{sym}/bars (DB/R2 seam, split-adj,
+  indicators, epoch times) + /events; benchmarks `times`;
+  scripts/smoke_dashboard.py
+- ✅ Phase 3 (v5.39): /symbol Workstation page (candles+volume+EMA/BB,
+  synced RSI/MACD, trade/event markers + drawer, search, MAX=R2 history,
+  URL state); /research→307; scripts/seed_demo_data.py
+
+**REMAINING (specs in the approved plan, summarized):**
+- Phase 4 (v5.40) API batch 2: routers/lab.py (/api/lab/runs+detail+
+  scoreboard+labels over validation_runs, hunt-r1:* labels);
+  engine/record.py persist folds+by_regime into oos JSON; strategies
+  router adds promoted/summary(kills fake-capital fallback)/meta/
+  dividends/params + lane field; ops adds activity(obs+actions timeline)
+  + storage(DB+R2 manifest, TTLCache); research qualifications; market
+  sectors/history
+- Phase 5 (v5.41) /lab page: Scoreboard (N-of-10 finalists) · Runs
+  (filters+detail drawer+compare≤4) · Backtest tab (absorbs old page,
+  poll.js fixes infinite polling); /backtest→redirect
+- Phase 6 (v5.42) Portfolio rebuild (lane-segmented Arena/V2 hero stats
+  via /api/strategies/summary, heatmap component, NO fake capital)
+- Phase 7 (v5.43) Trades+Strategies+Screener rebuild; treemap component
+  replaces Chart.js (drop its CDN tags from base.html)
+- Phase 8 (v5.44) /ops page (heartbeats, scheduler, activity timeline,
+  storage panel)
+- Phase 9 (v5.45) cleanup: delete common.js/theme.css/orphans, drop
+  legacy `dates` from benchmarks, style-guard ALL templates, docs
+- Verification each phase: pytest + scripts/smoke_dashboard.py against
+  uvicorn on scripts/seed_demo_data.py SQLite; DevTools mobile pass
+
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
 The machine is fidelity-verified end to end. Lanes ready:
