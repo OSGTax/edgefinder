@@ -1,7 +1,7 @@
 """Page routes — serves rendered HTML templates for each dashboard page."""
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
@@ -29,9 +29,23 @@ async def trades_page(request: Request):
     return templates.TemplateResponse(request=request, name="trades.html")
 
 
-@router.get("/research", response_class=HTMLResponse)
-async def research_page(request: Request):
-    return templates.TemplateResponse(request=request, name="research.html")
+@router.get("/symbol", response_class=HTMLResponse)
+async def symbol_page(request: Request):
+    return templates.TemplateResponse(request=request, name="symbol.html")
+
+
+@router.get("/symbol/{symbol}", response_class=HTMLResponse)
+async def symbol_page_sym(request: Request, symbol: str):
+    return templates.TemplateResponse(request=request, name="symbol.html")
+
+
+@router.get("/research")
+async def research_redirect(request: Request):
+    """Old Research page -> Symbol Workstation (deep links preserved)."""
+    ticker = request.query_params.get("ticker")
+    return RedirectResponse(
+        url=f"/symbol/{ticker.upper()}" if ticker else "/symbol",
+        status_code=307)
 
 
 @router.get("/backtest", response_class=HTMLResponse)

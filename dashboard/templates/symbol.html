@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Chart — EdgeFinder{% endblock %}
+
+{% block content %}
+<div id="sym-root" class="sym-layout">
+
+  <!-- header: search + price + controls -->
+  <div class="sym-header">
+    <div class="sym-search">
+      <input id="sym-search-input" class="c-input" type="text"
+             placeholder="Search symbol…" autocomplete="off" spellcheck="false">
+      <div id="sym-search-results" class="sym-search-results hidden"></div>
+    </div>
+    <div class="sym-ident">
+      <span id="sym-name" class="sym-symbol num">—</span>
+      <span id="sym-price" class="sym-price num">—</span>
+      <span id="sym-change" class="num"></span>
+      <span id="sym-source" class="c-pill neutral hidden"></span>
+    </div>
+    <div class="sym-controls">
+      <div id="sym-ranges"></div>
+      <button id="sym-fullscreen" class="c-btn ghost" title="Fullscreen">⛶</button>
+    </div>
+  </div>
+
+  <!-- toggles -->
+  <div class="ch-toolbar">
+    <div id="sym-ind-toggles" class="c-chips scroll"></div>
+    <div id="sym-marker-toggles" class="c-chips scroll"></div>
+  </div>
+
+  <div class="sym-main">
+    <!-- chart stack -->
+    <div id="sym-shell" class="ch-shell c-card">
+      <div id="sym-chart-stack">
+        <div class="ch-pane price" id="pane-price">
+          <div class="ch-legend" id="sym-legend"></div>
+        </div>
+        <div class="ch-pane sub hidden" id="pane-rsi">
+          <div class="ch-pane-label">RSI 14</div>
+        </div>
+        <div class="ch-pane sub hidden" id="pane-macd">
+          <div class="ch-pane-label">MACD 12·26·9</div>
+        </div>
+      </div>
+      <div id="sym-chart-status" class="hidden"></div>
+    </div>
+
+    <!-- right rail -->
+    <aside class="sym-rail">
+      <div class="c-seg" id="sym-rail-tabs">
+        <button data-tab="profile" class="active">Profile</button>
+        <button data-tab="trades">Trades</button>
+        <button data-tab="events">Events</button>
+      </div>
+      <div id="sym-rail-body" class="sym-rail-body"></div>
+    </aside>
+  </div>
+</div>
+
+<!-- trade detail drawer -->
+<div id="trade-drawer" class="c-drawer">
+  <div class="c-drawer-head">
+    <strong id="trade-drawer-title">Trade</strong>
+    <span class="spacer"></span>
+    <button class="c-btn ghost" id="trade-drawer-close">✕</button>
+  </div>
+  <div class="c-drawer-body" id="trade-drawer-body"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/pages/symbol.js"></script>
+{% endblock %}

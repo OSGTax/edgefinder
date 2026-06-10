@@ -67,3 +67,79 @@
   .ch-pane.equity { height: 240px; }
   .ch-pane.sub { height: 100px; }
 }
+
+/* ── symbol workstation layout ── */
+.sym-layout { display: flex; flex-direction: column; gap: 10px; }
+.sym-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.sym-search { position: relative; min-width: 180px; }
+.sym-search .c-input { width: 200px; max-width: 56vw; }
+.sym-search-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 60;
+  min-width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--t-surface-2);
+  border: 1px solid var(--t-border-strong);
+  border-radius: var(--t-radius);
+}
+.sym-search-results .item {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 9px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--t-border);
+}
+.sym-search-results .item:last-child { border-bottom: none; }
+.sym-search-results .item:hover, .sym-search-results .item.sel { background: var(--t-surface-3); }
+.sym-search-results .item .s { font-family: var(--t-font-mono); font-weight: 700; }
+.sym-search-results .item .n {
+  color: var(--t-text-3);
+  font-size: var(--t-fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sym-search-results .hint {
+  padding: 8px 12px;
+  color: var(--t-text-3);
+  font-size: var(--t-fs-xs);
+}
+.sym-ident { display: flex; align-items: baseline; gap: 10px; }
+.sym-symbol { font-size: var(--t-fs-xl); font-weight: 700; }
+.sym-price { font-size: var(--t-fs-xl); }
+.sym-controls { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+.sym-main {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 12px;
+  align-items: start;
+}
+.sym-rail { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sym-rail-body {
+  background: var(--t-surface);
+  border: 1px solid var(--t-border);
+  border-radius: var(--t-radius);
+  padding: 10px 12px;
+  max-height: 600px;
+  overflow-y: auto;
+}
+.sym-rail .c-table td, .sym-rail .c-table th { white-space: normal; }
+
+@media (max-width: 1100px) {
+  .sym-main { grid-template-columns: 1fr; }
+  .sym-rail-body { max-height: none; }
+}
+@media (max-width: 768px) {
+  .sym-controls { margin-left: 0; width: 100%; }
+  .sym-header { gap: 8px; }
+}

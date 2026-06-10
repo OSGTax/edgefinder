@@ -49,6 +49,7 @@ NEW_ASSETS = [
     "/static/js/core/poll.js",
     "/static/js/components/sparkline.js",
     "/static/js/components/heatmap.js",
+    "/static/js/pages/symbol.js",
 ]
 
 
@@ -71,9 +72,21 @@ def _inline_styles(name: str) -> list[str]:
 
 # Coverage expands as each page is rebuilt (redesign phases 1-9). The end
 # state is every template in dashboard/templates/ inline-style-free.
-STYLE_FREE_TEMPLATES: list[str] = ["base.html"]
+STYLE_FREE_TEMPLATES: list[str] = ["base.html", "symbol.html"]
 
 
 @pytest.mark.parametrize("name", STYLE_FREE_TEMPLATES)
 def test_templates_have_no_inline_styles(name):
     assert _inline_styles(name) == [], f"{name} has inline styles"
+
+
+def test_symbol_page_routes(client):
+    assert client.get("/symbol").status_code == 200
+    assert client.get("/symbol/AAPL").status_code == 200
+
+
+def test_research_redirects_to_symbol(client):
+    r = client.get("/research", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/symbol"
+    r = client.get("/research?ticker=aapl", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/symbol/AAPL"
