@@ -412,32 +412,36 @@ Watchdog liveness repointed to `v2_portfolio_cycle` (daily cadence, 26h
 staleness, weekdays after 10:00 ET). Gates: 553 tests, demo boot, smoke
 35/35 — verified twice (subagent + orchestrator).
 
-**DB (flag-gated, `ops/retire-arena.flag` → retire-arena.yml):** dry-run
-verified on prod — 12,828 rows: arena trades(14)+context+orphaned
+**DB — ✅ EXECUTED (2026-06-10 18:34 UTC, run f92a422 after v5.47 was
+live + smoked 35/35):** 12,828 rows deleted via `ops/retire-arena.flag`
+→ retire-arena.yml — arena trades(14)+context+orphaned
 market_snapshots(519), strategy_snapshots(789), 7 accounts
 (coward/gambler/degenerate + dead alpha/bravo/charlie/echo shells),
 ticker_strategy_qualifications(11,485, whole table), manual_injections.
-v2 lane guard-checked untouched. ⚠️ **EXECUTE only AFTER v5.47 deploys to
-Render** (else the old scheduler recreates rows). Flow: merge → verify
-/api/health shows 5.47 → set flag to `EXECUTE` → commit → verify counts.
+Verified by SQL after: strategy_accounts = exactly
+{dual_momentum_v2, equal_weight}; 10 v2 trades; 0 arena rows anywhere;
+prod re-smoked 35/35 on the emptied tables. The flag was reset to `done`
+(any future trigger is a harmless dry-run; the script is idempotent).
+market_snapshots starts empty — the 16:05 ET job repopulates daily.
 
-### 🏹 HUNT ROUND 2 — IN FLIGHT (2026-06-10, v5.46 `322afcb` roster)
+### 🏹 HUNT ROUND 2 — COMPLETE (2026-06-10, v5.46 `322afcb` roster; full report `reviews/HUNT-ROUND-2.md`)
 
-Pre-registered 12 candidates + 2 fresh randoms in `engine/hunt_r2.py`,
-informed by round-1 FAMILY learnings (momentum variants ± quality/regime/
-inverse-vol; value-with-profitability; barbell + low-vol-value blends).
-Wave 1 (15 runs, ids 78–92): null −0.02pp clean, randoms −8.3/−8.9
-(noise floor holds). **Six passed the total-return bar** → re-check wave
-(ids 93+, label `hunt-r2:recheck-*`): value_mom_barbell (+16.9pp 5/6 —
-strongest of the hunt), value_pe12 (+8.6 4/6), mom_inverse_vol (+8.1 4/6),
-mom_6m_k20 (+6.3 4/6), mom_earnings_tilt (+5.9 4/6), mom_12_1_k40 (+3.8
-4/6). Notes: earnings_yield_top was bit-identical to value_pe12 (EY rank ≡
-inverse-P/E rank; ceiling never binds — redundant registration, skipped in
-re-checks); regime-gated momentum UNDERPERFORMED ungated (+2.6); early
-re-check read: value_pe12 shift− came back 3/6 (below majority → out,
-matching its pe10 sibling); barbell passing big so far. Compile verdicts
-from `validation_runs WHERE universe LIKE 'hunt-r2:recheck%'` (18 runs
-expected) and write `reviews/HUNT-ROUND-2.md`.
+12 pre-registered candidates + 2 fresh randoms (`engine/hunt_r2.py`),
+top-500 PIT, costed, TR, all from R2; 33 runs (wave ids 78–92, re-checks
+93–110), zero lost jobs; null −0.02pp, randoms −8.3/−8.9 — instrument
+clean. **THREE NEW CONFIRMED FINALISTS** (all-three-re-checks standard):
+**value_mom_barbell** (+16.9pp 5/6 main; re-checks +22.7/+17.3/+28.7 —
+strongest candidate in lab history; the value×momentum interaction is the
+find of the round), **mom_inverse_vol** (+8.1 main; +15.8/+5.7/+17.9),
+**mom_earnings_tilt** (+5.9 main; +4.9/+4.5/+13.8 — thinnest margins).
+Re-checks KILLED value_pe12 (shift− 3/6, the pe10 pattern repeats),
+mom_6m_k20 (shift+ collapsed to +0.45pp 2/5), mom_12_1_k40 (shift− 3/6).
+All confirmed finalists fail the risk-adjusted bar (deeper drawdowns) —
+return edges, not comfort edges; and 3 of 4 share the 12-1 momentum
+engine (correlation caveat disclosed). earnings_yield_top was
+bit-identical to value_pe12 (EY ≡ inverse P/E; redundant registration).
+**Scoreboard: 4 of 10 confirmed** (xsec_mom_12_1, value_mom_barbell,
+mom_inverse_vol, mom_earnings_tilt). Holdout still sealed.
 
 **Open owner decision (still unresolved):** live paper-trading universe
 mechanics for cross-sectional finalists (resolve-at-promotion vs nightly
