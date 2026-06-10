@@ -135,7 +135,9 @@ class BenchmarkService:
             start_date = date.today() - timedelta(days=days)
 
         start_dt = datetime.combine(start_date, datetime.min.time())
-        result: dict = {"dates": [], "indices": {}}
+        # "times" (UTC-midnight epoch seconds) is the chart-facing axis; the
+        # legacy "dates" strings remain until the redesign cleanup phase
+        result: dict = {"dates": [], "times": [], "indices": {}}
 
         for symbol in settings.index_symbols:
             records = (
@@ -159,6 +161,13 @@ class BenchmarkService:
             result["indices"][symbol] = cumulative
             if not result["dates"]:
                 result["dates"] = dates
+                from datetime import timezone as _tz
+                result["times"] = [
+                    int(datetime.combine(
+                        rec.date.date() if hasattr(rec.date, "date") else rec.date,
+                        datetime.min.time(), tzinfo=_tz.utc).timestamp())
+                    for rec in records
+                ]
 
         return result
 
