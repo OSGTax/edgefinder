@@ -1,5 +1,5 @@
 {
-  "wave": "r2-equivalence",
+  "wave": "r2-equivalence-retry",
   "runs": [
     {
       "id": "r2-equivalence-xsec",
