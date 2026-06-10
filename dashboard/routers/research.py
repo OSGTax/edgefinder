@@ -121,3 +121,26 @@ def trigger_scan(db: Session = Depends(get_db)):
 
     threading.Thread(target=_run_scan, daemon=True, name="manual-scan").start()
     return {"status": "scanning", "message": "Unified scan started in background."}
+
+
+@router.get("/qualifications")
+def qualifications(
+    strategy: str | None = Query(None),
+    qualified: bool = Query(True),
+    limit: int = Query(200, le=500),
+    db: Session = Depends(get_db),
+):
+    """Ranked watchlist: what the scanner actually qualified, by score."""
+    from edgefinder.db.models import TickerStrategyQualification as Q
+
+    q = db.query(Q)
+    if strategy:
+        q = q.filter(Q.strategy_name == strategy)
+    if qualified:
+        q = q.filter(Q.qualified.is_(True))
+    rows = q.order_by(Q.score.desc().nullslast()).limit(limit).all()
+    return [{
+        "symbol": r.symbol, "strategy_name": r.strategy_name,
+        "qualified": r.qualified, "score": r.score,
+        "scan_date": r.scan_date.isoformat() if r.scan_date else None,
+    } for r in rows]

@@ -15,13 +15,23 @@ from edgefinder.db.models import ValidationRun
 def record_validation_run(
     session, scorecard: dict, *, universe: str, git_sha: str | None = None
 ) -> int:
-    """Persist a walk-forward scorecard to validation_runs (offline evidence)."""
+    """Persist a walk-forward scorecard to validation_runs (offline evidence).
+
+    Per-fold detail and the regime breakdown ride inside the ``oos`` JSON
+    (added for the lab explorer, 2026-06-10) — legacy rows simply lack the
+    keys and the dashboard renders "fold detail not recorded".
+    """
+    oos = dict(scorecard.get("oos") or {})
+    if scorecard.get("folds") is not None:
+        oos["folds"] = scorecard["folds"]
+    if scorecard.get("by_regime") is not None:
+        oos["by_regime"] = scorecard["by_regime"]
     row = ValidationRun(
         strategy_name=scorecard["strategy"],
         git_sha=git_sha,
         universe=universe,
         config=scorecard.get("config"),
-        oos=scorecard.get("oos"),
+        oos=oos,
         criteria=scorecard.get("criteria"),
         holdout=scorecard.get("holdout"),
         verdict=scorecard.get("verdict", "FAIL"),

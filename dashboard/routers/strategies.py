@@ -8,25 +8,28 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from dashboard.dependencies import get_db
+from dashboard.routers._shared import COST_DISCLOSURE as _COST_DISCLOSURE
 from dashboard.services import get_arena, get_scheduler
-from edgefinder.db.models import StrategyAccount, StrategySnapshot
+from edgefinder.db.models import PromotedStrategy, StrategyAccount, StrategySnapshot
 from edgefinder.strategies.base import StrategyRegistry
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Live paper fills and lab backtests price costs differently; any view that
-# shows the two side-by-side carries this disclosure (values are the live
-# tiers' actual constants: engine/live.SLIPPAGE_BPS and the old arena's
-# settings.slippage_base_rate, vs engine/backtest's cost_bps default).
-_COST_DISCLOSURE = {
-    "live_slippage_bps_per_side": 5.0,
-    "lab_default_cost_bps": 2.0,
-    "note": ("live paper fills pay ~5 bps/side slippage; v2 lab runs assume "
-             "2 bps flat per fill unless run --costed (realistic spread + "
-             "impact model)"),
-}
+def _lane(name: str, v2_names: set[str]) -> str:
+    from config.settings import settings
+
+    if name in v2_names:
+        return "v2"
+    if name in settings.live_strategies:
+        return "arena"
+    return "arena"
+
+
+def _v2_names(db: Session) -> set[str]:
+    return {p.strategy_name for p in
+            db.query(PromotedStrategy).filter(PromotedStrategy.active.is_(True)).all()}
 
 
 def _live_account_states() -> list[dict] | None:
@@ -98,16 +101,21 @@ def list_strategies():
 def get_accounts(db: Session = Depends(get_db)):
     """Get strategy account states — live from arena if available, else DB.
 
-    Enriches with unrealized P&L by fetching current prices for open positions.
+    Enriches with unrealized P&L by fetching current prices for open
+    positions, and tags each row with its lane (arena $5k vs v2 $100k).
     """
+    v2 = _v2_names(db)
     live = _live_account_states()
     if live is not None:
+        for a in live:
+            a["lane"] = _lane(a.get("strategy_name") or a.get("name", ""), v2)
         return live
 
     # Fallback to DB
     accounts = db.query(StrategyAccount).all()
     return [
         {
+            "lane": _lane(a.strategy_name, v2),
             "strategy_name": a.strategy_name,
             "starting_capital": a.starting_capital,
             "cash": a.cash_balance,
@@ -288,3 +296,173 @@ def scheduler_status():
     status = scheduler.get_status()
     status["last_signal_check"] = get_last_signal_check()
     return status
+
+
+# ── redesign additions (v5.40): promoted / summary / meta / ledgers ──
+
+
+@router.get("/promoted")
+def promoted_strategies(db: Session = Depends(get_db)):
+    """v2 promoted strategies (active AND demoted) joined to their accounts."""
+    accounts = {a.strategy_name: a for a in db.query(StrategyAccount).all()}
+    out = []
+    for p in db.query(PromotedStrategy).order_by(PromotedStrategy.promoted_at.desc()).all():
+        a = accounts.get(p.strategy_name)
+        out.append({
+            "strategy_name": p.strategy_name,
+            "spec": p.spec,
+            "symbols": p.symbols,
+            "schedule": p.schedule,
+            "tier": p.tier,
+            "active": p.active,
+            "validation_run_id": p.validation_run_id,
+            "prices_basis": getattr(p, "prices_basis", None),
+            "promoted_at": p.promoted_at.isoformat() if p.promoted_at else None,
+            "total_equity": a.total_equity if a else None,
+            "drawdown_pct": a.drawdown_pct if a else None,
+        })
+    return out
+
+
+@router.get("/summary")
+def lane_summary(db: Session = Depends(get_db)):
+    """Server-computed header rollups per lane (arena / v2 / all).
+
+    The ONLY source for the portfolio hero stats — the client never invents
+    capital figures (the old FALLBACK_STARTING_CAPITAL bug class); if this
+    endpoint fails the UI shows an error card.
+    """
+    from datetime import datetime, time, timezone
+
+    from edgefinder.db.models import TradeRecord
+
+    v2 = _v2_names(db)
+    accounts = get_accounts(db)
+    midnight = datetime.combine(datetime.now(timezone.utc).date(), time.min,
+                                tzinfo=timezone.utc)
+
+    lanes: dict[str, dict] = {}
+    for lane_name in ("arena", "v2", "all"):
+        lanes[lane_name] = {
+            "starting_capital": 0.0, "total_equity": 0.0, "day_pnl": None,
+            "unrealized_pnl": 0.0, "open_positions": 0, "win_rate": None,
+            "strategies": 0,
+        }
+
+    day_base: dict[str, float] = {}
+    for (name, equity) in (
+            db.query(StrategySnapshot.strategy_name, StrategySnapshot.total_equity)
+            .filter(StrategySnapshot.timestamp < midnight)
+            .order_by(StrategySnapshot.strategy_name, StrategySnapshot.timestamp)
+            .all()):
+        day_base[name] = equity   # last pre-midnight snapshot wins
+
+    open_counts: dict[str, int] = {}
+    wins: dict[str, int] = {}
+    closed: dict[str, int] = {}
+    for t in db.query(TradeRecord).all():
+        if t.status == "OPEN":
+            open_counts[t.strategy_name] = open_counts.get(t.strategy_name, 0) + 1
+        elif t.status == "CLOSED":
+            closed[t.strategy_name] = closed.get(t.strategy_name, 0) + 1
+            if (t.pnl_dollars or 0) > 0:
+                wins[t.strategy_name] = wins.get(t.strategy_name, 0) + 1
+
+    day_pnl_acc: dict[str, float] = {"arena": 0.0, "v2": 0.0, "all": 0.0}
+    day_pnl_known: dict[str, bool] = {"arena": False, "v2": False, "all": False}
+    closed_acc = {"arena": 0, "v2": 0, "all": 0}
+    wins_acc = {"arena": 0, "v2": 0, "all": 0}
+
+    for a in accounts:
+        name = a.get("strategy_name") or a.get("name", "")
+        lane = a.get("lane") or _lane(name, v2)
+        equity = a.get("total_equity") or 0.0
+        for key in (lane, "all"):
+            L = lanes[key]
+            L["strategies"] += 1
+            L["starting_capital"] += a.get("starting_capital") or 0.0
+            L["total_equity"] += equity
+            L["unrealized_pnl"] += a.get("unrealized_pnl") or 0.0
+            L["open_positions"] += open_counts.get(name, 0)
+            closed_acc[key] += closed.get(name, 0)
+            wins_acc[key] += wins.get(name, 0)
+            if name in day_base:
+                day_pnl_acc[key] += equity - day_base[name]
+                day_pnl_known[key] = True
+
+    for key, L in lanes.items():
+        if day_pnl_known[key]:
+            L["day_pnl"] = round(day_pnl_acc[key], 2)
+        if closed_acc[key]:
+            L["win_rate"] = round(wins_acc[key] / closed_acc[key] * 100, 1)
+        L["total_pnl"] = round(L["total_equity"] - L["starting_capital"], 2)
+        for f in ("starting_capital", "total_equity", "unrealized_pnl"):
+            L[f] = round(L[f], 2)
+    return lanes
+
+
+@router.get("/meta")
+def strategies_meta(db: Session = Depends(get_db)):
+    """Registry-driven strategy metadata: lanes, display, color slots, risk.
+
+    Replaces every hardcoded STRATEGY_RISK/name/color table in the old JS —
+    adding or renaming a strategy needs zero frontend changes.
+    """
+    v2_rows = (db.query(PromotedStrategy)
+               .filter(PromotedStrategy.active.is_(True))
+               .order_by(PromotedStrategy.strategy_name).all())
+    out = []
+    slot = 0
+    try:
+        by_name = {i.name: i for i in StrategyRegistry.get_instances()}
+    except Exception:
+        by_name = {}
+    for name in sorted(StrategyRegistry.get_all()):
+        inst = by_name.get(name)
+        risk = {}
+        for attr in ("risk_pct", "target_pct", "stop_pct"):
+            v = getattr(inst, attr, None)
+            if v is not None:
+                risk[attr] = v
+        out.append({"name": name, "lane": "arena", "display_name": name,
+                    "color_slot": slot % 8, "risk": risk})
+        slot += 1
+    for p in v2_rows:
+        out.append({"name": p.strategy_name, "lane": "v2",
+                    "display_name": p.strategy_name, "color_slot": slot % 8,
+                    "risk": {}, "tier": p.tier, "schedule": p.schedule})
+        slot += 1
+    return out
+
+
+@router.get("/dividends")
+def dividend_credits(strategy: str | None = Query(None),
+                     db: Session = Depends(get_db)):
+    """Dividend cash-credit ledger for v2 paper accounts."""
+    from edgefinder.db.models import DividendCredit
+
+    q = db.query(DividendCredit).order_by(DividendCredit.ex_date.desc())
+    if strategy:
+        q = q.filter(DividendCredit.strategy_name == strategy)
+    return [{
+        "strategy_name": r.strategy_name, "symbol": r.symbol,
+        "ex_date": str(r.ex_date), "shares": r.shares, "amount": r.amount,
+    } for r in q.limit(500).all()]
+
+
+@router.get("/params")
+def parameter_audit(strategy: str | None = Query(None),
+                    db: Session = Depends(get_db)):
+    """Strategy parameter change audit log (coach/agent tuning history)."""
+    from edgefinder.db.models import StrategyParameterLog
+
+    q = (db.query(StrategyParameterLog)
+         .order_by(StrategyParameterLog.changed_at.desc()))
+    if strategy:
+        q = q.filter(StrategyParameterLog.strategy_name == strategy)
+    return [{
+        "strategy_name": r.strategy_name, "param_name": r.param_name,
+        "old_value": r.old_value, "new_value": r.new_value,
+        "changed_by": r.changed_by,
+        "changed_at": r.changed_at.isoformat() if r.changed_at else None,
+    } for r in q.limit(200).all()]

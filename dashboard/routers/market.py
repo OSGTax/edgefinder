@@ -105,3 +105,25 @@ def regime_at_trade(trade_id: str, db: Session = Depends(get_db)):
             "indicators": ctx.indicators,
         } if ctx else None,
     }
+
+
+@router.get("/sectors/history")
+def sectors_history(days: int = Query(30, le=365), db: Session = Depends(get_db)):
+    """Sector ETF price series from stored market snapshots."""
+    from datetime import datetime, timedelta, timezone
+
+    from edgefinder.db.models import MarketSnapshotRecord
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (db.query(MarketSnapshotRecord)
+            .filter(MarketSnapshotRecord.timestamp >= cutoff)
+            .order_by(MarketSnapshotRecord.timestamp).all())
+    out: dict[str, list] = {}
+    times: list[int] = []
+    for r in rows:
+        if not r.sector_performance:
+            continue
+        times.append(int(r.timestamp.replace(tzinfo=timezone.utc).timestamp()))
+        for sym, px in (r.sector_performance or {}).items():
+            out.setdefault(sym, []).append(px)
+    return {"times": times, "sectors": out}
