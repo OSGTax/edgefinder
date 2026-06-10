@@ -1,7 +1,9 @@
 """EdgeFinder v2 — Research service.
 
-Aggregates fundamentals, technicals, trade history, and
-strategy qualification into a single per-ticker report. Read-only layer.
+Aggregates fundamentals, technicals, and trade history into a single
+per-ticker report. Read-only layer. (Per-strategy qualification was retired
+with the old arena; ``qualifying_strategies`` is kept as an empty list for
+API-shape stability.)
 """
 
 from __future__ import annotations
@@ -13,10 +15,8 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from edgefinder.core.interfaces import DataProvider
-from edgefinder.core.models import TickerFundamentals
 from edgefinder.db.models import Fundamental, ManualInjection, Ticker, TradeRecord
 from edgefinder.signals.engine import compute_indicators
-from edgefinder.strategies.base import StrategyRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class TickerReport:
     closed_trades: int = 0
     total_pnl: float = 0.0
 
-    # Strategy qualification
+    # Strategy qualification (retired — always empty, kept for API shape)
     qualifying_strategies: list[str] = field(default_factory=list)
 
     # Enriched data (from accumulated DB)
@@ -212,15 +212,6 @@ class ResearchService:
             except Exception:
                 pass
 
-        # Strategy qualification
-        fund_model = self._build_fundamentals_model(report)
-        for strategy in StrategyRegistry.get_instances():
-            try:
-                if strategy.qualifies_stock(fund_model):
-                    report.qualifying_strategies.append(strategy.name)
-            except Exception:
-                pass
-
         return report
 
     def search_tickers(self, query: str, limit: int = 20) -> list[dict]:
@@ -315,7 +306,7 @@ class ResearchService:
             # Technical indicators (from Massive)
             "rsi_14": None, "ema_21": None, "sma_50": None,
             "macd_value": None, "macd_signal": None, "macd_histogram": None,
-            # Strategies
+            # Strategies (qualification retired — kept for API shape)
             "qualifying_strategies": [],
         }
 
@@ -336,37 +327,5 @@ class ResearchService:
                 if val is not None:
                     entry[attr] = val
 
-        # Strategy qualification
-        fund_model = TickerFundamentals(
-            symbol=sym,
-            company_name=entry["company_name"],
-            sector=entry["sector"],
-            market_cap=entry["market_cap"],
-            price=entry["last_price"],
-            earnings_growth=entry["earnings_growth"],
-            revenue_growth=entry["revenue_growth"],
-            peg_ratio=entry["peg_ratio"],
-            fcf_yield=entry["fcf_yield"],
-            current_ratio=entry["current_ratio"],
-            debt_to_equity=entry["debt_to_equity"],
-        )
-        for strategy in StrategyRegistry.get_instances():
-            try:
-                if strategy.qualifies_stock(fund_model):
-                    entry["qualifying_strategies"].append(strategy.name)
-            except Exception:
-                pass
-
         return entry
 
-    @staticmethod
-    def _build_fundamentals_model(report: TickerReport) -> TickerFundamentals:
-        """Build TickerFundamentals from report data for strategy qualification."""
-        return TickerFundamentals(
-            symbol=report.symbol,
-            company_name=report.company_name,
-            sector=report.sector,
-            market_cap=report.market_cap,
-            price=report.price,
-            **report.fundamentals,
-        )

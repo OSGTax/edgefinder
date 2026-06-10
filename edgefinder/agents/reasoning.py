@@ -151,7 +151,7 @@ def _recent_commits(limit: int = 10) -> list[str]:
                 "--pretty=format:%h %s",
                 "--",
                 "edgefinder/trading/",
-                "edgefinder/strategies/",
+                "edgefinder/engine/",
                 "edgefinder/db/",
                 "dashboard/services.py",
             ],

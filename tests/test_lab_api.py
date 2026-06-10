@@ -15,7 +15,6 @@ from edgefinder.db.models import (
     StrategyAccount,
     StrategyParameterLog,
     StrategySnapshot,
-    TickerStrategyQualification,
     TradeRecord,
     ValidationRun,
 )
@@ -161,21 +160,25 @@ class TestStrategiesAdditions:
         s.commit()
 
     def test_accounts_have_lanes(self, client, db_session):
+        # every account reads lane "v2" now — the arena lane was retired
+        # (the field is kept for API-shape stability)
         self._seed(db_session)
         rows = client.get("/api/strategies/accounts").json()
         lanes = {r["strategy_name"]: r["lane"] for r in rows}
-        assert lanes["coward"] == "arena"
+        assert lanes["coward"] == "v2"
         assert lanes["equal_weight"] == "v2"
 
     def test_summary_lane_rollups(self, client, db_session):
+        # keys stay {arena, v2, all} for API stability; arena is all zeros
         self._seed(db_session)
         s = client.get("/api/strategies/summary").json()
-        assert s["arena"]["starting_capital"] == 5000
-        assert s["v2"]["starting_capital"] == 100000
+        assert s["arena"]["starting_capital"] == 0
+        assert s["arena"]["strategies"] == 0
+        assert s["v2"]["starting_capital"] == 105000
         assert s["all"]["total_equity"] == 110500
         assert s["all"]["total_pnl"] == 5500
-        assert s["arena"]["day_pnl"] == pytest.approx(100.0)  # 5500 - 5400
-        assert s["arena"]["win_rate"] == 100.0
+        assert s["v2"]["day_pnl"] == pytest.approx(100.0)  # 5500 - 5400
+        assert s["v2"]["win_rate"] == 100.0
 
     def test_promoted_dividends_params_meta(self, client, db_session):
         self._seed(db_session)
@@ -221,22 +224,3 @@ class TestOpsAdditions:
         out = client.get("/api/ops/storage").json()
         assert out["db"]["symbols"] == 1 and out["db"]["rows"] == 1
         assert out["r2"] is None     # no R2 env in tests
-
-
-class TestQualifications:
-    def test_ranked_watchlist(self, client, db_session):
-        from edgefinder.db.models import Ticker
-
-        t = Ticker(symbol="AAA", company_name="A Corp")
-        db_session.add(t)
-        db_session.flush()
-        db_session.add(TickerStrategyQualification(
-            ticker_id=t.id, symbol="AAA", strategy_name="coward",
-            qualified=True, score=88.0))
-        db_session.add(TickerStrategyQualification(
-            ticker_id=t.id, symbol="AAA", strategy_name="gambler",
-            qualified=False, score=10.0))
-        db_session.commit()
-        rows = client.get("/api/research/qualifications?strategy=coward").json()
-        assert rows == [dict(rows[0], symbol="AAA", score=88.0)]
-        assert client.get("/api/research/qualifications").json()[0]["qualified"] is True

@@ -228,16 +228,15 @@ def check_high_drawdown(
 
 # ── Cycle liveness ──────────────────────────────────────────
 
-# The intraday cycle only runs Mon-Fri 09:30-16:00 ET (the scheduler /
-# the intraday cron). Liveness is only meaningful inside that window —
-# outside it, returning no spec lets persist_checks auto-resolve any
-# open stall and never alerts overnight/weekends.
-_MARKET_OPEN_ET = time(9, 30)
-_MARKET_CLOSE_ET = time(16, 0)
+# The v2 portfolio cycle runs once per trading day (9:45 AM ET). Liveness
+# is checked on weekdays after 10:00 ET — outside that window, returning no
+# spec lets persist_checks auto-resolve any open stall and never alerts
+# overnight/weekends before the cycle has had a chance to run.
+_CYCLE_CHECK_AFTER_ET = time(10, 0)
 
 
-def _in_market_hours(now: datetime, grace_min: int) -> bool:
-    """True if `now` (any tz) is Mon-Fri and within 09:30+grace .. 16:00 ET.
+def _in_check_window(now: datetime) -> bool:
+    """True if `now` (any tz) is Mon-Fri after 10:00 ET.
 
     Compares full tz-aware datetimes (not bare times) so DST is handled
     correctly by zoneinfo for the given date.
@@ -245,37 +244,32 @@ def _in_market_hours(now: datetime, grace_min: int) -> bool:
     et = now.astimezone(_ET)
     if et.weekday() >= 5:  # Sat=5, Sun=6
         return False
-    open_dt = (
-        datetime.combine(et.date(), _MARKET_OPEN_ET, tzinfo=_ET)
-        + timedelta(minutes=grace_min)
-    )
-    close_dt = datetime.combine(et.date(), _MARKET_CLOSE_ET, tzinfo=_ET)
-    return open_dt <= et <= close_dt
+    return et.time() >= _CYCLE_CHECK_AFTER_ET
 
 
 def check_cycle_liveness(
     session: Session,
-    stale_minutes: int,
-    open_grace_minutes: int,
+    stale_hours: int,
     now: datetime | None = None,
-    component: str = "intraday_cycle",
+    component: str = "v2_portfolio_cycle",
 ) -> list[ObservationSpec]:
-    """Flag a stalled intraday trading cycle.
+    """Flag a stalled v2 portfolio cycle (DAILY cadence).
 
     The cycle writes a SystemHeartbeat at the end of every run — success,
-    controlled skip, or failure. We alert only during ET market hours, so
-    overnight/weekend silence and a clean 16:00 close never fire, and any
-    open stall auto-resolves once the window ends:
-      - no heartbeat row at all       → CRITICAL "missing"
-      - last_run_at older than stale  → CRITICAL "stale"
-      - latest run errored (ok=False) → CRITICAL "error"
+    controlled skip, or failure. We alert only on weekdays after 10:00 ET
+    (the cycle fires at 9:45), so weekend silence never alarms and any open
+    stall auto-resolves once the window ends:
+      - no heartbeat row at all            → CRITICAL "missing"
+      - last_run_at older than stale_hours → CRITICAL "stale" (26h default
+        tolerates normal daily jitter but catches a missed day)
+      - latest run errored (ok=False)      → CRITICAL "error"
 
-    A controlled skip is written fresh with ok=True, so a market holiday
-    reads as healthy without this check needing a holiday calendar (which
-    it couldn't obtain in a bare runner anyway).
+    A controlled skip (nothing promoted, holiday) is written fresh with
+    ok=True, so a legitimate no-op reads as healthy without this check
+    needing a holiday calendar.
     """
     now = now or datetime.now(timezone.utc)
-    if not _in_market_hours(now, open_grace_minutes):
+    if not _in_check_window(now):
         return []
 
     hb = session.query(SystemHeartbeat).filter(
@@ -287,8 +281,8 @@ def check_cycle_liveness(
             severity="CRITICAL",
             category="cycle_liveness",
             message=(
-                f"No heartbeat for '{component}' during market hours — the "
-                "intraday cycle has never run (entries/exits are not firing)."
+                f"No heartbeat for '{component}' — the v2 portfolio cycle "
+                "has never run (paper accounts are not trading or marking)."
             ),
             metadata={"key": component, "reason": "missing"},
             dedup_key=("cycle_liveness", component),
@@ -297,20 +291,20 @@ def check_cycle_liveness(
     last = hb.last_run_at
     if last.tzinfo is None:  # SQLite/Postgres round-trip naive datetimes
         last = last.replace(tzinfo=timezone.utc)
-    age_min = (now - last).total_seconds() / 60.0
+    age_hours = (now - last).total_seconds() / 3600.0
 
-    if age_min > stale_minutes:
+    if age_hours > stale_hours:
         return [ObservationSpec(
             severity="CRITICAL",
             category="cycle_liveness",
             message=(
-                f"Intraday cycle STALLED: last heartbeat {age_min:.1f} min ago "
-                f"(threshold {stale_minutes}m). Open positions are unmonitored "
-                "— no stop/target checks are running."
+                f"V2 portfolio cycle STALLED: last heartbeat {age_hours:.1f}h "
+                f"ago (threshold {stale_hours}h). Promoted strategies are "
+                "neither rebalancing nor being marked."
             ),
             metadata={
                 "key": component, "reason": "stale",
-                "age_min": round(age_min, 1), "last_run_at": last.isoformat(),
+                "age_hours": round(age_hours, 1), "last_run_at": last.isoformat(),
             },
             dedup_key=("cycle_liveness", component),
         )]
@@ -320,7 +314,7 @@ def check_cycle_liveness(
         return [ObservationSpec(
             severity="CRITICAL",
             category="cycle_liveness",
-            message=f"Intraday cycle ran but ERRORED: {err}",
+            message=f"V2 portfolio cycle ran but ERRORED: {err}",
             metadata={"key": component, "reason": "error", "error": err},
             dedup_key=("cycle_liveness", component),
         )]
@@ -352,10 +346,7 @@ def run_checks(
     if bool(cfg.get("liveness_enabled", settings.liveness_enabled)):
         specs.extend(check_cycle_liveness(
             session,
-            stale_minutes=int(cfg.get("liveness_stale_minutes", settings.liveness_stale_minutes)),
-            open_grace_minutes=int(
-                cfg.get("liveness_open_grace_minutes", settings.liveness_open_grace_minutes)
-            ),
+            stale_hours=int(cfg.get("liveness_stale_hours", settings.liveness_stale_hours)),
         ))
     return specs
 

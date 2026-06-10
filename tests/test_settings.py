@@ -8,9 +8,8 @@ def test_defaults_load():
     """Settings loads with all defaults without error."""
     s = Settings(polygon_api_key="test")
     assert s.starting_capital == 10_000.00
-    assert s.max_open_positions == 5
-    assert s.max_risk_per_trade_pct == 0.02
-    assert s.pdt_day_trade_limit == 3
+    assert s.drawdown_circuit_breaker_pct == 0.20
+    assert s.liveness_stale_hours == 26
 
 
 def test_env_override(monkeypatch):
@@ -24,17 +23,11 @@ def test_env_override(monkeypatch):
 
 def test_type_coercion(monkeypatch):
     """String env vars are coerced to correct types."""
-    monkeypatch.setenv("EDGEFINDER_MAX_OPEN_POSITIONS", "10")
+    monkeypatch.setenv("EDGEFINDER_LIVENESS_STALE_HOURS", "48")
     monkeypatch.setenv("EDGEFINDER_POLYGON_API_KEY", "test")
     s = Settings()
-    assert s.max_open_positions == 10
-    assert isinstance(s.max_open_positions, int)
-
-
-def test_signal_check_interval():
-    """Signal check interval should be 5 minutes."""
-    s = Settings(polygon_api_key="test")
-    assert s.signal_check_interval_minutes == 5
+    assert s.liveness_stale_hours == 48
+    assert isinstance(s.liveness_stale_hours, int)
 
 
 def test_cache_ttl_defaults():
@@ -45,17 +38,11 @@ def test_cache_ttl_defaults():
     assert s.cache_bars_ttl_minutes["day"] == 1080
 
 
-def test_new_risk_settings():
+def test_scanner_and_schedule_settings():
     from config.settings import settings
-    assert settings.stop_loss_pct == 0.20
-    assert settings.profit_target_coward == 0.15
-    assert settings.profit_target_gambler == 0.25
-    assert settings.profit_target_degenerate == 0.50
-    assert settings.risk_pct_coward == 0.05
-    assert settings.risk_pct_gambler == 0.10
-    assert settings.risk_pct_degenerate == 0.20
     assert settings.market_open_et == "09:30"
     assert settings.market_close_et == "16:00"
-    assert settings.indicator_history_days == 30
-    assert settings.volume_anomaly_threshold == 3.0
+    assert settings.scanner_run_time == "18:15"
+    assert settings.scanner_min_price == 5.00
+    assert settings.scanner_max_price == 500.00
     assert settings.scanner_max_universe_size == 1000

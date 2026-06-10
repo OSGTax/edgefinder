@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> dict:
         # trading day BEFORE its first scored day, then load the union once.
         import re
 
-        from edgefinder.backtest.jobs import resolve_universe
+        from edgefinder.engine.data import resolve_universe
         from edgefinder.engine.walkforward import plan_folds
 
         m = re.fullmatch(r"top:(\d+)(?:\+(\d+))?", args.universe)

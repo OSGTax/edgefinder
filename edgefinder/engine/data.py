@@ -11,11 +11,64 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from edgefinder.db.models import DailyBar, IndexDaily
 
 _IN_CHUNK = 500  # keep IN() clauses bounded for the pooler
+
+
+def resolve_universe(db: Session, mode: str, symbols: list[str], top_n: int,
+                     as_of=None, rank_offset: int = 0,
+                     rank_start=None) -> list[str]:
+    """Turn a universe spec into a concrete symbol list from daily_bars.
+
+    (Relocated verbatim from the retired edgefinder/backtest/jobs.py.)
+
+    ``as_of`` (date, "top" mode only): rank by dollar volume using ONLY bars
+    dated <= as_of, and require the name to be alive near as_of (a bar within
+    the prior 30 days). Without it the ranking sees the WHOLE table — i.e.
+    the future relative to any backtest window — which selects tomorrow's
+    winners into yesterday's universe (measured at ~+3pp/126d of free excess
+    vs SPY on this data). Point-in-time runs should always pass the day
+    before their first scored day.
+
+    ``rank_start`` (date, "top" mode only): rank on bars dated >= rank_start —
+    a TRAILING-window dollar volume ending at as_of — instead of the symbol's
+    whole history. Without it a name that was huge years ago but thin by
+    as_of still ranks on its glory days (lifetime ranking — the disclosed
+    caveat this parameter closes). Callers with a trading calendar should
+    derive rank_start from it (engine/validate does); the liveness gate
+    above is unchanged.
+
+    ``rank_offset`` (int, "top" mode only): skip the N most-liquid names before
+    taking ``top_n``. ``rank_offset=1000, top_n=2000`` yields dollar-volume
+    ranks 1000-3000 — the small-cap / lower-liquidity band where the documented
+    edges live and where the realistic cost model bites hardest.
+    """
+    if mode == "symbols":
+        return sorted({s.strip().upper() for s in symbols if s.strip()})
+    if mode == "full":
+        rows = db.query(DailyBar.symbol).distinct().all()
+        return sorted(r[0] for r in rows)
+    if mode == "top":
+        q = db.query(DailyBar.symbol)
+        if as_of is not None:
+            from datetime import timedelta
+            q = q.filter(DailyBar.date <= as_of)
+            alive_cutoff = as_of - timedelta(days=30)
+        if rank_start is not None:
+            q = q.filter(DailyBar.date >= rank_start)
+        q = q.group_by(DailyBar.symbol)
+        if as_of is not None:
+            q = q.having(func.max(DailyBar.date) >= alive_cutoff)
+        rows = (
+            q.order_by(func.avg(DailyBar.close * DailyBar.volume).desc())
+            .limit(top_n).offset(max(rank_offset, 0)).all()
+        )
+        return [r[0] for r in rows]
+    raise ValueError(f"unknown universe mode {mode!r}")
 
 # Symbol-reuse contamination found by the 2026-06-10 fidelity audit: rows
 # under a ticker that belong to a DIFFERENT security (recycled symbol).
@@ -195,7 +248,7 @@ def rank_top_universe(
     """``resolve_universe('top')`` semantics computed from in-memory frames —
     used when bars come from the R2 store instead of the DB.
 
-    Same rules as the SQL path (backtest/jobs.resolve_universe): rank by mean
+    Same rules as the SQL path (resolve_universe above): rank by mean
     dollar volume over bars dated <= ``as_of`` (and >= ``rank_start`` when
     given — the trailing window), require a bar within ``alive_days`` of
     as_of (the graveyard gate), then take ``top_n`` after ``rank_offset``.

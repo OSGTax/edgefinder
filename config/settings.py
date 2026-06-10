@@ -18,27 +18,13 @@ class Settings(BaseSettings):
 
     # ── ACCOUNT ──────────────────────────────────────
     starting_capital: float = 10_000.00
-    max_open_positions: int = 5
-    max_portfolio_concentration_pct: float = 0.20
-
-    # ── PDT (defaults; overridden per-strategy in DB) ─
-    pdt_day_trade_limit: int = 3
-    pdt_window_days: int = 5
 
     # ── RISK ─────────────────────────────────────────
-    max_risk_per_trade_pct: float = 0.02
+    # Drawdown level treated as account-critical by the watchdog checks.
     drawdown_circuit_breaker_pct: float = 0.20
-    min_reward_to_risk: float = 1.5
-    revenge_trade_cooldown_minutes: int = 30
-    max_same_sector_positions: int = 3
-    trailing_stop_activation_r: float = 1.0
-    trailing_stop_trail_r: float = 2.0
-    # Per-ticker re-entry cooldown after closing a position. Prevents the
-    # signal check from immediately reopening the same ticker after a close.
-    ticker_reentry_cooldown_minutes: int = 30
     # Minimum target distance as a percentage of entry price. Floors the
-    # ATR-based target so trades aim for substantive wins instead of
-    # micro-moves driven by tiny intraday ATR.
+    # ATR-based target so signal targets aim for substantive wins instead
+    # of micro-moves driven by tiny intraday ATR (signals/engine.py).
     signal_min_target_pct_day: float = 0.01    # 1% min target for DAY trades
     signal_min_target_pct_swing: float = 0.02  # 2% min target for SWING trades
 
@@ -49,9 +35,6 @@ class Settings(BaseSettings):
     scanner_min_price: float = 5.00
     scanner_max_price: float = 500.00
     scanner_excluded_sectors: list[str] = Field(default=["Utilities"])
-    scanner_batch_count: int = 5  # one batch per weekday (Mon=0 ... Fri=4)
-    scanner_full_universe: bool = True  # scan all tickers nightly (unlimited API plan)
-    scanner_max_watchlist_per_strategy: int = 50  # top N scored stocks per strategy
     # Unified scanner pre-filter: top N stocks by yesterday's dollar volume
     # (volume * close). Cuts the universe from ~5000 common stocks to the
     # most liquid names that strategies actually trade.
@@ -61,21 +44,6 @@ class Settings(BaseSettings):
     scanner_concurrent_workers: int = 10
     # Commit cadence for incremental persistence — survives mid-scan deploys.
     scanner_commit_batch_size: int = 100
-
-    # ── NEW RISK SYSTEM ───────────────────────────────
-    stop_loss_pct: float = 0.20  # fixed 20% stop for all strategies
-    risk_pct_coward: float = 0.05  # max loss per trade as % of equity
-    risk_pct_gambler: float = 0.10
-    risk_pct_degenerate: float = 0.20
-    profit_target_coward: float = 0.15
-    profit_target_gambler: float = 0.25
-    profit_target_degenerate: float = 0.50
-
-    # ── INDICATOR HISTORY ─────────────────────────────
-    indicator_history_days: int = 30
-
-    # ── VOLUME ANOMALY (Degenerate dynamic watchlist) ──
-    volume_anomaly_threshold: float = 3.0  # 3x time-normalized volume
 
     # ── SIGNALS / TECHNICAL ──────────────────────────
     signal_ema_fast_day: int = 9
@@ -110,37 +78,17 @@ class Settings(BaseSettings):
 
     # ── SCHEDULING (ET timezone) ─────────────────────
     scanner_run_time: str = "18:15"
-    signal_check_interval_minutes: int = 5
     market_open_et: str = "09:30"
     market_close_et: str = "16:00"
-    position_monitor_interval_minutes: int = 5
 
     # ── LIVENESS WATCHDOG ────────────────────────────
-    # Detect a stalled intraday cycle (no trades opening/closing during
-    # market hours). The cycle writes a heartbeat each run; check_cycle_liveness
-    # alerts if it goes stale. 15 min ≈ 2×signal_check_interval + slack, so one
-    # missed cycle is tolerated but ≥2 consecutive misses alert.
-    liveness_stale_minutes: int = 15
-    liveness_open_grace_minutes: int = 10  # suppress alerts right after 09:30 ET
+    # Detect a stalled v2 portfolio cycle (daily cadence, 9:45 AM ET). The
+    # cycle writes a heartbeat each run; check_cycle_liveness raises CRITICAL
+    # on weekdays after 10:00 ET if the heartbeat is missing, errored, or
+    # older than this many hours (26h tolerates daily jitter but catches a
+    # fully missed day).
+    liveness_stale_hours: int = 26
     liveness_enabled: bool = True
-
-    # ── LIVE STRATEGY ALLOWLIST ──────────────────────
-    # Only these strategies get live (paper) accounts. Research candidates
-    # (pullback_rider, gap_drift, turtle_adx, ...) are registry-visible for
-    # the backtest lab but must pass validation before being added here —
-    # the seed of the promotion pipeline.
-    live_strategies: list[str] = Field(default=["coward", "gambler", "degenerate"])
-
-    # ── INTRADAY DRIVER ──────────────────────────────
-    # When True, the in-process APScheduler does NOT register the intraday
-    # signal_check/position_monitor jobs — an external GitHub Actions cron
-    # (intraday-cycle.yml → POST /api/admin/run-intraday) is the single driver
-    # instead, so the loop survives the Render web service idling. Explicit
-    # opt-in (not inferred from the trigger token) so a deploy never silently
-    # changes the driver: flip EDGEFINDER_INTRADAY_EXTERNAL_DRIVER=true on
-    # Render *together with* enabling the cron. Default False keeps the
-    # in-process timer (correct for local/dev with no cron).
-    intraday_external_driver: bool = False
 
     # ── DATA SOURCE (Polygon.io) ─────────────────────
     polygon_api_key: str = ""
@@ -184,11 +132,6 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_recycle: int = 300  # seconds; Supabase Supavisor retires idle connections
-
-    # ── SLIPPAGE MODEL ───────────────────────────────
-    slippage_base_rate: float = 0.0005
-    slippage_volume_factor: float = 1.5
-    slippage_min_avg_volume: int = 100_000
 
     # ── LOGGING ──────────────────────────────────────
     log_level: str = "INFO"

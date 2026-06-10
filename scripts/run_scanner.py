@@ -1,9 +1,13 @@
-"""Run the per-strategy scanner (CLI).
+"""Run the nightly data scanner (CLI).
 
 Usage:
     python scripts/run_scanner.py                  # Full universe scan
     python scripts/run_scanner.py --tickers AAPL MSFT GOOG  # Specific tickers
     python scripts/run_scanner.py --quick           # 20 popular tickers
+
+The scanner is a pure data collector (per-strategy qualification was retired
+with the old arena): it fetches fundamentals for each ticker and persists
+tickers + fundamentals rows, then prints a summary table.
 """
 
 import argparse
@@ -18,8 +22,8 @@ from edgefinder.data.cache import DataCache
 from edgefinder.data.provider import CachedDataProvider
 from edgefinder.db.engine import Base, get_engine, get_session_factory
 from edgefinder.db import models  # noqa: F401
-from edgefinder.scanner.strategy_scanner import StrategyScanner
-from edgefinder.strategies.base import StrategyRegistry
+from edgefinder.db.models import Fundamental, Ticker
+from edgefinder.scanner.unified_scanner import UnifiedScanner
 
 console = Console()
 
@@ -32,12 +36,12 @@ QUICK_TICKERS = [
 
 
 def main():
-    parser = argparse.ArgumentParser(description="EdgeFinder Per-Strategy Scanner")
+    parser = argparse.ArgumentParser(description="EdgeFinder Nightly Data Scanner")
     parser.add_argument("--tickers", nargs="+", help="Specific tickers to scan")
     parser.add_argument("--quick", action="store_true", help="Scan 20 popular tickers")
     args = parser.parse_args()
 
-    console.print("[bold]EdgeFinder v4 — Per-Strategy Scanner[/bold]\n")
+    console.print("[bold]EdgeFinder — Nightly Data Scanner[/bold]\n")
 
     engine = get_engine()
     Base.metadata.create_all(engine)
@@ -55,54 +59,49 @@ def main():
         tickers = sorted(cached.get_ticker_universe())
     console.print(f"Scanning {len(tickers)} tickers...\n")
 
-    # Import strategies
-    from edgefinder.strategies import alpha, bravo, charlie  # noqa: F401
+    scanner = UnifiedScanner(cached, session_factory)
+    summary = scanner.run(tickers)
+    console.print(f"Scan summary: {summary}\n")
 
-    for strategy in StrategyRegistry.get_instances():
-        session = session_factory()
-        try:
-            scanner = StrategyScanner(strategy, cached, session)
-            results = scanner.run(tickers=tickers)
-            qualified = sum(1 for r in results if r.qualified)
+    # Show the freshest fundamentals for the scanned set
+    session = session_factory()
+    try:
+        rows = (
+            session.query(Ticker, Fundamental)
+            .join(Fundamental, Ticker.id == Fundamental.ticker_id)
+            .filter(Ticker.symbol.in_(tickers))
+            .order_by(Ticker.market_cap.desc().nullslast())
+            .limit(20)
+            .all()
+        )
+        table = Table(title=f"Scanned fundamentals (top {len(rows)} by market cap)")
+        table.add_column("Symbol", style="cyan")
+        table.add_column("Company", max_width=25)
+        table.add_column("Mkt cap", justify="right")
+        table.add_column("EG%", justify="right")
+        table.add_column("RG%", justify="right")
+        table.add_column("D/E", justify="right")
+        table.add_column("P/E", justify="right")
+        table.add_column("ROE%", justify="right")
 
-            table = Table(title=f"{strategy.name.upper()} — {qualified} qualified of {len(results)}")
-            table.add_column("Symbol", style="cyan")
-            table.add_column("Company", max_width=25)
-            table.add_column("Score", justify="right")
-            table.add_column("EG%", justify="right")
-            table.add_column("RG%", justify="right")
-            table.add_column("D/E", justify="right")
-            table.add_column("P/E", justify="right")
-            table.add_column("ROE%", justify="right")
-            table.add_column("SI%", justify="right")
+        pct = lambda v: f"{v*100:.1f}%" if v is not None else "—"
+        fmt = lambda v: f"{v:.1f}" if v is not None else "—"
+        cap = lambda v: f"${v/1e9:.1f}B" if v else "—"
 
-            pct = lambda v: f"{v*100:.1f}%" if v is not None else "—"
-            fmt = lambda v: f"{v:.1f}" if v is not None else "—"
-
-            for r in sorted(results, key=lambda x: x.score, reverse=True)[:20]:
-                if not r.qualified:
-                    continue
-                f = r.profile.fundamentals
-                if not f:
-                    continue
-                table.add_row(
-                    r.symbol,
-                    f.company_name or "—",
-                    f"{r.score:.0f}",
-                    pct(f.earnings_growth),
-                    pct(f.revenue_growth),
-                    fmt(f.debt_to_equity),
-                    fmt(f.price_to_earnings),
-                    pct(f.return_on_equity),
-                    pct(f.short_interest),
-                )
-
-            console.print(table)
-            console.print()
-        except Exception as e:
-            console.print(f"[red]{strategy.name} scan failed: {e}[/red]")
-        finally:
-            session.close()
+        for t, f in rows:
+            table.add_row(
+                t.symbol,
+                t.company_name or "—",
+                cap(t.market_cap),
+                pct(f.earnings_growth),
+                pct(f.revenue_growth),
+                fmt(f.debt_to_equity),
+                fmt(f.price_to_earnings),
+                pct(f.return_on_equity),
+            )
+        console.print(table)
+    finally:
+        session.close()
 
     engine.dispose()
 

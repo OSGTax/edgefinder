@@ -9,22 +9,18 @@ from sqlalchemy.orm import Session
 
 from dashboard.dependencies import get_db
 from dashboard.routers._shared import COST_DISCLOSURE as _COST_DISCLOSURE
-from dashboard.services import get_arena, get_scheduler
+from dashboard.services import get_scheduler
 from edgefinder.db.models import PromotedStrategy, StrategyAccount, StrategySnapshot
-from edgefinder.strategies.base import StrategyRegistry
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-def _lane(name: str, v2_names: set[str]) -> str:
-    from config.settings import settings
 
-    if name in v2_names:
-        return "v2"
-    if name in settings.live_strategies:
-        return "arena"
-    return "arena"
+def _lane(name: str, v2_names: set[str]) -> str:
+    """Everything is v2 now (the old per-ticker arena was retired); the
+    field is kept for API-shape stability."""
+    return "v2"
 
 
 def _v2_names(db: Session) -> set[str]:
@@ -32,86 +28,23 @@ def _v2_names(db: Session) -> set[str]:
             db.query(PromotedStrategy).filter(PromotedStrategy.active.is_(True)).all()}
 
 
-def _live_account_states() -> list[dict] | None:
-    """Per-strategy accounts marked to the latest available market price.
-
-    Single source of truth for "current value" so the strategy cards and the
-    equity-curve tail can never disagree:
-
-        open_positions_value = Σ shares × current price
-                               (live price when available, else entry price)
-        total_equity         = cash + open_positions_value
-        unrealized_pnl       = market value − cost basis (direction-aware)
-
-    NOTE: ``to_dict()``'s ``open_positions_value`` is already mark-to-market,
-    so it must NOT be re-added to unrealized P&L (the prior bug double-counted
-    the P&L). We recompute the market value directly from current prices here.
-
-    Returns ``None`` when the arena isn't running so callers fall back to DB.
-    """
-    arena = get_arena()
-    if not arena:
-        return None
-    from dashboard.services import _provider
-
-    accounts = arena.get_all_accounts()
-    positions = arena.get_all_open_positions()
-
-    all_symbols = list({
-        p["symbol"] for pos_list in positions.values() for p in pos_list
-    })
-    live_prices: dict[str, float] = {}
-    if all_symbols and _provider:
-        for sym in all_symbols:
-            try:
-                price = _provider.get_latest_price(sym)
-                if price:
-                    live_prices[sym] = price
-            except Exception:
-                logger.warning("Failed to fetch live price for %s", sym, exc_info=True)
-
-    result = []
-    for name, acct in accounts.items():
-        market_value = 0.0
-        unrealized = 0.0
-        for p in positions.get(name, []):
-            price = live_prices.get(p["symbol"]) or p["entry_price"]
-            market_value += p["shares"] * price
-            if p["direction"] == "LONG":
-                unrealized += (price - p["entry_price"]) * p["shares"]
-            else:
-                unrealized += (p["entry_price"] - price) * p["shares"]
-        acct["open_positions_value"] = round(market_value, 2)
-        acct["unrealized_pnl"] = round(unrealized, 2)
-        acct["total_equity"] = round(acct["cash"] + market_value, 2)
-        result.append(acct)
-    return result
-
-
 @router.get("")
-def list_strategies():
-    """List all registered strategies."""
+def list_strategies(db: Session = Depends(get_db)):
+    """List the v2 promoted strategies (the live registry is the DB now)."""
+    rows = (db.query(PromotedStrategy)
+            .order_by(PromotedStrategy.strategy_name).all())
     return [
-        {"name": name, "class": cls.__name__}
-        for name, cls in StrategyRegistry.get_all().items()
+        {"name": p.strategy_name, "spec": p.spec, "tier": p.tier,
+         "schedule": p.schedule, "active": p.active}
+        for p in rows
     ]
 
 
 @router.get("/accounts")
 def get_accounts(db: Session = Depends(get_db)):
-    """Get strategy account states — live from arena if available, else DB.
-
-    Enriches with unrealized P&L by fetching current prices for open
-    positions, and tags each row with its lane (arena $5k vs v2 $100k).
-    """
+    """Get strategy account states from the DB (the source of truth —
+    the v2 engine marks strategy_accounts every cycle/snapshot)."""
     v2 = _v2_names(db)
-    live = _live_account_states()
-    if live is not None:
-        for a in live:
-            a["lane"] = _lane(a.get("strategy_name") or a.get("name", ""), v2)
-        return live
-
-    # Fallback to DB
     accounts = db.query(StrategyAccount).all()
     return [
         {
@@ -133,12 +66,24 @@ def get_accounts(db: Session = Depends(get_db)):
 
 
 @router.get("/positions")
-def get_positions():
-    """Get all open positions across all strategies."""
-    arena = get_arena()
-    if not arena:
-        return {}
-    return arena.get_all_open_positions()
+def get_positions(db: Session = Depends(get_db)):
+    """All OPEN trades grouped by strategy (same shape the arena returned)."""
+    from edgefinder.db.models import TradeRecord
+
+    out: dict[str, list[dict]] = {}
+    rows = (db.query(TradeRecord)
+            .filter(TradeRecord.status == "OPEN")
+            .order_by(TradeRecord.strategy_name, TradeRecord.entry_time)
+            .all())
+    for t in rows:
+        out.setdefault(t.strategy_name, []).append({
+            "symbol": t.symbol,
+            "shares": t.shares,
+            "entry_price": t.entry_price,
+            "direction": t.direction,
+            "entry_time": t.entry_time.isoformat() if t.entry_time else None,
+        })
+    return out
 
 
 @router.get("/equity-curve")
@@ -174,35 +119,6 @@ def equity_curve(
             "total_equity": s.total_equity,
             "total_return_pct": s.total_return_pct,
         })
-
-    # Append a live "now" point so the curve ends at the current market value
-    # (cash + securities at current price) rather than the last persisted
-    # snapshot. Appended as a distinct timestamp; only replaces the last point
-    # if it lands in the same second (so the aggregate isn't doubled).
-    live = _live_account_states()
-    if live is not None:
-        now = datetime.now(timezone.utc)
-        now_epoch = int(now.timestamp())
-        now_date = now.strftime("%Y-%m-%d")
-        for acct in live:
-            name = acct["strategy_name"]
-            if strategy and name != strategy:
-                continue
-            starting = acct.get("starting_capital") or 0
-            point = {
-                "time": now_epoch,
-                "date": now_date,
-                "total_equity": acct["total_equity"],
-                "total_return_pct": (
-                    round((acct["total_equity"] - starting) / starting * 100, 4)
-                    if starting else None
-                ),
-            }
-            pts = result.setdefault(name, [])
-            if pts and pts[-1].get("time") == now_epoch:
-                pts[-1] = point
-            else:
-                pts.append(point)
 
     return result
 
@@ -288,14 +204,11 @@ def validation_runs(db: Session = Depends(get_db)):
 
 @router.get("/scheduler")
 def scheduler_status():
-    """Get scheduler status, next run times, and last cycle result."""
-    from dashboard.services import get_last_signal_check
+    """Get scheduler status and next run times."""
     scheduler = get_scheduler()
     if not scheduler:
         return {"running": False, "jobs": {}, "message": "Pipeline not initialized"}
-    status = scheduler.get_status()
-    status["last_signal_check"] = get_last_signal_check()
-    return status
+    return scheduler.get_status()
 
 
 # ── redesign additions (v5.40): promoted / summary / meta / ledgers ──
@@ -403,30 +316,17 @@ def lane_summary(db: Session = Depends(get_db)):
 
 @router.get("/meta")
 def strategies_meta(db: Session = Depends(get_db)):
-    """Registry-driven strategy metadata: lanes, display, color slots, risk.
+    """DB-driven strategy metadata: lane, display, color slots.
 
-    Replaces every hardcoded STRATEGY_RISK/name/color table in the old JS —
-    adding or renaming a strategy needs zero frontend changes.
+    Replaces every hardcoded name/color table in the JS — adding or renaming
+    a promoted strategy needs zero frontend changes. (The old StrategyRegistry
+    half was retired with the arena; everything listed here is v2.)
     """
     v2_rows = (db.query(PromotedStrategy)
                .filter(PromotedStrategy.active.is_(True))
                .order_by(PromotedStrategy.strategy_name).all())
     out = []
     slot = 0
-    try:
-        by_name = {i.name: i for i in StrategyRegistry.get_instances()}
-    except Exception:
-        by_name = {}
-    for name in sorted(StrategyRegistry.get_all()):
-        inst = by_name.get(name)
-        risk = {}
-        for attr in ("risk_pct", "target_pct", "stop_pct"):
-            v = getattr(inst, attr, None)
-            if v is not None:
-                risk[attr] = v
-        out.append({"name": name, "lane": "arena", "display_name": name,
-                    "color_slot": slot % 8, "risk": risk})
-        slot += 1
     for p in v2_rows:
         out.append({"name": p.strategy_name, "lane": "v2",
                     "display_name": p.strategy_name, "color_slot": slot % 8,

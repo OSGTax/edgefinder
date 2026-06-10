@@ -1,27 +1,7 @@
-"""Minute-bar backtesting on Massive flat files.
+"""Trading-cost models for the portfolio engine.
 
-A small, self-contained event-driven backtester — a foundation to extend
-toward parity with the live arena, not a drop-in replacement for it.
+The old per-ticker lab (engine/jobs/walkforward/validate/daily_backtest)
+was retired with the arena; the realistic cost model in ``costs.py`` is the
+sole survivor — it is shared by edgefinder/engine/backtest.py and
+edgefinder/engine/validate.py.
 """
-
-from edgefinder.backtest.engine import (
-    Bar,
-    BacktestContext,
-    BacktestEngine,
-    BacktestResult,
-    Fill,
-    Order,
-    Position,
-    load_minute_bars,
-)
-
-__all__ = [
-    "Bar",
-    "BacktestContext",
-    "BacktestEngine",
-    "BacktestResult",
-    "Fill",
-    "Order",
-    "Position",
-    "load_minute_bars",
-]

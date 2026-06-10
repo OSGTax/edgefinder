@@ -1,13 +1,14 @@
 """EdgeFinder v2 — APScheduler job scheduling.
 
 All scheduled jobs run in ET wall-clock time:
-- Signal check / position monitor: every N min during market hours
-- Daily strategy snapshots: 4:05 PM ET
+- V2 portfolio rebalance: 9:45 AM ET
+- V2 account snapshots: every 30 min, 9:45 AM - 4:15 PM ET
+- Market snapshot: 4:05 PM ET
 - Benchmark collection: 4:10 PM ET
 - Sector rotation: 4:15 PM ET
-- Daily indicator computation: 4:30 PM ET
-- Nightly scan: 6:15 PM ET
+- Nightly data scan: 6:15 PM ET (settings.scanner_run_time)
 - Dividends & splits: 6:30 PM ET
+- R2 bar-store sync: 7:00 PM ET
 - News accumulator: hourly :30 from 9:30 AM to 4:30 PM ET
 
 Render containers (and most prod environments) run as UTC. APScheduler 3.x
@@ -21,6 +22,7 @@ scheduler and every trigger so jobs fire on the intended ET wall clock.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -42,55 +44,52 @@ class EdgeFinderScheduler:
 
     def setup(
         self,
-        signal_check_fn=None,
-        position_monitor_fn=None,
+        portfolio_rebalance_fn=None,
+        v2_snapshot_fn=None,
         nightly_scan_fn=None,
         benchmark_collect_fn=None,
-        snapshot_fn=None,
+        market_snapshot_fn=None,
         sector_rotation_fn=None,
         news_accumulate_fn=None,
         dividend_split_fn=None,
-        daily_indicator_fn=None,
-        portfolio_rebalance_fn=None,
         r2_sync_fn=None,
     ) -> None:
         """Register all scheduled jobs.
 
         Pass None for any function to skip that job.
         """
-        open_h = settings.market_open_et.split(":")[0]
-        close_h = settings.market_close_et.split(":")[0]
-        market_hours = f"{open_h}-{close_h}"
-
-        if signal_check_fn:
+        if portfolio_rebalance_fn:
+            # Shortly after the open: yesterday's flat-file bars are long
+            # since published, and fills land near the open the v2 engine
+            # models (decide on data through yesterday, fill at today's open).
             self._scheduler.add_job(
-                signal_check_fn,
-                CronTrigger(
-                    minute=f"*/{settings.signal_check_interval_minutes}",
-                    hour=market_hours,
-                    day_of_week="mon-fri",
-                    timezone=ET,
-                ),
-                id="signal_check",
-                name="Signal Check",
+                portfolio_rebalance_fn,
+                CronTrigger(hour=9, minute=45, day_of_week="mon-fri", timezone=ET),
+                id="v2_portfolio_rebalance",
+                name="V2 Portfolio Rebalance",
                 replace_existing=True,
             )
-            self._jobs["signal_check"] = f"Every {settings.signal_check_interval_minutes}m"
+            self._jobs["v2_portfolio_rebalance"] = "Daily at 9:45 AM ET"
 
-        if position_monitor_fn:
+        if v2_snapshot_fn:
+            # Cron grid is :15/:45 across 9-16 ET; the wrapper clips it to the
+            # 09:45-16:15 window (CronTrigger can't express the cross-hour
+            # bounds directly).
+            def _v2_snapshot_windowed():
+                now_et = datetime.now(ET)
+                if not (dtime(9, 45) <= now_et.time() <= dtime(16, 15)):
+                    return
+                v2_snapshot_fn()
+
             self._scheduler.add_job(
-                position_monitor_fn,
-                CronTrigger(
-                    minute=f"*/{settings.position_monitor_interval_minutes}",
-                    hour=market_hours,
-                    day_of_week="mon-fri",
-                    timezone=ET,
-                ),
-                id="position_monitor",
-                name="Position Monitor",
+                _v2_snapshot_windowed,
+                CronTrigger(minute="15,45", hour="9-16",
+                            day_of_week="mon-fri", timezone=ET),
+                id="v2_snapshot",
+                name="V2 Account Snapshots",
                 replace_existing=True,
             )
-            self._jobs["position_monitor"] = f"Every {settings.position_monitor_interval_minutes}m"
+            self._jobs["v2_snapshot"] = "Every 30m, 9:45 AM - 4:15 PM ET"
 
         if nightly_scan_fn:
             scan_hour, scan_min = settings.scanner_run_time.split(":")
@@ -103,7 +102,7 @@ class EdgeFinderScheduler:
                     timezone=ET,
                 ),
                 id="nightly_scan",
-                name="Nightly Scan",
+                name="Nightly Data Scan",
                 replace_existing=True,
             )
             self._jobs["nightly_scan"] = f"Daily at {settings.scanner_run_time} ET"
@@ -118,15 +117,15 @@ class EdgeFinderScheduler:
             )
             self._jobs["benchmark_collect"] = "Daily at 4:10 PM ET"
 
-        if snapshot_fn:
+        if market_snapshot_fn:
             self._scheduler.add_job(
-                snapshot_fn,
+                market_snapshot_fn,
                 CronTrigger(hour=16, minute=5, day_of_week="mon-fri", timezone=ET),
-                id="daily_snapshot",
-                name="Daily Strategy Snapshots",
+                id="market_snapshot",
+                name="Daily Market Snapshot",
                 replace_existing=True,
             )
-            self._jobs["daily_snapshot"] = "Daily at 4:05 PM ET"
+            self._jobs["market_snapshot"] = "Daily at 4:05 PM ET"
 
         if sector_rotation_fn:
             self._scheduler.add_job(
@@ -157,29 +156,6 @@ class EdgeFinderScheduler:
                 replace_existing=True,
             )
             self._jobs["dividend_split"] = "Daily at 6:30 PM ET"
-
-        if daily_indicator_fn:
-            self._scheduler.add_job(
-                daily_indicator_fn,
-                CronTrigger(hour=16, minute=30, day_of_week="mon-fri", timezone=ET),
-                id="daily_indicators",
-                name="Daily Indicator Computation",
-                replace_existing=True,
-            )
-            self._jobs["daily_indicators"] = "Daily at 4:30 PM ET"
-
-        if portfolio_rebalance_fn:
-            # Shortly after the open: yesterday's flat-file bars are long
-            # since published, and fills land near the open the v2 engine
-            # models (decide on data through yesterday, fill at today's open).
-            self._scheduler.add_job(
-                portfolio_rebalance_fn,
-                CronTrigger(hour=9, minute=45, day_of_week="mon-fri", timezone=ET),
-                id="v2_portfolio_rebalance",
-                name="V2 Portfolio Rebalance",
-                replace_existing=True,
-            )
-            self._jobs["v2_portfolio_rebalance"] = "Daily at 9:45 AM ET"
 
         if r2_sync_fn:
             # After the nightly scan + PIT snapshot: mirror the day's new

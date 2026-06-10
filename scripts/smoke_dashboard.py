@@ -33,8 +33,6 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/api/research/search?q=AA&limit=3", [], {200}),
     ("/api/research/active", [], {200}),
     ("/api/ops/health", ["heartbeats"], {200}),
-    ("/api/backtest/jobs", [], {200}),
-    ("/api/inject", [], {200}),
     # symbol workstation API (404 acceptable when the symbol has no bars
     # in the target environment)
     ("/api/symbols/SPY/bars?range=3m", ["bars", "source"], {200, 404}),
@@ -54,17 +52,27 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/trades", [], {200}),
     ("/research", [], {200, 307}),
     ("/screener", [], {200}),
-    ("/backtest", [], {200, 307}),
+    ("/backtest", [], {307}),
     ("/lab", [], {200}),
     ("/ops", [], {200}),
 ]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # noqa: D102
+        return None
+
+
 def hit(base: str, path: str, keys: list[str], allowed: set[int]) -> str | None:
     url = base.rstrip("/") + path
     req = urllib.request.Request(url, headers={"User-Agent": "ef-smoke"})
+    # When only a redirect status is acceptable, don't follow it — urllib
+    # otherwise resolves the 307 to the target page's 200.
+    opener = (urllib.request.build_opener(_NoRedirect())
+              if allowed and 200 not in allowed and allowed <= {301, 302, 307, 308}
+              else urllib.request.build_opener())
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with opener.open(req, timeout=30) as resp:
             status = resp.status
             body = resp.read()
     except urllib.error.HTTPError as e:

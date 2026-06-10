@@ -102,7 +102,7 @@ def test_research_redirects_to_symbol(client):
 def test_lab_page_and_backtest_redirect(client):
     assert client.get("/lab").status_code == 200
     r = client.get("/backtest", follow_redirects=False)
-    assert r.status_code == 307 and r.headers["location"] == "/lab?tab=backtest"
+    assert r.status_code == 307 and r.headers["location"] == "/lab"
 
 
 def test_no_cdn_script_tags_remain():

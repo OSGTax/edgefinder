@@ -1,7 +1,7 @@
-/* Portfolio command center — lane-segmented (Arena $5k / V2 $100k / All)
-   hero stats from the SERVER-computed /summary (no fabricated capital,
-   ever), equity + comparison charts on epoch time, P&L calendar heatmap,
-   live-proof scorecard, open positions, market strip, ops badge. */
+/* Portfolio command center — hero stats from the SERVER-computed /summary
+   (no fabricated capital, ever), equity + comparison charts on epoch time,
+   P&L calendar heatmap, live-proof scorecard, open positions, market strip,
+   ops badge. Everything is v2 now (the old arena lane was retired). */
 
 import { apiGet } from '../core/net.js';
 import { fmtDollar, fmtPnl, fmtPct, fmtNum, fmtPrice, fmtInt, upDownClass, fmtDate } from '../core/fmt.js';
@@ -11,7 +11,7 @@ import { onThemeChange } from '../core/theme.js';
 import { calendarHeatmap } from '../components/heatmap.js';
 import { poller } from '../core/poll.js';
 
-const state = { lane: 'all', eqDays: 90, meta: new Map() };
+const state = { eqDays: 90, meta: new Map() };
 let eqChart = null;
 let cmpChart = null;
 
@@ -19,7 +19,7 @@ let cmpChart = null;
 async function loadHero() {
   const el = document.getElementById('pf-hero');
   await panel(el, () => apiGet('/api/strategies/summary'), (host, lanes) => {
-    const L = lanes[state.lane] || lanes.all;
+    const L = lanes.all;
     const stat = (label, value, cls = '', sub = null) => h('div', { class: 'c-stat' },
       h('div', { class: 'label', text: label }),
       h('div', { class: `value hero num ${cls}`, text: value }),
@@ -35,7 +35,7 @@ async function loadHero() {
   });
 }
 
-/* ── equity chart (sum of lane strategies, epoch time) ── */
+/* ── equity chart (sum of all strategies, epoch time) ── */
 async function loadEquity() {
   const host = document.getElementById('pf-equity');
   host.replaceChildren();
@@ -44,9 +44,7 @@ async function loadEquity() {
     data = await apiGet(`/api/strategies/equity-curve?days=${state.eqDays}`);
   } catch (err) { renderError(host, err, loadEquity); return; }
 
-  const lane = state.lane;
-  const names = Object.keys(data).filter(n =>
-    lane === 'all' || (state.meta.get(n)?.lane || 'arena') === lane);
+  const names = Object.keys(data);
   const byTime = new Map();
   for (const name of names) {
     for (const p of data[name] || []) {
@@ -114,10 +112,8 @@ async function loadComparison() {
 async function loadCalendar() {
   const el = document.getElementById('pf-calendar');
   await panel(el, () => apiGet('/api/trades?status=CLOSED&limit=500'), (host, trades) => {
-    const lane = state.lane;
     const daily = {};
     for (const t of trades) {
-      if (lane !== 'all' && (state.meta.get(t.strategy_name)?.lane || 'arena') !== lane) continue;
       if (!t.exit_time || t.pnl_dollars == null) continue;
       const day = t.exit_time.slice(0, 10);
       daily[day] = (daily[day] || 0) + t.pnl_dollars;
@@ -153,9 +149,7 @@ async function loadProof() {
 async function loadPositions() {
   const el = document.getElementById('pf-positions');
   await panel(el, () => apiGet('/api/trades?status=OPEN&limit=200'), (host, trades) => {
-    const lane = state.lane;
-    const rows = trades.filter(t =>
-      lane === 'all' || (state.meta.get(t.strategy_name)?.lane || 'arena') === lane);
+    const rows = trades;
     document.getElementById('pf-pos-count').textContent = `${rows.length} open`;
     if (!rows.length) { renderEmpty(host, 'No open positions'); return; }
     const tbody = h('tbody');
@@ -235,16 +229,7 @@ async function init() {
   try {
     const meta = await apiGet('/api/strategies/meta');
     for (const m of meta) state.meta.set(m.name, m);
-  } catch { /* lanes default to arena */ }
-
-  document.getElementById('pf-lane').addEventListener('click', (e) => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    for (const x of document.querySelectorAll('#pf-lane button')) x.classList.remove('active');
-    b.classList.add('active');
-    state.lane = b.dataset.lane;
-    loadHero(); loadEquity(); loadComparison(); loadCalendar(); loadPositions();
-  });
+  } catch { /* meta optional */ }
 
   const ranges = [{ label: '30D', value: 30 }, { label: '90D', value: 90 },
                   { label: '180D', value: 180 }, { label: '1Y', value: 365 }];

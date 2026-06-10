@@ -1,7 +1,10 @@
 """EdgeFinder v2 — Runtime service initialization.
 
-Creates and wires all trading pipeline components:
-Arena, Scheduler, TradeJournal, MarketSnapshot, EventBus subscribers.
+Slim post-arena module: a data provider, a DB session factory, and an
+APScheduler running the v2 portfolio engine + nightly data-collection jobs.
+The old per-ticker arena (intraday loop, event bus, watchlists, cooldowns)
+was retired — the v2 engine (edgefinder/engine/live.py) is the only live
+trading path.
 
 Called once from app.py lifespan. Module-level singletons for router access.
 """
@@ -10,53 +13,32 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 from datetime import datetime, timezone
 
 from config.settings import settings
-from edgefinder.core.events import event_bus
-from edgefinder.core.models import TickerFundamentals
 from edgefinder.data.cache import DataCache
 from edgefinder.data.polygon import PolygonDataProvider
 from edgefinder.data.provider import CachedDataProvider
 from edgefinder.db.engine import get_engine, get_session_factory
 from edgefinder.db import models as db_models  # noqa: F401 — registers ORM tables
 from edgefinder.db.models import (
-    DailyBar,
+    PromotedStrategy,
     StrategyAccount,
     StrategySnapshot,
     SystemHeartbeat,
-    Ticker,
-    TickerStrategyQualification,
-    TradeRecord,
 )
 from edgefinder.market.benchmarks import BenchmarkService
 from edgefinder.market.snapshot import MarketSnapshotService
-from edgefinder.scanner.strategy_scanner import StrategyScanner
 from edgefinder.scheduler.scheduler import EdgeFinderScheduler
-from edgefinder.trading.arena import ArenaEngine
-from edgefinder.trading.journal import TradeJournal
 
 logger = logging.getLogger(__name__)
 
 # ── Module-level singletons ─────────────────────────────
 
 _provider: CachedDataProvider | None = None
-_arena: ArenaEngine | None = None
 _scheduler: EdgeFinderScheduler | None = None
 _session_factory = None
 _plan_access: dict[str, bool] = {}
-
-# Last 5-min signal-check result, surfaced via /api/strategies/scheduler so
-# we can see from outside whether cycles complete cleanly. No DB writes —
-# resets to {} on each Render redeploy, which is the right semantics
-# (we only care about the current process's runtime state).
-_last_signal_check: dict = {}
-
-# Single-flight guard for the cron-driven intraday cycle: a slow or
-# overlapping POST /api/admin/run-intraday must never run two cycles
-# concurrently against the shared in-memory arena.
-_intraday_lock = threading.Lock()
 
 
 def get_plan_access() -> dict[str, bool]:
@@ -64,13 +46,8 @@ def get_plan_access() -> dict[str, bool]:
     return _plan_access
 
 
-def get_last_signal_check() -> dict:
-    """Snapshot of the most recent _signal_check_job invocation."""
-    return dict(_last_signal_check)
-
-
-def get_arena() -> ArenaEngine | None:
-    return _arena
+def get_provider():
+    return _provider
 
 
 def get_scheduler() -> EdgeFinderScheduler | None:
@@ -80,82 +57,23 @@ def get_scheduler() -> EdgeFinderScheduler | None:
 # ── Initialization ──────────────────────────────────────
 
 
-QUICK_START_TICKERS = [
-    "AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "META", "TSLA", "BRK.B",
-    "JPM", "V", "JNJ", "WMT", "PG", "MA", "HD", "UNH", "DIS", "BAC",
-    "XOM", "ABBV", "PFE", "COST", "MRK", "AVGO", "KO", "PEP", "TMO",
-    "CSCO", "ABT", "ADBE", "CRM", "NKE", "INTC", "AMD", "QCOM", "TXN",
-    "LOW", "NFLX", "AMGN", "GS", "CAT", "BLK", "SYK", "ISRG", "DE",
-    "LRCX", "AMAT", "MU", "MRVL", "NOW",
-]
-
-
-def _deferred_initial_scan() -> None:
-    """Run initial scan in background: quick-start batch first, then full universe."""
-    import threading
-
-    def _scan():
-        try:
-            # Phase 1: Quick-start with top 50 liquid stocks so trading begins fast
-            logger.info("Quick-start scan: %d tickers...", len(QUICK_START_TICKERS))
-            _run_scan_batch(QUICK_START_TICKERS)
-            watchlists = _load_watchlists()
-            if watchlists and _arena:
-                _arena.set_watchlists(watchlists)
-                _populate_fundamentals_cache()
-                for name, tickers in watchlists.items():
-                    logger.info("Quick-start: %s = %d tickers", name, len(tickers))
-            logger.info("Quick-start complete — strategies can now trade")
-
-            # Phase 2: Full universe scan (takes much longer)
-            logger.info("Starting full universe scan...")
-            _run_initial_scan()
-            watchlists = _load_watchlists()
-            if watchlists and _arena:
-                _arena.set_watchlists(watchlists)
-                _populate_fundamentals_cache()
-                for name, tickers in watchlists.items():
-                    logger.info("Full scan: %s = %d tickers", name, len(tickers))
-        except Exception:
-            logger.exception("Background initial scan failed")
-
-    thread = threading.Thread(target=_scan, daemon=True, name="initial-scan")
-    thread.start()
-
-
-def _run_scan_batch(tickers: list[str]) -> None:
-    """Run per-strategy scan on a specific list of tickers."""
-    from edgefinder.strategies.base import StrategyRegistry
-
-    for strategy in StrategyRegistry.get_instances():
-        session = _session_factory()
-        try:
-            scanner = StrategyScanner(strategy, _provider, session)
-            results = scanner.run(tickers=tickers)
-            qualified = sum(1 for r in results if r.qualified)
-            logger.info("[%s] batch scan: %d qualified of %d", strategy.name, qualified, len(results))
-        except Exception:
-            logger.exception("Batch scan failed for '%s'", strategy.name)
-        finally:
-            session.close()
-
-
 def init_services() -> None:
-    """Initialize all trading pipeline services. Called once at startup."""
-    global _provider, _arena, _scheduler, _session_factory
+    """Initialize the data provider, DB session factory, and scheduler."""
+    global _provider, _scheduler, _session_factory
 
     # Data provider — DataHub wraps Polygon + optional supplements
     try:
         polygon = PolygonDataProvider()
     except ValueError:
         logger.warning(
-            "No Polygon API key — trading pipeline disabled. "
+            "No Polygon API key — scheduled jobs disabled. "
             "Set EDGEFINDER_POLYGON_API_KEY in .env"
         )
         return
 
     # Probe plan access in background — don't block server startup
     import threading
+
     def _probe():
         global _plan_access
         logger.info("Probing Massive API plan access...")
@@ -174,407 +92,154 @@ def init_services() -> None:
     engine = get_engine()
     _session_factory = get_session_factory(engine)
 
-    # Arena — load strategies and set watchlist. The bars_loader lets the
-    # arena seed each ticker's IndicatorHistory from the persisted daily_bars
-    # table, so history-dependent strategies (e.g. gambler's MACD cross) work
-    # right after a restart instead of waiting for the in-memory daily cycle.
-    _arena = ArenaEngine(_provider, bars_loader=_load_daily_bars_for_history)
-    # Live allowlist: research candidates stay lab-only until promoted.
-    _arena.load_strategies(only=list(settings.live_strategies))
-
-    watchlists = _load_watchlists()
-    if not watchlists or not _has_fundamentals():
-        # Startup safeguard: skip scan if within 2 hours of market open
-        if _is_near_market_open():
-            logger.info(
-                "Within 2 hours of market open — skipping initial scan, "
-                "using existing DB watchlists until nightly scan"
-            )
-        else:
-            logger.info("No scored tickers — launching background initial scan")
-            _deferred_initial_scan()
+    # Scheduler — v2 engine + data-collection jobs only.
+    if os.getenv("EDGEFINDER_SCHEDULER_ENABLED", "true").lower() == "false":
+        logger.info("Scheduler disabled via EDGEFINDER_SCHEDULER_ENABLED=false")
     else:
-        _arena.set_watchlists(watchlists)
-        _populate_fundamentals_cache()
-        for name, tickers in watchlists.items():
-            logger.info("Watchlist '%s': %d tickers", name, len(tickers))
-
-    # Restore account state, open positions, then recalculate from trades (source of truth)
-    _restore_account_state()
-    _restore_open_positions()
-    _restore_close_cooldowns()
-    _recalculate_account_balances()
-
-    # Persist any corrections from _recalculate_account_balances back to DB
-    # (cash adjustments, auto-unpause, etc.) so they survive even if no trades
-    # fire before the next restart.
-    _persist_account_state()
-
-    # Diagnostic: log final account state for each strategy after restore + recalc
-    if _arena:
-        for name in _arena.get_strategy_names():
-            account = _arena.get_account(name)
-            if account:
-                logger.info(
-                    "Startup state [%s]: cash=$%.2f, positions=%d, paused=%s, "
-                    "drawdown=%.1f%%, peak_equity=$%.2f",
-                    name, account.cash, len(account.positions), account.is_paused,
-                    account.drawdown_pct * 100, account.peak_equity,
-                )
-
-    # Event bus — persist trades and capture market snapshots
-    _wire_event_bus()
-
-    # Scheduler — wire all jobs and start. When the external-driver flag is set
-    # (on Render, where the intraday-cycle cron drives the loop), the in-process
-    # intraday timer is disabled so the cron is the SINGLE driver — no
-    # double-execution against the shared arena. Default off, so a deploy never
-    # silently changes the driver and local/dev keeps the in-process timer.
-    _intraday_external = settings.intraday_external_driver
-    _scheduler = EdgeFinderScheduler()
-    _scheduler.setup(
-        signal_check_fn=None if _intraday_external else _signal_check_job,
-        position_monitor_fn=None if _intraday_external else _position_monitor_job,
-        nightly_scan_fn=_nightly_scan_job,
-        benchmark_collect_fn=_benchmark_job,
-        snapshot_fn=_snapshot_job,
-        sector_rotation_fn=_sector_rotation_job,
-        news_accumulate_fn=_news_accumulate_job,
-        dividend_split_fn=_dividend_split_job,
-        daily_indicator_fn=_daily_indicator_job,
-        portfolio_rebalance_fn=_v2_portfolio_job,
-        r2_sync_fn=_r2_sync_job,
-    )
-    _scheduler.start()
-    if _intraday_external:
-        logger.info(
-            "Intraday cycle driven by external cron (external-driver flag on) — "
-            "in-process signal_check/position_monitor timer disabled"
+        _scheduler = EdgeFinderScheduler()
+        _scheduler.setup(
+            portfolio_rebalance_fn=_v2_portfolio_job,
+            v2_snapshot_fn=_v2_snapshot_job,
+            nightly_scan_fn=_nightly_scan_job,
+            benchmark_collect_fn=_benchmark_job,
+            market_snapshot_fn=_market_snapshot_job,
+            sector_rotation_fn=_sector_rotation_job,
+            news_accumulate_fn=_news_accumulate_job,
+            dividend_split_fn=_dividend_split_job,
+            r2_sync_fn=_r2_sync_job,
         )
+        _scheduler.start()
 
-    logger.info("Trading pipeline initialized — all services running")
+    logger.info("Services initialized — v2 pipeline running")
 
 
 def shutdown_services() -> None:
     """Gracefully shut down all services."""
-    _persist_account_state()  # Save account state before shutdown
     if _scheduler:
         _scheduler.stop()
-    event_bus.clear()
-    logger.info("Trading pipeline shut down")
+    try:
+        get_engine().dispose()
+    except Exception:
+        logger.debug("Engine dispose at shutdown failed", exc_info=True)
+    logger.info("Services shut down")
 
 
-# ── Watchlist ───────────────────────────────────────────
+# ── Heartbeat ───────────────────────────────────────────
 
 
-def _restore_account_state() -> None:
-    """Restore account cash, peak equity, and pause state from DB.
+def _record_heartbeat(component: str, ok: bool, detail: dict) -> None:
+    """Upsert the single per-component liveness heartbeat row.
 
-    Must run BEFORE _restore_open_positions() so that the cash balance
-    reflects historical P&L, not a fresh $5,000.
+    Best-effort and isolated on its own session: heartbeat bookkeeping
+    must never roll back or break a job. One row per component, so a
+    plain SELECT-then-insert/update is correct on both SQLite (dev) and
+    Postgres (prod) without dialect-specific upserts. A controlled skip
+    is written fresh with ok=True so a legitimate no-op never reads as a
+    stall to the watchdog.
     """
-    if not _arena or not _session_factory:
+    if not _session_factory:
         return
     session = _session_factory()
     try:
-        rows = session.query(StrategyAccount).all()
-        restored = 0
-        for row in rows:
-            account = _arena.get_account(row.strategy_name)
-            if not account:
-                continue
-            account.cash = row.cash_balance
-            account.peak_equity = row.peak_equity
-            account.is_paused = row.is_paused
-            account.realized_pnl = row.realized_pnl or 0.0
-            restored += 1
-            logger.info(
-                "Restored account state for '%s': cash=$%.2f, peak=$%.2f, paused=%s",
-                row.strategy_name, row.cash_balance, row.peak_equity, row.is_paused,
-            )
-        if restored:
-            logger.info("Restored account state for %d strategies", restored)
+        hb = session.query(SystemHeartbeat).filter(
+            SystemHeartbeat.component == component
+        ).one_or_none()
+        now = datetime.now(timezone.utc)
+        if hb is None:
+            session.add(SystemHeartbeat(
+                component=component, last_run_at=now, ok=ok, detail=detail
+            ))
+        else:
+            hb.last_run_at = now
+            hb.ok = ok
+            hb.detail = detail
+        session.commit()
     except Exception:
-        logger.exception("Failed to restore account state")
+        logger.exception("Heartbeat upsert failed for %s", component)
+        session.rollback()
     finally:
         session.close()
 
 
-def _restore_open_positions() -> None:
-    """Restore open positions from DB into in-memory arena accounts.
+# ── Scheduler job callbacks ─────────────────────────────
 
-    Without this, every restart resets position counts to 0, bypassing
-    max_open_positions and allowing duplicate trades.
 
-    NOTE: Does NOT deduct cash — the persisted cash balance from
-    _restore_account_state() already reflects open position costs.
+def _v2_portfolio_job() -> None:
+    """Called at 9:45 AM ET — run the engine-v2 portfolio paper-trading cycle.
+
+    Trades every active row in promoted_strategies in its own isolated paper
+    account (see edgefinder/engine/live.py). No-ops cleanly when nothing is
+    promoted; writes the v2_portfolio_cycle heartbeat either way.
     """
-    if not _arena or not _session_factory:
+    if not _session_factory or not _provider:
         return
+    try:
+        from edgefinder.engine.live import run_portfolio_cycle
+
+        summary = run_portfolio_cycle(_session_factory, provider=_provider)
+        logger.info("V2 portfolio cycle: %s", summary)
+    except Exception:
+        logger.exception("V2 portfolio cycle failed")
+
+
+def _v2_snapshot_job(now: datetime | None = None) -> None:
+    """Every 30 min during market hours — mark v2 accounts + append snapshots.
+
+    For each ACTIVE promoted strategy with an account row: recompute cash from
+    the trades + dividend_credits tables (the CLAUDE.md integrity formula via
+    engine/live._recalc_cash), mark open lots to the latest price, update the
+    strategy_accounts row (engine/live._mark_account), and append one
+    StrategySnapshot row — the equity-curve time series the dashboard charts.
+    """
+    if not _session_factory or not _provider:
+        return
+    # _mark_account internally recomputes cash via engine/live._recalc_cash
+    # (the CLAUDE.md integrity formula + dividend credits) — one shared
+    # implementation between the daily cycle and this intraday mark.
+    from edgefinder.engine.live import STARTING_CAPITAL, _mark_account, _memoized
+    from edgefinder.trading.journal import TradeJournal
+
+    now = now or datetime.now(timezone.utc)
     session = _session_factory()
     try:
-        from edgefinder.trading.account import Position
+        active = {p.strategy_name for p in session.query(PromotedStrategy)
+                  .filter(PromotedStrategy.active.is_(True)).all()}
+        accounts = {a.strategy_name: a for a in session.query(StrategyAccount).all()}
+        names = sorted(active & set(accounts))
+        if not names:
+            _record_heartbeat("v2_snapshot", ok=True,
+                              detail={"skip": "no active promoted accounts"})
+            return
 
-        open_trades = (
-            session.query(TradeRecord)
-            .filter(TradeRecord.status == "OPEN")
-            .all()
-        )
-        restored = 0
-        for tr in open_trades:
-            account = _arena.get_account(tr.strategy_name)
-            if not account:
-                continue
-            # Skip if already have this position (shouldn't happen, but be safe)
-            if account.get_position(tr.symbol):
-                continue
-            # DB DateTime columns round-trip naive; the arena compares
-            # entry_time against tz-aware UTC now (max-hold, hold-hours), so
-            # coerce at the restore boundary — same pattern as
-            # _restore_close_cooldowns. A naive entry_time here crashed every
-            # intraday cycle with "can't subtract offset-naive and
-            # offset-aware datetimes" (caught by the heartbeat, 2026-06-05).
-            entry_time = tr.entry_time
-            if entry_time is not None and entry_time.tzinfo is None:
-                entry_time = entry_time.replace(tzinfo=timezone.utc)
-            position = Position(
-                symbol=tr.symbol,
-                shares=tr.shares,
-                entry_price=tr.entry_price,
-                stop_loss=tr.stop_loss,
-                target=tr.target,
-                direction=tr.direction,
-                trade_type=tr.trade_type,
-                entry_time=entry_time,
-                trade_id=tr.trade_id,
-            )
-            # Add position only — cash already reflects this from _restore_account_state()
-            account.positions.append(position)
-            restored += 1
-        if restored:
-            logger.info("Restored %d open positions from DB", restored)
-            _fetch_startup_prices()
-    except Exception:
-        logger.exception("Failed to restore open positions")
-    finally:
-        session.close()
-
-
-def _fetch_startup_prices() -> None:
-    """Fetch current market prices for all open positions at startup.
-
-    Ensures mark-to-market equity is correct before the first
-    position monitor cycle runs.
-    """
-    if not _arena or not _provider:
-        return
-    fetched = 0
-    failed = 0
-    for name in _arena.get_strategy_names():
-        account = _arena.get_account(name)
-        if not account:
-            continue
-        for pos in account.positions:
-            price = _provider.get_latest_price(pos.symbol)
-            if price is not None:
-                pos.market_price = price
-                fetched += 1
-            else:
-                logger.warning(
-                    "Startup: no price for %s — using entry price $%.2f until next monitor cycle",
-                    pos.symbol, pos.entry_price,
-                )
-                failed += 1
-    if fetched or failed:
-        logger.info("Startup price fetch: %d fetched, %d failed", fetched, failed)
-
-
-def _restore_close_cooldowns() -> None:
-    """Restore per-ticker re-entry cooldowns from the trades table.
-
-    The in-memory _last_close_per_ticker map is wiped on every restart,
-    which previously allowed the signal check to immediately reopen a
-    ticker after a deploy interrupted an active cooldown. This rebuilds
-    the map from the most recent CLOSED trade per (strategy, symbol)
-    so cooldowns survive restarts.
-
-    Only loads closes within the cooldown window — older closes are
-    irrelevant since their cooldown has already expired.
-    """
-    if not _arena or not _session_factory:
-        return
-    from datetime import timedelta
-    from sqlalchemy import func
-
-    session = _session_factory()
-    try:
-        cutoff = datetime.now(timezone.utc) - timedelta(
-            minutes=settings.ticker_reentry_cooldown_minutes
-        )
-        # Get the most recent close per (strategy_name, symbol) since cutoff
-        rows = (
-            session.query(
-                TradeRecord.strategy_name,
-                TradeRecord.symbol,
-                func.max(TradeRecord.exit_time).label("last_exit"),
-            )
-            .filter(
-                TradeRecord.status == "CLOSED",
-                TradeRecord.exit_time.is_not(None),
-                TradeRecord.exit_time >= cutoff,
-            )
-            .group_by(TradeRecord.strategy_name, TradeRecord.symbol)
-            .all()
-        )
-        restored = 0
-        for strategy_name, symbol, last_exit in rows:
-            account = _arena.get_account(strategy_name)
-            if not account:
-                continue
-            # Ensure tz-aware UTC for comparison with datetime.now(timezone.utc)
-            if last_exit.tzinfo is None:
-                last_exit = last_exit.replace(tzinfo=timezone.utc)
-            account._last_close_per_ticker[symbol] = last_exit
-            restored += 1
-        if restored:
-            logger.info(
-                "Restored %d re-entry cooldowns from trades table (cutoff=%dm)",
-                restored, settings.ticker_reentry_cooldown_minutes,
-            )
-    except Exception:
-        logger.exception("Failed to restore close cooldowns")
-    finally:
-        session.close()
-
-
-def _recalculate_account_balances() -> None:
-    """Recalculate cash and realized P&L from the trades table (source of truth).
-
-    Formula: correct_cash = starting_capital
-                          + sum(pnl_dollars for CLOSED trades)
-                          - sum(entry_price * shares for OPEN trades)
-
-    This self-heals any corruption from restarts where the DB had stale
-    cash values (e.g., positions opened after last persist but before shutdown).
-    """
-    if not _arena or not _session_factory:
-        return
-    from sqlalchemy import func
-
-    session = _session_factory()
-    try:
-        for name in _arena.get_strategy_names():
-            account = _arena.get_account(name)
-            if not account:
-                continue
-
-            # Realized P&L from closed trades
-            realized = (
-                session.query(func.coalesce(func.sum(TradeRecord.pnl_dollars), 0.0))
-                .filter(
-                    TradeRecord.strategy_name == name,
-                    TradeRecord.status == "CLOSED",
-                )
-                .scalar()
-            )
-
-            # Cost basis of open positions from trades table
-            open_cost = (
-                session.query(
-                    func.coalesce(
-                        func.sum(TradeRecord.entry_price * TradeRecord.shares), 0.0
-                    )
-                )
-                .filter(
-                    TradeRecord.strategy_name == name,
-                    TradeRecord.status == "OPEN",
-                )
-                .scalar()
-            )
-
-            correct_cash = round(account.starting_capital + realized - open_cost, 2)
-            account.realized_pnl = round(realized, 2)
-
-            if abs(account.cash - correct_cash) > 0.01:
-                logger.warning(
-                    "Cash correction for '%s': DB had $%.2f, correct is $%.2f (diff $%.2f)",
-                    name, account.cash, correct_cash, account.cash - correct_cash,
-                )
-                account.cash = correct_cash
-
-            # CRITICAL: if cash is negative, account is over-leveraged.
-            # Cancel excess positions (newest first) until cash is non-negative,
-            # rather than nuking the entire account.
-            if account.cash < 0:
-                logger.error(
-                    "CRITICAL: '%s' has negative cash $%.2f — cancelling excess positions",
-                    name, account.cash,
-                )
-                # Get open trades ordered newest first (cancel most recent)
-                open_trades = (
-                    session.query(TradeRecord)
-                    .filter(TradeRecord.strategy_name == name, TradeRecord.status == "OPEN")
-                    .order_by(TradeRecord.entry_time.desc())
-                    .all()
-                )
-                cancelled = 0
-                recalc_cash = correct_cash
-                for trade in open_trades:
-                    if recalc_cash >= 0:
-                        break
-                    trade.status = "CANCELLED"
-                    trade.exit_reason = "NEGATIVE_CASH_CORRECTION"
-                    trade_cost = trade.entry_price * trade.shares
-                    recalc_cash += trade_cost
-                    cancelled += 1
-                    logger.warning(
-                        "Cancelled %s %s (cost $%.2f) to recover cash",
-                        name, trade.symbol, trade_cost,
-                    )
-                session.commit()
-
-                # Remove cancelled positions from in-memory account
-                cancelled_ids = {
-                    t.trade_id for t in open_trades
-                    if t.status == "CANCELLED"
-                }
-                account.positions = [
-                    p for p in account.positions
-                    if p.trade_id not in cancelled_ids
-                ]
-                account.cash = recalc_cash
-                logger.info(
-                    "Account '%s': cancelled %d excess positions, cash now $%.2f",
-                    name, cancelled, recalc_cash,
-                )
-
-            # Update peak equity based on corrected values
-            equity = account.total_equity
-            if equity > account.peak_equity:
-                account.peak_equity = equity
-
-            # Auto-unpause heuristic: if an account is paused but its drawdown
-            # is well below the circuit breaker (< half the threshold), the
-            # pause is stale (recovered, or set by an old bug that no longer
-            # applies). Clear it so the strategy can resume trading. Always
-            # log a WARNING so this is visible — never silent.
-            unpause_threshold = settings.drawdown_circuit_breaker_pct / 2
-            if account.is_paused and account.drawdown_pct < unpause_threshold:
-                logger.warning(
-                    "Auto-unpausing '%s': drawdown %.1f%% is below threshold %.1f%% "
-                    "(half of %.1f%% circuit breaker). Account had been paused "
-                    "but has since recovered.",
-                    name, account.drawdown_pct * 100, unpause_threshold * 100,
-                    settings.drawdown_circuit_breaker_pct * 100,
-                )
-                account.is_paused = False
-
-            logger.info(
-                "Account '%s': cash=$%.2f, realized=$%.2f, open_cost=$%.2f",
-                name, correct_cash, realized, open_cost,
-            )
-    except Exception:
-        logger.exception("Failed to recalculate account balances")
+        price_fn = _memoized(_provider.get_latest_price)
+        journal = TradeJournal(session)
+        snapped = 0
+        for name in names:
+            # _mark_account recomputes cash + positions_value from the trades
+            # table and live prices, and upserts the strategy_accounts row.
+            _mark_account(session, name, journal, price_fn, dry_run=False)
+            acct = accounts[name]
+            session.refresh(acct)
+            session.add(StrategySnapshot(
+                strategy_name=name,
+                timestamp=now,
+                cash=acct.cash_balance,
+                positions_value=acct.open_positions_value,
+                total_equity=acct.total_equity,
+                drawdown_pct=acct.drawdown_pct,
+                total_return_pct=round(
+                    (acct.total_equity - STARTING_CAPITAL)
+                    / STARTING_CAPITAL * 100, 4),
+            ))
+            snapped += 1
+        session.commit()
+        logger.info("V2 snapshot: %d strategies marked", snapped)
+        _record_heartbeat("v2_snapshot", ok=True, detail={"strategies": snapped})
+    except Exception as exc:
+        session.rollback()
+        logger.exception("V2 snapshot job failed")
+        _record_heartbeat("v2_snapshot", ok=False,
+                          detail={"error": f"{type(exc).__name__}: {exc}"})
     finally:
         session.close()
 
@@ -605,649 +270,59 @@ def _resolve_scan_universe() -> list[str]:
     return sorted(_provider.get_ticker_universe())
 
 
-_HISTORY_BARS = 260  # ~1 trading year — enough for every indicator (incl. ema_200)
-
-
-def _load_daily_bars_for_history(symbol: str):
-    """Load recent completed daily bars for a symbol from the daily_bars table.
-
-    Returns a DataFrame [open, high, low, close, volume] ordered oldest-first,
-    or None when unavailable. Wired into the arena so it can seed each ticker's
-    IndicatorHistory (history.previous) from persisted data after a restart.
-    """
-    if _session_factory is None:
-        return None
-    import pandas as pd
-
-    session = _session_factory()
-    try:
-        rows = (
-            session.query(
-                DailyBar.open, DailyBar.high, DailyBar.low,
-                DailyBar.close, DailyBar.volume,
-            )
-            .filter(DailyBar.symbol == symbol.upper())
-            .order_by(DailyBar.date.desc())
-            .limit(_HISTORY_BARS)
-            .all()
-        )
-        if not rows:
-            return None
-        rows = list(reversed(rows))  # newest-first -> oldest-first (causal)
-        return pd.DataFrame(
-            {
-                "open": [r.open for r in rows],
-                "high": [r.high for r in rows],
-                "low": [r.low for r in rows],
-                "close": [r.close for r in rows],
-                "volume": [r.volume for r in rows],
-            }
-        )
-    except Exception:
-        logger.exception("Failed to load daily_bars history for %s", symbol)
-        return None
-    finally:
-        session.close()
-
-
-def _run_initial_scan() -> None:
-    """Run unified scan on first startup to populate watchlists.
-
-    Uses UnifiedScanner: fetches each ticker's fundamentals ONCE and
-    qualifies against all 4 strategies in parallel. Pre-filtered to the
-    top N most-liquid stocks by dollar volume to keep total scan time
-    in the seconds-to-minutes range instead of hours.
-    """
-    from edgefinder.scanner.unified_scanner import UnifiedScanner
-    from edgefinder.strategies.base import StrategyRegistry
-
-    tickers = _resolve_scan_universe()
-    logger.info("Initial scan: %d tickers (top dollar-volume universe)", len(tickers))
-
-    strategies = list(StrategyRegistry.get_instances())
-    scanner = UnifiedScanner(strategies, _provider, _session_factory)
-    try:
-        summary = scanner.run(tickers)
-        logger.info("Initial scan results: %s", summary)
-    except Exception:
-        logger.exception("Initial scan failed")
-
-
-def _load_watchlist() -> list[str]:
-    """Load active tickers from DB (populated by scanner).
-
-    Legacy function — used by /api/research/active endpoint.
-    For strategy-specific watchlists, use _load_watchlists().
-    """
-    session = _session_factory()
-    try:
-        active = (
-            session.query(Ticker.symbol)
-            .filter(Ticker.is_active == True)
-            .all()
-        )
-        return [row[0] for row in active]
-    finally:
-        session.close()
-
-
-def _load_watchlists() -> dict[str, list[str]]:
-    """Load per-strategy qualified tickers from DB, ranked by score.
-
-    Returns dict mapping strategy_name -> list of qualified ticker symbols.
-    Each strategy only sees stocks that passed its own qualifies_stock() check.
-    Lists are ordered by score (highest first) and capped at top N per strategy.
-    """
-    default_max = settings.scanner_max_watchlist_per_strategy
-    # Per-strategy caps from strategy.watchlist_size (Coward=50, Gambler=100, Degenerate=200)
-    from edgefinder.strategies.base import StrategyRegistry
-    watchlist_limits = {s.name: getattr(s, "watchlist_size", default_max)
-                        for s in StrategyRegistry.get_instances()}
-    session = _session_factory()
-    try:
-        rows = (
-            session.query(
-                TickerStrategyQualification.strategy_name,
-                TickerStrategyQualification.symbol,
-            )
-            .filter(TickerStrategyQualification.qualified == True)
-            .order_by(
-                TickerStrategyQualification.strategy_name,
-                TickerStrategyQualification.score.desc().nullslast(),
-            )
-            .all()
-        )
-        result: dict[str, list[str]] = {}
-        for strategy_name, symbol in rows:
-            tickers = result.setdefault(strategy_name, [])
-            limit = watchlist_limits.get(strategy_name, default_max)
-            if len(tickers) < limit:
-                tickers.append(symbol)
-        return result
-    finally:
-        session.close()
-
-
-def _populate_fundamentals_cache() -> None:
-    """Build fundamentals cache from DB and push to arena for re-qualification."""
-    if not _arena or not _session_factory:
-        return
-    from edgefinder.db.models import Fundamental
-    session = _session_factory()
-    try:
-        rows = (
-            session.query(Ticker, Fundamental)
-            .join(Fundamental, Ticker.id == Fundamental.ticker_id)
-            .filter(Ticker.is_active == True)
-            .all()
-        )
-        cache = {}
-        for ticker, fund in rows:
-            cache[ticker.symbol] = TickerFundamentals(
-                symbol=ticker.symbol,
-                company_name=ticker.company_name,
-                sector=ticker.sector,
-                market_cap=ticker.market_cap,
-                price=ticker.last_price,
-                earnings_growth=fund.earnings_growth,
-                revenue_growth=fund.revenue_growth,
-                peg_ratio=fund.peg_ratio,
-                fcf_yield=fund.fcf_yield,
-                current_ratio=fund.current_ratio,
-                debt_to_equity=fund.debt_to_equity,
-                price_to_tangible_book=fund.price_to_tangible_book,
-                ev_to_ebitda=fund.ev_to_ebitda,
-                short_interest=fund.short_interest,
-            )
-        _arena.set_fundamentals_cache(cache)
-    except Exception:
-        logger.exception("Failed to populate fundamentals cache")
-    finally:
-        session.close()
-
-
-def _has_fundamentals() -> bool:
-    """Check if active tickers have fundamental data."""
-    from edgefinder.db.models import Fundamental
-
-    session = _session_factory()
-    try:
-        count = (
-            session.query(Ticker)
-            .join(Fundamental, Ticker.id == Fundamental.ticker_id)
-            .filter(Ticker.is_active == True)
-            .count()
-        )
-        return count > 0
-    finally:
-        session.close()
-
-
-# ── Event Bus Wiring ────────────────────────────────────
-
-
-def _wire_event_bus() -> None:
-    """Subscribe to trade events for persistence."""
-
-    def on_trade_opened(trade):
-        # Snapshot commits independently — the trade row needs its FK and
-        # an orphan snapshot is harmless if the atomic write below fails.
-        snapshot_id = None
-        try:
-            snap_session = _session_factory()
-            try:
-                snapshot_svc = MarketSnapshotService(_provider, snap_session)
-                snapshot_id = snapshot_svc.capture_and_persist()
-                trade.market_snapshot_id = snapshot_id
-            finally:
-                snap_session.close()
-        except Exception:
-            logger.exception("Failed to capture market snapshot for %s", trade.trade_id)
-
-        # Atomic: trade row + account-state row commit together. Without
-        # this, a crash between the two writes leaves the DB with a trade
-        # whose cost was never deducted from cash_balance; on restart,
-        # _recalculate_account_balances then self-heals by cancelling an
-        # arbitrary newest position.
-        session = _session_factory()
-        try:
-            journal = TradeJournal(session)
-            journal.log_trade(trade, commit=False)
-            _persist_account_state(
-                session=session,
-                strategy_name=trade.strategy_name,
-                commit=False,
-            )
-            session.commit()
-
-            _capture_trade_context(session, trade)
-            logger.info(
-                "[%s] Trade opened: %s %s @ $%.2f (snapshot #%s)",
-                trade.strategy_name, trade.direction.value,
-                trade.symbol, trade.entry_price,
-                snapshot_id if snapshot_id is not None else "n/a",
-            )
-        except Exception:
-            session.rollback()
-            logger.exception("Failed to persist opened trade %s", trade.trade_id)
-        finally:
-            session.close()
-
-    def on_trade_closed(trade):
-        # Atomic: trade update + account-state update commit together.
-        session = _session_factory()
-        try:
-            journal = TradeJournal(session)
-            journal.log_trade(trade, commit=False)
-            _persist_account_state(
-                session=session,
-                strategy_name=trade.strategy_name,
-                commit=False,
-            )
-            session.commit()
-            logger.info(
-                "[%s] Trade closed: %s %s @ $%.2f — P&L $%.2f (%s)",
-                trade.strategy_name, trade.direction.value,
-                trade.symbol, trade.exit_price or 0,
-                trade.pnl_dollars or 0, trade.exit_reason or "manual",
-            )
-        except Exception:
-            session.rollback()
-            logger.exception("Failed to persist closed trade %s", trade.trade_id)
-        finally:
-            session.close()
-
-    event_bus.subscribe("trade.opened", on_trade_opened)
-    event_bus.subscribe("trade.closed", on_trade_closed)
-
-
-def _capture_trade_context(session, trade) -> None:
-    """Capture rich market context at trade time for later AI analysis.
-
-    Pulls from DB (pre-accumulated data) — no extra API calls.
-    """
-    from edgefinder.db.models import TickerNews, TickerDividend, TradeContext
-
-    try:
-        # Recent news for this ticker (from accumulated DB)
-        news_rows = (
-            session.query(TickerNews)
-            .filter_by(symbol=trade.symbol)
-            .order_by(TickerNews.id.desc())
-            .limit(5)
-            .all()
-        )
-        recent_news = [
-            {"title": n.title, "published": n.published_utc, "publisher": n.publisher_name}
-            for n in news_rows
-        ]
-
-        # Upcoming dividends
-        divs = (
-            session.query(TickerDividend)
-            .filter_by(symbol=trade.symbol)
-            .order_by(TickerDividend.id.desc())
-            .limit(3)
-            .all()
-        )
-        dividends = [
-            {"ex_date": d.ex_dividend_date, "amount": d.cash_amount}
-            for d in divs
-        ]
-
-        # Sector rotation data (if available)
-        sector_prices = {}
-        if _sector_rotation_data:
-            sector_prices = {r["symbol"]: r.get("quadrant") for r in _sector_rotation_data}
-
-        # Related tickers (from cached fundamentals if available)
-        related = None
-        if hasattr(trade, "technical_signals") and trade.technical_signals:
-            related = trade.technical_signals.get("related_tickers")
-
-        context = TradeContext(
-            trade_id=trade.trade_id,
-            recent_news=recent_news,
-            sector_prices=sector_prices,
-            related_tickers=related,
-            short_interest=None,  # populated from fundamentals if available
-            dividends=dividends,
-            indicators=trade.technical_signals,
-        )
-        session.add(context)
-        session.commit()
-    except Exception:
-        logger.debug("Trade context capture failed for %s", trade.trade_id)
-
-
-# ── Market Holiday Check ───────────────────────────────
-
-def _is_near_market_open() -> bool:
-    """Check if current time is within 2 hours of market open (9:30 AM ET).
-
-    Used as startup safeguard: skip initial scan to avoid bleeding into trading time.
-    """
-    try:
-        from zoneinfo import ZoneInfo
-        et = ZoneInfo("US/Eastern")
-        now_et = datetime.now(et)
-        market_open_h, market_open_m = (int(x) for x in settings.market_open_et.split(":"))
-        open_time = now_et.replace(hour=market_open_h, minute=market_open_m, second=0, microsecond=0)
-        hours_until_open = (open_time - now_et).total_seconds() / 3600
-        return 0 <= hours_until_open <= 2
-    except Exception:
-        return False
-
-
-_holidays_cache: list[str] = []  # cached list of holiday date strings
-_holidays_last_refresh: float = 0
-
-
-def _is_market_holiday() -> bool:
-    """Check if today is a market holiday. Refreshes cache weekly."""
-    import time
-    global _holidays_cache, _holidays_last_refresh
-
-    now = time.time()
-    if not _holidays_cache or (now - _holidays_last_refresh) > 604800:  # 7 days
-        if _provider:
-            try:
-                holidays = _provider.get_market_holidays()
-                _holidays_cache = [
-                    h["date"] for h in holidays
-                    if h.get("status") == "closed"
-                ]
-                _holidays_last_refresh = now
-            except Exception:
-                pass
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    return today_str in _holidays_cache
-
-
-# ── Market Snapshot Broadcasting ──────────────────────
-
-
-def _broadcast_snapshot_to_strategies() -> None:
-    """Capture a market snapshot and broadcast to all strategies.
-
-    This keeps Echo (and any future strategies that use on_market_snapshot)
-    aware of the current market regime before each signal check.
-    """
-    if not _arena or not _provider:
-        return
-    try:
-        session = _session_factory()
-        try:
-            svc = MarketSnapshotService(_provider, session)
-            snapshot = svc.capture()
-            _arena.broadcast_market_snapshot(snapshot)
-        finally:
-            session.close()
-    except Exception:
-        logger.exception("Failed to broadcast market snapshot to strategies")
-
-
-# ── Scheduler Job Callbacks ─────────────────────────────
-
-
-def _daily_indicator_job() -> None:
-    """Called at 4:30 PM ET — save daily indicators to history buffer."""
-    if not _arena:
-        return
-    try:
-        _arena.run_daily_cycle()
-        logger.info("Daily indicator cycle complete")
-    except Exception:
-        logger.exception("Daily indicator cycle failed")
-
-
-def _r2_sync_job() -> None:
-    """Called at 7:00 PM ET — incremental daily_bars -> R2 merge + DB prune.
-
-    Self-enabling: runs only when the four R2_* env vars are present (add
-    them to Render to turn the nightly mirror on; absent, it logs and skips).
-    Two steps, in safety order:
-      1. sync — MERGE today's new DB rows into the grow-only R2 store.
-      2. prune — shed DB rows older than the retention window for symbols
-         whose DB state is fingerprint-current in R2 (free-tier cap
-         maintenance; a symbol that failed to sync is never pruned).
-    """
-    if not _session_factory:
-        return
-    if not all(os.getenv(k) for k in (
-            "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT", "R2_BUCKET")):
-        logger.info("R2 sync skipped — R2_* env vars not set")
-        return
-    try:
-        from edgefinder.data.barstore import (
-            DB_RETENTION_DAYS,
-            BarStore,
-            db_protected_symbols,
-        )
-
-        store = BarStore()
-        session = _session_factory()
-        try:
-            result = store.sync(session)
-            logger.info("R2 sync: %s", result)
-            pruned = store.prune_db(
-                session, keep_days=DB_RETENTION_DAYS,
-                protected=db_protected_symbols(session))
-            logger.info("DB prune: %s", pruned)
-        finally:
-            session.close()
-    except Exception:
-        logger.exception("R2 sync/prune failed")
-
-
-def _v2_portfolio_job() -> None:
-    """Called at 9:45 AM ET — run the engine-v2 portfolio paper-trading cycle.
-
-    Trades every active row in promoted_strategies in its own isolated paper
-    account (see edgefinder/engine/live.py). No-ops cleanly when nothing is
-    promoted; writes the v2_portfolio_cycle heartbeat either way.
-    """
-    if not _session_factory or not _provider:
-        return
-    try:
-        from edgefinder.engine.live import run_portfolio_cycle
-
-        summary = run_portfolio_cycle(_session_factory, provider=_provider)
-        logger.info("V2 portfolio cycle: %s", summary)
-    except Exception:
-        logger.exception("V2 portfolio cycle failed")
-
-
-def _record_heartbeat(component: str, ok: bool, detail: dict) -> None:
-    """Upsert the single per-component liveness heartbeat row.
-
-    Best-effort and isolated on its own session: heartbeat bookkeeping
-    must never roll back or break the trading cycle. One row per
-    component, so a plain SELECT-then-insert/update is correct on both
-    SQLite (dev) and Postgres (prod) without dialect-specific upserts.
-    A controlled skip is written fresh with ok=True so a legitimate
-    no-op (holiday, not-ready) never reads as a stall to the watchdog.
-    """
-    if not _session_factory:
-        return
-    session = _session_factory()
-    try:
-        hb = session.query(SystemHeartbeat).filter(
-            SystemHeartbeat.component == component
-        ).one_or_none()
-        now = datetime.now(timezone.utc)
-        if hb is None:
-            session.add(SystemHeartbeat(
-                component=component, last_run_at=now, ok=ok, detail=detail
-            ))
-        else:
-            hb.last_run_at = now
-            hb.ok = ok
-            hb.detail = detail
-        session.commit()
-    except Exception:
-        logger.exception("Heartbeat upsert failed for %s", component)
-        session.rollback()
-    finally:
-        session.close()
-
-
-def _signal_check_job() -> None:
-    """Called every 5 min during market hours. Runs the intraday cycle."""
-    global _last_signal_check
-    cycle_start = datetime.now(timezone.utc)
-    if not _arena or not _provider:
-        _last_signal_check = {"ts": cycle_start.isoformat(), "skipped": "arena/provider not ready"}
-        logger.warning("Signal check skipped: arena not initialized")
-        _record_heartbeat("intraday_cycle", ok=True, detail=dict(_last_signal_check))
-        return
-    if _is_market_holiday():
-        _last_signal_check = {"ts": cycle_start.isoformat(), "skipped": "market holiday"}
-        logger.info("Signal check skipped — market holiday")
-        _record_heartbeat("intraday_cycle", ok=True, detail=dict(_last_signal_check))
-        return
-    try:
-        from zoneinfo import ZoneInfo
-
-        from edgefinder.data.market_data import MarketContext
-
-        # Get bulk snapshot data (one API call). Pass the watchlist as
-        # a fallback so the provider can fetch per-ticker if the bulk
-        # snapshot endpoint isn't on this Polygon plan.
-        fallback = list(_arena.get_all_watched_tickers())
-        snapshot_data = _provider.get_enriched_snapshots(fallback_tickers=fallback)
-
-        # Build market context from index prices
-        ctx = MarketContext(
-            spy_price=snapshot_data.get("SPY", {}).get("price", 0),
-            spy_change_pct=0,  # calculated from prev close if needed
-            qqq_price=snapshot_data.get("QQQ", {}).get("price", 0),
-            qqq_change_pct=0,
-            iwm_price=snapshot_data.get("IWM", {}).get("price", 0),
-            iwm_change_pct=0,
-            dia_price=snapshot_data.get("DIA", {}).get("price", 0),
-            dia_change_pct=0,
-            vix_level=snapshot_data.get("VIX", {}).get("price", 0),
-            as_of=datetime.now(ZoneInfo("US/Eastern")).date(),
-        )
-
-        # Run the intraday cycle (entries + exits)
-        opened, closed = _arena.run_intraday_cycle(snapshot_data, ctx)
-        total = len(opened) + len(closed)
-        if total:
-            logger.info("Intraday cycle: %d opened, %d closed", len(opened), len(closed))
-        else:
-            logger.info("Intraday cycle: no trades")
-
-        _persist_account_state()
-        _last_signal_check = {
-            "ts": cycle_start.isoformat(),
-            "duration_s": (datetime.now(timezone.utc) - cycle_start).total_seconds(),
-            "snapshot_count": len(snapshot_data),
-            "opened": len(opened),
-            "closed": len(closed),
-            "success": True,
-        }
-        _record_heartbeat("intraday_cycle", ok=True, detail=dict(_last_signal_check))
-    except Exception as exc:
-        logger.exception("Intraday cycle failed")
-        _last_signal_check = {
-            "ts": cycle_start.isoformat(),
-            "duration_s": (datetime.now(timezone.utc) - cycle_start).total_seconds(),
-            "success": False,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        _record_heartbeat("intraday_cycle", ok=False, detail=dict(_last_signal_check))
-
-
-def _position_monitor_job() -> None:
-    """Called every 5 min during market hours — persist current account state
-    and record an intraday equity snapshot so the curve shows intraday shape."""
-    if not _arena:
-        return
-    try:
-        _persist_account_state()
-    except Exception:
-        logger.exception("Position monitor persist failed")
-
-    if not _session_factory:
-        return
-    session = _session_factory()
-    try:
-        n = _write_equity_snapshots(session)
-        session.commit()
-        logger.debug("Intraday equity snapshot: %d strategies", n)
-    except Exception:
-        logger.exception("Intraday snapshot failed")
-        session.rollback()
-    finally:
-        session.close()
-
-
 def _nightly_scan_job() -> None:
-    """Called at 6:15 PM ET on weekdays.
+    """Called at 6:15 PM ET on weekdays — the nightly DATA collector.
 
-    Runs the unified scanner: fetches each ticker's fundamentals once and
-    qualifies against all 4 strategies in parallel. Pre-filtered to top
-    N most-liquid by dollar volume so the full nightly scan completes
-    in seconds instead of hours.
+    Runs the slimmed unified scanner (fundamentals fetch + persist, no
+    strategy qualification) over the top-N dollar-volume universe, then
+    snapshots the fundamentals table into the PIT store — that is how the
+    honest fundamental history accumulates.
     """
-    if not _provider:
+    if not _provider or not _session_factory:
         return
 
     from edgefinder.scanner.unified_scanner import UnifiedScanner
-    from edgefinder.strategies.base import StrategyRegistry
 
     weekday = datetime.now().weekday()
     if weekday >= 5:
         logger.info("Weekend — skipping nightly scan")
+        _record_heartbeat("nightly_scan", ok=True, detail={"skip": "weekend"})
         return
 
     tickers = _resolve_scan_universe()
     logger.info("Nightly scan: %d tickers (top dollar-volume universe)", len(tickers))
 
-    strategies = list(StrategyRegistry.get_instances())
-    scanner = UnifiedScanner(strategies, _provider, _session_factory)
+    scanner = UnifiedScanner(_provider, _session_factory)
     try:
         summary = scanner.run(tickers)
         logger.info("Nightly scan results: %s", summary)
-    except Exception:
+    except Exception as exc:
         logger.exception("Nightly scan failed")
+        _record_heartbeat("nightly_scan", ok=False,
+                          detail={"error": f"{type(exc).__name__}: {exc}"})
         return
 
     # PIT fundamentals: snapshot what tonight's scan wrote, dated today —
     # this is how the honest fundamental-strategy history accumulates.
+    pit_rows = None
     try:
         from edgefinder.data.pit_fundamentals import snapshot_fundamentals
 
         session = _session_factory()
         try:
-            snapshot_fundamentals(session)
+            pit_rows = snapshot_fundamentals(session)
         finally:
             session.close()
     except Exception:
         logger.exception("PIT fundamentals snapshot failed")
 
-    # Reload per-strategy watchlists into the live arena
-    watchlists = _load_watchlists()
-    if watchlists and _arena:
-        _arena.set_watchlists(watchlists)
-        _populate_fundamentals_cache()
-        total = sum(len(t) for t in watchlists.values())
-        logger.info(
-            "Nightly scan complete: %d total tickers across %d strategies",
-            total, len(watchlists),
-        )
-        for name, tickers_for_strategy in watchlists.items():
-            logger.info("  %s: %d tickers", name, len(tickers_for_strategy))
-    else:
-        logger.info("Nightly scan: 0 qualified across all strategies")
+    _record_heartbeat("nightly_scan", ok=True,
+                      detail={**summary, "pit_rows": pit_rows})
 
 
 def _benchmark_job() -> None:
     """Called at 4:10 PM ET on weekdays."""
-    if not _provider:
+    if not _provider or not _session_factory:
         return
     session = _session_factory()
     try:
@@ -1256,6 +331,28 @@ def _benchmark_job() -> None:
         logger.info("Benchmark collection: %d records", count)
     except Exception:
         logger.exception("Benchmark collection failed")
+    finally:
+        session.close()
+
+
+def _market_snapshot_job() -> None:
+    """Called at 4:05 PM ET on weekdays — persist a market-wide snapshot.
+
+    Keeps /api/market/regime fresh now that snapshots are no longer captured
+    at (old-arena) trade time.
+    """
+    if not _provider or not _session_factory:
+        return
+    session = _session_factory()
+    try:
+        svc = MarketSnapshotService(_provider, session)
+        snapshot_id = svc.capture_and_persist()
+        logger.info("Market snapshot persisted (#%s)", snapshot_id)
+        _record_heartbeat("market_snapshot", ok=True, detail={"id": snapshot_id})
+    except Exception as exc:
+        logger.exception("Market snapshot job failed")
+        _record_heartbeat("market_snapshot", ok=False,
+                          detail={"error": f"{type(exc).__name__}: {exc}"})
     finally:
         session.close()
 
@@ -1313,67 +410,62 @@ def _dividend_split_job() -> None:
         logger.exception("Dividend/split accumulation job failed")
 
 
-def _write_equity_snapshots(session, now=None) -> int:
-    """Append one StrategySnapshot per strategy — the equity-curve time series.
+def _r2_sync_job() -> None:
+    """Called at 7:00 PM ET — incremental daily_bars -> R2 merge + DB prune.
 
-    Marked to the same mark-to-market ``total_equity`` the accounts use
-    (cash + Σ shares×market_price, refreshed every 5 min by the intraday
-    cycle). Shared by the daily close snapshot and the intraday monitor so
-    the curve shows real intraday shape, not just daily closes.
+    Self-enabling: runs only when the four R2_* env vars are present (add
+    them to Render to turn the nightly mirror on; absent, it logs and skips).
+    Two steps, in safety order:
+      1. sync — MERGE today's new DB rows into the grow-only R2 store.
+      2. prune — shed DB rows older than the retention window for symbols
+         whose DB state is fingerprint-current in R2 (free-tier cap
+         maintenance; a symbol that failed to sync is never pruned).
     """
-    if not _arena:
-        return 0
-    now = now or datetime.now(timezone.utc)
-    accounts = _arena.get_all_accounts()
-    for name, acct in accounts.items():
-        session.add(StrategySnapshot(
-            strategy_name=name,
-            timestamp=now,
-            cash=acct["cash"],
-            positions_value=acct["open_positions_value"],
-            total_equity=acct["total_equity"],
-            drawdown_pct=acct["drawdown_pct"],
-            total_return_pct=(
-                (acct["total_equity"] - settings.starting_capital)
-                / settings.starting_capital * 100
-            ),
-        ))
-    return len(accounts)
-
-
-def _snapshot_job() -> None:
-    """Called at 4:05 PM ET — persist the daily close strategy snapshots."""
-    if not _arena:
+    if not _session_factory:
         return
-    session = _session_factory()
+    if not all(os.getenv(k) for k in (
+            "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT", "R2_BUCKET")):
+        logger.info("R2 sync skipped — R2_* env vars not set")
+        return
     try:
-        n = _write_equity_snapshots(session)
-        session.commit()
-        logger.info("Daily snapshots: %d strategies recorded", n)
-    except Exception:
-        logger.exception("Snapshot job failed")
-    finally:
-        session.close()
+        from edgefinder.data.barstore import (
+            DB_RETENTION_DAYS,
+            BarStore,
+            db_protected_symbols,
+        )
 
-    _persist_account_state()
+        store = BarStore()
+        session = _session_factory()
+        try:
+            result = store.sync(session)
+            logger.info("R2 sync: %s", result)
+            pruned = store.prune_db(
+                session, keep_days=DB_RETENTION_DAYS,
+                protected=db_protected_symbols(session))
+            logger.info("DB prune: %s", pruned)
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("R2 sync/prune failed")
+
+
+# ── On-demand EOD runner (admin endpoint) ───────────────
 
 
 def run_eod_jobs(jobs: list[str] | None = None) -> dict[str, str]:
     """Run the post-close jobs in-process, on demand.
 
-    Triggered by the /api/admin/run-eod endpoint (hit by an external cron)
-    because the in-process scheduler can't fire these when the web service is
-    idle after market close. Each job is isolated so one failure doesn't abort
-    the rest. Returns a {job_name: "ok"|"error"|"skipped"} report.
+    Triggered by the /api/admin/run-eod endpoint. Each job is isolated so
+    one failure doesn't abort the rest. Returns a
+    {job_name: "ok"|"error"|"skipped"} report.
     """
-    # Built lazily so all callbacks below are defined regardless of file order.
     pipeline = [
-        ("nightly_scan", _nightly_scan_job),
-        ("daily_indicators", _daily_indicator_job),
+        ("market_snapshot", _market_snapshot_job),
         ("benchmark", _benchmark_job),
-        ("snapshot", _snapshot_job),
         ("sector_rotation", _sector_rotation_job),
+        ("nightly_scan", _nightly_scan_job),
         ("dividend_split", _dividend_split_job),
+        ("v2_snapshot", _v2_snapshot_job),
     ]
     report: dict[str, str] = {}
     for name, fn in pipeline:
@@ -1388,102 +480,3 @@ def run_eod_jobs(jobs: list[str] | None = None) -> dict[str, str]:
             report[name] = "error"
     logger.info("EOD jobs complete: %s", report)
     return report
-
-
-def run_intraday_jobs() -> dict[str, str]:
-    """Run one intraday cycle on demand (entries+exits, then state/equity persist).
-
-    Triggered by POST /api/admin/run-intraday from the external cron, which is
-    the single driver of the live loop when a trigger token is configured (the
-    in-process timer is then disabled — see init_services). Reuses the exact
-    scheduler callbacks so there is no logic duplication and the dashboard's
-    last-signal-check widget stays correct for free.
-
-    Single-flight: a non-blocking lock drops an overlapping/slow fire rather
-    than running two cycles against the shared in-memory arena. Order matters —
-    signal_check (mutates positions/cash) must run before position_monitor
-    (snapshots equity) so the snapshot reflects post-cycle state.
-    """
-    if not _intraday_lock.acquire(blocking=False):
-        logger.warning("Intraday cycle already running — skipping this fire")
-        return {"status": "busy"}
-    try:
-        report: dict[str, str] = {}
-        for name, fn in (
-            ("signal_check", _signal_check_job),
-            ("position_monitor", _position_monitor_job),
-        ):
-            try:
-                fn()
-                report[name] = "ok"
-            except Exception:
-                logger.exception("Intraday job '%s' failed", name)
-                report[name] = "error"
-        logger.info("Intraday cycle complete: %s", report)
-        return report
-    finally:
-        _intraday_lock.release()
-
-
-def _persist_account_state(
-    session=None,
-    strategy_name: str | None = None,
-    commit: bool = True,
-) -> None:
-    """Sync in-memory arena accounts to the strategy_accounts DB table.
-
-    When called with a caller-owned session and commit=False, the writes
-    are staged only — the caller is responsible for commit and close.
-    Used by the event handlers so a trade row and its account-state
-    update land in the same atomic transaction.
-    """
-    if not _arena:
-        return
-    owned_session = session is None
-    if owned_session:
-        if not _session_factory:
-            return
-        session = _session_factory()
-    try:
-        accounts = _arena.get_all_accounts()
-        if strategy_name is not None:
-            accounts = (
-                {strategy_name: accounts[strategy_name]}
-                if strategy_name in accounts
-                else {}
-            )
-        for name, acct in accounts.items():
-            existing = (
-                session.query(StrategyAccount)
-                .filter_by(strategy_name=name)
-                .first()
-            )
-            if existing:
-                existing.cash_balance = acct["cash"]
-                existing.open_positions_value = acct["open_positions_value"]
-                existing.total_equity = acct["total_equity"]
-                existing.peak_equity = acct["peak_equity"]
-                existing.drawdown_pct = acct["drawdown_pct"]
-                existing.realized_pnl = acct["realized_pnl"]
-                existing.is_paused = acct["is_paused"]
-            else:
-                session.add(StrategyAccount(
-                    strategy_name=name,
-                    starting_capital=settings.starting_capital,
-                    cash_balance=acct["cash"],
-                    open_positions_value=acct["open_positions_value"],
-                    total_equity=acct["total_equity"],
-                    peak_equity=acct["peak_equity"],
-                    drawdown_pct=acct["drawdown_pct"],
-                    realized_pnl=acct["realized_pnl"],
-                    is_paused=acct["is_paused"],
-                ))
-        if commit:
-            session.commit()
-    except Exception:
-        logger.exception("Failed to persist account state")
-        if commit and owned_session:
-            session.rollback()
-    finally:
-        if owned_session:
-            session.close()

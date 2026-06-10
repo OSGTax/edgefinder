@@ -339,10 +339,6 @@ function renderProfile(body) {
   }
   if (!n) { renderEmpty(body, 'No profile data'); return; }
   clear(body).append(kv);
-  const quals = src.qualifying_strategies || [];
-  if (quals.length) {
-    body.append(h('div', { class: 'mt-8 t-dim', text: 'Qualifies: ' + quals.join(', ') }));
-  }
 }
 
 function renderRailTrades(body) {
