@@ -9,6 +9,7 @@ Called once from app.py lifespan. Module-level singletons for router access.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from datetime import datetime, timezone
 
@@ -242,6 +243,7 @@ def init_services() -> None:
         dividend_split_fn=_dividend_split_job,
         daily_indicator_fn=_daily_indicator_job,
         portfolio_rebalance_fn=_v2_portfolio_job,
+        r2_sync_fn=_r2_sync_job,
     )
     _scheduler.start()
     if _intraday_external:
@@ -998,6 +1000,31 @@ def _daily_indicator_job() -> None:
         logger.info("Daily indicator cycle complete")
     except Exception:
         logger.exception("Daily indicator cycle failed")
+
+
+def _r2_sync_job() -> None:
+    """Called at 7:00 PM ET — incremental daily_bars -> R2 Parquet mirror.
+
+    Self-enabling: runs only when the four R2_* env vars are present (add
+    them to Render to turn the nightly mirror on; absent, it logs and skips).
+    """
+    if not _session_factory:
+        return
+    if not all(os.getenv(k) for k in (
+            "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT", "R2_BUCKET")):
+        logger.info("R2 sync skipped — R2_* env vars not set")
+        return
+    try:
+        from edgefinder.data.barstore import BarStore
+
+        session = _session_factory()
+        try:
+            result = BarStore().sync(session)
+        finally:
+            session.close()
+        logger.info("R2 sync: %s", result)
+    except Exception:
+        logger.exception("R2 sync failed")
 
 
 def _v2_portfolio_job() -> None:

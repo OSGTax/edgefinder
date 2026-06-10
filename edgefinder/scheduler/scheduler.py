@@ -52,6 +52,7 @@ class EdgeFinderScheduler:
         dividend_split_fn=None,
         daily_indicator_fn=None,
         portfolio_rebalance_fn=None,
+        r2_sync_fn=None,
     ) -> None:
         """Register all scheduled jobs.
 
@@ -179,6 +180,18 @@ class EdgeFinderScheduler:
                 replace_existing=True,
             )
             self._jobs["v2_portfolio_rebalance"] = "Daily at 9:45 AM ET"
+
+        if r2_sync_fn:
+            # After the nightly scan + PIT snapshot: mirror the day's new
+            # daily_bars rows to the R2 Parquet store (incremental).
+            self._scheduler.add_job(
+                r2_sync_fn,
+                CronTrigger(hour=19, minute=0, day_of_week="mon-fri", timezone=ET),
+                id="r2_sync",
+                name="R2 Bar-Store Sync",
+                replace_existing=True,
+            )
+            self._jobs["r2_sync"] = "Daily at 7:00 PM ET"
 
         logger.info("Scheduler configured with %d jobs", len(self._jobs))
 

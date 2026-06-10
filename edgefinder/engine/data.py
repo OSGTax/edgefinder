@@ -43,6 +43,29 @@ def load_bars(
     }
 
 
+def load_bars_from_store(
+    symbols: list[str], start=None, end=None,
+) -> dict[str, pd.DataFrame]:
+    """Read bars from the R2 Parquet store instead of the DB.
+
+    Same return shape as :func:`load_bars`. The store is a verified mirror of
+    daily_bars (see edgefinder/data/barstore.py); callers opt in explicitly.
+    """
+    from edgefinder.data.barstore import BarStore
+
+    bars = BarStore().load(symbols)
+    if start is not None or end is not None:
+        out = {}
+        for sym, df in bars.items():
+            if start is not None:
+                df = df[df["date"] >= start]
+            if end is not None:
+                df = df[df["date"] <= end]
+            out[sym] = df.reset_index(drop=True)
+        bars = out
+    return bars
+
+
 def spy_series(db: Session) -> pd.DataFrame:
     """Longest available SPY series for benchmarking/regime tagging.
 

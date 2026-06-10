@@ -54,6 +54,8 @@ def main(argv: list[str] | None = None) -> dict:
                    help="persist the scorecard to validation_runs")
     p.add_argument("--universe-label", default=None,
                    help="label stored with the run (default: <n>syms+v2)")
+    p.add_argument("--bars-from", default="db", choices=["db", "r2"],
+                   help="bar source: the DB (default) or the verified R2 store")
     args = p.parse_args(argv)
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -62,12 +64,21 @@ def main(argv: list[str] | None = None) -> dict:
     except ValueError as e:
         raise SystemExit(str(e)) from None
 
-    session = get_session_factory(get_engine())()
-    try:
-        bars = load_bars(session, symbols)
-        spy = spy_series(session)
-    finally:
-        session.close()   # never hold a pooler connection through the folds
+    if args.bars_from == "r2":
+        from edgefinder.engine.data import load_bars_from_store
+
+        bars = load_bars_from_store(symbols + ["SPY"])
+        spy = bars.get("SPY")
+        bars = {s: df for s, df in bars.items() if s in symbols}
+        if spy is None:
+            raise SystemExit("SPY not in the R2 store — run barstore sync first")
+    else:
+        session = get_session_factory(get_engine())()
+        try:
+            bars = load_bars(session, symbols)
+            spy = spy_series(session)
+        finally:
+            session.close()   # never hold a pooler connection through the folds
     missing = [s for s in symbols if s not in bars]
     if missing:
         raise SystemExit(f"no bars for: {', '.join(missing)}")
