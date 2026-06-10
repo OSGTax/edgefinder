@@ -192,6 +192,39 @@ trading → dashboard tables.**
 - **Autonomy:** finish the project autonomously, phase by phase, committing as you go;
   surface decisions only when they genuinely change direction.
 
+### 🔑 SECRETS MAP — every secret × every place it must exist
+
+Secrets do NOT follow your account; each runtime has its own vault and nothing
+syncs them. When something can't authenticate, check this table first.
+
+| Secret | Codespaces¹ | Actions² | Render³ | claude.ai cloud⁴ |
+|---|---|---|---|---|
+| `DATABASE_URL` (use the **pooler** form!) | ✅ set | ✅ set | ✅ set | add if needed |
+| `EDGEFINDER_POLYGON_API_KEY` | ✅ set | — | ✅ set | add if needed |
+| `EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | ✅ set | ✅ set | — | — |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ENDPOINT` / `R2_BUCKET` | ✅ set | — | ⬜ **pending** (enables nightly R2 mirror) | add if needed |
+| `CLAUDE_CODE_OAUTH_TOKEN` | ⬜ (re-add if watchdog CLI needed here) | ✅ set | — | n/a |
+
+¹ GitHub → Settings → Codespaces → Secrets (scoped to this repo). Env vars in
+  every Codespace. **Rebuild/restart the Codespace to pick up changes.**
+² GitHub repo → Settings → Secrets and variables → Actions. Workflows only.
+³ Render dashboard → service → Environment. **Applies on next deploy.**
+⁴ claude.ai/code → environment settings (cloud icon → settings) → env vars in
+  .env format. Used by mobile/web cloud sessions. ⚠️ Stored PLAIN TEXT,
+  visible to anyone who can edit the environment — fine for this project's
+  paper-trading keys, think twice for anything high-value. ⚠️ Cloud sandboxes
+  do NOT set `CODESPACES`, so the direct→pooler DATABASE_URL self-heal won't
+  fire there — paste the POOLER form
+  (`postgresql://postgres.<ref>:<pw>@aws-1-us-east-1.pooler.supabase.com:5432/postgres`).
+
+Gotchas that have already bitten: a pasted secret carried a trailing newline
+(code now .strip()s R2 values); the direct `db.<ref>.supabase.co` host is
+IPv6-only and unreachable from Codespaces (self-heal rewrites it, Codespaces
+only). The zero-secret-movement alternative for mobile: run
+`claude remote-control` in this Codespace and drive it from the phone — all
+execution and secrets stay here (requires the Codespace to stay awake; bump
+the idle timeout in GitHub → Settings → Codespaces, max 240 min).
+
 ### ⚠️ Codespace persistence warning (why this section exists)
 
 Conversation transcripts and the agent memory dir live under `~/.claude/`, which is
