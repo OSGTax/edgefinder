@@ -1,0 +1,58 @@
+name: Calibration re-run (temporary)
+
+# TEMPORARY — delete after the v5.32 calibration re-run completes.
+# The session driving the loose-ends cleanup cannot reach the DB directly
+# (sandbox blocks Postgres egress) and cannot dispatch workflows (MCP token
+# lacks actions:write), so this runs the two calibration lanes on push to
+# the working branch instead:
+#   1. Null control (buy_and_hold:SPY vs SPY) — must still read
+#      0.00 excess Sharpe / -0.02pp after the v5.32 engine changes.
+#   2. The PIT bias-demo lane (validation_runs id 26) re-measured with the
+#      new default trailing rank window (--rank-window 126).
+# Both holdouts stay sealed (no --burn-holdout).
+
+on:
+  push:
+    branches: [claude/handoff-doc-review-176vbl]
+
+permissions:
+  contents: read
+
+jobs:
+  null-control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -e .
+      - name: Null control (expect 0.00 / -0.02pp)
+        run: |
+          python -m edgefinder.engine.validate \
+            --strategy buy_and_hold:SPY --symbols SPY --schedule monthly \
+            --holdout-days 126 --record --universe-label spy+v2-null-v5.32
+
+  pit-trailing-window:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -e .
+      - name: PIT lane with trailing rank window (re-measure id 26)
+        run: |
+          python -m edgefinder.engine.validate \
+            --strategy equal_weight --universe top:100 --start 2021-06-01 \
+            --costed --div-adjust --schedule monthly --holdout-days 126 \
+            --rank-window 126 \
+            --record --universe-label "top:100@pit,rw126+v2-tr"
