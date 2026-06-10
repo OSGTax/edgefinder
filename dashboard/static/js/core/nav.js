@@ -1,7 +1,9 @@
-/* Shell behavior for the redesigned navigation: bottom tab bar active
-   state + the mobile "More" bottom sheet. Top-nav active state, the
-   indices strip and the health dot stay in common.js until the cleanup
-   phase deletes it (then this module absorbs them). */
+/* Shell behavior — the whole navigation layer (common.js retired):
+   top-nav + tab-bar active state, indices strip, health dot, theme
+   toggle, the mobile "More" bottom sheet. */
+
+import { apiGet } from './net.js';
+import { toggleTheme, currentTheme } from './theme.js';
 
 function pathMatches(href) {
   const path = window.location.pathname;
@@ -39,7 +41,65 @@ function initSheet() {
   document.addEventListener('keydown', e => { if (e.key === 'Escape') toggle(false); });
 }
 
+function initTopnav() {
+  const path = window.location.pathname;
+  for (const tab of document.querySelectorAll('.topnav-tab')) {
+    if (pathMatches(tab.getAttribute('href'))) tab.classList.add('active');
+  }
+}
+
+function initThemeButtons() {
+  const setIcon = () => {
+    const btn = document.getElementById('theme-toggle-btn');
+    if (btn) btn.textContent = currentTheme() === 'light' ? '☀️' : '🌙';
+  };
+  setIcon();
+  for (const el of document.querySelectorAll('[data-action="toggle-theme"]')) {
+    el.addEventListener('click', () => { toggleTheme(); setIcon(); });
+  }
+}
+
+async function loadIndices() {
+  try {
+    const data = await apiGet('/api/benchmarks/comparison?days=5');
+    const el = document.getElementById('topnav-indices');
+    if (!el || !data.indices) return;
+    el.replaceChildren();
+    for (const sym of ['SPY', 'QQQ', 'VIX']) {
+      const series = data.indices[sym];
+      if (!series || series.length < 2) continue;
+      const chg = series[series.length - 1] - series[series.length - 2];
+      const wrap = document.createElement('div');
+      wrap.className = 'topnav-index';
+      const s1 = document.createElement('span');
+      s1.className = 'sym';
+      s1.textContent = sym;
+      const s2 = document.createElement('span');
+      s2.className = 'num ' + (chg >= 0 ? 't-up' : 't-down');
+      s2.textContent = `${chg >= 0 ? '▲' : '▼'}${Math.abs(chg).toFixed(2)}%`;
+      wrap.append(s1, s2);
+      el.append(wrap);
+    }
+  } catch { /* decorative */ }
+}
+
+async function loadHealthDot() {
+  try {
+    const data = await apiGet('/api/health');
+    const el = document.getElementById('topnav-status');
+    if (!el) return;
+    el.replaceChildren();
+    const dot = document.createElement('span');
+    dot.className = 'dot ' + (data.status === 'ok' ? 'ok' : 'bad');
+    el.append(dot, document.createTextNode(` v${data.version}`));
+  } catch { /* decorative */ }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
+  initTopnav();
   initTabbar();
   initSheet();
+  initThemeButtons();
+  loadIndices();
+  loadHealthDot();
 });

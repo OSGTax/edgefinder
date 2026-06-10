@@ -77,12 +77,9 @@ def _inline_styles(name: str) -> list[str]:
     return re.findall(r'style="[^"]*"', (TEMPLATES / name).read_text())
 
 
-# Coverage expands as each page is rebuilt (redesign phases 1-9). The end
-# state is every template in dashboard/templates/ inline-style-free.
-STYLE_FREE_TEMPLATES: list[str] = [
-    "base.html", "symbol.html", "lab.html", "dashboard.html",
-    "trades.html", "strategies.html", "screener.html", "ops.html",
-]
+# End state (redesign phase 9): EVERY template is inline-style-free.
+STYLE_FREE_TEMPLATES: list[str] = sorted(
+    p.name for p in TEMPLATES.glob("*.html"))
 
 
 @pytest.mark.parametrize("name", STYLE_FREE_TEMPLATES)
@@ -116,3 +113,8 @@ def test_no_cdn_script_tags_remain():
 
 def test_ops_page(client):
     assert client.get("/ops").status_code == 200
+
+
+def test_legacy_assets_are_gone(client):
+    assert client.get("/static/js/common.js").status_code == 404
+    assert client.get("/static/css/theme.css").status_code == 404

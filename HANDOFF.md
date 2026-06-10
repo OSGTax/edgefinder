@@ -359,49 +359,37 @@ menu control −3.3pp (no tilt), dumb sweep 0/6 false positives (noise floor
   workflow (waves of ~10-25; stock/Lynch lanes should now use
   `--bars-from r2`).
 
-### 🎨 DASHBOARD REDESIGN — IN PROGRESS (plan approved 2026-06-10)
+### 🎨 DASHBOARD REDESIGN — COMPLETE (2026-06-10, v5.36→v5.45)
 
-Full plan: `/root/.claude/plans/` is session-local — the AUTHORITATIVE spec
-is reproduced here. Goal: dark trading-terminal, mobile-equal, data-rich,
-reliable. 10 phases, each shippable; cutover in-place page by page.
+Dark trading-terminal, mobile-equal, data-rich, reliable. All 10 phases
+shipped; suite 792, smoke 37/37 vs a live server on the seeded demo DB.
 
-**DONE:**
-- ✅ Phase 0 (v5.36): lightweight-charts 4.1.0 vendored (CDN killed);
-  static guards in tests/test_dashboard_static.py
-- ✅ Phase 1 (v5.37): css/{tokens,base,components,charts}.css (dark :root,
-  light via html[data-theme]; legacy var aliases); js/core/{net,fmt,dom,
-  theme,charts,poll,nav}.js (AbortController+retry+dedup fetch, epoch-sec
-  time boundary, error cards, pane-sync charts, hard-stop poller);
-  js/components/{sparkline,heatmap}.js; bottom tab bar + More sheet
-- ✅ Phase 2 (v5.38): dashboard/{ttl_cache,symbol_service}.py +
-  routers/symbols.py — /api/symbols/{sym}/bars (DB/R2 seam, split-adj,
-  indicators, epoch times) + /events; benchmarks `times`;
-  scripts/smoke_dashboard.py
-- ✅ Phase 3 (v5.39): /symbol Workstation page (candles+volume+EMA/BB,
-  synced RSI/MACD, trade/event markers + drawer, search, MAX=R2 history,
-  URL state); /research→307; scripts/seed_demo_data.py
+**Pages:** `/` Portfolio (lane-segmented Arena/V2 hero from server-computed
+/summary — the fake-capital fallback is dead), `/symbol/{sym}` Workstation
+(candles+volume, EMA/BB overlays, synced RSI/MACD panes w/ locked
+crosshair, trade/dividend/split/news markers + trade drawer, search,
+MAX = full R2 history, URL state), `/lab` (Scoreboard N-of-10 · Runs
+browser w/ detail drawer + compare≤4 · Backtest tab w/ bounded polling),
+`/trades`, `/strategies` (lanes + dividend/param ledgers), `/screener`
+(hand-rolled treemap + qualification watchlist), `/ops` (heartbeats,
+storage panel, agent timeline). `/research`→/symbol, `/backtest`→/lab.
 
-**REMAINING (specs in the approved plan, summarized):**
-- Phase 4 (v5.40) API batch 2: routers/lab.py (/api/lab/runs+detail+
-  scoreboard+labels over validation_runs, hunt-r1:* labels);
-  engine/record.py persist folds+by_regime into oos JSON; strategies
-  router adds promoted/summary(kills fake-capital fallback)/meta/
-  dividends/params + lane field; ops adds activity(obs+actions timeline)
-  + storage(DB+R2 manifest, TTLCache); research qualifications; market
-  sectors/history
-- Phase 5 (v5.41) /lab page: Scoreboard (N-of-10 finalists) · Runs
-  (filters+detail drawer+compare≤4) · Backtest tab (absorbs old page,
-  poll.js fixes infinite polling); /backtest→redirect
-- Phase 6 (v5.42) Portfolio rebuild (lane-segmented Arena/V2 hero stats
-  via /api/strategies/summary, heatmap component, NO fake capital)
-- Phase 7 (v5.43) Trades+Strategies+Screener rebuild; treemap component
-  replaces Chart.js (drop its CDN tags from base.html)
-- Phase 8 (v5.44) /ops page (heartbeats, scheduler, activity timeline,
-  storage panel)
-- Phase 9 (v5.45) cleanup: delete common.js/theme.css/orphans, drop
-  legacy `dates` from benchmarks, style-guard ALL templates, docs
-- Verification each phase: pytest + scripts/smoke_dashboard.py against
-  uvicorn on scripts/seed_demo_data.py SQLite; DevTools mobile pass
+**Architecture:** zero CDN deps (lightweight-charts 4.1 vendored; Chart.js
+retired), zero inline styles (guard test, all templates), ES modules
+(core/net w/ AbortController+retry+dedup; epoch-sec time boundary in
+fmt.toEpochSec; dom error-cards everywhere; bounded poller; theme tokens
+w/ live chart restyle), css/{tokens,base,components,charts}.css.
+common.js/theme.css deleted; nav lives in core/nav.js.
+
+**Verification tooling that outlives the redesign:**
+`scripts/seed_demo_data.py` (offline demo DB) + `scripts/smoke_dashboard.py`
+(every GET, run vs localhost or Render) + `tests/test_dashboard_static.py`
+(asset serving, no-CDN, no-inline-style guards).
+
+**Post-deploy checklist (owner, ~5 min on the phone):** open
+edgefinder-pm8h.onrender.com on mobile — bottom tabs, /symbol pinch-zoom
++ MAX range (first R2 read warms the server cache), lab drawer, theme
+toggle. Report anything off; charts restyle live on theme switch.
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 

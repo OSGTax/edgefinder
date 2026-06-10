@@ -126,7 +126,7 @@ class BenchmarkService:
 
         Returns:
             {
-                "dates": ["2024-01-02", ...],
+                "times": [epoch_sec, ...],   # UTC-midnight epoch seconds
                 "indices": {"SPY": [0.0, 0.5, 1.2, ...], ...}
             }
         Cumulative % change from the first date.
@@ -135,9 +135,7 @@ class BenchmarkService:
             start_date = date.today() - timedelta(days=days)
 
         start_dt = datetime.combine(start_date, datetime.min.time())
-        # "times" (UTC-midnight epoch seconds) is the chart-facing axis; the
-        # legacy "dates" strings remain until the redesign cleanup phase
-        result: dict = {"dates": [], "times": [], "indices": {}}
+        result: dict = {"times": [], "indices": {}}
 
         for symbol in settings.index_symbols:
             records = (
@@ -150,17 +148,14 @@ class BenchmarkService:
                 continue
 
             base_close = records[0].close
-            cumulative = []
-            dates = []
-            for rec in records:
-                pct = round((rec.close - base_close) / base_close * 100, 2) if base_close > 0 else 0.0
-                cumulative.append(pct)
-                dt = rec.date
-                dates.append(dt.strftime("%Y-%m-%d") if hasattr(dt, "strftime") else str(dt))
+            cumulative = [
+                round((rec.close - base_close) / base_close * 100, 2)
+                if base_close > 0 else 0.0
+                for rec in records
+            ]
 
             result["indices"][symbol] = cumulative
-            if not result["dates"]:
-                result["dates"] = dates
+            if not result["times"]:
                 from datetime import timezone as _tz
                 result["times"] = [
                     int(datetime.combine(

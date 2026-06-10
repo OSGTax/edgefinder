@@ -108,8 +108,8 @@ edgefinder/
 │   │   ├── sentiment.py        # Sentiment scores + trending
 │   │   ├── benchmarks.py       # Strategy vs index comparison
 │   │   └── inject.py           # Manual ticker injection
-│   └── templates/
-│       └── index.html          # Dashboard frontend
+│   ├── templates/              # 8 pages (v5.45 dark-terminal redesign)
+│   └── static/                 # tokens/components CSS + ES-module JS, vendored charts
 ├── scripts/
 │   ├── setup_db.py             # Initialize database
 │   ├── run_scanner.py          # CLI scanner (--quick, --tickers)
@@ -165,6 +165,13 @@ python -m pytest tests/ -v -m "not integration"
 | GET | `/api/backtest/jobs` | List recent backtest jobs |
 | GET | `/api/backtest/jobs/{id}` | Poll a backtest job (status, progress, result) |
 | POST | `/api/inject` | Inject ticker for evaluation |
+| GET | `/api/symbols/{sym}/bars?range=&indicators=` | Chart bars + indicator series (DB/R2 seam, epoch times) |
+| GET | `/api/symbols/{sym}/events` | Dividend/split/news chart markers |
+| GET | `/api/lab/runs` · `/runs/{id}` · `/scoreboard` · `/labels` | Validation-runs browser + 10-finalist scoreboard |
+| GET | `/api/strategies/summary` · `/promoted` · `/meta` · `/dividends` · `/params` | Lane rollups, v2 registry, metadata, ledgers |
+| GET | `/api/ops/activity` · `/api/ops/storage` | Agent timeline; DB vs R2 storage panel |
+| GET | `/api/research/qualifications` | Scanner's ranked watchlist |
+| GET | `/api/market/sectors/history` | Sector price series |
 | GET | `/api/inject` | List active injections |
 | DELETE | `/api/inject/{id}` | Remove injection |
 

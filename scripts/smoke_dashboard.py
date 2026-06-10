@@ -28,7 +28,7 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/api/trades/stats", ["total_trades"], {200}),
     ("/api/trades/integrity", [], {200}),
     ("/api/market/regime?limit=1", [], {200}),
-    ("/api/benchmarks/comparison?days=5", ["dates", "times", "indices"], {200}),
+    ("/api/benchmarks/comparison?days=5", ["times", "indices"], {200}),
     ("/api/benchmarks/sectors", [], {200}),
     ("/api/research/search?q=AA&limit=3", [], {200}),
     ("/api/research/active", [], {200}),

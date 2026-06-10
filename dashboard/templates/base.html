@@ -6,24 +6,20 @@
   <title>{% block title %}EdgeFinder{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9670;</text></svg>">
   <script>
-    // pre-paint theme (no flash): data-theme drives the new token CSS;
-    // the legacy body class is mirrored in common.js on DOMContentLoaded
+    // pre-paint theme (no flash): data-theme drives the token CSS
     document.documentElement.setAttribute('data-theme',
       localStorage.getItem('ef-theme') === 'light' ? 'light' : 'dark');
   </script>
-  <link rel="stylesheet" href="/static/css/theme.css">
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="stylesheet" href="/static/css/base.css">
   <link rel="stylesheet" href="/static/css/components.css">
   <link rel="stylesheet" href="/static/css/charts.css">
   <!-- vendored (pinned, no CDN dependency) — TradingView Lightweight Charts v4.1.0, Apache-2.0 -->
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="/static/js/common.js"></script>
   <script type="module" src="/static/js/core/nav.js"></script>
   {% block head %}{% endblock %}
 </head>
 <body>
-<script>if(localStorage.getItem('ef-theme')==='light')document.body.classList.add('light-mode')</script>
 
 <!-- Top Navigation Bar -->
 <nav class="topnav">
@@ -41,7 +37,7 @@
   </div>
   <div class="topnav-right">
     <div id="topnav-indices" class="topnav-indices"></div>
-    <button id="theme-toggle-btn" class="theme-toggle" onclick="toggleTheme()">🌙</button>
+    <button id="theme-toggle-btn" class="theme-toggle" data-action="toggle-theme">🌙</button>
     <div id="topnav-status" class="topnav-status">
       <span class="dot"></span> ...
     </div>
@@ -67,7 +63,7 @@
   <a href="/strategies" class="sheet-link">Strategies</a>
   <a href="/screener" class="sheet-link">Screener</a>
   <a href="/ops" class="sheet-link">Ops</a>
-  <button class="sheet-link" type="button" onclick="toggleTheme()">Toggle theme</button>
+  <button class="sheet-link" type="button" data-action="toggle-theme">Toggle theme</button>
 </div>
 
 {% block scripts %}{% endblock %}

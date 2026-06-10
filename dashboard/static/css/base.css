@@ -4,6 +4,27 @@
    names only. Coexists with theme.css until the cleanup phase.
    ═══════════════════════════════════════════════════════════════ */
 
+/* ── global reset (theme.css retired in cleanup phase) ── */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--t-bg);
+  color: var(--t-text);
+  font-family: var(--t-font-ui);
+  font-size: var(--t-fs-base);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { margin: 0 0 6px; font-weight: 650; }
+h2 { font-size: var(--t-fs-xl); }
+h4 { font-size: var(--t-fs-base); color: var(--t-text-2); }
+p { margin: 4px 0; }
+a { color: var(--t-info); text-decoration: none; }
+a:hover { text-decoration: underline; }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--t-border-strong); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+
 /* ── numerals: monospace + tabular everywhere they carry data ── */
 .num {
   font-family: var(--t-font-mono);
