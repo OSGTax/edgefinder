@@ -1,0 +1,46 @@
+name: Retire old arena (DB row deletion)
+
+# Executes scripts/retire_arena_db.py against the production DB (owner
+# approved "just delete, no archive", 2026-06-10). Triggered by
+# committing ops/retire-arena.flag:
+#   - any content        -> DRY RUN (prints per-table counts, no writes)
+#   - content 'EXECUTE'  -> the real single-transaction deletion
+# Run EXECUTE only after the code retirement is deployed, or the old
+# arena scheduler will recreate accounts on its next cycle.
+
+on:
+  push:
+    branches: [claude/handoff-doc-review-176vbl, main]
+    paths: [ops/retire-arena.flag]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retire-arena
+  cancel-in-progress: false
+
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -e .
+      - name: Retire arena rows
+        run: |
+          set -euo pipefail
+          MODE="$(tr -d '[:space:]' < ops/retire-arena.flag || true)"
+          if [ "$MODE" = "EXECUTE" ]; then
+            echo "EXECUTE mode — deleting arena rows"
+            python scripts/retire_arena_db.py --execute
+          else
+            echo "DRY-RUN mode (flag content: $MODE)"
+            python scripts/retire_arena_db.py
+          fi
