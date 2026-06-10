@@ -155,6 +155,19 @@ def init_database():
             ON dividends (symbol)""",
         """CREATE INDEX IF NOT EXISTS ix_dividends_ex_date
             ON dividends (ex_date)""",
+        """CREATE TABLE IF NOT EXISTS dividend_credits (
+            id SERIAL PRIMARY KEY,
+            strategy_name VARCHAR(50) NOT NULL,
+            symbol VARCHAR(10) NOT NULL,
+            ex_date DATE NOT NULL,
+            shares INTEGER NOT NULL,
+            amount FLOAT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT uq_div_credit_strategy_symbol_exdate
+                UNIQUE (strategy_name, symbol, ex_date)
+        )""",
+        """CREATE INDEX IF NOT EXISTS ix_dividend_credits_strategy_name
+            ON dividend_credits (strategy_name)""",
     ]
     with engine.begin() as conn:
         for ddl in table_ddls:

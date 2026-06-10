@@ -12,9 +12,13 @@ Deliberate deviations from the old per-ticker arena's account rules:
   strategy's target weights ARE its risk policy (long-only, sum <= 1,
   enforced here). The old caps encode a per-ticker risk model and would
   block e.g. a 7-position equal-weight at ~14% per name.
-- The account integrity formula is unchanged (CLAUDE.md):
-  cash = starting_capital + sum(closed pnl) - sum(open cost basis),
-  recomputed from the trades table at the start of every cycle (self-heal).
+- The account integrity formula follows CLAUDE.md, extended with dividend
+  cash credits (the live counterpart of the lab's total-return adjustment):
+  cash = starting_capital + sum(closed pnl) + sum(dividend credits)
+       - sum(open cost basis),
+  recomputed from the trades + dividend_credits tables every cycle
+  (self-heal). Credits are written when an ex-date passes while lots are
+  held (one row per strategy/symbol/ex_date, never recomputed).
 - A partial rebalance sell SPLITS a lot: the sold shares close as a normal
   closed trade and the remainder reopens with the ORIGINAL entry price/time
   (entry_reasoning notes the split), so realized P&L stays exact and every
@@ -37,8 +41,17 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
+from sqlalchemy import func
+
 from edgefinder.core.models import Direction, Trade, TradeStatus, TradeType
-from edgefinder.db.models import DailyBar, PromotedStrategy, StrategyAccount, SystemHeartbeat
+from edgefinder.db.models import (
+    DailyBar,
+    DividendCredit,
+    DividendRecord,
+    PromotedStrategy,
+    StrategyAccount,
+    SystemHeartbeat,
+)
 from edgefinder.engine.backtest import _build_context, prepare_bars
 from edgefinder.engine.data import load_bars
 from edgefinder.engine.strategies import make_strategy_factory
@@ -142,17 +155,93 @@ def ensure_recent_bars(session, provider, symbols: list[str], today: date) -> in
     return added
 
 
+def ensure_recent_dividends(session, provider, symbols: list[str]) -> int:
+    """Top up the dividends table for the traded universe (best-effort).
+
+    Live credits can only be as fresh as the dividends table, and nothing
+    else updates it in production. Polygon declares ex-dates ahead of time,
+    so a daily idempotent top-up (skip-existing per (symbol, ex_date)) keeps
+    credits exact. Needs the raw Polygon REST client; absent (tests, stub
+    providers), it skips cleanly.
+    """
+    client = getattr(provider, "_client", None)
+    if client is None:  # CachedDataProvider wraps the real provider
+        client = getattr(getattr(provider, "_provider", None), "_client", None)
+    if client is None or not symbols:
+        return 0
+    try:
+        from edgefinder.data.dividends_backfill import backfill
+
+        return int(backfill(session, client, symbols).get("rows_written", 0))
+    except Exception:
+        logger.exception("dividend refresh failed")
+        return 0
+
+
+def _credit_dividends(session, strategy_name: str, open_lots, today: date) -> float:
+    """Credit cash for dividends whose ex-date passed while lots were held.
+
+    Ex-date convention: a lot earns a dividend when it was OPENED strictly
+    before the ex-date (bought yesterday or earlier = held at the prior
+    close, which is what gets the payment). Cycles run daily and trades only
+    happen at cycle time AFTER this step, so the open lots seen here are the
+    holdings as of every ex-date being credited — including ex-dates from
+    missed cycles, which self-heal on the next run.
+
+    One credit row per (strategy, symbol, ex_date). Splits from partial
+    sells carry the ORIGINAL entry time, so they can't double-credit.
+    Returns dollars credited by this call.
+    """
+    by_symbol: dict[str, list] = {}
+    for t in open_lots:
+        by_symbol.setdefault(t.symbol, []).append(t)
+
+    credited = 0.0
+    for symbol, lots in by_symbol.items():
+        earliest_entry = min(t.entry_time for t in lots).date()
+        divs = (session.query(DividendRecord)
+                .filter(DividendRecord.symbol == symbol,
+                        DividendRecord.ex_date > earliest_entry,
+                        DividendRecord.ex_date <= today).all())
+        if not divs:
+            continue
+        already = {r[0] for r in session.query(DividendCredit.ex_date)
+                   .filter(DividendCredit.strategy_name == strategy_name,
+                           DividendCredit.symbol == symbol).all()}
+        for div in divs:
+            if div.ex_date in already:
+                continue
+            shares = sum(t.shares for t in lots
+                         if t.entry_time.date() < div.ex_date)
+            if shares <= 0:
+                continue
+            amount = round(shares * div.cash_amount, 2)
+            session.add(DividendCredit(
+                strategy_name=strategy_name, symbol=symbol,
+                ex_date=div.ex_date, shares=shares, amount=amount))
+            credited += amount
+            logger.info("%s: dividend credit %s %s x%d = $%.2f",
+                        strategy_name, symbol, div.ex_date, shares, amount)
+    if credited:
+        session.commit()
+    return credited
+
+
 def _open_lots(journal: TradeJournal, strategy_name: str) -> list:
     return journal.get_open_trades(strategy_name)
 
 
-def _recalc_cash(journal: TradeJournal, strategy_name: str) -> float:
-    """CLAUDE.md integrity formula, recomputed from the trades table."""
+def _recalc_cash(session, journal: TradeJournal, strategy_name: str) -> float:
+    """CLAUDE.md integrity formula, recomputed from the trades table
+    (+ dividend credits, the v2 extension)."""
     closed = journal.get_closed_trades(strategy_name)
     open_lots = _open_lots(journal, strategy_name)
     realized = sum(t.pnl_dollars or 0.0 for t in closed)
     open_cost = sum(t.entry_price * t.shares for t in open_lots)
-    return STARTING_CAPITAL + realized - open_cost
+    credits = session.query(
+        func.coalesce(func.sum(DividendCredit.amount), 0.0)
+    ).filter(DividendCredit.strategy_name == strategy_name).scalar() or 0.0
+    return STARTING_CAPITAL + realized + credits - open_cost
 
 
 def _close_lot(journal: TradeJournal, lot, shares: int, price: float,
@@ -262,6 +351,7 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
                        promo.strategy_name, basis)
 
     ensure_recent_bars(session, provider, symbols, today)
+    ensure_recent_dividends(session, provider, symbols)
 
     # cheap schedule gate BEFORE the expensive load + indicator precompute —
     # on a hold day only the account mark runs
@@ -274,6 +364,10 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
 
     journal = TradeJournal(session)
     open_lots = _open_lots(journal, promo.strategy_name)
+    # credit ex-dates crossed since the last cycle BEFORE any trading or
+    # marking — runs on hold days too (ex-dates rarely land on boundaries)
+    if not dry_run:
+        _credit_dividends(session, promo.strategy_name, open_lots, today)
     has_history = bool(open_lots or journal.get_closed_trades(promo.strategy_name))
     if has_history and not _is_rebalance_day(today, decision_date, promo.schedule):
         _mark_account(session, promo.strategy_name, journal, price_fn, dry_run)
@@ -299,14 +393,18 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
             px = prep[s]["last_close"] if s in prep else 0.0
         prices[s] = px
 
-    cash = _recalc_cash(journal, promo.strategy_name)
+    cash = _recalc_cash(session, journal, promo.strategy_name)
     current: dict[str, int] = {}
     for t in open_lots:
         current[t.symbol] = current.get(t.symbol, 0) + t.shares
     equity = cash + sum(sh * prices.get(s, 0.0) for s, sh in current.items())
 
     slip = SLIPPAGE_BPS / 1e4
-    now = datetime.now(timezone.utc)
+    # trade timestamps carry the CYCLE's trading day, not the wall-clock
+    # date: a --date/simulated run (or an evening manual run after the UTC
+    # rollover) must not stamp trades onto a different day than the cycle
+    # they belong to — dividend eligibility compares entry date vs ex-date
+    now = datetime.combine(today, datetime.now(timezone.utc).timetz())
     actions: list[dict] = []
 
     # sells first (raise cash) — anything over target, or fully exited names
@@ -333,7 +431,7 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
                 to_sell -= n
             open_lots = _open_lots(journal, promo.strategy_name)
             current[sym] = sum(t.shares for t in open_lots if t.symbol == sym)
-            cash = _recalc_cash(journal, promo.strategy_name)
+            cash = _recalc_cash(session, journal, promo.strategy_name)
         actions.append({"side": "SELL", "symbol": sym, "shares": -delta,
                         "price": round(fill, 4)})
 
@@ -382,7 +480,7 @@ def _mark_account(session, strategy_name: str, journal: TradeJournal,
     """Upsert the strategy_accounts row from the trades table + live prices."""
     if dry_run:
         return
-    cash = _recalc_cash(journal, strategy_name)
+    cash = _recalc_cash(session, journal, strategy_name)
     open_lots = _open_lots(journal, strategy_name)
     closed = journal.get_closed_trades(strategy_name)
     positions_value = 0.0

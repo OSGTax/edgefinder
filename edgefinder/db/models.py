@@ -347,6 +347,35 @@ class DividendRecord(Base):
     cash_amount: Mapped[float] = mapped_column(Float)
 
 
+class DividendCredit(Base):
+    """Cash credited to a v2 paper account for a dividend on a held position.
+
+    Written by the v2 portfolio runner (engine/live) when an ex-date passes
+    while lots are held — the live counterpart of the lab's total-return
+    adjustment. Extends the account integrity formula for v2 accounts:
+
+        cash = starting_capital + closed P&L + dividend credits - open cost
+
+    One row per (strategy_name, symbol, ex_date); rows are facts recorded at
+    credit time and are never recomputed or deleted, so the cash audit trail
+    stays append-only like the trades table.
+    """
+
+    __tablename__ = "dividend_credits"
+    __table_args__ = (
+        UniqueConstraint("strategy_name", "symbol", "ex_date",
+                         name="uq_div_credit_strategy_symbol_exdate"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy_name: Mapped[str] = mapped_column(String(50), index=True)
+    symbol: Mapped[str] = mapped_column(String(10))
+    ex_date: Mapped[date] = mapped_column(Date)
+    shares: Mapped[int] = mapped_column(Integer)
+    amount: Mapped[float] = mapped_column(Float)  # total dollars: shares × per-share
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # ── system_heartbeat ────────────────────────────────────
 
 

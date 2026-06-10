@@ -177,6 +177,15 @@ The trades table is the **source of truth** for all account balances. On every s
 ```
 correct_cash = starting_capital + sum(closed trade P&L) - sum(open position cost basis)
 ```
+**v2 portfolio accounts** (engine/live) extend the formula with dividend cash credits
+(`dividend_credits` table, written when an ex-date passes while lots are held —
+the live counterpart of the lab's total-return adjustment):
+```
+correct_cash_v2 = starting_capital + sum(closed P&L) + sum(dividend credits)
+                - sum(open cost basis)
+```
+The watchdog's cash-drift check uses the extended formula for ALL accounts
+(old-arena strategies have no credit rows, so the extra term is zero for them).
 **Rules for all strategies (existing and new):**
 1. Every strategy uses the same `VirtualAccount` class — no custom account logic
 2. Account state is persisted to DB immediately after every trade open/close AND on shutdown

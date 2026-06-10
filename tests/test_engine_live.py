@@ -7,6 +7,8 @@ import pytest
 from edgefinder.db.engine import Base, get_engine, get_session_factory
 from edgefinder.db.models import (
     DailyBar,
+    DividendCredit,
+    DividendRecord,
     PromotedStrategy,
     StrategyAccount,
     SystemHeartbeat,
@@ -196,3 +198,103 @@ class TestLiveCycle:
         summary = run_portfolio_cycle(
             factory, today=date(2024, 2, 1), price_fn=lambda s: 100.0)
         assert summary["note"] == "no active promoted strategies"
+
+
+class TestDividendCredits:
+    """Live TR parity: ex-dates crossed while holding credit cash.
+
+    Setup mirrors TestLiveCycle: equal_weight on AAA/BBB, first cycle (and
+    lot entries) on Thu 2024-02-01.
+    """
+
+    def _setup(self, factory):
+        session = factory()
+        _seed_bars(session, "AAA", date(2023, 1, 2), 260, price=100.0)
+        _seed_bars(session, "BBB", date(2023, 1, 2), 260, price=50.0)
+        promote(session, spec="equal_weight", symbols=["AAA", "BBB"],
+                schedule="monthly", tier="experimental")
+        session.close()
+        price_fn = _prices(factory)
+        run_portfolio_cycle(factory, today=date(2024, 2, 1), price_fn=price_fn)
+        return price_fn
+
+    def _add_dividend(self, factory, symbol, ex_date, amount):
+        session = factory()
+        session.add(DividendRecord(symbol=symbol, ex_date=ex_date,
+                                   cash_amount=amount))
+        session.commit()
+        session.close()
+
+    def _advance_bars(self, factory, last_seed: date, days: int):
+        session = factory()
+        _seed_bars(session, "AAA", last_seed, days, price=100.0)
+        _seed_bars(session, "BBB", last_seed, days, price=50.0)
+        session.close()
+
+    def test_ex_date_while_held_credits_cash(self, factory):
+        price_fn = self._setup(factory)
+        self._add_dividend(factory, "AAA", date(2024, 2, 2), 1.0)
+        self._advance_bars(factory, date(2024, 2, 1), 1)
+        # Fri 2024-02-02 = ex-date, a hold day (same month)
+        run_portfolio_cycle(factory, today=date(2024, 2, 2), price_fn=price_fn)
+
+        session = factory()
+        credit = session.query(DividendCredit).one()
+        shares = (session.query(TradeRecord)
+                  .filter_by(strategy_name="equal_weight", symbol="AAA",
+                             status="OPEN").one().shares)
+        assert credit.symbol == "AAA"
+        assert credit.shares == shares
+        assert credit.amount == pytest.approx(shares * 1.0, abs=0.01)
+        # cash includes the credit (extended integrity formula)
+        open_cost = sum(t.entry_price * t.shares
+                        for t in session.query(TradeRecord)
+                        .filter_by(strategy_name="equal_weight", status="OPEN"))
+        acct = session.query(StrategyAccount).filter_by(
+            strategy_name="equal_weight").one()
+        assert acct.cash_balance == pytest.approx(
+            STARTING_CAPITAL + credit.amount - open_cost, abs=0.01)
+        session.close()
+
+    def test_no_credit_for_entry_on_or_after_ex_date(self, factory):
+        price_fn = self._setup(factory)
+        # ex-date == entry date: bought ex-dividend, not entitled
+        self._add_dividend(factory, "AAA", date(2024, 2, 1), 1.0)
+        self._advance_bars(factory, date(2024, 2, 1), 1)
+        run_portfolio_cycle(factory, today=date(2024, 2, 2), price_fn=price_fn)
+        session = factory()
+        assert session.query(DividendCredit).count() == 0
+        session.close()
+
+    def test_credit_is_idempotent_across_cycles(self, factory):
+        price_fn = self._setup(factory)
+        self._add_dividend(factory, "AAA", date(2024, 2, 2), 1.0)
+        self._advance_bars(factory, date(2024, 2, 1), 2)
+        run_portfolio_cycle(factory, today=date(2024, 2, 2), price_fn=price_fn)
+        run_portfolio_cycle(factory, today=date(2024, 2, 5), price_fn=price_fn)
+        session = factory()
+        assert session.query(DividendCredit).count() == 1
+        session.close()
+
+    def test_missed_cycle_ex_date_self_heals(self, factory):
+        price_fn = self._setup(factory)
+        # ex-date Mon 2024-02-05; no cycle ran that day (outage). The next
+        # cycle (Tue) still credits it: shares unchanged since no trades ran.
+        self._add_dividend(factory, "BBB", date(2024, 2, 5), 0.5)
+        self._advance_bars(factory, date(2024, 2, 1), 3)
+        run_portfolio_cycle(factory, today=date(2024, 2, 6), price_fn=price_fn)
+        session = factory()
+        credit = session.query(DividendCredit).one()
+        assert credit.symbol == "BBB"
+        assert credit.ex_date == date(2024, 2, 5)
+        session.close()
+
+    def test_dry_run_writes_no_credits(self, factory):
+        price_fn = self._setup(factory)
+        self._add_dividend(factory, "AAA", date(2024, 2, 2), 1.0)
+        self._advance_bars(factory, date(2024, 2, 1), 1)
+        run_portfolio_cycle(factory, today=date(2024, 2, 2),
+                            price_fn=price_fn, dry_run=True)
+        session = factory()
+        assert session.query(DividendCredit).count() == 0
+        session.close()

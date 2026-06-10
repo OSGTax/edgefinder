@@ -110,6 +110,21 @@ class TestCheckCashDrift:
         specs = check_cash_drift(db_session, drift_threshold_pct=0.01)
         assert specs == []
 
+    def test_dividend_credits_are_not_drift(self, db_session):
+        # v2 extension: cash legitimately includes dividend credits.
+        # Without the credits term this would flag 4% drift.
+        from datetime import date
+
+        from edgefinder.db.models import DividendCredit
+
+        _make_account(db_session, "alpha", cash=5200.0)
+        db_session.add(DividendCredit(
+            strategy_name="alpha", symbol="SPY", ex_date=date(2026, 3, 20),
+            shares=100, amount=200.0))
+        db_session.commit()
+        specs = check_cash_drift(db_session, drift_threshold_pct=0.01)
+        assert specs == []
+
 
 class TestCheckNegativeCash:
     def test_positive_cash_not_flagged(self, db_session):

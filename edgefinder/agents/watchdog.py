@@ -32,6 +32,7 @@ from edgefinder.agents.config import get_agent_config
 from edgefinder.agents.journal import record_observation
 from edgefinder.db.models import (
     AgentObservation,
+    DividendCredit,
     StrategyAccount,
     SystemHeartbeat,
     TradeRecord,
@@ -82,7 +83,12 @@ def check_cash_drift(
     """Flag strategies whose stored cash_balance differs from the
     recomputed correct_cash by more than `drift_threshold_pct`.
 
-    correct_cash = starting_capital + sum(closed_pnl) - sum(open_cost)
+    correct_cash = starting_capital + sum(closed_pnl) + sum(dividend_credits)
+                 - sum(open_cost)
+
+    The dividend_credits term is the v2 extension (engine/live credits cash
+    for ex-dates crossed while holding); old-arena strategies simply have no
+    credit rows, so the formula stays correct for both tiers.
     """
     specs: list[ObservationSpec] = []
     for account in session.query(StrategyAccount).all():
@@ -100,8 +106,13 @@ def check_cash_drift(
             TradeRecord.strategy_name == account.strategy_name,
             TradeRecord.status == "OPEN",
         ).scalar() or 0.0
+        credits = session.query(
+            func.coalesce(func.sum(DividendCredit.amount), 0.0)
+        ).filter(
+            DividendCredit.strategy_name == account.strategy_name,
+        ).scalar() or 0.0
 
-        correct_cash = account.starting_capital + realized - open_cost
+        correct_cash = account.starting_capital + realized + credits - open_cost
         diff = account.cash_balance - correct_cash
         if account.starting_capital <= 0:
             continue
