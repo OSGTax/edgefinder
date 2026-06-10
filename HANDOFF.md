@@ -391,6 +391,58 @@ edgefinder-pm8h.onrender.com on mobile — bottom tabs, /symbol pinch-zoom
 + MAX range (first R2 read warms the server cache), lab drawer, theme
 toggle. Report anything off; charts restyle live on theme switch.
 
+### 🪦 ARENA RETIREMENT — CODE DONE (2026-06-10, v5.47 `10bcaf4`)
+
+Owner directive: "clear the code, base, database, and anything else of the
+old strategies and arena." Scope decisions (owner, via AskUserQuestion):
+DB history = **just delete, no archive**; legacy quick-backtest + old lab =
+**remove**; agents = **retire coach, keep data collection** (scanner stays
+as nightly fundamentals collector, no strategy qualification).
+
+**Code (v5.47, 106 files, +955/−14,179):** deleted `edgefinder/strategies/`
+(17 files), `trading/{arena,executor,account,risk}.py`, the old minute-bar
+lab (`backtest/*` except costs.py), coach + weekly_summary + their
+workflows, intraday-cycle/keepalive/eod-jobs/validate workflows, routers
+backtest+inject, scanner qualification layer. Relocated verbatim:
+`_sanitize_ohlcv`+`precompute_snapshots` → engine/backtest.py,
+`resolve_universe` → engine/data.py. `services.py` rewritten 1,489→482
+lines (9 jobs; NEW `_v2_snapshot_job` every 30m 09:45–16:15 ET appends
+StrategySnapshot equity-curve rows; NEW `_market_snapshot_job` 16:05 ET).
+Watchdog liveness repointed to `v2_portfolio_cycle` (daily cadence, 26h
+staleness, weekdays after 10:00 ET). Gates: 553 tests, demo boot, smoke
+35/35 — verified twice (subagent + orchestrator).
+
+**DB (flag-gated, `ops/retire-arena.flag` → retire-arena.yml):** dry-run
+verified on prod — 12,828 rows: arena trades(14)+context+orphaned
+market_snapshots(519), strategy_snapshots(789), 7 accounts
+(coward/gambler/degenerate + dead alpha/bravo/charlie/echo shells),
+ticker_strategy_qualifications(11,485, whole table), manual_injections.
+v2 lane guard-checked untouched. ⚠️ **EXECUTE only AFTER v5.47 deploys to
+Render** (else the old scheduler recreates rows). Flow: merge → verify
+/api/health shows 5.47 → set flag to `EXECUTE` → commit → verify counts.
+
+### 🏹 HUNT ROUND 2 — IN FLIGHT (2026-06-10, v5.46 `322afcb` roster)
+
+Pre-registered 12 candidates + 2 fresh randoms in `engine/hunt_r2.py`,
+informed by round-1 FAMILY learnings (momentum variants ± quality/regime/
+inverse-vol; value-with-profitability; barbell + low-vol-value blends).
+Wave 1 (15 runs, ids 78–92): null −0.02pp clean, randoms −8.3/−8.9
+(noise floor holds). **Six passed the total-return bar** → re-check wave
+(ids 93+, label `hunt-r2:recheck-*`): value_mom_barbell (+16.9pp 5/6 —
+strongest of the hunt), value_pe12 (+8.6 4/6), mom_inverse_vol (+8.1 4/6),
+mom_6m_k20 (+6.3 4/6), mom_earnings_tilt (+5.9 4/6), mom_12_1_k40 (+3.8
+4/6). Notes: earnings_yield_top was bit-identical to value_pe12 (EY rank ≡
+inverse-P/E rank; ceiling never binds — redundant registration, skipped in
+re-checks); regime-gated momentum UNDERPERFORMED ungated (+2.6); early
+re-check read: value_pe12 shift− came back 3/6 (below majority → out,
+matching its pe10 sibling); barbell passing big so far. Compile verdicts
+from `validation_runs WHERE universe LIKE 'hunt-r2:recheck%'` (18 runs
+expected) and write `reviews/HUNT-ROUND-2.md`.
+
+**Open owner decision (still unresolved):** live paper-trading universe
+mechanics for cross-sectional finalists (resolve-at-promotion vs nightly
+re-resolve) — blocks promoting xsec_mom_12_1 and any round-2 confirmations.
+
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
 The machine is fidelity-verified end to end. Lanes ready:
@@ -414,20 +466,14 @@ The machine is fidelity-verified end to end. Lanes ready:
 
 ### Remaining cleanup (parked for the dashboard-overhaul phase)
 
-4. **Consolidation debt:** lab/live
-   duplication (`_is_rebalance` semantics + order math exist in backtest.py
-   AND live.py — parity by parallel code, not shared code), heartbeat upsert
-   x2 (services + engine/live), validated-rule x2 (promote.py + strategies
-   router), bulk bar loaders x2 (backtest/jobs._load_bars + engine/data,
-   intentional to avoid old-engine import chains), old lab stack
-   (backtest/walkforward+optimize+screen) superseded by engine/ for future
-   work but still powering the legacy lanes. All intentional-for-now; retire
-   with the old engine when v2 fully takes over.
-- **PHASE 5b — Go wide (the actual hunt). ⛔ OUT OF SCOPE until the owner says go.**
-  When unlocked: use the honest lab as a high-throughput screen — the Lynch lane on
-  the PIT store, deliberately-dumb strategies, batch validation, survivors
-  adversarially re-validated, winners promoted. Do NOT start this on your own
-  initiative; the owner explicitly gated it (2026-06-09).
+4. **Consolidation debt** (shrunk by the v5.47 retirement — old lab stack
+   now gone): lab/live duplication (`_is_rebalance` semantics + order math
+   exist in backtest.py AND live.py — parity by parallel code, not shared
+   code), heartbeat upsert x2 (services + engine/live), validated-rule x2
+   (promote.py + strategies router). All intentional-for-now.
+- **PHASE 5b — Go wide (the actual hunt). ✅ UNLOCKED 2026-06-10** (owner:
+  "Try at least 30 strategies… that is our /goal"). Round 1 done (35
+  candidates), Round 2 in flight — see the HUNT sections above.
 
 ### Working agreements (how the owner wants this run)
 
