@@ -1003,10 +1003,15 @@ def _daily_indicator_job() -> None:
 
 
 def _r2_sync_job() -> None:
-    """Called at 7:00 PM ET — incremental daily_bars -> R2 Parquet mirror.
+    """Called at 7:00 PM ET — incremental daily_bars -> R2 merge + DB prune.
 
     Self-enabling: runs only when the four R2_* env vars are present (add
     them to Render to turn the nightly mirror on; absent, it logs and skips).
+    Two steps, in safety order:
+      1. sync — MERGE today's new DB rows into the grow-only R2 store.
+      2. prune — shed DB rows older than the retention window for symbols
+         whose DB state is fingerprint-current in R2 (free-tier cap
+         maintenance; a symbol that failed to sync is never pruned).
     """
     if not _session_factory:
         return
@@ -1015,16 +1020,25 @@ def _r2_sync_job() -> None:
         logger.info("R2 sync skipped — R2_* env vars not set")
         return
     try:
-        from edgefinder.data.barstore import BarStore
+        from edgefinder.data.barstore import (
+            DB_RETENTION_DAYS,
+            BarStore,
+            db_protected_symbols,
+        )
 
+        store = BarStore()
         session = _session_factory()
         try:
-            result = BarStore().sync(session)
+            result = store.sync(session)
+            logger.info("R2 sync: %s", result)
+            pruned = store.prune_db(
+                session, keep_days=DB_RETENTION_DAYS,
+                protected=db_protected_symbols(session))
+            logger.info("DB prune: %s", pruned)
         finally:
             session.close()
-        logger.info("R2 sync: %s", result)
     except Exception:
-        logger.exception("R2 sync failed")
+        logger.exception("R2 sync/prune failed")
 
 
 def _v2_portfolio_job() -> None:

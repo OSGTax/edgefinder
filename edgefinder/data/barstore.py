@@ -43,11 +43,36 @@ from edgefinder.db.models import DailyBar
 logger = logging.getLogger(__name__)
 
 _COLS = ["date", "open", "high", "low", "close", "volume"]
+DB_RETENTION_DAYS = 365   # trailing window the DB keeps; R2 keeps forever
+
+# symbols whose FULL history always stays in the DB: the deep ETF lane +
+# benchmark indices run from the DB (small, calibration-anchoring), and
+# live trading must never lose its own books' history
+DB_PROTECTED_ETFS = ("SPY", "QQQ", "IWM", "DIA", "GLD", "TLT", "EFA",
+                     "AGG", "LQD", "HYG")
+
 _BATCH = 40           # symbols per DB pull — small enough that one
                       # statement stays under Supabase's statement_timeout
                       # even when the project is disk-throttled (a 200-symbol
                       # ORDER BY pull got QueryCanceled on 2026-06-10)
 MANIFEST_KEY = "manifest.json"
+
+
+def db_protected_symbols(session) -> set[str]:
+    """Symbols never pruned from the DB: deep ETFs + benchmark indices +
+    promoted-strategy universes + anything with an open trade."""
+    from config.settings import settings
+    from edgefinder.db.models import PromotedStrategy, TradeRecord
+
+    out = {s.upper() for s in DB_PROTECTED_ETFS}
+    out |= {s.strip().upper() for s in settings.index_symbols if s.strip()}
+    for promo in session.query(PromotedStrategy).filter(
+            PromotedStrategy.active.is_(True)).all():
+        out |= {str(s).upper() for s in (promo.symbols or [])}
+    for (sym,) in (session.query(TradeRecord.symbol)
+                   .filter(TradeRecord.status == "OPEN").distinct().all()):
+        out.add(str(sym).upper())
+    return out
 
 
 def _bar_key(symbol: str) -> str:
@@ -138,21 +163,61 @@ class BarStore:
         return out
 
     def sync(self, session, symbols: list[str] | None = None) -> dict:
-        """Export new/changed symbols from daily_bars to R2. Idempotent."""
+        """MERGE new/changed DB rows into R2. The store is GROW-ONLY.
+
+        R2 is the permanent asset; the DB is allowed to shed old rows
+        (free-tier retention). So a symbol's parquet is the UNION of what R2
+        already holds and what the DB currently holds — the DB wins on
+        conflicting dates (it is where corrections land), and rows the DB no
+        longer has are PRESERVED. A sync after a DB prune can therefore
+        never shrink the mirror.
+
+        Manifest entry per symbol:
+          rows / max_date  — describe the R2 PARQUET (the merged asset)
+          db_rows / db_max — fingerprint of the DB state last merged; change
+                             detection compares THIS against the live DB.
+        Legacy entries (pre-fingerprint) whose parquet state equals the live
+        DB state are upgraded in place without an upload.
+
+        Known limitation (pre-existing): the fingerprint is (row count,
+        max date), so an in-place VALUE correction that adds no rows is not
+        detected — force it with ``sync --symbols X`` when hand-correcting
+        history.
+        """
         manifest = self.read_manifest()
 
         db_state = {
-            sym: {"rows": n, "max_date": str(mx)}
+            sym: {"db_rows": n, "db_max": str(mx)}
             for sym, n, mx in (
                 session.query(DailyBar.symbol,
                               func.count(DailyBar.id),
                               func.max(DailyBar.date))
                 .group_by(DailyBar.symbol).all())
         }
-        targets = sorted(
-            sym for sym, state in db_state.items()
-            if (symbols is None or sym in symbols)
-            and manifest.get(sym) != state)
+
+        targets: list[str] = []
+        migrated = 0
+        for sym, state in db_state.items():
+            if symbols is not None:
+                if sym in symbols:
+                    targets.append(sym)   # explicitly named = forced re-merge
+                continue
+            entry = manifest.get(sym)
+            if entry and "db_rows" not in entry:
+                # legacy replace-era entry: parquet WAS the DB state
+                if (entry.get("rows") == state["db_rows"]
+                        and entry.get("max_date") == state["db_max"]):
+                    entry.update(state)   # fingerprint backfill, no upload
+                    migrated += 1
+                    continue
+            if not entry or (entry.get("db_rows"), entry.get("db_max")) != \
+                    (state["db_rows"], state["db_max"]):
+                targets.append(sym)
+        targets.sort()
+        if migrated:
+            self.write_manifest(manifest)
+            logger.info("sync: backfilled fingerprints for %d legacy entries",
+                        migrated)
         logger.info("sync: %d of %d symbols changed", len(targets), len(db_state))
 
         def _pull(batch: list[str]) -> list:
@@ -189,30 +254,96 @@ class BarStore:
             for sym, *vals in rows:
                 by_sym.setdefault(sym, []).append(vals)
 
-            # uploads parallelize cleanly (sequential PUTs would take hours
-            # for a full export); the DB pull above stays batched/sequential
+            # merge + upload parallelize cleanly (each symbol = one GET,
+            # one union, one PUT); the DB pull above stays batched
             from concurrent.futures import ThreadPoolExecutor
 
-            def _upload(sym: str) -> tuple[str, int]:
-                df = pd.DataFrame(by_sym[sym], columns=_COLS)
-                return sym, self._put_frame(_bar_key(sym), df)
+            def _merge_upload(sym: str) -> tuple[str, int, int, str]:
+                db_df = pd.DataFrame(by_sym[sym], columns=_COLS)
+                existing = self._get_frame(_bar_key(sym))
+                if existing is not None and len(existing):
+                    keep = existing[~existing["date"].isin(set(db_df["date"]))]
+                    merged = (pd.concat([keep, db_df], ignore_index=True)
+                              .sort_values("date").reset_index(drop=True))
+                else:
+                    merged = db_df
+                nbytes = self._put_frame(_bar_key(sym), merged)
+                return sym, nbytes, len(merged), str(merged["date"].iloc[-1])
 
             with ThreadPoolExecutor(max_workers=16) as pool:
-                for sym, nbytes in pool.map(
-                        _upload, [s for s in batch if s in by_sym]):
+                for sym, nbytes, mrows, mmax in pool.map(
+                        _merge_upload, [s for s in batch if s in by_sym]):
                     bytes_up += nbytes
-                    manifest[sym] = db_state[sym]
+                    manifest[sym] = {"rows": mrows, "max_date": mmax,
+                                     **db_state[sym]}
                     uploaded += 1
-            logger.info("sync: %d/%d uploaded (%.1f MB)",
+            logger.info("sync: %d/%d merged+uploaded (%.1f MB)",
                         uploaded, len(targets), bytes_up / 1e6)
             self.write_manifest(manifest)   # checkpoint per batch
         self.write_manifest(manifest)
         return {"changed": len(targets), "uploaded": uploaded,
-                "failed": len(failed),
+                "failed": len(failed), "migrated": migrated,
                 "bytes": bytes_up, "symbols_total": len(db_state)}
 
+    def prune_db(self, session, *, keep_days: int = 365,
+                 protected: set[str] | None = None) -> dict:
+        """Steady-state retention: drop DB rows older than ``keep_days`` for
+        symbols that are manifest-current in R2 (the nightly counterpart of
+        scripts/slim_daily_bars.py — keeps the free-tier DB from creeping
+        back over its cap as the nightly ingest appends ~1000 rows/day).
+
+        Per-symbol manifest guard: a symbol whose DB state differs from the
+        manifest is NOT pruned (its newest rows haven't mirrored yet — the
+        next successful sync makes it eligible). Protected symbols are never
+        touched. Plain DELETEs; freed space is reused by future inserts, so
+        table size stays flat without VACUUM FULL.
+        """
+        from datetime import date as _date
+        from datetime import timedelta as _timedelta
+
+        protected = {s.upper() for s in (protected or set())}
+        cutoff = _date.today() - _timedelta(days=keep_days)
+        manifest = self.read_manifest()
+
+        candidates = []
+        rows = (session.query(DailyBar.symbol,
+                              func.count(DailyBar.id),
+                              func.max(DailyBar.date),
+                              func.min(DailyBar.date))
+                .group_by(DailyBar.symbol).all())
+        for sym, n, mx, mn in rows:
+            if sym in protected or mn >= cutoff:
+                continue
+            m = manifest.get(sym) or {}
+            fp = (m.get("db_rows", m.get("rows")),
+                  m.get("db_max", m.get("max_date")))
+            if fp == (n, str(mx)):
+                candidates.append(sym)
+
+        deleted = 0
+        chunk = 200
+        for i in range(0, len(candidates), chunk):
+            batch = candidates[i:i + chunk]
+            deleted += (session.query(DailyBar)
+                        .filter(DailyBar.symbol.in_(batch),
+                                DailyBar.date < cutoff)
+                        .delete(synchronize_session=False))
+            session.commit()
+        if deleted:
+            logger.info("prune: deleted %d rows older than %s "
+                        "(%d symbols, all R2-current)",
+                        deleted, cutoff, len(candidates))
+        return {"deleted": deleted, "symbols": len(candidates),
+                "cutoff": str(cutoff)}
+
     def verify(self, session, sample: int = 25) -> dict:
-        """Prove R2 == DB for a deterministic sample of synced symbols."""
+        """Prove DB ⊆ R2 for a deterministic sample of synced symbols.
+
+        The store is grow-only and the DB sheds old rows (retention), so the
+        correct invariant is: every row the DB holds exists in R2 with
+        identical values, and R2 holds at least as many rows. Pre-retention
+        (DB == R2) passes as the equality special case.
+        """
         manifest = self.read_manifest()
         if not manifest:
             return {"ok": False, "reason": "empty manifest"}
@@ -227,12 +358,18 @@ class BarStore:
                     .filter(DailyBar.symbol == sym)
                     .order_by(DailyBar.date).all())
             db = pd.DataFrame(rows, columns=_COLS)
-            ok = (r2 is not None and len(r2) == len(db)
-                  and list(r2["date"]) == list(db["date"])
-                  and all(
-                      (r2[c].astype(float).round(6)
-                       == db[c].astype(float).round(6)).all()
-                      for c in _COLS[1:]))
+            if r2 is None or len(r2) < len(db):
+                ok = False
+            elif not len(db):
+                ok = True          # DB shed everything; R2 keeps the asset
+            else:
+                sub = r2[r2["date"].isin(set(db["date"]))].reset_index(drop=True)
+                ok = (len(sub) == len(db)
+                      and list(sub["date"]) == list(db["date"])
+                      and all(
+                          (sub[c].astype(float).round(6)
+                           == db[c].astype(float).round(6)).all()
+                          for c in _COLS[1:]))
             checked.append(sym)
             if not ok:
                 mismatches.append(sym)
