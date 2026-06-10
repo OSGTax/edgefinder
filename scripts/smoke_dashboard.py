@@ -56,6 +56,7 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/screener", [], {200}),
     ("/backtest", [], {200, 307}),
     ("/lab", [], {200}),
+    ("/ops", [], {200}),
 ]
 
 

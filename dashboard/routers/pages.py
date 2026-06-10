@@ -48,6 +48,11 @@ async def research_redirect(request: Request):
         status_code=307)
 
 
+@router.get("/ops", response_class=HTMLResponse)
+async def ops_page(request: Request):
+    return templates.TemplateResponse(request=request, name="ops.html")
+
+
 @router.get("/lab", response_class=HTMLResponse)
 async def lab_page(request: Request):
     return templates.TemplateResponse(request=request, name="lab.html")

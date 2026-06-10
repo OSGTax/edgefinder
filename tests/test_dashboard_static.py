@@ -56,6 +56,7 @@ NEW_ASSETS = [
     "/static/js/pages/strategies.js",
     "/static/js/pages/screener.js",
     "/static/js/components/treemap.js",
+    "/static/js/pages/ops.js",
 ]
 
 
@@ -80,7 +81,7 @@ def _inline_styles(name: str) -> list[str]:
 # state is every template in dashboard/templates/ inline-style-free.
 STYLE_FREE_TEMPLATES: list[str] = [
     "base.html", "symbol.html", "lab.html", "dashboard.html",
-    "trades.html", "strategies.html", "screener.html",
+    "trades.html", "strategies.html", "screener.html", "ops.html",
 ]
 
 
@@ -111,3 +112,7 @@ def test_no_cdn_script_tags_remain():
     html = (TEMPLATES / "base.html").read_text()
     assert "cdn.jsdelivr.net" not in html
     assert "unpkg.com" not in html
+
+
+def test_ops_page(client):
+    assert client.get("/ops").status_code == 200
