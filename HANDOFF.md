@@ -178,20 +178,33 @@ trading → dashboard tables.**
   boundary so it can't roll forward as bars accrue; use it for any multi-run
   research program).
 
-### Remaining machine gaps (named, deliberately NOT built yet)
+### Stock-universe machine — DONE ✅ (v5.28.0 `233e271`; 35-agent review; 647 tests)
 
-1. **PIT-universe walk-forward** — the harness takes an explicit symbol list;
-   honest top-N STOCK-universe folds need per-fold `resolve_universe(as_of=...)`
-   re-resolution (the future-selection bias is measured at ~+3pp/126d without
-   it). Required before any stock-universe verdict; ~half a day.
-2. **Realistic cost model on the v2 engine** — flat `cost_bps` only; fine for
-   liquid ETFs, dishonest for small caps. The old lab's vetted cost engine
-   (`backtest/costs.py`: Corwin-Schultz spread + impact) needs a hook into
-   `_execute_to_target`. Required before any non-ETF claim; ~a day.
-3. **Dividend adjustment** — all prices split-adjusted but div-UNadjusted;
-   biases cross-asset rankings against high-yield names (TLT, DIA). Known,
-   disclosed in every scorecard; a total-return layer is a heavier build.
-4. **Consolidation debt (parked for the dashboard-overhaul phase):** lab/live
+All three former gaps closed and verified:
+1. **PIT universes**: `--universe top:N[+OFFSET] --start ...` — per-window
+   top-N resolved as of the day before each window's first scored day; ONE
+   planning calendar (CLI passes it via `calendar=`; resolver misses fail
+   loud). **Bias demo: same strategy, PIT menu +0.17pp vs future-selected
+   menu +5.79pp — ~5.6pp/fold of selection bias stripped.**
+2. **Realistic costs**: `--costed` — Corwin-Schultz spread + sqrt impact +
+   participation caps, PIT stats, **liquidity-tiered FIXED spread floors**
+   (2bps ≥$1B ADV … 50bps microcap), costed delist liquidations, no negative
+   fills, collapsed-liquidity holdings freeze (never force-dumped).
+3. **Total return**: `--div-adjust` — dividends table (167k records / 3,443
+   symbols incl. graveyard) + CRSP back-adjustment at load time (raw bars
+   immutable in DB+R2); declared-future dividends ignored; ADV from RAW
+   closes; SPY-dividends-missing hard-fails; coverage recorded; prices basis
+   stored at promotion (live trades raw — disclosed divergence for yielders).
+   **TR null control: 0.00 / −0.02pp. SPY 21-yr OOS 253% → 566.7% (~2.1%/yr
+   yield — checks out).**
+   Known follow-ups: live paper accounts get no dividend cash credits (TR
+   live parity), phantom 2026-05-25 index_daily rows need owner-approved
+   deletion + a holiday gate on the benchmarks collector, resolve_universe
+   ranks on lifetime (not trailing) dollar volume — disclosed caveat.
+
+### Remaining cleanup (parked for the dashboard-overhaul phase)
+
+4. **Consolidation debt:** lab/live
    duplication (`_is_rebalance` semantics + order math exist in backtest.py
    AND live.py — parity by parallel code, not shared code), heartbeat upsert
    x2 (services + engine/live), validated-rule x2 (promote.py + strategies
