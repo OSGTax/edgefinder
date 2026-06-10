@@ -288,15 +288,18 @@ ran via the supabase MCP and temporary push-triggered Actions jobs.
   shift is menu composition (currently-liquid names), not look-ahead — rank
   windows only see data through each as-of day.
 
-**Owner actions to finish the round (~5 min):**
+**Closed with owner approval in-session (2026-06-10):** TLT dividend
+inserted (dividends id 167005), `dividend_credits` pre-created in prod,
+branch merged to main (Render deploys v5.32).
+
+**Owner actions remaining (~2 min each — they need credentials/values no
+agent session holds: R2 values live only in Codespaces secrets, and no
+session has a GitHub-secrets write path or Render API key):**
 1. Render env: add the four `R2_*` vars (values in GitHub → Codespaces
    secrets) → nightly R2 mirror self-enables on next deploy.
-2. Actions secrets: add `EDGEFINDER_POLYGON_API_KEY`; repo variable
-   `BARS_NIGHTLY_ENABLED=true` → nightly bars catch-up goes live.
-3. Approve the TLT dividend insert (or run:
-   `python -m edgefinder.data.dividends_backfill add --symbol TLT --ex-date 2015-08-03 --amount 0.267`).
-4. Merge the branch to main → Render deploys v5.32 (render_start creates
-   dividend_credits; dashboard shows the disclosure).
+2. Actions secrets: add `EDGEFINDER_POLYGON_API_KEY` → the nightly bars
+   catch-up self-enables (it skips green until the secret exists; no repo
+   variable needed — set `BARS_NIGHTLY_ENABLED=false` to pause it).
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 

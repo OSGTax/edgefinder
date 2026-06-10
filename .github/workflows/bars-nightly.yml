@@ -12,14 +12,18 @@ name: Nightly daily-bars catch-up
 # skipped naturally (no holiday calendar needed) and a missed run is
 # topped up by the next one (upserts on (symbol, date) are idempotent).
 #
-# Kill switch: repo variable BARS_NIGHTLY_ENABLED must be exactly 'true'.
+# Self-enabling (mirrors the r2_sync pattern): the job runs for real once
+# EDGEFINDER_POLYGON_API_KEY exists in Actions secrets, and skips green
+# (with a notice) until then — no repo variable required to turn it on.
+# Kill switch: set repo variable BARS_NIGHTLY_ENABLED to 'false' to pause.
 #
 # --- Required repo secrets --------------------------------------------
 #   DATABASE_URL                              (Supabase pooler URL)
 #   EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID       (flat-files S3 key)
 #   EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY   (flat-files S3 secret)
 #   EDGEFINDER_POLYGON_API_KEY                (REST key — the top-per-day
-#       keep-set pulls the active+delisted common-stock ticker lists)
+#       keep-set pulls the active+delisted common-stock ticker lists;
+#       the ONE secret not yet set — adding it turns the job on)
 
 on:
   schedule:
@@ -33,7 +37,7 @@ permissions:
 
 jobs:
   catchup:
-    if: vars.BARS_NIGHTLY_ENABLED == 'true'
+    if: vars.BARS_NIGHTLY_ENABLED != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     concurrency:
@@ -49,26 +53,33 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Check secrets
+      - name: Check secrets (skip green until all present)
+        id: gate
         run: |
           set -euo pipefail
+          ready=true
           for v in DATABASE_URL EDGEFINDER_POLYGON_API_KEY \
                    EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID \
                    EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY; do
             if [ -z "${!v:-}" ]; then
-              echo "::error::repo secret $v is not set"; exit 1
+              echo "::notice::repo secret $v is not set — nightly catch-up skipped (self-enables once all secrets exist)"
+              ready=false
             fi
           done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@v6
+        if: steps.gate.outputs.ready == 'true'
         with:
           python-version: '3.11'
           cache: pip
 
       - name: Install package
+        if: steps.gate.outputs.ready == 'true'
         run: pip install -e .
 
       - name: Catch up daily_bars (trailing 5-day window)
+        if: steps.gate.outputs.ready == 'true'
         run: |
           set -euo pipefail
           START="$(date -u -d '5 days ago' +%F)"
