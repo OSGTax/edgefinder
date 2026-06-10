@@ -161,14 +161,45 @@ trading → dashboard tables.**
   logs-and-skips without them). The DB is never deleted from. R2 secrets live in
   GitHub → Codespaces → Secrets; values are .strip()ed in code (a pasted secret
   carried a trailing newline once).
-- **PHASE 5a — DONE ✅ (v5.25.0 `61c8431`).** `fundamentals_snapshots` table +
-  `data/pit_fundamentals.py` (snapshot writer hooked into the nightly scan;
-  `PITFundamentals.asof(symbol, date)` reader; None before coverage — honest).
-  Engine `_build_context` accepts static dict (disclosed look-ahead) OR any
-  object with `asof()` (the honest path). **First snapshot taken 2026-06-10,
-  2,692 symbols — PIT history accumulates forward from that date.** Historical
-  backfill via Polygon financials-by-filing-date: deferred (needs its own fetch
-  infra + restatement-vintage care; revisit when the Lynch lane is unlocked).
+- **PHASE 5a — DONE ✅ (v5.25.0 `61c8431` + backfill v5.27.0 `cd274df`).**
+  `fundamentals_snapshots` table + `data/pit_fundamentals.py` (snapshot writer
+  hooked into the nightly scan; `PITFundamentals.asof(symbol, date)` reader;
+  None before coverage). Engine `_build_context` accepts static dict (disclosed
+  look-ahead) OR any object with `asof()` (the honest path). **HISTORICAL
+  BACKFILL DONE + VERIFIED: 128,854 PIT snapshots / 7,702 symbols /
+  2019→now from Polygon SEC quarterly filings, keyed by FILING date
+  (conservative SEC-deadline imputation where missing), including 2,060
+  graveyard (delisted) symbols** — survivorship-free fundamental backtests
+  over 2021-06→now are now POSSIBLE (bounded by stock bars, not fundamentals).
+  Stored facts are price-independent (TTM EPS, earnings/revenue growth, D/E,
+  ROE, ROA, current ratio); strategies compute P/E and PEG at decision time
+  from `AssetView.price`. Daily scan snapshots keep accruing on top.
+  Also shipped: `--holdout-start` (fixed-DATE sealed holdout — pins the
+  boundary so it can't roll forward as bars accrue; use it for any multi-run
+  research program).
+
+### Remaining machine gaps (named, deliberately NOT built yet)
+
+1. **PIT-universe walk-forward** — the harness takes an explicit symbol list;
+   honest top-N STOCK-universe folds need per-fold `resolve_universe(as_of=...)`
+   re-resolution (the future-selection bias is measured at ~+3pp/126d without
+   it). Required before any stock-universe verdict; ~half a day.
+2. **Realistic cost model on the v2 engine** — flat `cost_bps` only; fine for
+   liquid ETFs, dishonest for small caps. The old lab's vetted cost engine
+   (`backtest/costs.py`: Corwin-Schultz spread + impact) needs a hook into
+   `_execute_to_target`. Required before any non-ETF claim; ~a day.
+3. **Dividend adjustment** — all prices split-adjusted but div-UNadjusted;
+   biases cross-asset rankings against high-yield names (TLT, DIA). Known,
+   disclosed in every scorecard; a total-return layer is a heavier build.
+4. **Consolidation debt (parked for the dashboard-overhaul phase):** lab/live
+   duplication (`_is_rebalance` semantics + order math exist in backtest.py
+   AND live.py — parity by parallel code, not shared code), heartbeat upsert
+   x2 (services + engine/live), validated-rule x2 (promote.py + strategies
+   router), bulk bar loaders x2 (backtest/jobs._load_bars + engine/data,
+   intentional to avoid old-engine import chains), old lab stack
+   (backtest/walkforward+optimize+screen) superseded by engine/ for future
+   work but still powering the legacy lanes. All intentional-for-now; retire
+   with the old engine when v2 fully takes over.
 - **PHASE 5b — Go wide (the actual hunt). ⛔ OUT OF SCOPE until the owner says go.**
   When unlocked: use the honest lab as a high-throughput screen — the Lynch lane on
   the PIT store, deliberately-dumb strategies, batch validation, survivors
