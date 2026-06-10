@@ -154,6 +154,7 @@ def run_walkforward(
     cost_model=None,
     prices_label: str = "split-adjusted, dividend-unadjusted",
     calendar: list | None = None,
+    fundamentals=None,
 ) -> dict:
     """Run rolling out-of-sample folds (and optionally the sealed holdout) and
     return the scorecard dict (same shape the old harness recorded).
@@ -218,6 +219,7 @@ def run_walkforward(
             cost_bps=cost_bps,
             cost_model=cost_model,
             rebalance_band=rebalance_band,
+            fundamentals=fundamentals,
             trade_start=oos_start,
             benchmark=_slice(spy_bars, oos_start, oos_end) if spy_bars is not None else None,
         )
@@ -238,6 +240,7 @@ def run_walkforward(
             cost_bps=cost_bps,
             cost_model=cost_model,
             rebalance_band=rebalance_band,
+            fundamentals=fundamentals,
             trade_start=h_start,
             benchmark=_slice(spy_bars, h_start, h_end) if spy_bars is not None else None,
         ).stats
@@ -277,6 +280,11 @@ def run_walkforward(
     card["config"]["pit_universe"] = universe_fn is not None
     card["config"]["prices"] = prices_label
     card["config"]["rebalance_band"] = rebalance_band
+    # disclose the fundamentals source: "pit" (honest as-of reader) vs
+    # "static" (one dict for all dates — look-ahead unless disclosed) vs none
+    card["config"]["fundamentals"] = (
+        "pit" if hasattr(fundamentals, "asof")
+        else "static" if fundamentals else "none")
     if planned_holdout is not None:
         # pin the sealed boundary in the record — the carve is count-relative,
         # so without this the "sealed" region would drift as new bars accrue

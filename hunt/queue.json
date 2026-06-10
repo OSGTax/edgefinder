@@ -1,0 +1,54 @@
+{
+  "wave": 1,
+  "lane": "etf-defensive",
+  "runs": [
+    {
+      "id": "null-control",
+      "args": "--strategy buy_and_hold:SPY --symbols SPY --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:null"
+    },
+    {
+      "id": "vol-target-spy",
+      "args": "--strategy vol_target_spy --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "vol-target-spy-tlt",
+      "args": "--strategy vol_target_spy_tlt --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "canary-efa-iwm",
+      "args": "--strategy canary_efa_iwm --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "golden-cross-spy",
+      "args": "--strategy golden_cross_spy --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "golden-cross-spy-tlt",
+      "args": "--strategy golden_cross_spy_tlt --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "inverse-vol-etf7",
+      "args": "--strategy inverse_vol_etf7 --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "trend-breadth-gate",
+      "args": "--strategy trend_breadth_gate --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "dual-momentum-9",
+      "args": "--strategy dual_momentum_9 --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "risk-parity-lite",
+      "args": "--strategy risk_parity_lite --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "mom-6m-top2",
+      "args": "--strategy mom_6m_top2 --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    },
+    {
+      "id": "breadth-tilt-spy",
+      "args": "--strategy breadth_tilt_spy --symbols SPY,QQQ,IWM,DIA,GLD,TLT,EFA,AGG,LQD --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r1:etf9"
+    }
+  ]
+}

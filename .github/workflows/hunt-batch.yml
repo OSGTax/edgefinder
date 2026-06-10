@@ -1,0 +1,60 @@
+name: Hunt batch
+
+# Runs the current wave of pre-registered hunt candidates through the v2
+# validator against the production DB. Triggered by committing a new
+# hunt/queue.json (the wave manifest) — so the roster code and parameters
+# are ALWAYS committed before the first run executes (pre-registration is
+# structural, not procedural).
+#
+# Every run records to validation_runs (--record) with a hunt-r1:* label;
+# the driving session reads results back via SQL and compiles the round
+# report. Waves are serialized by the concurrency group.
+
+on:
+  push:
+    branches: [claude/handoff-doc-review-176vbl, main]
+    paths: [hunt/queue.json]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hunt-batch
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: read
+        run: echo "matrix=$(jq -c '.runs' hunt/queue.json)" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 6   # be kind to the Supabase pooler
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.id }}
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install package
+        run: pip install -e .
+      - name: Validate ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          echo "Running: python -m edgefinder.engine.validate ${{ matrix.args }}"
+          python -m edgefinder.engine.validate ${{ matrix.args }}

@@ -89,6 +89,37 @@ class PITFundamentals:
         self._dates: dict[str, list[date]] = {}
         self._cache: dict[tuple[str, date], TickerFundamentals | None] = {}
 
+    def preload(self, symbols: list[str]) -> int:
+        """Bulk-load every snapshot for ``symbols`` into the memo caches.
+
+        Two reasons this exists (both bit during hunt wiring): a lazy per-
+        symbol/per-date fetch is ~30k pooler round-trips for one top-500
+        walk-forward run, and validate.py closes its DB session BEFORE the
+        folds execute — so the engine must never touch the session mid-run.
+        After preload, ``asof()`` is pure in-memory. Returns rows loaded.
+        """
+        n = 0
+        chunk_size = 400
+        todo = [s for s in dict.fromkeys(symbols) if s not in self._dates]
+        for i in range(0, len(todo), chunk_size):
+            chunk = todo[i:i + chunk_size]
+            for s in chunk:
+                self._dates[s] = []
+            rows = (self._session.query(FundamentalsSnapshot)
+                    .filter(FundamentalsSnapshot.symbol.in_(chunk))
+                    .order_by(FundamentalsSnapshot.symbol,
+                              FundamentalsSnapshot.as_of).all())
+            for row in rows:
+                self._dates[row.symbol].append(row.as_of)
+                try:
+                    tf = TickerFundamentals(**row.data)
+                except Exception:
+                    logger.exception("bad PIT snapshot %s@%s", row.symbol, row.as_of)
+                    tf = None
+                self._cache[(row.symbol, row.as_of)] = tf
+                n += 1
+        return n
+
     def _symbol_dates(self, symbol: str) -> list[date]:
         if symbol not in self._dates:
             rows = (self._session.query(FundamentalsSnapshot.as_of)

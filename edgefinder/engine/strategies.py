@@ -35,9 +35,13 @@ def make_strategy_factory(spec: str):
     if spec.startswith("trend_timer:"):
         sym = spec.split(":", 1)[1].upper()
         return lambda: TrendTimer(sym)
+    from edgefinder.engine.hunt_r1 import HUNT_SPECS
+    if spec in HUNT_SPECS:
+        return HUNT_SPECS[spec]
     raise ValueError(
         f"unknown strategy spec {spec!r} (use equal_weight, dual_momentum, "
-        "buy_and_hold:SYM, or trend_timer:SYM)")
+        "buy_and_hold:SYM, trend_timer:SYM, or a hunt roster spec from "
+        "engine/hunt_r1.HUNT_SPECS)")
 
 
 class TrendTimer:

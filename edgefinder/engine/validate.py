@@ -35,6 +35,23 @@ from edgefinder.engine.walkforward import run_walkforward
 logger = logging.getLogger(__name__)
 
 
+def _load_pit(args, session, symbols):
+    """Build + bulk-preload the PIT fundamentals reader (or None).
+
+    Preloading happens HERE, while the caller's session is still open —
+    the folds run after the session closes, so a lazy reader would crash
+    (and a top-500 run would otherwise cost ~30k pooler round-trips).
+    """
+    if not args.pit_fundamentals:
+        return None
+    from edgefinder.data.pit_fundamentals import PITFundamentals
+
+    pit = PITFundamentals(session)
+    n = pit.preload(list(symbols))
+    print(f"PIT fundamentals preloaded: {n} snapshots / {len(symbols)} symbols")
+    return pit
+
+
 def main(argv: list[str] | None = None) -> dict:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--strategy", required=True,
@@ -59,6 +76,12 @@ def main(argv: list[str] | None = None) -> dict:
                    help="realistic costs (Corwin-Schultz spread + sqrt impact "
                         "+ participation caps; FIXED params, never optimized) "
                         "instead of flat --cost-bps")
+    p.add_argument("--pit-fundamentals", action="store_true",
+                   help="hand strategies point-in-time fundamentals (the "
+                        "honest as-of reader over fundamentals_snapshots; "
+                        "preloaded in bulk, disclosed as fundamentals:'pit' "
+                        "in the scorecard). Strategies see None before a "
+                        "symbol's coverage begins")
     p.add_argument("--div-adjust", action="store_true",
                    help="total-return prices: back-adjust all bars AND the "
                         "SPY benchmark for cash dividends")
@@ -155,6 +178,7 @@ def main(argv: list[str] | None = None) -> dict:
             bars = load_bars(session, union, start=start)
             divs = (load_dividends(session, union + ["SPY"])
                     if args.div_adjust else None)
+            fundamentals = _load_pit(args, session, union)
         finally:
             session.close()
         universe_fn = per_window.get
@@ -179,6 +203,7 @@ def main(argv: list[str] | None = None) -> dict:
                     bars, load_splits(session, list(bars)))
                 divs = (load_dividends(session, symbols + ["SPY"])
                         if args.div_adjust else None)
+                fundamentals = _load_pit(args, session, symbols)
             finally:
                 session.close()
             spy = bars.get("SPY")
@@ -194,6 +219,7 @@ def main(argv: list[str] | None = None) -> dict:
                     spy = spy[spy["date"] >= start].reset_index(drop=True)
                 divs = (load_dividends(session, symbols + ["SPY"])
                         if args.div_adjust else None)
+                fundamentals = _load_pit(args, session, symbols)
             finally:
                 session.close()   # never hold a pooler connection through folds
         missing = [s for s in symbols if s not in bars]
@@ -249,6 +275,7 @@ def main(argv: list[str] | None = None) -> dict:
         risk_adjusted=not args.total_return,
         universe_fn=universe_fn,
         cost_model=cost_model,
+        fundamentals=fundamentals,
         prices_label=prices_label,
         calendar=planning_calendar,
     )
