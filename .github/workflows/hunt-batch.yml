@@ -35,6 +35,7 @@ jobs:
 
   run:
     needs: plan
+    if: needs.plan.outputs.matrix != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:

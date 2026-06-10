@@ -1,13 +1,4 @@
 {
-  "wave": "post-slim-verification",
-  "runs": [
-    {
-      "id": "postslim-null-control",
-      "args": "--strategy buy_and_hold:SPY --symbols SPY --schedule monthly --holdout-start 2025-12-05 --record --universe-label postslim:null"
-    },
-    {
-      "id": "postslim-r2-equivalence",
-      "args": "--strategy xsec_mom_12_1 --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --warmup-days 290 --schedule monthly --bars-from r2 --record --universe-label postslim:r2-equiv"
-    }
-  ]
+  "wave": "idle",
+  "runs": []
 }
