@@ -30,6 +30,8 @@ from __future__ import annotations
 import io
 import json
 import logging
+
+from sqlalchemy.exc import OperationalError
 import os
 from datetime import date
 
@@ -41,7 +43,10 @@ from edgefinder.db.models import DailyBar
 logger = logging.getLogger(__name__)
 
 _COLS = ["date", "open", "high", "low", "close", "volume"]
-_BATCH = 200          # symbols per DB pull
+_BATCH = 40           # symbols per DB pull — small enough that one
+                      # statement stays under Supabase's statement_timeout
+                      # even when the project is disk-throttled (a 200-symbol
+                      # ORDER BY pull got QueryCanceled on 2026-06-10)
 MANIFEST_KEY = "manifest.json"
 
 
@@ -150,15 +155,36 @@ class BarStore:
             and manifest.get(sym) != state)
         logger.info("sync: %d of %d symbols changed", len(targets), len(db_state))
 
-        uploaded = bytes_up = 0
-        for i in range(0, len(targets), _BATCH):
-            batch = targets[i:i + _BATCH]
-            rows = (session.query(
+        def _pull(batch: list[str]) -> list:
+            return (session.query(
                         DailyBar.symbol, DailyBar.date, DailyBar.open,
                         DailyBar.high, DailyBar.low, DailyBar.close,
                         DailyBar.volume)
                     .filter(DailyBar.symbol.in_(batch))
                     .order_by(DailyBar.symbol, DailyBar.date).all())
+
+        uploaded = bytes_up = 0
+        failed: list[str] = []
+        for i in range(0, len(targets), _BATCH):
+            batch = targets[i:i + _BATCH]
+            try:
+                rows = _pull(batch)
+            except OperationalError:
+                # statement timeout / dropped connection on a throttled DB:
+                # recover the session and retry in halves; a batch that still
+                # fails is skipped (the manifest diff re-targets it next run)
+                session.rollback()
+                rows = []
+                for j in range(0, len(batch), max(1, _BATCH // 2)):
+                    half = batch[j:j + max(1, _BATCH // 2)]
+                    try:
+                        rows.extend(_pull(half))
+                    except OperationalError:
+                        session.rollback()
+                        failed.extend(half)
+                        logger.warning("sync: pull failed for %d symbols "
+                                       "(%s..) — will retry next run",
+                                       len(half), half[0])
             by_sym: dict[str, list] = {}
             for sym, *vals in rows:
                 by_sym.setdefault(sym, []).append(vals)
@@ -182,6 +208,7 @@ class BarStore:
             self.write_manifest(manifest)   # checkpoint per batch
         self.write_manifest(manifest)
         return {"changed": len(targets), "uploaded": uploaded,
+                "failed": len(failed),
                 "bytes": bytes_up, "symbols_total": len(db_state)}
 
     def verify(self, session, sample: int = 25) -> dict:
@@ -252,7 +279,12 @@ def main(argv: list[str] | None = None) -> None:
         if args.command == "sync":
             symbols = ([s.strip().upper() for s in args.symbols.split(",")]
                        if args.symbols else None)
-            print(json.dumps(store.sync(session, symbols), indent=2))
+            out = store.sync(session, symbols)
+            print(json.dumps(out, indent=2))
+            # partial progress is success (manifest diff self-heals next
+            # run); only a zero-progress run with failures should go red
+            if out["failed"] and not out["uploaded"]:
+                raise SystemExit(1)
         else:
             print(json.dumps(store.verify(session, args.sample), indent=2))
     finally:
