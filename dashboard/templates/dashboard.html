@@ -1,134 +1,59 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — EdgeFinder{% endblock %}
+{% block title %}Portfolio — EdgeFinder{% endblock %}
+
 {% block content %}
-
-<!-- Auto-Refresh Bar -->
-<div class="refresh-bar mb-16">
-  <button id="refresh-toggle" class="refresh-toggle active" onclick="toggleAutoRefresh()">&#x27F3;</button>
-  <span id="refresh-status">Auto-refresh: on &middot; Updated just now</span>
+<div class="flex items-center gap-12 mb-16 flex-wrap">
+  <h2 class="flex-1">Portfolio</h2>
+  <div class="c-seg" id="pf-lane">
+    <button data-lane="all" class="active">All</button>
+    <button data-lane="arena">Arena $5k</button>
+    <button data-lane="v2">V2 $100k</button>
+  </div>
+  <span id="pf-ops-badge"></span>
 </div>
 
-<!-- Hero Stats Row -->
-<div class="stats-grid grid-4 mb-20" id="stats-row">
-  <div class="stat-card">
-    <div class="stat-label">Total Equity</div>
-    <div class="stat-value" id="stat-equity">&mdash;</div>
-    <div class="stat-sub" id="stat-equity-chg">&nbsp;</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Today's P&amp;L</div>
-    <div class="stat-value" id="stat-pnl">&mdash;</div>
-    <div class="stat-sub" id="stat-pnl-sub">&nbsp;</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Open Positions</div>
-    <div class="stat-value" id="stat-positions">&mdash;</div>
-    <div class="stat-sub text-secondary" id="stat-positions-sub">&nbsp;</div>
-  </div>
-  <div class="stat-card">
-    <div class="stat-label">Win Rate</div>
-    <div class="stat-value" id="stat-winrate">&mdash;</div>
-    <div class="stat-sub text-secondary" id="stat-winrate-sub">&nbsp;</div>
-  </div>
-</div>
+<div id="pf-hero" class="grid-4 mb-16"></div>
 
-<!-- Equity Curve -->
-<div class="card mb-20">
-  <div class="card-header">
-    Equity Curve
-    <div class="right">
-      <div class="filter-tabs" id="eq-range-tabs">
-        <span class="filter-tab" data-days="30">30D</span>
-        <span class="filter-tab active" data-days="90">90D</span>
-        <span class="filter-tab" data-days="180">180D</span>
-        <span class="filter-tab" data-days="365">1Y</span>
-      </div>
+<div class="grid-2 mb-16 pf-charts">
+  <div class="c-card">
+    <div class="c-card-header">Equity
+      <span class="spacer"></span>
+      <div id="pf-eq-ranges"></div>
     </div>
+    <div class="c-card-body tight"><div class="ch-pane equity" id="pf-equity"></div></div>
   </div>
-  <div class="card-body" style="padding:8px 8px 0 8px;">
-    <div id="equity-chart" style="width:100%;height:300px;"></div>
-  </div>
-</div>
-
-<!-- Strategy Comparison -->
-<div class="card mb-20">
-  <div class="card-header">
-    Strategy Comparison
-    <div class="right">
-      <div class="filter-tabs" id="cmp-range-tabs">
-        <div class="filter-tab" data-days="30">30D</div>
-        <div class="filter-tab active" data-days="90">90D</div>
-        <div class="filter-tab" data-days="180">180D</div>
-        <div class="filter-tab" data-days="365">1Y</div>
-      </div>
+  <div class="c-card">
+    <div class="c-card-header">Strategies vs SPY (%)
+      <span class="spacer"></span>
+      <div id="pf-cmp-legend" class="c-chips"></div>
     </div>
-  </div>
-  <div class="card-body">
-    <div id="comparison-chart" style="height:280px;"></div>
-    <div id="comparison-legend" style="display:flex;gap:16px;justify-content:center;margin-top:8px;font-size:12px;"></div>
+    <div class="c-card-body tight"><div class="ch-pane equity" id="pf-compare"></div></div>
   </div>
 </div>
 
-<!-- Live Proof: the offline validation bar applied to live results -->
-<div class="card mb-20">
-  <div class="card-header">
-    Live Proof &mdash; vs SPY
-    <div class="right">
-      <div class="filter-tabs" id="proof-range-tabs">
-        <div class="filter-tab" data-days="30">30D</div>
-        <div class="filter-tab active" data-days="90">90D</div>
-        <div class="filter-tab" data-days="365">1Y</div>
-      </div>
-    </div>
+<div class="grid-2 mb-16 pf-mid">
+  <div class="c-card">
+    <div class="c-card-header">P&amp;L calendar</div>
+    <div class="c-card-body" id="pf-calendar"></div>
   </div>
-  <div class="card-body" id="live-proof-body">
-    <div class="empty-state">
-      <div class="icon">&#9744;</div>
-      Loading scorecard&hellip;
-    </div>
+  <div class="c-card">
+    <div class="c-card-header">Live proof — vs SPY <span class="spacer"></span>
+      <a href="/lab" class="c-chip">Lab →</a></div>
+    <div class="c-card-body" id="pf-proof"></div>
   </div>
 </div>
 
-<!-- Open Positions -->
-<div class="card mb-20">
-  <div class="card-header">
-    Open Positions
-    <div class="right" id="positions-count-header"></div>
-  </div>
-  <div class="card-body" id="positions-grid">
-    <div class="empty-state">
-      <div class="icon">&#9744;</div>
-      Loading positions...
-    </div>
-  </div>
+<div class="c-card mb-16">
+  <div class="c-card-header">Open positions <span class="spacer"></span><span id="pf-pos-count" class="t-dim"></span></div>
+  <div class="c-card-body tight c-table-wrap" id="pf-positions"></div>
 </div>
 
-<!-- Market Overview -->
-<div class="card mb-20">
-  <div class="card-header">
-    <span>Market Overview</span>
-    <span class="right" id="market-regime-badge"></span>
-  </div>
-  <div class="card-body">
-    <div class="stats-grid" id="market-row" style="grid-template-columns:repeat(5,1fr);">
-      <!-- Filled by JS -->
-    </div>
-    <div id="sector-strip" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:14px;"></div>
-  </div>
+<div class="c-card">
+  <div class="c-card-header">Market</div>
+  <div class="c-card-body" id="pf-market"></div>
 </div>
-
-<!-- System Health (ops) -->
-<div class="card mb-20">
-  <div class="card-header">
-    System Health
-    <div class="right" id="ops-alert-badge"></div>
-  </div>
-  <div class="card-body" id="ops-body">
-    <div class="empty-state"><div class="icon">&#9744;</div>Loading&hellip;</div>
-  </div>
-</div>
-
 {% endblock %}
+
 {% block scripts %}
-<script src="/static/js/dashboard.js"></script>
+<script type="module" src="/static/js/pages/portfolio.js"></script>
 {% endblock %}

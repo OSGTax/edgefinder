@@ -51,6 +51,7 @@ NEW_ASSETS = [
     "/static/js/components/heatmap.js",
     "/static/js/pages/symbol.js",
     "/static/js/pages/lab.js",
+    "/static/js/pages/portfolio.js",
 ]
 
 
@@ -73,7 +74,7 @@ def _inline_styles(name: str) -> list[str]:
 
 # Coverage expands as each page is rebuilt (redesign phases 1-9). The end
 # state is every template in dashboard/templates/ inline-style-free.
-STYLE_FREE_TEMPLATES: list[str] = ["base.html", "symbol.html", "lab.html"]
+STYLE_FREE_TEMPLATES: list[str] = ["base.html", "symbol.html", "lab.html", "dashboard.html"]
 
 
 @pytest.mark.parametrize("name", STYLE_FREE_TEMPLATES)
