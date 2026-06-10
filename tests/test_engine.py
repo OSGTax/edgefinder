@@ -114,3 +114,58 @@ def test_strategy_protocol_shape():
                        schedule="daily", cost_bps=0.0, warmup_days=2)
     assert any(t["symbol"] == "AAA" for t in res.trades)
     assert not any(t["symbol"] == "ZZZ" and t["side"] == "BUY" for t in res.trades)
+
+
+def test_rebalance_band_kills_retrue_churn_but_not_entries():
+    # Two names drifting slightly apart: an exact daily re-true trades dust
+    # every day; the live-equivalent 1% band should trade only the entries.
+    a = _bars([100 + 0.1 * i for i in range(30)], "AAA")
+    b = _bars([100 - 0.1 * i for i in range(30)], "BBB")
+    exact = run_backtest({"AAA": a, "BBB": b}, EqualWeight(),
+                         schedule="daily", cost_bps=0.0, warmup_days=2)
+    banded = run_backtest({"AAA": a, "BBB": b}, EqualWeight(),
+                          schedule="daily", cost_bps=0.0, warmup_days=2,
+                          rebalance_band=0.01)
+    assert banded.stats["num_trades"] < exact.stats["num_trades"]
+    buys = [t for t in banded.trades if t["side"] == "BUY"]
+    assert {t["symbol"] for t in buys} >= {"AAA", "BBB"}   # entries unaffected
+    # both end fully invested in the same names — the band only skips dust
+    assert banded.stats["open_positions"] == exact.stats["open_positions"]
+    assert banded.stats["return_pct"] == pytest.approx(
+        exact.stats["return_pct"], abs=0.5)
+
+
+def test_rebalance_band_never_blocks_a_full_close():
+    # Strategy drops AAA entirely mid-run; even a tiny position must be SOLD
+    # (the band exempts deltas that open or fully close a position).
+    class DropsAAA:
+        name = "drops_aaa"
+
+        def __init__(self):
+            self.calls = 0
+
+        def rebalance(self, ctx):
+            self.calls += 1
+            if self.calls <= 2:
+                return {"AAA": 0.01, "BBB": 0.99}    # AAA is a dust position
+            return {"BBB": 0.99}                      # full exit of AAA
+
+    a = _bars([100] * 12, "AAA")
+    b = _bars([100] * 12, "BBB")
+    res = run_backtest({"AAA": a, "BBB": b}, DropsAAA(), schedule="daily",
+                       cost_bps=0.0, warmup_days=2, rebalance_band=0.05)
+    aaa_sells = [t for t in res.trades
+                 if t["symbol"] == "AAA" and t["side"] == "SELL"]
+    assert aaa_sells, "full close must bypass the no-trade band"
+
+
+def test_rebalance_band_zero_is_default_exact_retrue():
+    a = _bars([100 + 0.1 * i for i in range(30)], "AAA")
+    b = _bars([100 - 0.1 * i for i in range(30)], "BBB")
+    default = run_backtest({"AAA": a, "BBB": b}, EqualWeight(),
+                           schedule="daily", cost_bps=0.0, warmup_days=2)
+    explicit = run_backtest({"AAA": a, "BBB": b}, EqualWeight(),
+                            schedule="daily", cost_bps=0.0, warmup_days=2,
+                            rebalance_band=0.0)
+    assert default.trades == explicit.trades
+    assert default.stats == explicit.stats

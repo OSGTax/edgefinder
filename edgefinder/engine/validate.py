@@ -46,6 +46,12 @@ def main(argv: list[str] | None = None) -> dict:
                         "dollar volume ranked using only data through the day "
                         "before that fold's first scored day (e.g. top:500 or "
                         "top:2000+1000 for the rank 1000-3000 band)")
+    p.add_argument("--rank-window", type=int, default=126, metavar="N",
+                   help="rank top-N universes on TRAILING dollar volume over "
+                        "the N trading days ending at each window's as-of day "
+                        "(default 126 — what's liquid NOW, not on lifetime "
+                        "glory days). 0 = legacy lifetime-through-as-of "
+                        "ranking, kept for reproducing pre-v5.32 runs")
     p.add_argument("--start", default=None,
                    help="clip history to dates >= this (YYYY-MM-DD); use "
                         "2021-06-01 for stock universes (bars start there)")
@@ -72,6 +78,12 @@ def main(argv: list[str] | None = None) -> dict:
                         "reserved (carved off, never scored)")
     p.add_argument("--warmup-days", type=int, default=210)
     p.add_argument("--cost-bps", type=float, default=2.0)
+    p.add_argument("--rebalance-band", type=float, default=0.0, metavar="F",
+                   help="no-trade band: skip re-true deltas smaller than this "
+                        "fraction of equity unless they open/close a position "
+                        "(0.01 = the live runner's band; kills daily-schedule "
+                        "re-true churn). Default 0 = exact re-true, matching "
+                        "every previously committed run")
     p.add_argument("--start-cash", type=float, default=1_000_000.0)
     p.add_argument("--total-return", action="store_true",
                    help="score on the total-return bar instead of risk-adjusted")
@@ -127,10 +139,15 @@ def main(argv: list[str] | None = None) -> dict:
             windows = folds + ([holdout] if holdout else [])
             per_window: dict = {}
             for w_start, _ in windows:
-                as_of = days[max(0, days.index(w_start) - 1)]
+                i = days.index(w_start)
+                as_of = days[max(0, i - 1)]
+                # trailing rank window: the --rank-window trading days
+                # ending at as_of (0 = lifetime-through-as_of, legacy)
+                rank_start = (days[max(0, i - args.rank_window)]
+                              if args.rank_window else None)
                 per_window[w_start] = resolve_universe(
                     session, "top", [], top_n, as_of=as_of,
-                    rank_offset=rank_offset)
+                    rank_offset=rank_offset, rank_start=rank_start)
             union = sorted(set().union(*per_window.values()))
             print(f"PIT universe top:{top_n}"
                   f"{f'+{rank_offset}' if rank_offset else ''}: "
@@ -228,6 +245,7 @@ def main(argv: list[str] | None = None) -> dict:
         holdout_eval=args.burn_holdout,
         warmup_days=args.warmup_days, start_cash=args.start_cash,
         schedule=args.schedule, cost_bps=args.cost_bps,
+        rebalance_band=args.rebalance_band,
         risk_adjusted=not args.total_return,
         universe_fn=universe_fn,
         cost_model=cost_model,
@@ -239,11 +257,14 @@ def main(argv: list[str] | None = None) -> dict:
     if args.universe:
         scorecard["config"]["universe_sizes"] = {
             str(k): len(v) for k, v in per_window.items()}
+        scorecard["config"]["rank_window"] = args.rank_window
     print(json.dumps(scorecard, indent=2, default=str))
 
     if args.record:
         universe = args.universe_label or (
-            f"{args.universe}@pit+v2" if args.universe
+            f"{args.universe}@pit"
+            f"{f',rw{args.rank_window}' if args.rank_window else ',lifetime'}"
+            "+v2" if args.universe
             else f"{len(symbols)}syms+v2")
         try:
             session = get_session_factory(get_engine())()

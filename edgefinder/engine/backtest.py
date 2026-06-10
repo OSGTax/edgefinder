@@ -134,6 +134,7 @@ def _execute_to_target(
     weights: dict, open_px: dict, holdings: dict, cash: float,
     cost_rate: float, trades: list, dt,
     cost_model=None, cost_ctx: dict | None = None,
+    rebalance_band: float = 0.0,
 ) -> float:
     """Trade current holdings toward the target weights at today's open.
 
@@ -142,6 +143,11 @@ def _execute_to_target(
     per-symbol look-ahead-free ``cost_ctx`` of (adv_dollars, volatility,
     spread_frac)), every fill pays spread + impact and buys are capped at the
     participation limit; otherwise every fill pays flat ``cost_rate``.
+
+    ``rebalance_band``: skip re-true deltas smaller than this fraction of
+    equity unless they open or fully close a position — the live runner's
+    dust/churn guard (its REBALANCE_BAND is 0.01). Default 0.0 trades to
+    exact weights, preserving every pre-band result bit-for-bit.
     """
     equity = cash + sum(sh * open_px[s] for s, sh in holdings.items() if s in open_px)
     target: dict[str, int] = {}
@@ -175,8 +181,13 @@ def _execute_to_target(
         if s not in open_px or s in frozen:   # untradeable today — hold as-is
             continue
         d = target.get(s, 0) - holdings.get(s, 0)
-        if d != 0:
-            deltas[s] = d
+        if d == 0:
+            continue
+        opens_or_closes = holdings.get(s, 0) == 0 or target.get(s, 0) == 0
+        if (rebalance_band > 0.0 and not opens_or_closes
+                and abs(d) * open_px[s] < rebalance_band * equity):
+            continue
+        deltas[s] = d
 
     for s, d in deltas.items():        # sells first (raise cash)
         if d < 0:
@@ -216,6 +227,7 @@ def run_backtest(
     benchmark: pd.DataFrame | None = None,
     fundamentals: dict | None = None,
     log_weights: bool = False,
+    rebalance_band: float = 0.0,
 ) -> BacktestResult:
     """Replay ``strategy`` over ``bars_by_symbol`` and return the equity curve,
     trades, and stats. ``benchmark`` is an optional (date, open, close) frame;
@@ -326,7 +338,8 @@ def run_backtest(
                 weights = {s: w / total for s, w in weights.items()}
             cash = _execute_to_target(weights, today_open, holdings, cash,
                                       cost_rate, trades, dt,
-                                      cost_model=cost_model, cost_ctx=cost_ctx)
+                                      cost_model=cost_model, cost_ctx=cost_ctx,
+                                      rebalance_band=rebalance_band)
             if log_weights:
                 weights_log.append({"date": dt, "weights": dict(weights)})
 

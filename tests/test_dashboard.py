@@ -447,6 +447,37 @@ class TestBacktestJobs:
         assert resolve_universe(db_session, "top", [], 2, as_of=cut) == ["STEADY", "LATER"]
         assert "DEAD" not in resolve_universe(db_session, "top", [], 10, as_of=cut)
 
+    def test_resolve_universe_trailing_rank_window(self, db_session):
+        """rank_start ranks on TRAILING dollar volume: a name that was huge
+        long ago but thin lately must rank below a recently-active one."""
+        from datetime import date, timedelta
+
+        from edgefinder.backtest.jobs import resolve_universe
+        from edgefinder.db.models import DailyBar
+
+        start = date(2024, 1, 1)
+        # FADED: enormous volume in days 0-19, near-dead in days 20-39
+        # (still alive — trades a trickle, so the liveness gate keeps it).
+        for i in range(40):
+            vol = 50_000_000.0 if i < 20 else 1_000.0
+            db_session.add(DailyBar(symbol="FADED", date=start + timedelta(days=i),
+                open=50.0, high=50.5, low=49.5, close=50.0, volume=vol))
+        # CURRENT: steady real volume throughout.
+        for i in range(40):
+            db_session.add(DailyBar(symbol="CURRENT", date=start + timedelta(days=i),
+                open=50.0, high=50.5, low=49.5, close=50.0, volume=1_000_000.0))
+        db_session.commit()
+
+        as_of = start + timedelta(days=39)
+        window_start = start + timedelta(days=20)
+        # lifetime ranking still crowns the faded name on its glory days...
+        assert resolve_universe(
+            db_session, "top", [], 1, as_of=as_of) == ["FADED"]
+        # ...the trailing window ranks what is liquid NOW.
+        assert resolve_universe(
+            db_session, "top", [], 1, as_of=as_of,
+            rank_start=window_start) == ["CURRENT"]
+
     def test_resolve_universe_rank_offset_band(self, db_session):
         # rank_offset skips the most-liquid names → the lower-liquidity band.
         from edgefinder.backtest.jobs import resolve_universe

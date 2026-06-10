@@ -536,7 +536,9 @@ async function loadLiveProof(days = 90) {
       + '<div style="margin-top:10px;font-size:11px;color:var(--text-secondary);">'
       + 'Live = same bar as offline validation (positive Sharpe AND beats SPY AND enough closed trades), '
       + 'computed from stored equity marks, SPY closes, and closed trades. '
-      + 'Offline = latest walk-forward + sealed-holdout lab verdict.</div>';
+      + 'Offline = latest walk-forward + sealed-holdout lab verdict. '
+      + 'Costs differ by tier: live paper fills pay ~5 bps/side slippage; '
+      + 'lab runs assume 2 bps flat per fill unless marked costed (realistic spread + impact).</div>';
   } catch (e) {
     el.innerHTML = '<div class="empty-state"><div class="icon">&#9888;</div>Scorecard unavailable.</div>';
   }

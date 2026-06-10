@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Live paper fills and lab backtests price costs differently; any view that
+# shows the two side-by-side carries this disclosure (values are the live
+# tiers' actual constants: engine/live.SLIPPAGE_BPS and the old arena's
+# settings.slippage_base_rate, vs engine/backtest's cost_bps default).
+_COST_DISCLOSURE = {
+    "live_slippage_bps_per_side": 5.0,
+    "lab_default_cost_bps": 2.0,
+    "note": ("live paper fills pay ~5 bps/side slippage; v2 lab runs assume "
+             "2 bps flat per fill unless run --costed (realistic spread + "
+             "impact model)"),
+}
+
 
 def _live_account_states() -> list[dict] | None:
     """Per-strategy accounts marked to the latest available market price.
@@ -207,9 +219,13 @@ def scorecard(
         compute_scorecard,
     )
 
-    if strategy:
-        return [compute_scorecard(db, strategy, days=days)]
-    return compute_all_scorecards(db, days=days)
+    cards = ([compute_scorecard(db, strategy, days=days)] if strategy
+             else compute_all_scorecards(db, days=days))
+    for c in cards:
+        # live numbers embed real paper slippage; lab numbers assume their
+        # own cost model — disclose the asymmetry wherever the two meet
+        c["cost_disclosure"] = _COST_DISCLOSURE
+    return cards
 
 
 @router.get("/validation")
@@ -242,6 +258,10 @@ def validation_runs(db: Session = Depends(get_db)):
             and holdout is not None
             and holdout.get("passes")
         )
+        cfg = r.config or {}
+        lab_costs = ("realistic cost model (spread + impact + participation)"
+                     if cfg.get("costed")
+                     else f"flat {cfg.get('cost_bps', '?')} bps per fill")
         out.append({
             "strategy_name": r.strategy_name,
             "run_at": r.run_at.isoformat() if r.run_at else None,
@@ -253,6 +273,7 @@ def validation_runs(db: Session = Depends(get_db)):
             "holdout": holdout,
             "verdict": r.verdict,
             "validated": validated,
+            "cost_disclosure": {**_COST_DISCLOSURE, "this_run_lab_costs": lab_costs},
         })
     return sorted(out, key=lambda x: x["strategy_name"])
 

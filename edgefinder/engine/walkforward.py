@@ -147,6 +147,7 @@ def run_walkforward(
     start_cash: float = 1_000_000.0,
     schedule: str = "monthly",
     cost_bps: float = 2.0,
+    rebalance_band: float = 0.0,
     risk_adjusted: bool = True,
     pass_min_trades: int = 30,
     universe_fn: Callable[[date], list[str]] | None = None,
@@ -216,6 +217,7 @@ def run_walkforward(
             schedule=schedule,
             cost_bps=cost_bps,
             cost_model=cost_model,
+            rebalance_band=rebalance_band,
             trade_start=oos_start,
             benchmark=_slice(spy_bars, oos_start, oos_end) if spy_bars is not None else None,
         )
@@ -235,6 +237,7 @@ def run_walkforward(
             schedule=schedule,
             cost_bps=cost_bps,
             cost_model=cost_model,
+            rebalance_band=rebalance_band,
             trade_start=h_start,
             benchmark=_slice(spy_bars, h_start, h_end) if spy_bars is not None else None,
         ).stats
@@ -273,6 +276,7 @@ def run_walkforward(
     card["config"]["costed"] = cost_model is not None
     card["config"]["pit_universe"] = universe_fn is not None
     card["config"]["prices"] = prices_label
+    card["config"]["rebalance_band"] = rebalance_band
     if planned_holdout is not None:
         # pin the sealed boundary in the record — the carve is count-relative,
         # so without this the "sealed" region would drift as new bars accrue
