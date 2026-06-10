@@ -12,7 +12,9 @@ name: Hunt batch
 
 on:
   push:
-    branches: [claude/handoff-doc-review-176vbl, main]
+    # session branches only — merging a fired queue to main must NOT
+    # re-run the wave (duplicate validation_runs rows)
+    branches: [claude/handoff-doc-review-176vbl]
     paths: [hunt/queue.json]
 
 permissions:
