@@ -150,27 +150,25 @@ trading → dashboard tables.**
   stale frames), ET-not-UTC trading day, gate-before-prep, per-cycle price memo.
 
 ### ROADMAP — resume here
-- **PHASE 4 — Storage: two-tier (R2), parallel & non-blocking.** History (`daily_bars`,
-  ~1.3 GB, write-once/read-heavy) → **Parquet on Cloudflare R2** (10 GB free, zero
-  egress, S3-compatible; ~1.3 GB → ~200-400 MB compressed). `data/flatfiles.py`
-  already speaks boto3/S3; `data/cache.py` already does Parquet. Route the data layer
-  through a "bar store" abstraction instead of reading `daily_bars` directly (few
-  choke points — not a rewrite). Live/operational data (<30 MB) stays in **Supabase**,
-  lean. **R2 secrets** the owner is adding as GitHub → Codespaces → Secrets (scoped to
-  `OSGTax/edgefinder`, injected as env vars every session):
-  `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`
-  (`https://<accountid>.r2.cloudflarestorage.com`), `R2_BUCKET=edgefinder-data`.
-  **On resume verify first:** `env | grep -E '^R2_'` (never print secret values). If
-  present, wire the bar store to R2; if absent, build on current data and note it's
-  pending (non-blocking).
-- **PHASE 5a — PIT fundamentals store (IN SCOPE — machine work).** The fundamentals
-  table is current-snapshot-only (1 row/symbol, overwritten each scan) — any
-  historical backtest using it is pure look-ahead, so the Lynch/GARP lane cannot be
-  honestly tested until point-in-time fundamentals exist. Build the store: snapshot
-  the fundamentals table on every scan keyed by as_of date (forward accumulation
-  starts immediately), and evaluate Polygon financials-by-filing-date for historical
-  backfill. The engine's AssetView.fundamentals then needs a PIT lookup per
-  decision date instead of the static dict.
+- **PHASE 4 — DONE ✅ (v5.26.0 `afabd6a`).** `data/barstore.py`: Parquet-per-symbol
+  on Cloudflare R2, incremental manifest-driven sync, parallel uploads. **Full
+  export done + verified: all 8,651 symbols / 4.51M rows / 179 MB** (the 1.3 GB
+  table, ~7x compressed); `verify -n 50` = zero mismatches; the 21-yr null control
+  run `--bars-from r2` reproduces the DB calibration exactly (0.00 / −0.02pp).
+  Read path: `engine/data.load_bars_from_store` + validate `--bars-from r2`.
+  Nightly mirror: `r2_sync` job 7 PM ET, self-enabling on R2_* env presence —
+  **add the four R2_* vars to Render env to turn the nightly mirror on** (it
+  logs-and-skips without them). The DB is never deleted from. R2 secrets live in
+  GitHub → Codespaces → Secrets; values are .strip()ed in code (a pasted secret
+  carried a trailing newline once).
+- **PHASE 5a — DONE ✅ (v5.25.0 `61c8431`).** `fundamentals_snapshots` table +
+  `data/pit_fundamentals.py` (snapshot writer hooked into the nightly scan;
+  `PITFundamentals.asof(symbol, date)` reader; None before coverage — honest).
+  Engine `_build_context` accepts static dict (disclosed look-ahead) OR any
+  object with `asof()` (the honest path). **First snapshot taken 2026-06-10,
+  2,692 symbols — PIT history accumulates forward from that date.** Historical
+  backfill via Polygon financials-by-filing-date: deferred (needs its own fetch
+  infra + restatement-vintage care; revisit when the Lynch lane is unlocked).
 - **PHASE 5b — Go wide (the actual hunt). ⛔ OUT OF SCOPE until the owner says go.**
   When unlocked: use the honest lab as a high-throughput screen — the Lynch lane on
   the PIT store, deliberately-dumb strategies, batch validation, survivors
