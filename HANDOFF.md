@@ -202,6 +202,53 @@ All three former gaps closed and verified:
    deletion + a holiday gate on the benchmarks collector, resolve_universe
    ranks on lifetime (not trailing) dollar volume — disclosed caveat.
 
+### 🔬 MARKET-FIDELITY AUDIT — PASSED (2026-06-10, v5.29.0 `98e940e`)
+
+A 14-agent audit checked the machine against PUBLISHED market reality
+(every lens re-verified with independent sources):
+- **ETF history 12/12 penny-exact** (GFC −56.47% peak-trough, COVID −34.10%,
+  famous closes to the cent; the 2021 Yahoo/Polygon splice is seamless).
+- **Graveyard 7/7 exact**: SIVB dies 2023-03-09 @ $106.04, FRC, BBBY @
+  $0.0751, TWTR, ATVI, SBNY — all on the real last trading day, no OTC
+  afterlife leakage. Survivorship-bias protection verified.
+- **Dividends/TR 5/5**: SPY dividends match to 5-6 decimals; the TR transform
+  reproduces published SPY calendar total returns **within 0.01pp**.
+- **PIT fundamentals**: TTM EPS matches filings to pennies; snapshot timing
+  errs only LATE (conservative) — zero look-ahead found.
+- **Engine**: buy-and-hold identities <0.01pp; all three nulls 0.00; delist
+  mechanics exact; 7-ETF monthly cost drag single-digit bps/yr.
+- **ONE systemic bug found and FIXED (v5.29.0): the stock lane was not
+  split-adjusted** (fake ±60-99% cliffs at ~256 split ex-dates; NVDA lane
+  read −68% instead of +1,181%). Now: market-wide ticker_splits (9,884
+  rows) + load-time adjustment in load_bars (default ON), dividend amounts
+  scaled across splits, META pre-2022-06-09 contamination quarantined.
+  Verified: TSLA 2022 −65.0%, AMZN −49.6%, NVDA +1,181% — all exact.
+  **All committed ETF-lane verdicts stand (no ETF splits in range); any
+  earlier ad-hoc single-stock numbers spanning splits are void.**
+- Recorded caveats: BBBY = two companies (gap-separated; PIT universes are
+  safe, fixed-symbol runs beware); stock bars end at the 2026-05-26 bulk
+  edge except traded names (freshness step advances them); SPY dividends
+  start 2007 (pre-2007 ETF TR = price-only); one missing TLT dividend
+  (2015-08); phantom 2026-05-25 index_daily rows still need owner-approved
+  deletion.
+
+### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
+
+The machine is fidelity-verified end to end. Lanes ready:
+- **ETF lane** (21 yr, 2005→now, 11 symbols):
+  `python -m edgefinder.engine.validate --strategy X --symbols ... --schedule monthly --holdout-start 2025-12-05 --record`
+- **Stock lane** (5 yr, 2021-06→now, PIT top-N incl. graveyard, costed, TR):
+  `python -m edgefinder.engine.validate --strategy X --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record`
+- **Fundamental/Lynch lane**: PIT fundamentals 2019→now (128,854 snapshots);
+  strategies read `a.fundamentals.earnings_growth` etc. in rebalance(ctx);
+  compute P/E-style ratios from `a.price` at decision time.
+- New strategy = ~10 lines in `engine/strategies.py` + a spec in
+  `make_strategy_factory`. Pre-register (commit params BEFORE first run).
+- **Discipline:** pin ONE `--holdout-start` date for the whole research
+  round and never evaluate it without explicit owner sign-off
+  (`--burn-holdout`); promote candidates as `experimental` tier to
+  paper-trade; `validated` tier requires the passing sealed holdout.
+
 ### Remaining cleanup (parked for the dashboard-overhaul phase)
 
 4. **Consolidation debt:** lab/live
