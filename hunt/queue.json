@@ -1,4 +1,65 @@
 {
-  "wave": "idle",
-  "runs": []
+  "wave": "hunt-r2-w1",
+  "runs": [
+    {
+      "id": "null-control",
+      "args": "--strategy buy_and_hold:SPY --symbols SPY --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r2:null"
+    },
+    {
+      "id": "mom-12-1-k40",
+      "args": "--strategy mom_12_1_k40 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500 --warmup-days 290"
+    },
+    {
+      "id": "mom-6m-k20",
+      "args": "--strategy mom_6m_k20 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500"
+    },
+    {
+      "id": "mom-inverse-vol",
+      "args": "--strategy mom_inverse_vol --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500 --warmup-days 290"
+    },
+    {
+      "id": "mom-regime-gated",
+      "args": "--strategy mom_regime_gated --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500 --warmup-days 290"
+    },
+    {
+      "id": "mom-earnings-tilt",
+      "args": "--strategy mom_earnings_tilt --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500 --pit-fundamentals --warmup-days 290"
+    },
+    {
+      "id": "value-pe12",
+      "args": "--strategy value_pe12 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500-pit --pit-fundamentals"
+    },
+    {
+      "id": "value-roe",
+      "args": "--strategy value_roe --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500-pit --pit-fundamentals"
+    },
+    {
+      "id": "value-momentum",
+      "args": "--strategy value_momentum --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500-pit --pit-fundamentals"
+    },
+    {
+      "id": "earnings-yield-top",
+      "args": "--strategy earnings_yield_top --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500-pit --pit-fundamentals"
+    },
+    {
+      "id": "value-low-debt",
+      "args": "--strategy value_low_debt --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500-pit --pit-fundamentals"
+    },
+    {
+      "id": "value-mom-barbell",
+      "args": "--strategy value_mom_barbell --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500-pit --pit-fundamentals --warmup-days 290"
+    },
+    {
+      "id": "low-vol-value",
+      "args": "--strategy low_vol_value --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500-pit --pit-fundamentals"
+    },
+    {
+      "id": "random-20-s23",
+      "args": "--strategy random_20_s23 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500"
+    },
+    {
+      "id": "random-20-s31",
+      "args": "--strategy random_20_s31 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r2:top500"
+    }
+  ]
 }
