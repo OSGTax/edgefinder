@@ -48,6 +48,12 @@ async def research_redirect(request: Request):
         status_code=307)
 
 
-@router.get("/backtest", response_class=HTMLResponse)
-async def backtest_page(request: Request):
-    return templates.TemplateResponse(request=request, name="backtest.html")
+@router.get("/lab", response_class=HTMLResponse)
+async def lab_page(request: Request):
+    return templates.TemplateResponse(request=request, name="lab.html")
+
+
+@router.get("/backtest")
+async def backtest_redirect():
+    """Old Backtest page -> Lab explorer's backtest tab."""
+    return RedirectResponse(url="/lab?tab=backtest", status_code=307)

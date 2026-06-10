@@ -40,6 +40,14 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/api/symbols/SPY/bars?range=3m", ["bars", "source"], {200, 404}),
     ("/api/symbols/SPY/bars?range=3m&indicators=true", ["bars"], {200, 404}),
     ("/api/symbols/SPY/events", ["dividends", "splits", "news"], {200}),
+    ("/api/lab/runs?limit=5", ["total", "runs"], {200}),
+    ("/api/lab/scoreboard", ["target", "finalists", "counts"], {200}),
+    ("/api/lab/labels", ["prefixes"], {200}),
+    ("/api/strategies/summary", ["arena", "v2", "all"], {200}),
+    ("/api/strategies/promoted", [], {200}),
+    ("/api/strategies/meta", [], {200}),
+    ("/api/ops/activity?limit=10", ["items"], {200}),
+    ("/api/ops/storage", ["db"], {200}),
     # pages
     ("/", [], {200}),
     ("/strategies", [], {200}),
@@ -47,6 +55,7 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/research", [], {200, 307}),
     ("/screener", [], {200}),
     ("/backtest", [], {200, 307}),
+    ("/lab", [], {200}),
 ]
 
 

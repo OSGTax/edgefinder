@@ -50,6 +50,7 @@ NEW_ASSETS = [
     "/static/js/components/sparkline.js",
     "/static/js/components/heatmap.js",
     "/static/js/pages/symbol.js",
+    "/static/js/pages/lab.js",
 ]
 
 
@@ -72,7 +73,7 @@ def _inline_styles(name: str) -> list[str]:
 
 # Coverage expands as each page is rebuilt (redesign phases 1-9). The end
 # state is every template in dashboard/templates/ inline-style-free.
-STYLE_FREE_TEMPLATES: list[str] = ["base.html", "symbol.html"]
+STYLE_FREE_TEMPLATES: list[str] = ["base.html", "symbol.html", "lab.html"]
 
 
 @pytest.mark.parametrize("name", STYLE_FREE_TEMPLATES)
@@ -90,3 +91,9 @@ def test_research_redirects_to_symbol(client):
     assert r.status_code == 307 and r.headers["location"] == "/symbol"
     r = client.get("/research?ticker=aapl", follow_redirects=False)
     assert r.status_code == 307 and r.headers["location"] == "/symbol/AAPL"
+
+
+def test_lab_page_and_backtest_redirect(client):
+    assert client.get("/lab").status_code == 200
+    r = client.get("/backtest", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/lab?tab=backtest"
