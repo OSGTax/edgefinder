@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+from datetime import date
 
 from edgefinder.db.engine import get_engine, get_session_factory
 from edgefinder.engine.data import load_bars, spy_series
@@ -41,6 +42,10 @@ def main(argv: list[str] | None = None) -> dict:
     p.add_argument("--oos-days", type=int, default=126)
     p.add_argument("--step-days", type=int, default=126)
     p.add_argument("--holdout-days", type=int, default=0)
+    p.add_argument("--holdout-start", default=None,
+                   help="pin the sealed holdout to a fixed DATE (YYYY-MM-DD) "
+                        "instead of a rolling last-N-days count — required "
+                        "discipline for any multi-run research program")
     p.add_argument("--burn-holdout", action="store_true",
                    help="EVALUATE the sealed holdout — spends the one "
                         "look-per-round; without this flag the holdout is "
@@ -87,7 +92,10 @@ def main(argv: list[str] | None = None) -> dict:
         bars, factory,
         spy_bars=spy,
         is_days=args.is_days, oos_days=args.oos_days, step_days=args.step_days,
-        holdout_days=args.holdout_days, holdout_eval=args.burn_holdout,
+        holdout_days=args.holdout_days,
+        holdout_start=(date.fromisoformat(args.holdout_start)
+                       if args.holdout_start else None),
+        holdout_eval=args.burn_holdout,
         warmup_days=args.warmup_days, start_cash=args.start_cash,
         schedule=args.schedule, cost_bps=args.cost_bps,
         risk_adjusted=not args.total_return,

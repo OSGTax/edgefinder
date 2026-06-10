@@ -112,6 +112,27 @@ class TestFoldGeometry:
         with pytest.raises(ValueError, match="not enough history"):
             run_walkforward(bars, EqualWeight, is_days=100, oos_days=50)
 
+    def test_holdout_start_pins_the_sealed_boundary(self):
+        bars = {"AAA": _bars(420)}
+        days = sorted(bars["AAA"]["date"])
+        pin = days[370]
+        card = run_walkforward(
+            bars, EqualWeight, schedule="daily", warmup_days=10,
+            is_days=100, oos_days=50, step_days=50,
+            holdout_start=pin, holdout_eval=False)
+        assert card["config"]["holdout_window"] == f"{days[370]}..{days[419]}"
+        # new bars accrue -> the sealed START must NOT move (the whole point)
+        bars2 = {"AAA": _bars(460)}
+        card2 = run_walkforward(
+            bars2, EqualWeight, schedule="daily", warmup_days=10,
+            is_days=100, oos_days=50, step_days=50,
+            holdout_start=pin, holdout_eval=False)
+        assert card2["config"]["holdout_window"].startswith(str(pin))
+        # and folds still never touch the sealed region
+        last_oos_end = max(
+            date.fromisoformat(f["window"].split("..")[1]) for f in card2["folds"])
+        assert last_oos_end < pin
+
 
 def _fold(i, excess_sharpe, dd_reduction, trades=10, excess_ret=1.0):
     return Fold(

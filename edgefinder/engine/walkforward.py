@@ -22,6 +22,7 @@ Methodology notes carried over (and disclosed in every scorecard):
 
 from __future__ import annotations
 
+import bisect
 import math
 import statistics
 from dataclasses import dataclass
@@ -109,6 +110,7 @@ def run_walkforward(
     oos_days: int = 126,
     step_days: int = 126,
     holdout_days: int = 0,
+    holdout_start: date | None = None,
     holdout_eval: bool = True,
     warmup_days: int = 210,
     start_cash: float = 1_000_000.0,
@@ -121,11 +123,13 @@ def run_walkforward(
     return the scorecard dict (same shape the old harness recorded).
 
     ``strategy_factory`` builds a FRESH strategy instance per window, so
-    stateful strategies cannot leak across folds. With ``holdout_days > 0`` the
-    final stretch of the calendar is carved off and untouchable by folds;
-    ``holdout_eval=False`` reserves it without burning the one look (the
-    sealed window's dates are still disclosed in config so the boundary is
-    pinned in the record even as new bars accrue).
+    stateful strategies cannot leak across folds. With ``holdout_days > 0``
+    (count-relative) or ``holdout_start`` (a date — pins the sealed boundary
+    permanently, so it cannot roll forward as new bars accrue; preferred for
+    any multi-run research program) the final stretch of the calendar is
+    carved off and untouchable by folds; ``holdout_eval=False`` reserves it
+    without burning the one look (the sealed window's dates are disclosed in
+    config either way).
 
     ``start_cash`` defaults high so integer-share flooring is negligible —
     at $10k across 7 ETFs the flooring alone measured ~-1.3pp/fold of phantom
@@ -133,7 +137,11 @@ def run_walkforward(
     """
     days = _all_dates(bars_by_symbol)
     n = len(days)
-    wf_n = n - holdout_days
+    if holdout_start is not None:
+        wf_n = bisect.bisect_left(days, holdout_start)
+        holdout_days = n - wf_n
+    else:
+        wf_n = n - holdout_days
     if wf_n < is_days + oos_days:
         raise ValueError(
             f"not enough history: {n} trading days minus {holdout_days} holdout "
