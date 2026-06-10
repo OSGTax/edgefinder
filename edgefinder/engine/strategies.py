@@ -44,6 +44,9 @@ def make_strategy_factory(spec: str):
     from edgefinder.engine.hunt_r3 import HUNT_R3_SPECS
     if spec in HUNT_R3_SPECS:
         return HUNT_R3_SPECS[spec]
+    from edgefinder.engine.hunt_r4 import HUNT_R4_SPECS
+    if spec in HUNT_R4_SPECS:
+        return HUNT_R4_SPECS[spec]
     raise ValueError(
         f"unknown strategy spec {spec!r} (use equal_weight, dual_momentum, "
         "buy_and_hold:SYM, trend_timer:SYM, or a hunt roster spec from "
