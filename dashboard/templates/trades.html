@@ -1,62 +1,30 @@
 {% extends "base.html" %}
 {% block title %}Trades — EdgeFinder{% endblock %}
+
 {% block content %}
-<h1 class="page-title">Trades <span id="integrity-badge" style="font-size:12px;font-weight:400;vertical-align:middle;margin-left:10px;"></span></h1>
-
-<!-- Stats Bar -->
-<div class="stats-grid mb-20" id="trade-stats"></div>
-
-<!-- P&L Calendar -->
-<div class="card mb-20">
-  <div class="card-header">Daily P&L <span id="calendar-range" style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0;"></span></div>
-  <div class="card-body">
-    <div id="pnl-calendar" class="calendar-grid"></div>
-  </div>
+<div class="flex items-center gap-12 mb-16 flex-wrap">
+  <h2 class="flex-1">Trades</h2>
+  <span id="tr-integrity"></span>
 </div>
 
-<!-- Filters -->
-<div class="filters mb-16">
-  <select class="filter-select" id="filter-strategy">
-    <option value="">All Strategies</option>
-  </select>
-  <div class="filter-tabs" id="status-tabs">
-    <div class="filter-tab active" data-status="all">All</div>
-    <div class="filter-tab" data-status="OPEN">Open</div>
-    <div class="filter-tab" data-status="wins">Wins</div>
-    <div class="filter-tab" data-status="losses">Losses</div>
+<div id="tr-stats" class="grid-4 mb-16"></div>
+
+<div class="ch-toolbar">
+  <select id="tr-strategy" class="c-select"><option value="">All strategies</option></select>
+  <div class="c-seg" id="tr-status">
+    <button data-status="" class="active">All</button>
+    <button data-status="OPEN">Open</button>
+    <button data-status="wins">Wins</button>
+    <button data-status="losses">Losses</button>
   </div>
+  <input id="tr-symbol" class="c-input" placeholder="Symbol…">
 </div>
 
-<!-- Trade Journal Table -->
-<div class="card">
-  <div class="card-header">
-    Trade Journal
-    <span id="trade-count" style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
-  </div>
-  <div class="card-body" style="padding:0;max-height:600px;overflow-y:auto;">
-    <table class="data-table">
-      <thead>
-        <tr>
-          <th data-col="symbol">Symbol</th>
-          <th data-col="strategy_name">Strategy</th>
-          <th data-col="direction">Dir</th>
-          <th data-col="entry_price">Entry</th>
-          <th data-col="exit_price">Exit</th>
-          <th data-col="shares">Shares</th>
-          <th data-col="pnl_dollars">P&amp;L</th>
-          <th data-col="pnl_percent">P&amp;L%</th>
-          <th data-col="r_multiple">R</th>
-          <th data-col="status">Status</th>
-          <th data-col="exit_reason">Reason</th>
-          <th data-col="entry_time">Opened</th>
-          <th data-col="exit_time">Closed</th>
-        </tr>
-      </thead>
-      <tbody id="trades-body"></tbody>
-    </table>
-  </div>
+<div class="c-card">
+  <div class="c-card-body tight c-table-wrap" id="tr-table"></div>
 </div>
 {% endblock %}
+
 {% block scripts %}
-<script src="/static/js/trades.js"></script>
+<script type="module" src="/static/js/pages/trades.js"></script>
 {% endblock %}

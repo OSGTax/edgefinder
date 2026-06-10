@@ -1,62 +1,32 @@
 {% extends "base.html" %}
 {% block title %}Screener — EdgeFinder{% endblock %}
+
 {% block content %}
-<h1 class="page-title">Screener</h1>
-
-<!-- Sector Rotation -->
-<div class="card mb-20">
-  <div class="card-header">Sector Rotation (RRG)</div>
-  <div class="card-body">
-    <div id="sector-grid">
-      <canvas id="sector-treemap" height="200"></canvas>
-    </div>
-  </div>
+<div class="flex items-center gap-12 mb-16 flex-wrap">
+  <h2 class="flex-1">Screener</h2>
 </div>
 
-<!-- Filters -->
-<div class="filters mb-16">
-  <select class="filter-select" id="filter-strategy">
-    <option value="">All Strategies</option>
-  </select>
-  <select class="filter-select" id="filter-sector">
-    <option value="">All Sectors</option>
-  </select>
-  <input class="filter-input" id="filter-search" placeholder="Search symbol or company..." type="text" style="min-width:220px;">
+<div class="c-card mb-16">
+  <div class="c-card-header">Sector rotation (RRG quadrants) <span class="spacer"></span><span id="sc-sector-clear"></span></div>
+  <div class="c-card-body"><div id="sc-treemap"></div></div>
 </div>
 
-<!-- Screener Table -->
-<div class="card">
-  <div class="card-header">
-    Stocks
-    <span id="stock-count" style="color:var(--text-muted);font-weight:400;text-transform:none;letter-spacing:0;"></span>
-  </div>
-  <div class="card-body" style="padding:0;max-height:600px;overflow-y:auto;">
-    <table class="data-table" id="screener-table">
-      <thead>
-        <tr>
-          <th data-col="symbol">Symbol</th>
-          <th data-col="company_name">Company</th>
-          <th data-col="sector">Sector</th>
-          <th data-col="last_price" class="text-right">Price</th>
-          <th data-col="market_cap" class="text-right">MktCap</th>
-          <th data-col="earnings_growth" class="text-right">EG%</th>
-          <th data-col="revenue_growth" class="text-right">RG%</th>
-          <th data-col="price_to_earnings" class="text-right">P/E</th>
-          <th data-col="rsi_14" class="text-right">RSI</th>
-          <th data-col="macd_histogram" class="text-right">MACD</th>
-          <th data-col="short_interest" class="text-right">SI%</th>
-          <th>Strategies</th>
-        </tr>
-      </thead>
-      <tbody id="screener-body">
-        <tr>
-          <td colspan="12" class="empty-state" style="padding:40px;">Loading&hellip;</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+<div class="ch-toolbar">
+  <select id="sc-strategy" class="c-select"><option value="">All strategies</option></select>
+  <input id="sc-search" class="c-input" placeholder="Symbol / company…">
+</div>
+
+<div class="c-card mb-16">
+  <div class="c-card-header">Ranked watchlist (scanner qualifications)</div>
+  <div class="c-card-body tight c-table-wrap" id="sc-watchlist"></div>
+</div>
+
+<div class="c-card">
+  <div class="c-card-header">Universe</div>
+  <div class="c-card-body tight c-table-wrap" id="sc-table"></div>
 </div>
 {% endblock %}
+
 {% block scripts %}
-<script src="/static/js/screener.js"></script>
+<script type="module" src="/static/js/pages/screener.js"></script>
 {% endblock %}

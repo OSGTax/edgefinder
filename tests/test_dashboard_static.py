@@ -52,6 +52,10 @@ NEW_ASSETS = [
     "/static/js/pages/symbol.js",
     "/static/js/pages/lab.js",
     "/static/js/pages/portfolio.js",
+    "/static/js/pages/trades.js",
+    "/static/js/pages/strategies.js",
+    "/static/js/pages/screener.js",
+    "/static/js/components/treemap.js",
 ]
 
 
@@ -74,7 +78,10 @@ def _inline_styles(name: str) -> list[str]:
 
 # Coverage expands as each page is rebuilt (redesign phases 1-9). The end
 # state is every template in dashboard/templates/ inline-style-free.
-STYLE_FREE_TEMPLATES: list[str] = ["base.html", "symbol.html", "lab.html", "dashboard.html"]
+STYLE_FREE_TEMPLATES: list[str] = [
+    "base.html", "symbol.html", "lab.html", "dashboard.html",
+    "trades.html", "strategies.html", "screener.html",
+]
 
 
 @pytest.mark.parametrize("name", STYLE_FREE_TEMPLATES)
@@ -98,3 +105,9 @@ def test_lab_page_and_backtest_redirect(client):
     assert client.get("/lab").status_code == 200
     r = client.get("/backtest", follow_redirects=False)
     assert r.status_code == 307 and r.headers["location"] == "/lab?tab=backtest"
+
+
+def test_no_cdn_script_tags_remain():
+    html = (TEMPLATES / "base.html").read_text()
+    assert "cdn.jsdelivr.net" not in html
+    assert "unpkg.com" not in html
