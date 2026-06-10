@@ -112,13 +112,24 @@ class BarStore:
 
     # ── public API ───────────────────────────────────────
 
-    def load(self, symbols: list[str]) -> dict[str, pd.DataFrame]:
-        """Read bars for ``symbols`` from R2 (missing symbols are omitted)."""
+    def load(self, symbols: list[str],
+             max_workers: int = 8) -> dict[str, pd.DataFrame]:
+        """Read bars for ``symbols`` from R2 (missing symbols are omitted).
+
+        GETs run in parallel (botocore clients are thread-safe): a
+        full-market load for PIT universe resolution is ~8.6k objects —
+        minutes sequential, tens of seconds at 8-16 workers.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _one(sym: str):
+            return sym, self._get_frame(_bar_key(sym))
+
         out: dict[str, pd.DataFrame] = {}
-        for sym in symbols:
-            df = self._get_frame(_bar_key(sym))
-            if df is not None and len(df):
-                out[sym] = df
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for sym, df in pool.map(_one, symbols):
+                if df is not None and len(df):
+                    out[sym] = df
         return out
 
     def sync(self, session, symbols: list[str] | None = None) -> dict:

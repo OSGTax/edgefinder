@@ -154,16 +154,28 @@ def adjust_dividends_for_splits(
 
 
 def load_bars_from_store(
-    symbols: list[str], start=None, end=None,
+    symbols: list[str] | None, start=None, end=None,
 ) -> dict[str, pd.DataFrame]:
     """Read bars from the R2 Parquet store instead of the DB.
 
     Same return shape as :func:`load_bars`. The store is a verified mirror of
     daily_bars (see edgefinder/data/barstore.py); callers opt in explicitly.
+    ``symbols=None`` loads the ENTIRE manifest — the full-market frame set
+    that PIT universe resolution needs once the DB no longer carries breadth
+    history. The symbol-reuse quarantine (CONTAMINATED_BEFORE) is applied
+    here exactly as in the DB loader — the store mirrors raw rows, so the
+    META pre-2022-06-09 ETF rows exist in it too.
     """
     from edgefinder.data.barstore import BarStore
 
-    bars = BarStore().load(symbols)
+    store = BarStore()
+    if symbols is None:
+        symbols = sorted(store.read_manifest())
+    bars = store.load(symbols)
+    for sym, cutoff in CONTAMINATED_BEFORE.items():
+        if sym in bars:
+            df = bars[sym]
+            bars[sym] = df[df["date"] >= cutoff].reset_index(drop=True)
     if start is not None or end is not None:
         out = {}
         for sym, df in bars.items():
@@ -173,7 +185,39 @@ def load_bars_from_store(
                 df = df[df["date"] <= end]
             out[sym] = df.reset_index(drop=True)
         bars = out
-    return bars
+    return {s: df for s, df in bars.items() if len(df)}
+
+
+def rank_top_universe(
+    bars_by_symbol: dict[str, pd.DataFrame], as_of, top_n: int,
+    rank_offset: int = 0, rank_start=None, alive_days: int = 30,
+) -> list[str]:
+    """``resolve_universe('top')`` semantics computed from in-memory frames —
+    used when bars come from the R2 store instead of the DB.
+
+    Same rules as the SQL path (backtest/jobs.resolve_universe): rank by mean
+    dollar volume over bars dated <= ``as_of`` (and >= ``rank_start`` when
+    given — the trailing window), require a bar within ``alive_days`` of
+    as_of (the graveyard gate), then take ``top_n`` after ``rank_offset``.
+    Dollar volume is split-invariant, so raw store frames rank identically
+    to raw DB rows. Ties break by symbol for determinism.
+    """
+    from datetime import timedelta
+
+    alive_cutoff = as_of - timedelta(days=alive_days)
+    scored: list[tuple[float, str]] = []
+    for sym, df in bars_by_symbol.items():
+        d = df["date"]
+        mask = d <= as_of
+        if rank_start is not None:
+            mask = mask & (d >= rank_start)
+        sub = df[mask]
+        if not len(sub) or sub["date"].iloc[-1] < alive_cutoff:
+            continue
+        dv = float((sub["close"] * sub["volume"]).mean())
+        scored.append((dv, sym))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    return [s for _, s in scored[rank_offset: rank_offset + top_n]]
 
 
 def load_dividends(db: Session, symbols: list[str]) -> dict[str, list[tuple]]:

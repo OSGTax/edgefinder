@@ -124,8 +124,6 @@ def main(argv: list[str] | None = None) -> dict:
         raise SystemExit("--universe requires --start (stock bars begin "
                          "2021-06; without a start the SPY calendar would "
                          "plan years of empty pre-2021 universes)")
-    if args.universe and args.bars_from != "db":
-        raise SystemExit("--bars-from r2 is not supported with --universe yet")
     try:
         factory = make_strategy_factory(args.strategy)
     except ValueError as e:
@@ -160,6 +158,19 @@ def main(argv: list[str] | None = None) -> dict:
                 step_days=args.step_days, holdout_days=args.holdout_days,
                 holdout_start=holdout_start)
             windows = folds + ([holdout] if holdout else [])
+            market = None
+            if args.bars_from == "r2":
+                # full-market frames from the verified R2 mirror — both the
+                # PIT ranking and the bar slices come from the store; the DB
+                # serves only the small tables (SPY calendar, splits,
+                # dividends, PIT fundamentals)
+                from edgefinder.engine.data import (
+                    adjust_for_splits,
+                    load_bars_from_store,
+                    load_splits,
+                    rank_top_universe,
+                )
+                market = load_bars_from_store(None, start=None)
             per_window: dict = {}
             for w_start, _ in windows:
                 i = days.index(w_start)
@@ -168,14 +179,26 @@ def main(argv: list[str] | None = None) -> dict:
                 # ending at as_of (0 = lifetime-through-as_of, legacy)
                 rank_start = (days[max(0, i - args.rank_window)]
                               if args.rank_window else None)
-                per_window[w_start] = resolve_universe(
-                    session, "top", [], top_n, as_of=as_of,
-                    rank_offset=rank_offset, rank_start=rank_start)
+                if market is not None:
+                    per_window[w_start] = rank_top_universe(
+                        market, as_of, top_n, rank_offset=rank_offset,
+                        rank_start=rank_start)
+                else:
+                    per_window[w_start] = resolve_universe(
+                        session, "top", [], top_n, as_of=as_of,
+                        rank_offset=rank_offset, rank_start=rank_start)
             union = sorted(set().union(*per_window.values()))
             print(f"PIT universe top:{top_n}"
-                  f"{f'+{rank_offset}' if rank_offset else ''}: "
+                  f"{f'+{rank_offset}' if rank_offset else ''}"
+                  f"{' (R2)' if market is not None else ''}: "
                   f"{len(windows)} windows, union {len(union)} symbols")
-            bars = load_bars(session, union, start=start)
+            if market is not None:
+                bars = {s: df[df["date"] >= start].reset_index(drop=True)
+                        for s, df in market.items() if s in set(union)}
+                bars = {s: df for s, df in bars.items() if len(df)}
+                bars = adjust_for_splits(bars, load_splits(session, union))
+            else:
+                bars = load_bars(session, union, start=start)
             divs = (load_dividends(session, union + ["SPY"])
                     if args.div_adjust else None)
             fundamentals = _load_pit(args, session, union)
