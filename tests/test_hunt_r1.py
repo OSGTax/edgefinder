@@ -17,6 +17,7 @@ from edgefinder.db.models import FundamentalsSnapshot  # registers the table for
 from edgefinder.engine.backtest import run_backtest
 from edgefinder.engine.hunt_r1 import ETF_MENU, HUNT_SPECS
 from edgefinder.engine.hunt_r2 import HUNT_R2_SPECS
+from edgefinder.engine.hunt_r3 import HUNT_R3_SPECS
 from edgefinder.engine.strategies import make_strategy_factory
 from edgefinder.engine.strategy import AssetView, RebalanceContext
 from edgefinder.data.market_data import IndicatorSnapshot
@@ -62,7 +63,8 @@ def _ctx(n_assets=30, with_fundamentals=False):
     return RebalanceContext(date=date(2025, 3, 4), assets=assets)
 
 
-@pytest.mark.parametrize("spec", sorted(HUNT_SPECS) + sorted(HUNT_R2_SPECS))
+@pytest.mark.parametrize("spec", sorted(HUNT_SPECS) + sorted(HUNT_R2_SPECS)
+                         + sorted(HUNT_R3_SPECS))
 def test_every_spec_builds_and_returns_legal_weights(spec):
     strat = make_strategy_factory(spec)()
     assert strat.name  # every candidate is identifiable

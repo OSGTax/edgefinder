@@ -447,6 +447,22 @@ mom_inverse_vol, mom_earnings_tilt). Holdout still sealed.
 mechanics for cross-sectional finalists (resolve-at-promotion vs nightly
 re-resolve) — blocks promoting xsec_mom_12_1 and any round-2 confirmations.
 
+### 🏹 HUNT ROUND 3 — IN FLIGHT (2026-06-10, v5.48 roster `engine/hunt_r3.py`)
+
+Owner directive: hunt runs as a CONTINUOUS LOOP until 10 confirmed
+finalists — evaluate each wave as it lands, queue re-checks for
+total-return passers, confirm/kill on the all-three standard, pre-register
+the next round when the current one resolves. Round-3 roster (12 + 2
+randoms, frozen pre-run): SOFT momentum risk overlays (mom_spy_vol_brake,
+mom_soft_gate, mom_52w_high), value×momentum structural probes
+(barbell_trend_value, value_mom_rank_blend), and five families with NO
+12-1 engine and NO P/E (quality_roe_top, quality_momentum, fast_growers,
+fcf_yield_top, dividend_value) + ew_top100 + seasonal_spy. Wave
+hunt-r3-w1 (15 runs incl. null) in `hunt/queue.json`. Results land in
+validation_runs with labels `hunt-r3:*` (ids > 110). If resuming in a
+fresh session: read `reviews/HUNT-ROUND-2.md` for the verdict standard,
+check ids > 110, and continue the loop.
+
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
 The machine is fidelity-verified end to end. Lanes ready:
