@@ -197,10 +197,11 @@ All three former gaps closed and verified:
    stored at promotion (live trades raw — disclosed divergence for yielders).
    **TR null control: 0.00 / −0.02pp. SPY 21-yr OOS 253% → 566.7% (~2.1%/yr
    yield — checks out).**
-   Known follow-ups: live paper accounts get no dividend cash credits (TR
-   live parity), phantom 2026-05-25 index_daily rows need owner-approved
-   deletion + a holiday gate on the benchmarks collector, resolve_universe
-   ranks on lifetime (not trailing) dollar volume — disclosed caveat.
+   Known follow-ups — ALL CLOSED by the 2026-06-10 loose-ends round (see
+   the LOOSE-ENDS POLISH section below): live dividend cash credits built
+   (v5.31), phantom index_daily rows deleted + holiday gate added (v5.30),
+   resolve_universe trailing-window ranking shipped as the hunt default
+   (v5.32).
 
 ### 🔬 MARKET-FIDELITY AUDIT — PASSED (2026-06-10, v5.29.0 `98e940e`)
 
@@ -226,11 +227,76 @@ A 14-agent audit checked the machine against PUBLISHED market reality
   **All committed ETF-lane verdicts stand (no ETF splits in range); any
   earlier ad-hoc single-stock numbers spanning splits are void.**
 - Recorded caveats: BBBY = two companies (gap-separated; PIT universes are
-  safe, fixed-symbol runs beware); stock bars end at the 2026-05-26 bulk
-  edge except traded names (freshness step advances them); SPY dividends
-  start 2007 (pre-2007 ETF TR = price-only); one missing TLT dividend
-  (2015-08); phantom 2026-05-25 index_daily rows still need owner-approved
-  deletion.
+  safe, fixed-symbol runs beware); SPY dividends start 2007 (pre-2007 ETF
+  TR = price-only — owner chose to accept this). The other three caveats
+  (bulk-edge staleness, missing TLT 2015-08 dividend, phantom 2026-05-25
+  index_daily rows) were closed by the 2026-06-10 loose-ends round below.
+
+### 🧹 LOOSE-ENDS POLISH — DONE ✅ (2026-06-10, v5.30–v5.32, branch `claude/handoff-doc-review-176vbl`)
+
+Owner-directed cleanup of every named loose end EXCEPT the hunt (explicitly
+deferred) and the consolidation debt (owner chose to keep it parked). Built
+from a claude.ai cloud sandbox that cannot reach Postgres directly — DB work
+ran via the supabase MCP and temporary push-triggered Actions jobs.
+
+- **Phantom 2026-05-25 index_daily rows DELETED** (owner-approved) and the
+  cause fixed: `BenchmarkService.collect_daily` now has a weekend + Polygon
+  market-holiday gate (service-level, so the manual `/api/benchmarks/collect`
+  route is covered too; fails open on API errors).
+- **Dividend cash credits for v2 paper accounts (TR live parity), v5.31.**
+  New `dividend_credits` table (one row per strategy/symbol/ex_date; DDL in
+  render_start). `engine/live` credits cash when an ex-date passes while lots
+  are held (hold days included; missed cycles self-heal; splits can't
+  double-credit), tops up the dividends table per cycle, and the integrity
+  formula extends to `cash = start + closed P&L + credits − open cost`
+  (CLAUDE.md updated; watchdog cash-drift check uses the same formula, so
+  credits never read as drift). Also fixed en route: live trades were
+  stamped with WALL-CLOCK time even on simulated `--date` cycles (same bug
+  family the rebuild killed) — now stamped with the cycle's trading day.
+- **Trailing-window universe ranking, v5.32 (the resolve_universe caveat).**
+  `resolve_universe(rank_start=...)` + validate `--rank-window N` (default
+  126 trading days; 0 = legacy lifetime for reproducing old runs). Disclosed
+  in labels (`top:N@pit,rw126+v2`) and scorecard config.
+- **Backtest no-trade band, v5.32.** `run_backtest(rebalance_band=F)` /
+  validate `--rebalance-band` — the live runner's 1%-of-equity dust guard as
+  an opt-in engine feature (opens/closes always exempt; default 0 = exact
+  re-true, bit-identical to all committed results). Kills the daily-schedule
+  13k-fill churn artifact when enabled.
+- **Cost disclosure where live and lab meet:** structured `cost_disclosure`
+  on `/api/strategies/scorecard` + `/validation` payloads and the Live Proof
+  card footer (live ~5bps/side vs lab 2bps flat / costed model).
+- **TLT 2015-08 dividend:** confirmed missing from Polygon itself; official
+  value $0.267 (ex 2015-08-03) verified against two independent sources;
+  `dividends_backfill add` subcommand built for such patches. Insert pending
+  owner approval (sandbox blocks agent-initiated prod writes of web-sourced
+  values).
+- **Stock-bar bulk edge advanced:** 2026-05-27→2026-06-09 ingested
+  (top-1000/day, active+delisted + benchmark ETFs — same survivorship-free
+  methodology), rows computed from flat files and loaded via a temporary
+  Actions job. Go-forward automation: `.github/workflows/bars-nightly.yml`
+  (nightly trailing-5-day self-healing catch-up, kill switch
+  `BARS_NIGHTLY_ENABLED`, requires `EDGEFINDER_POLYGON_API_KEY` in Actions
+  secrets). The manual backfill workflow gained a `top_per_day` input.
+- **engine-validate.yml** dispatch workflow: run any v2 validation lane from
+  Actions (the hunt's lanes can run there too; sealed-holdout discipline
+  noted in the workflow header).
+- **CALIBRATION RE-VERIFIED on v5.32 (validation_runs 27/28):** null control
+  **0.00 excess Sharpe / −0.02pp over 38 folds — identical to the committed
+  calibration.** PIT lane re-measured with the trailing window: +1.04pp /
+  −0.04 excess Sharpe / FAIL (vs +0.17pp lifetime-ranked id 26; both at
+  honest-noise scale, ~5pp below the measured future-selection bias). The
+  shift is menu composition (currently-liquid names), not look-ahead — rank
+  windows only see data through each as-of day.
+
+**Owner actions to finish the round (~5 min):**
+1. Render env: add the four `R2_*` vars (values in GitHub → Codespaces
+   secrets) → nightly R2 mirror self-enables on next deploy.
+2. Actions secrets: add `EDGEFINDER_POLYGON_API_KEY`; repo variable
+   `BARS_NIGHTLY_ENABLED=true` → nightly bars catch-up goes live.
+3. Approve the TLT dividend insert (or run:
+   `python -m edgefinder.data.dividends_backfill add --symbol TLT --ex-date 2015-08-03 --amount 0.267`).
+4. Merge the branch to main → Render deploys v5.32 (render_start creates
+   dividend_credits; dashboard shows the disclosure).
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
