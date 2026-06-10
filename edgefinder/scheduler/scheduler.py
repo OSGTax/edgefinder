@@ -51,6 +51,7 @@ class EdgeFinderScheduler:
         news_accumulate_fn=None,
         dividend_split_fn=None,
         daily_indicator_fn=None,
+        portfolio_rebalance_fn=None,
     ) -> None:
         """Register all scheduled jobs.
 
@@ -165,6 +166,19 @@ class EdgeFinderScheduler:
                 replace_existing=True,
             )
             self._jobs["daily_indicators"] = "Daily at 4:30 PM ET"
+
+        if portfolio_rebalance_fn:
+            # Shortly after the open: yesterday's flat-file bars are long
+            # since published, and fills land near the open the v2 engine
+            # models (decide on data through yesterday, fill at today's open).
+            self._scheduler.add_job(
+                portfolio_rebalance_fn,
+                CronTrigger(hour=9, minute=45, day_of_week="mon-fri", timezone=ET),
+                id="v2_portfolio_rebalance",
+                name="V2 Portfolio Rebalance",
+                replace_existing=True,
+            )
+            self._jobs["v2_portfolio_rebalance"] = "Daily at 9:45 AM ET"
 
         logger.info("Scheduler configured with %d jobs", len(self._jobs))
 

@@ -75,6 +75,29 @@ def _is_rebalance(i: int, cal: list, schedule: str) -> bool:
     raise ValueError(f"unknown schedule {schedule!r}")
 
 
+def prepare_bars(bars_by_symbol: dict[str, pd.DataFrame]) -> tuple[dict, list]:
+    """Sanitize bars and precompute indicator snapshots per symbol.
+
+    Returns ``(prep, calendar)`` — the per-symbol prep dicts and the sorted
+    union trading calendar. Shared by the backtest loop and the live
+    portfolio runner so lab and live decisions are built by the SAME code.
+    """
+    prep: dict[str, dict] = {}
+    all_dates: set = set()
+    for sym, df in bars_by_symbol.items():
+        d = df.sort_values("date").reset_index(drop=True)
+        ohlcv = _sanitize_ohlcv(
+            d[["open", "high", "low", "close", "volume"]].reset_index(drop=True))
+        dates = list(d["date"])
+        prep[sym] = {"dates": dates, "ohlcv": ohlcv,
+                     "snaps": precompute_snapshots(ohlcv),
+                     "idx": {dt: i for i, dt in enumerate(dates)},
+                     "last_date": dates[-1] if dates else None,
+                     "last_close": float(ohlcv["close"].iloc[-1]) if len(ohlcv) else 0.0}
+        all_dates.update(dates)
+    return prep, sorted(all_dates)
+
+
 def _build_context(prep: dict, decision_date, fundamentals: dict | None) -> RebalanceContext:
     """Snapshot the whole universe as of ``decision_date`` (inclusive)."""
     assets: dict[str, AssetView] = {}
@@ -169,20 +192,7 @@ def run_backtest(
     ``[start .. end]``); without it, flat warmup days dilute Sharpe."""
     cost_rate = cost_bps / 1e4
 
-    prep: dict[str, dict] = {}
-    all_dates: set = set()
-    for sym, df in bars_by_symbol.items():
-        d = df.sort_values("date").reset_index(drop=True)
-        ohlcv = _sanitize_ohlcv(
-            d[["open", "high", "low", "close", "volume"]].reset_index(drop=True))
-        dates = list(d["date"])
-        prep[sym] = {"dates": dates, "ohlcv": ohlcv,
-                     "snaps": precompute_snapshots(ohlcv),
-                     "idx": {dt: i for i, dt in enumerate(dates)},
-                     "last_date": dates[-1] if dates else None,
-                     "last_close": float(ohlcv["close"].iloc[-1]) if len(ohlcv) else 0.0}
-        all_dates.update(dates)
-    calendar = sorted(all_dates)
+    prep, calendar = prepare_bars(bars_by_symbol)
     warm_idx = (bisect.bisect_left(calendar, trade_start)
                 if trade_start is not None else warmup_days)
 

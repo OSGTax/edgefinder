@@ -23,32 +23,10 @@ import logging
 from edgefinder.db.engine import get_engine, get_session_factory
 from edgefinder.engine.data import load_bars, spy_series
 from edgefinder.engine.record import current_git_sha, record_validation_run
-from edgefinder.engine.strategies import DualMomentum, TrendTimer
-from edgefinder.engine.strategy import BuyAndHold, EqualWeight
+from edgefinder.engine.strategies import make_strategy_factory
 from edgefinder.engine.walkforward import run_walkforward
 
 logger = logging.getLogger(__name__)
-
-
-def make_strategy_factory(spec: str):
-    """Strategy spec -> a fresh-instance factory.
-
-    Specs: ``equal_weight`` | ``buy_and_hold:SYM`` | ``trend_timer:SYM`` |
-    ``dual_momentum`` (pre-registered 7-ETF menu, top_k=3).
-    """
-    if spec == "equal_weight":
-        return EqualWeight
-    if spec == "dual_momentum":
-        return DualMomentum
-    if spec.startswith("buy_and_hold:"):
-        sym = spec.split(":", 1)[1].upper()
-        return lambda: BuyAndHold(sym)
-    if spec.startswith("trend_timer:"):
-        sym = spec.split(":", 1)[1].upper()
-        return lambda: TrendTimer(sym)
-    raise SystemExit(
-        f"unknown strategy spec {spec!r} (use equal_weight, dual_momentum, "
-        "buy_and_hold:SYM, or trend_timer:SYM)")
 
 
 def main(argv: list[str] | None = None) -> dict:
@@ -79,7 +57,10 @@ def main(argv: list[str] | None = None) -> dict:
     args = p.parse_args(argv)
 
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    factory = make_strategy_factory(args.strategy)
+    try:
+        factory = make_strategy_factory(args.strategy)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
 
     session = get_session_factory(get_engine())()
     try:

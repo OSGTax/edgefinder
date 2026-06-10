@@ -44,6 +44,10 @@ class TradeJournal:
             # must stay immutable for verification (see _next_chain_link).
             existing.exit_price = trade.exit_price
             existing.exit_time = trade.exit_time
+            # v2 rebalance lot-splits close a REDUCED share count (the
+            # remainder reopens as its own row); old callers pass shares
+            # unchanged, so this is a no-op for them.
+            existing.shares = trade.shares
             existing.status = trade.status.value
             existing.pnl_dollars = trade.pnl_dollars
             existing.pnl_percent = trade.pnl_percent

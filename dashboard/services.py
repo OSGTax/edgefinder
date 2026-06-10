@@ -241,6 +241,7 @@ def init_services() -> None:
         news_accumulate_fn=_news_accumulate_job,
         dividend_split_fn=_dividend_split_job,
         daily_indicator_fn=_daily_indicator_job,
+        portfolio_rebalance_fn=_v2_portfolio_job,
     )
     _scheduler.start()
     if _intraday_external:
@@ -997,6 +998,24 @@ def _daily_indicator_job() -> None:
         logger.info("Daily indicator cycle complete")
     except Exception:
         logger.exception("Daily indicator cycle failed")
+
+
+def _v2_portfolio_job() -> None:
+    """Called at 9:45 AM ET — run the engine-v2 portfolio paper-trading cycle.
+
+    Trades every active row in promoted_strategies in its own isolated paper
+    account (see edgefinder/engine/live.py). No-ops cleanly when nothing is
+    promoted; writes the v2_portfolio_cycle heartbeat either way.
+    """
+    if not _session_factory or not _provider:
+        return
+    try:
+        from edgefinder.engine.live import run_portfolio_cycle
+
+        summary = run_portfolio_cycle(_session_factory, provider=_provider)
+        logger.info("V2 portfolio cycle: %s", summary)
+    except Exception:
+        logger.exception("V2 portfolio cycle failed")
 
 
 def _record_heartbeat(component: str, ok: bool, detail: dict) -> None:

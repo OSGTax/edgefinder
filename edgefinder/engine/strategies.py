@@ -12,10 +12,32 @@ degrees of freedom, so those pre-registrations still stand.
 
 from __future__ import annotations
 
-from edgefinder.engine.strategy import RebalanceContext
+from edgefinder.engine.strategy import BuyAndHold, EqualWeight, RebalanceContext
 
 # The pre-registered tradable set — low-correlation, liquid, full-history ETFs.
 ASSETS = ("SPY", "QQQ", "IWM", "DIA", "GLD", "TLT", "EFA")
+
+
+def make_strategy_factory(spec: str):
+    """Strategy spec -> a fresh-instance factory (shared by the validation
+    CLI, the promotion CLI, and the live portfolio runner).
+
+    Specs: ``equal_weight`` | ``buy_and_hold:SYM`` | ``trend_timer:SYM`` |
+    ``dual_momentum`` (pre-registered 7-ETF menu, top_k=3).
+    """
+    if spec == "equal_weight":
+        return EqualWeight
+    if spec == "dual_momentum":
+        return DualMomentum
+    if spec.startswith("buy_and_hold:"):
+        sym = spec.split(":", 1)[1].upper()
+        return lambda: BuyAndHold(sym)
+    if spec.startswith("trend_timer:"):
+        sym = spec.split(":", 1)[1].upper()
+        return lambda: TrendTimer(sym)
+    raise ValueError(
+        f"unknown strategy spec {spec!r} (use equal_weight, dual_momentum, "
+        "buy_and_hold:SYM, or trend_timer:SYM)")
 
 
 class TrendTimer:

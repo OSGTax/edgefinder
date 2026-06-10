@@ -264,6 +264,34 @@ class ValidationRun(Base):
     verdict: Mapped[str] = mapped_column(String(10))     # PASS | FAIL
 
 
+# ── promoted_strategies ─────────────────────────────────
+
+
+class PromotedStrategy(Base):
+    """Engine-v2 strategies promoted to self-running paper trading.
+
+    One row per promoted strategy; the v2 portfolio runner trades every
+    ``active`` row daily in its own isolated paper account. ``tier`` is
+    'validated' (promotion required a passing validation_runs row, linked
+    via ``validation_run_id``) or 'experimental' (explicitly promoted to
+    paper-trade without a passing backtest — the owner's "throw it in and
+    watch it run" stage). Demotion sets ``active`` False; rows are never
+    deleted, so the promotion history is auditable.
+    """
+
+    __tablename__ = "promoted_strategies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy_name: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    spec: Mapped[str] = mapped_column(String(100))       # factory spec, e.g. "dual_momentum"
+    symbols: Mapped[list | None] = mapped_column(JSON)   # the universe it trades
+    schedule: Mapped[str] = mapped_column(String(10), default="monthly")
+    tier: Mapped[str] = mapped_column(String(20), default="experimental")
+    validation_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    promoted_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # ── system_heartbeat ────────────────────────────────────
 
 
