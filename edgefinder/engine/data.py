@@ -8,6 +8,8 @@ volume]}``.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 from sqlalchemy.orm import Session
 
@@ -15,11 +17,26 @@ from edgefinder.db.models import DailyBar, IndexDaily
 
 _IN_CHUNK = 500  # keep IN() clauses bounded for the pooler
 
+# Symbol-reuse contamination found by the 2026-06-10 fidelity audit: rows
+# under a ticker that belong to a DIFFERENT security (recycled symbol).
+# {symbol: first date the rows are the real company} — earlier rows dropped.
+# META < 2022-06-09 is the Roundhill Ball Metaverse ETF, not Meta Platforms
+# (FB renamed to META on 2022-06-09).
+CONTAMINATED_BEFORE: dict[str, date] = {"META": date(2022, 6, 9)}
+
 
 def load_bars(
     db: Session, symbols: list[str], start=None, end=None,
+    split_adjust: bool = True,
 ) -> dict[str, pd.DataFrame]:
-    """Bulk-load daily bars for ``symbols`` as the engine's input shape."""
+    """Bulk-load daily bars for ``symbols`` as the engine's input shape.
+
+    ``split_adjust`` (default ON — this is what makes the engine's stated
+    "split-adjusted" price basis TRUE): daily_bars stores raw as-traded
+    prints, so bars before each split ex-date are divided by the cumulative
+    ratio (volume multiplied) using ticker_splits. Without it, every split
+    inside a backtest window is a fake ±60-99% one-day move.
+    """
     rows: list = []
     for i in range(0, len(symbols), _IN_CHUNK):
         q = db.query(
@@ -34,13 +51,106 @@ def load_bars(
 
     by_symbol: dict[str, list] = {}
     for sym, dt, o, h, lo, c, v in rows:
+        cutoff = CONTAMINATED_BEFORE.get(sym)
+        if cutoff is not None and dt < cutoff:
+            continue   # a different security traded under this ticker
         by_symbol.setdefault(sym, []).append((dt, o, h, lo, c, v))
 
     cols = ["date", "open", "high", "low", "close", "volume"]
-    return {
+    bars = {
         sym: pd.DataFrame(data, columns=cols)
         for sym, data in by_symbol.items()
     }
+    if split_adjust and bars:
+        bars = adjust_for_splits(bars, load_splits(db, list(bars)))
+    return bars
+
+
+def load_splits(db: Session, symbols: list[str]) -> dict[str, list[tuple]]:
+    """{symbol: [(execution_date, factor), ...]} sorted; factor = to/from."""
+    from edgefinder.db.models import TickerSplit
+
+    out: dict[str, list[tuple]] = {}
+    for i in range(0, len(symbols), _IN_CHUNK):
+        rows = (db.query(TickerSplit.symbol, TickerSplit.execution_date,
+                         TickerSplit.split_from, TickerSplit.split_to)
+                .filter(TickerSplit.symbol.in_(symbols[i:i + _IN_CHUNK])).all())
+        for sym, ex, f, t in rows:
+            if not f or not t or f <= 0 or t <= 0 or f == t:
+                continue
+            ex_date = date.fromisoformat(str(ex)[:10])
+            out.setdefault(sym, []).append((ex_date, t / f))
+    for sym in out:
+        out[sym].sort()
+    return out
+
+
+def adjust_for_splits(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    splits: dict[str, list[tuple]],
+) -> dict[str, pd.DataFrame]:
+    """Back-adjust OHLCV for stock splits (price / factor, volume * factor
+    for every bar strictly BEFORE each execution date). Dollar volume is
+    split-invariant, so liquidity ranking and cost-model ADV are unaffected.
+    Symbols without splits pass through unchanged (same object).
+    """
+    import bisect as _bisect
+
+    out: dict[str, pd.DataFrame] = {}
+    for sym, df in bars_by_symbol.items():
+        events = splits.get(sym)
+        if not events:
+            out[sym] = df
+            continue
+        df = df.sort_values("date").reset_index(drop=True)
+        dates = list(df["date"])
+        price_f = pd.Series(1.0, index=df.index)
+        vol_f = pd.Series(1.0, index=df.index)
+        touched = False
+        for ex_date, factor in events:
+            idx = _bisect.bisect_left(dates, ex_date)
+            if idx <= 0 or factor <= 0:
+                continue   # split predates our history (or bogus row)
+            price_f.iloc[:idx] /= factor
+            vol_f.iloc[:idx] *= factor
+            touched = True
+        if not touched:
+            out[sym] = df
+            continue
+        adj = df.copy()
+        for col in ("open", "high", "low", "close"):
+            adj[col] = df[col] * price_f
+        adj["volume"] = df["volume"] * vol_f
+        out[sym] = adj
+    return out
+
+
+def adjust_dividends_for_splits(
+    dividends: dict[str, list[tuple]],
+    splits: dict[str, list[tuple]],
+) -> dict[str, list[tuple]]:
+    """Scale dividend cash amounts onto the split-adjusted share basis.
+
+    A dividend is declared per share AS OF ITS EX-DATE; splits executing
+    AFTER that ex-date shrink the adjusted share, so the cash amount must
+    shrink by the same cumulative factor — otherwise a pre-split dividend
+    reads as an N-times yield against split-adjusted prices.
+    """
+    out: dict[str, list[tuple]] = {}
+    for sym, divs in dividends.items():
+        events = splits.get(sym)
+        if not events:
+            out[sym] = divs
+            continue
+        adjusted = []
+        for ex_date, amount in divs:
+            factor = 1.0
+            for split_date, f in events:
+                if split_date > ex_date:
+                    factor *= f
+            adjusted.append((ex_date, amount / factor))
+        out[sym] = adjusted
+    return out
 
 
 def load_bars_from_store(

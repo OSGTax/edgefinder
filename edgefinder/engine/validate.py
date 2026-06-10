@@ -147,20 +147,27 @@ def main(argv: list[str] | None = None) -> dict:
         planning_calendar = None
         symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
         if args.bars_from == "r2":
-            from edgefinder.engine.data import load_bars_from_store
+            from edgefinder.engine.data import (
+                adjust_for_splits,
+                load_bars_from_store,
+                load_splits,
+            )
 
             bars = load_bars_from_store(symbols + ["SPY"], start=start)
+            # the R2 store mirrors raw as-traded bars; apply the same
+            # split adjustment the DB loader applies
+            session = get_session_factory(get_engine())()
+            try:
+                bars = adjust_for_splits(
+                    bars, load_splits(session, list(bars)))
+                divs = (load_dividends(session, symbols + ["SPY"])
+                        if args.div_adjust else None)
+            finally:
+                session.close()
             spy = bars.get("SPY")
             bars = {s: df for s, df in bars.items() if s in symbols}
             if spy is None:
                 raise SystemExit("SPY not in the R2 store — run barstore sync first")
-            divs = None
-            if args.div_adjust:
-                session = get_session_factory(get_engine())()
-                try:
-                    divs = load_dividends(session, symbols + ["SPY"])
-                finally:
-                    session.close()
         else:
             session = get_session_factory(get_engine())()
             try:
@@ -179,6 +186,17 @@ def main(argv: list[str] | None = None) -> dict:
     prices_label = "split-adjusted, dividend-unadjusted"
     div_coverage = None
     if args.div_adjust:
+        # dividends are declared per share AS OF their ex-date; with bars on
+        # the split-adjusted basis, cash amounts must be scaled by splits
+        # executing after each ex-date or pre-split yields read N-times high
+        from edgefinder.engine.data import adjust_dividends_for_splits, load_splits
+
+        session = get_session_factory(get_engine())()
+        try:
+            divs = adjust_dividends_for_splits(
+                divs or {}, load_splits(session, list((divs or {}).keys())))
+        finally:
+            session.close()
         # the one anti-conservative failure mode of TR adjustment is an
         # adjusted strategy scored against an unadjusted benchmark — refuse
         # to run if SPY's dividends are missing
