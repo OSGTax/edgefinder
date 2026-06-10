@@ -6,7 +6,9 @@
   <title>{% block title %}EdgeFinder{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9670;</text></svg>">
   <link rel="stylesheet" href="/static/css/theme.css">
-  <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+  <!-- vendored (pinned, no CDN dependency) — TradingView Lightweight Charts v4.1.0, Apache-2.0 -->
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+  <!-- Chart.js stays on CDN only until the screener treemap is replaced (redesign phase 7) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-treemap@2.3.0"></script>
   <script src="/static/js/common.js"></script>
