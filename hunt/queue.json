@@ -1,74 +1,18 @@
 {
-  "wave": 3,
-  "lane": "lynch+dumb",
+  "wave": 4,
+  "lane": "recheck-deep-value",
   "runs": [
     {
-      "id": "garp-classic",
-      "args": "--strategy garp_classic --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500-pit --pit-fundamentals"
+      "id": "recheck-dv-shift-minus",
+      "args": "--strategy deep_value_pe10 --universe top:500 --costed --div-adjust --pit-fundamentals --holdout-start 2025-12-05 --record --schedule monthly --start 2021-06-01 --is-days 357 --universe-label hunt-r1:recheck2-shift-"
     },
     {
-      "id": "garp-quality",
-      "args": "--strategy garp_quality --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500-pit --pit-fundamentals"
+      "id": "recheck-dv-shift-plus",
+      "args": "--strategy deep_value_pe10 --universe top:500 --costed --div-adjust --pit-fundamentals --holdout-start 2025-12-05 --record --schedule monthly --start 2021-06-01 --is-days 399 --universe-label hunt-r1:recheck2-shift+"
     },
     {
-      "id": "earnings-growers",
-      "args": "--strategy earnings_growers --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "low-debt-value",
-      "args": "--strategy low_debt_value --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "cash-rich-growth",
-      "args": "--strategy cash_rich_growth --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "deep-value-pe10",
-      "args": "--strategy deep_value_pe10 --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "garp-momentum",
-      "args": "--strategy garp_momentum --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500-pit --pit-fundamentals"
-    },
-    {
-      "id": "quality-smallcap",
-      "args": "--strategy quality_smallcap --universe top:2000+1000 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --pit-fundamentals --schedule monthly --universe-label hunt-r1:band1k3k-pit"
-    },
-    {
-      "id": "letter-b-weekly",
-      "args": "--strategy letter_b_weekly --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule weekly --universe-label hunt-r1:top500"
-    },
-    {
-      "id": "early-month-hold",
-      "args": "--strategy early_month_hold --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule daily --universe-label hunt-r1:top500"
-    },
-    {
-      "id": "random-20-s7",
-      "args": "--strategy random_20_s7 --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500"
-    },
-    {
-      "id": "random-20-s13",
-      "args": "--strategy random_20_s13 --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500"
-    },
-    {
-      "id": "alphabet-rotation",
-      "args": "--strategy alphabet_rotation --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r1:top500"
-    },
-    {
-      "id": "tuesday-hold",
-      "args": "--strategy tuesday_hold --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record --schedule daily --universe-label hunt-r1:top500"
-    },
-    {
-      "id": "recheck-xsec-shift-minus",
-      "args": "--strategy xsec_mom_12_1 --universe top:500 --costed --div-adjust --holdout-start 2025-12-05 --record --warmup-days 290 --schedule monthly --start 2021-06-01 --is-days 357 --universe-label hunt-r1:recheck-shift-"
-    },
-    {
-      "id": "recheck-xsec-shift-plus",
-      "args": "--strategy xsec_mom_12_1 --universe top:500 --costed --div-adjust --holdout-start 2025-12-05 --record --warmup-days 290 --schedule monthly --start 2021-06-01 --is-days 399 --universe-label hunt-r1:recheck-shift+"
-    },
-    {
-      "id": "recheck-xsec-late",
-      "args": "--strategy xsec_mom_12_1 --universe top:500 --costed --div-adjust --holdout-start 2025-12-05 --record --warmup-days 290 --schedule monthly --start 2022-06-01 --universe-label hunt-r1:recheck-late"
+      "id": "recheck-dv-late",
+      "args": "--strategy deep_value_pe10 --universe top:500 --costed --div-adjust --pit-fundamentals --holdout-start 2025-12-05 --record --schedule monthly --start 2022-06-01 --universe-label hunt-r1:recheck2-late"
     }
   ]
 }
