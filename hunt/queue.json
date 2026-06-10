@@ -1,21 +1,9 @@
 {
-  "wave": "hunt-r3-rechecks",
+  "wave": "hunt-r3-rechecks-redo",
   "runs": [
     {
       "id": "rc-btv-shift-minus",
       "args": "--strategy barbell_trend_value --universe top:500 --start 2021-06-01 --is-days 357 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --warmup-days 290 --universe-label hunt-r3:recheck-shift-"
-    },
-    {
-      "id": "rc-btv-shift-plus",
-      "args": "--strategy barbell_trend_value --universe top:500 --start 2021-06-01 --is-days 399 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --warmup-days 290 --universe-label hunt-r3:recheck-shift+"
-    },
-    {
-      "id": "rc-btv-late",
-      "args": "--strategy barbell_trend_value --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --warmup-days 290 --universe-label hunt-r3:recheck-late"
-    },
-    {
-      "id": "rc-fg-shift-minus",
-      "args": "--strategy fast_growers --universe top:500 --start 2021-06-01 --is-days 357 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --universe-label hunt-r3:recheck-shift-"
     },
     {
       "id": "rc-fg-shift-plus",

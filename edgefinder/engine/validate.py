@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import time
 from datetime import date
 
 from edgefinder.db.engine import get_engine, get_session_factory
@@ -316,17 +317,28 @@ def main(argv: list[str] | None = None) -> dict:
             f"{f',rw{args.rank_window}' if args.rank_window else ',lifetime'}"
             "+v2" if args.universe
             else f"{len(symbols)}syms+v2")
-        try:
-            session = get_session_factory(get_engine())()
+        # Transient pooler checkout timeouts under parallel hunt load are
+        # common; retry in-process (cheap) before declaring the record lost.
+        for attempt in range(1, 5):
             try:
-                run_id = record_validation_run(
-                    session, scorecard, universe=universe,
-                    git_sha=current_git_sha())
-            finally:
-                session.close()
-            print(f"\nrecorded validation_runs id={run_id} universe={universe}")
-        except Exception:   # recording must never void a completed run
-            logger.exception("failed to record validation run")
+                session = get_session_factory(get_engine())()
+                try:
+                    run_id = record_validation_run(
+                        session, scorecard, universe=universe,
+                        git_sha=current_git_sha())
+                finally:
+                    session.close()
+                print(f"\nrecorded validation_runs id={run_id} universe={universe}")
+                break
+            except Exception:
+                logger.exception(
+                    "failed to record validation run (attempt %d/4)", attempt)
+                if attempt == 4:
+                    # The results were printed above, so the run isn't lost
+                    # to a human — but exit non-zero so unattended callers
+                    # (hunt-batch) know the row never landed and can re-run.
+                    raise SystemExit(3)
+                time.sleep(20 * attempt)
     return scorecard
 
 
