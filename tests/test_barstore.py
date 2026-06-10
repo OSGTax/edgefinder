@@ -59,7 +59,7 @@ def session():
 class TestBarStore:
     def test_sync_verify_load_roundtrip(self, store, session):
         result = store.sync(session)
-        assert result == {"changed": 2, "uploaded": 2,
+        assert result == {"changed": 2, "uploaded": 2, "failed": 0,
                           "bytes": result["bytes"], "symbols_total": 2}
         assert store.verify(session, sample=2) == {
             "ok": True, "checked": 2, "mismatches": []}
