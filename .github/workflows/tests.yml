@@ -1,9 +1,8 @@
 name: Tests
 
-# Runs the test suite on every PR to main. The coach's auto-merge
+# Runs the test suite on every PR to main. Any auto-merge
 # (`gh pr merge --auto`) waits for this workflow to go green before the
-# tune lands. If a coach-proposed change breaks anything, the PR stays
-# open instead of merging.
+# change lands.
 
 on:
   pull_request:

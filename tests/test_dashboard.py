@@ -7,10 +7,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from edgefinder.core.models import Direction, Trade, TradeStatus, TradeType
 from edgefinder.db.models import (
-    IndexDaily, ManualInjection, MarketSnapshotRecord, StrategyAccount,
-    StrategySnapshot, Ticker, TradeContext, TradeRecord,
+    MarketSnapshotRecord, StrategyAccount, StrategySnapshot, Ticker,
+    TradeContext, TradeRecord,
 )
 
 
@@ -99,140 +98,57 @@ class TestTradesAPI:
 
 
 class TestStrategiesAPI:
-    def test_list_strategies(self, client):
-        resp = client.get("/api/strategies")
-        assert resp.status_code == 200
-        names = {s["name"] for s in resp.json()}
-        assert "coward" in names
+    def test_list_strategies_lists_promoted(self, client, db_session):
+        from edgefinder.db.models import PromotedStrategy
+        assert client.get("/api/strategies").json() == []
+        db_session.add(PromotedStrategy(
+            strategy_name="equal_weight", spec="equal_weight:SPY",
+            symbols=["SPY"], schedule="monthly", tier="paper", active=True))
+        db_session.commit()
+        rows = client.get("/api/strategies").json()
+        assert [r["name"] for r in rows] == ["equal_weight"]
+        assert rows[0]["schedule"] == "monthly"
 
     def test_accounts_empty(self, client):
         resp = client.get("/api/strategies/accounts")
         assert resp.status_code == 200
-        # Arena may return live accounts if Polygon key is set,
-        # otherwise falls back to empty DB
-        data = resp.json()
-        assert isinstance(data, list)
+        assert resp.json() == []
 
     def test_accounts_with_data(self, client, db_session):
-        from dashboard.services import get_arena
-        arena = get_arena()
-        if arena:
-            # Live arena returns all strategy accounts
-            resp = client.get("/api/strategies/accounts")
-            data = resp.json()
-            assert len(data) >= 1
-            names = {a["strategy_name"] for a in data}
-            assert "coward" in names
-        else:
-            # No arena — DB fallback
-            db_session.add(StrategyAccount(strategy_name="alpha", cash_balance=4500.0))
-            db_session.commit()
-            resp = client.get("/api/strategies/accounts")
-            assert len(resp.json()) == 1
-            assert resp.json()[0]["cash"] == 4500.0
+        db_session.add(StrategyAccount(strategy_name="alpha", cash_balance=4500.0))
+        db_session.commit()
+        resp = client.get("/api/strategies/accounts")
+        assert len(resp.json()) == 1
+        assert resp.json()[0]["cash"] == 4500.0
+        assert resp.json()[0]["lane"] == "v2"
+
+    def test_positions_groups_open_trades(self, client, db_session):
+        from datetime import datetime, timezone
+        db_session.add(TradeRecord(
+            trade_id="p-1", strategy_name="alpha", symbol="AAPL",
+            direction="LONG", trade_type="SWING", entry_price=100.0, shares=10,
+            stop_loss=0.0, target=0.0, confidence=1.0,
+            entry_time=datetime.now(timezone.utc), status="OPEN"))
+        db_session.add(TradeRecord(
+            trade_id="p-2", strategy_name="alpha", symbol="MSFT",
+            direction="LONG", trade_type="SWING", entry_price=200.0, shares=5,
+            stop_loss=0.0, target=0.0, confidence=1.0,
+            entry_time=datetime.now(timezone.utc), status="CLOSED"))
+        db_session.commit()
+        data = client.get("/api/strategies/positions").json()
+        assert set(data) == {"alpha"}
+        assert [p["symbol"] for p in data["alpha"]] == ["AAPL"]
+        assert data["alpha"][0]["shares"] == 10
+        assert data["alpha"][0]["entry_price"] == 100.0
+        assert data["alpha"][0]["direction"] == "LONG"
+        assert data["alpha"][0]["entry_time"]
 
     def test_equity_curve_empty(self, client):
         resp = client.get("/api/strategies/equity-curve")
         assert resp.status_code == 200
 
-
-def _fake_arena(accounts, positions):
-    from unittest.mock import MagicMock
-    a = MagicMock()
-    a.get_all_accounts.return_value = accounts
-    a.get_all_open_positions.return_value = positions
-    return a
-
-
-class TestLiveAccountMarking:
-    """Per-strategy value must be cash + securities at current market price.
-
-    Regression guards for two bugs: (1) ``/accounts`` double-counted P&L by
-    adding unrealized to an already-mark-to-market open_positions_value, and
-    (2) the equity curve ended at the last daily-close snapshot instead of the
-    live current value.
-    """
-
-    def _patch(self, monkeypatch, accounts, positions, price):
-        import dashboard.routers.strategies as strat
-        import dashboard.services as services
-        from unittest.mock import MagicMock
-        monkeypatch.setattr(strat, "get_arena", lambda: _fake_arena(accounts, positions))
-        provider = MagicMock()
-        provider.get_latest_price.return_value = price
-        monkeypatch.setattr(services, "_provider", provider)
-        return strat
-
-    def test_marks_to_market_without_double_counting(self, monkeypatch):
-        # to_dict()'s open_positions_value is already mark-to-market (5100),
-        # but the live value must come from the current price (52*100=5200),
-        # and total_equity must be cash + market value with NO P&L re-added.
-        accounts = {"coward": {
-            "strategy_name": "coward", "starting_capital": 10000.0,
-            "cash": 5000.0, "open_positions_value": 5100.0, "total_equity": 10100.0,
-        }}
-        positions = {"coward": [{
-            "symbol": "AAA", "shares": 100.0, "entry_price": 50.0,
-            "direction": "LONG", "trade_type": "SWING", "trade_id": "t",
-        }]}
-        strat = self._patch(monkeypatch, accounts, positions, price=52.0)
-
-        [acct] = strat._live_account_states()
-        assert acct["open_positions_value"] == 5200.0          # 100 * live 52
-        assert acct["total_equity"] == 10200.0                 # cash + market value
-        assert acct["unrealized_pnl"] == 200.0                 # (52-50)*100
-        # The double-count bug would have produced 5100+200=5300 / 10300.
-        assert acct["total_equity"] == round(acct["cash"] + acct["open_positions_value"], 2)
-
-    def test_falls_back_to_entry_price_when_no_live_price(self, monkeypatch):
-        accounts = {"coward": {
-            "strategy_name": "coward", "starting_capital": 10000.0,
-            "cash": 5000.0, "open_positions_value": 5100.0, "total_equity": 10100.0,
-        }}
-        positions = {"coward": [{
-            "symbol": "AAA", "shares": 100.0, "entry_price": 50.0,
-            "direction": "LONG", "trade_type": "SWING", "trade_id": "t",
-        }]}
-        strat = self._patch(monkeypatch, accounts, positions, price=None)
-
-        [acct] = strat._live_account_states()
-        assert acct["open_positions_value"] == 5000.0          # 100 * entry 50
-        assert acct["total_equity"] == 10000.0
-        assert acct["unrealized_pnl"] == 0.0
-
-    def test_equity_curve_ends_at_live_market_value(self, client, db_session, monkeypatch):
+    def test_equity_curve_keeps_intraday_points_distinct(self, client, db_session):
         from datetime import datetime, timedelta, timezone
-        # A stale prior-day close snapshot...
-        db_session.add(StrategySnapshot(
-            strategy_name="coward",
-            timestamp=datetime.now(timezone.utc) - timedelta(days=1),
-            cash=10000.0, positions_value=0.0, total_equity=10000.0,
-            drawdown_pct=0.0, total_return_pct=0.0,
-        ))
-        db_session.commit()
-
-        accounts = {"coward": {
-            "strategy_name": "coward", "starting_capital": 10000.0,
-            "cash": 5000.0, "open_positions_value": 5100.0, "total_equity": 10100.0,
-        }}
-        positions = {"coward": [{
-            "symbol": "AAA", "shares": 100.0, "entry_price": 50.0,
-            "direction": "LONG", "trade_type": "SWING", "trade_id": "t",
-        }]}
-        self._patch(monkeypatch, accounts, positions, price=52.0)
-
-        resp = client.get("/api/strategies/equity-curve")
-        assert resp.status_code == 200
-        series = resp.json()["coward"]
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        # Last point is the live "now" value (cash + securities at 52), not the
-        # stale 10000 close.
-        assert series[-1]["date"] == today
-        assert series[-1]["total_equity"] == 10200.0
-
-    def test_equity_curve_keeps_intraday_points_distinct(self, client, db_session, monkeypatch):
-        from datetime import datetime, timedelta, timezone
-        import dashboard.routers.strategies as strat
         # Two snapshots on the SAME day, 5 min apart — must stay distinct on
         # the time axis (the old date-only key would have collapsed them).
         base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(hours=2)
@@ -244,7 +160,6 @@ class TestLiveAccountMarking:
                 drawdown_pct=0.0, total_return_pct=0.0,
             ))
         db_session.commit()
-        monkeypatch.setattr(strat, "get_arena", lambda: None)  # no live tail
 
         resp = client.get("/api/strategies/equity-curve")
         pts = resp.json()["coward"]
@@ -349,207 +264,6 @@ class TestResearchBars:
         assert client.get("/api/research/ticker/NOPE/bars").json() == []
 
 
-class TestBacktestAPI:
-    def _seed(self, db_session):
-        from datetime import date, timedelta
-        from edgefinder.db.models import DailyBar
-        prices = [120.0]
-        for _ in range(40):
-            prices.append(prices[-1] * 0.988)   # decline -> oversold entry
-        for _ in range(25):
-            prices.append(prices[-1] * 1.02)    # rally -> exit
-        start = date(2024, 1, 1)
-        for i, p in enumerate(prices):
-            db_session.add(DailyBar(
-                symbol="TEST", date=start + timedelta(days=i),
-                open=p, high=p * 1.01, low=p * 0.99, close=p, volume=1_000_000.0,
-            ))
-        db_session.commit()
-
-    def test_backtest_runs_over_seeded_bars(self, client, db_session):
-        self._seed(db_session)
-        r = client.post("/api/backtest", json={
-            "strategy": "coward", "symbols": ["test"], "starting_cash": 10000})
-        assert r.status_code == 200
-        d = r.json()
-        assert d["symbols"] == ["TEST"]
-        assert d["equity_curve"]
-        assert d["stats"]["num_closed_trades"] >= 1
-        assert "coverage" in d and d["coverage"]["TEST"]["bars"] == 66
-
-    def test_backtest_unknown_strategy(self, client):
-        assert client.post("/api/backtest", json={
-            "strategy": "nope", "symbols": ["X"]}).status_code == 404
-
-    def test_backtest_requires_symbols(self, client):
-        assert client.post("/api/backtest", json={
-            "strategy": "coward", "symbols": []}).status_code == 422
-
-    def test_backtest_no_data_for_symbol(self, client):
-        assert client.post("/api/backtest", json={
-            "strategy": "coward", "symbols": ["ZZZZ"]}).status_code == 404
-
-
-class TestBacktestJobs:
-    def _seed_multi(self, db_session):
-        from datetime import date, timedelta
-        from edgefinder.db.models import DailyBar
-        prices = [120.0]
-        for _ in range(40):
-            prices.append(prices[-1] * 0.988)   # decline -> oversold entry
-        for _ in range(25):
-            prices.append(prices[-1] * 1.02)    # rally -> exit
-        start = date(2024, 1, 1)
-        for i, p in enumerate(prices):
-            db_session.add(DailyBar(symbol="TEST", date=start + timedelta(days=i),
-                open=p, high=p * 1.01, low=p * 0.99, close=p, volume=1_000_000.0))
-        # Two flat symbols with different dollar-volume for top-N ordering.
-        for sym, vol in (("HIGHV", 5_000_000.0), ("LOWV", 100_000.0)):
-            for i in range(40):
-                db_session.add(DailyBar(symbol=sym, date=start + timedelta(days=i),
-                    open=50.0, high=50.5, low=49.5, close=50.0, volume=vol))
-        db_session.commit()
-
-    def test_resolve_universe_modes(self, db_session):
-        from edgefinder.backtest.jobs import resolve_universe
-        self._seed_multi(db_session)
-        assert resolve_universe(db_session, "symbols", ["test", "msft"], 0) == ["MSFT", "TEST"]
-        assert set(resolve_universe(db_session, "full", [], 0)) == {"TEST", "HIGHV", "LOWV"}
-        assert resolve_universe(db_session, "top", [], 1) == ["HIGHV"]  # top dollar-volume
-
-    def test_resolve_universe_point_in_time(self, db_session):
-        """as_of must hide future dollar-volume (no future-selection bias)
-        and exclude names already dead at the cut."""
-        from datetime import date, timedelta
-        from edgefinder.backtest.jobs import resolve_universe
-        from edgefinder.db.models import DailyBar
-        start = date(2024, 1, 1)
-        # LATER: tiny volume before the cut, explodes after (future winner).
-        for i in range(40):
-            vol = 100.0 if i < 20 else 50_000_000.0
-            db_session.add(DailyBar(symbol="LATER", date=start + timedelta(days=i),
-                open=50.0, high=50.5, low=49.5, close=50.0, volume=vol))
-        # STEADY: solid volume throughout.
-        for i in range(40):
-            db_session.add(DailyBar(symbol="STEADY", date=start + timedelta(days=i),
-                open=50.0, high=50.5, low=49.5, close=50.0, volume=1_000_000.0))
-        # DEAD: huge volume but last bar long before the cut (delisted).
-        for i in range(5):
-            db_session.add(DailyBar(symbol="DEAD", date=start - timedelta(days=200 - i),
-                open=50.0, high=50.5, low=49.5, close=50.0, volume=90_000_000.0))
-        db_session.commit()
-
-        cut = start + timedelta(days=19)
-        # Full-table ranking picks the long-dead name AND the future winner
-        # over the genuinely tradable steady name...
-        assert resolve_universe(db_session, "top", [], 2) == ["DEAD", "LATER"]
-        # ...the point-in-time cut ranks only what was knowable and alive.
-        assert resolve_universe(db_session, "top", [], 2, as_of=cut) == ["STEADY", "LATER"]
-        assert "DEAD" not in resolve_universe(db_session, "top", [], 10, as_of=cut)
-
-    def test_resolve_universe_trailing_rank_window(self, db_session):
-        """rank_start ranks on TRAILING dollar volume: a name that was huge
-        long ago but thin lately must rank below a recently-active one."""
-        from datetime import date, timedelta
-
-        from edgefinder.backtest.jobs import resolve_universe
-        from edgefinder.db.models import DailyBar
-
-        start = date(2024, 1, 1)
-        # FADED: enormous volume in days 0-19, near-dead in days 20-39
-        # (still alive — trades a trickle, so the liveness gate keeps it).
-        for i in range(40):
-            vol = 50_000_000.0 if i < 20 else 1_000.0
-            db_session.add(DailyBar(symbol="FADED", date=start + timedelta(days=i),
-                open=50.0, high=50.5, low=49.5, close=50.0, volume=vol))
-        # CURRENT: steady real volume throughout.
-        for i in range(40):
-            db_session.add(DailyBar(symbol="CURRENT", date=start + timedelta(days=i),
-                open=50.0, high=50.5, low=49.5, close=50.0, volume=1_000_000.0))
-        db_session.commit()
-
-        as_of = start + timedelta(days=39)
-        window_start = start + timedelta(days=20)
-        # lifetime ranking still crowns the faded name on its glory days...
-        assert resolve_universe(
-            db_session, "top", [], 1, as_of=as_of) == ["FADED"]
-        # ...the trailing window ranks what is liquid NOW.
-        assert resolve_universe(
-            db_session, "top", [], 1, as_of=as_of,
-            rank_start=window_start) == ["CURRENT"]
-
-    def test_resolve_universe_rank_offset_band(self, db_session):
-        # rank_offset skips the most-liquid names → the lower-liquidity band.
-        from edgefinder.backtest.jobs import resolve_universe
-        self._seed_multi(db_session)
-        # full ranking by dollar volume: HIGHV > TEST > LOWV
-        assert resolve_universe(db_session, "top", [], 3) == ["HIGHV", "TEST", "LOWV"]
-        # skip the top 1 → band starts at rank 1
-        assert resolve_universe(db_session, "top", [], 2, rank_offset=1) == ["TEST", "LOWV"]
-        assert resolve_universe(db_session, "top", [], 1, rank_offset=2) == ["LOWV"]
-
-    def test_execute_backtest_direct(self, db_session):
-        from edgefinder.backtest.jobs import BacktestJob, _execute_backtest
-        self._seed_multi(db_session)
-        job = BacktestJob(id="t", params={
-            "strategy": "coward", "mode": "full", "starting_cash": 10_000.0})
-        result = _execute_backtest(job, db_session)
-        assert result["num_symbols"] == 3
-        assert result["universe_mode"] == "full"
-        assert result["stats"]["num_closed_trades"] >= 1
-        assert "sharpe" in result["stats"]
-        assert job.progress  # progress was reported during the run
-
-    def test_start_job_validation(self, client):
-        assert client.post("/api/backtest/jobs", json={
-            "strategy": "nope", "mode": "full"}).status_code == 404
-        assert client.post("/api/backtest/jobs", json={
-            "strategy": "coward", "mode": "bogus"}).status_code == 422
-        assert client.post("/api/backtest/jobs", json={
-            "strategy": "coward", "mode": "symbols", "symbols": []}).status_code == 422
-        assert client.post("/api/backtest/jobs", json={
-            "strategy": "coward", "mode": "top", "top_n": 0}).status_code == 422
-
-    def test_start_job_and_poll(self, client, monkeypatch):
-        import dashboard.routers.backtest as bt
-        from edgefinder.backtest.jobs import BacktestJob
-        captured = {}
-        fake = BacktestJob(id="abc123", params={})
-
-        def fake_submit(params, factory):
-            captured["params"] = params
-            return fake
-
-        monkeypatch.setattr(bt.job_manager, "submit", fake_submit)
-        r = client.post("/api/backtest/jobs", json={"strategy": "coward", "mode": "full"})
-        assert r.status_code == 200
-        assert r.json()["job_id"] == "abc123"
-        assert captured["params"]["mode"] == "full"
-
-    def test_get_unknown_job(self, client):
-        assert client.get("/api/backtest/jobs/does-not-exist").status_code == 404
-
-
-def test_write_equity_snapshots_persists_timeseries(db_session, monkeypatch):
-    """The intraday monitor and daily job share this writer — one row/strategy."""
-    import dashboard.services as services
-    from unittest.mock import MagicMock
-    arena = MagicMock()
-    arena.get_all_accounts.return_value = {
-        "coward": {"cash": 5000.0, "open_positions_value": 5200.0,
-                   "total_equity": 10200.0, "drawdown_pct": 0.0},
-    }
-    monkeypatch.setattr(services, "_arena", arena)
-
-    n = services._write_equity_snapshots(db_session)
-    db_session.commit()
-    assert n == 1
-    rows = db_session.query(StrategySnapshot).filter_by(strategy_name="coward").all()
-    assert len(rows) == 1
-    assert rows[0].total_equity == 10200.0
-    assert rows[0].positions_value == 5200.0
-
-
 class TestResearchAPI:
     def test_search_empty(self, client):
         resp = client.get("/api/research/search?q=AAPL")
@@ -574,27 +288,3 @@ class TestBenchmarksAPI:
     def test_comparison_empty(self, client):
         resp = client.get("/api/benchmarks/comparison")
         assert resp.status_code == 200
-
-
-class TestInjectAPI:
-    def test_inject_ticker(self, client):
-        resp = client.post("/api/inject", json={
-            "symbol": "GME",
-            "notes": "Squeeze potential",
-        })
-        assert resp.status_code == 200
-        assert resp.json()["symbol"] == "GME"
-
-    def test_list_injections(self, client, db_session):
-        db_session.add(ManualInjection(symbol="GME", notes="test"))
-        db_session.commit()
-        resp = client.get("/api/inject")
-        assert len(resp.json()) == 1
-
-    def test_remove_injection(self, client, db_session):
-        inj = ManualInjection(symbol="AMC", notes="test")
-        db_session.add(inj)
-        db_session.commit()
-        resp = client.delete(f"/api/inject/{inj.id}")
-        assert resp.status_code == 200
-        assert "removed" in resp.json()["message"]

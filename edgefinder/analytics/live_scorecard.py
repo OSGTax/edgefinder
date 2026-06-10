@@ -29,15 +29,33 @@ Implementation notes (hard-won; see HANDOFF 2026-06-05):
 from __future__ import annotations
 
 import logging
+import math
+import statistics
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
-from edgefinder.backtest.daily_backtest import _sharpe  # single Sharpe definition
 from edgefinder.db.models import IndexDaily, StrategySnapshot, TradeRecord
 
 logger = logging.getLogger(__name__)
+
+
+def _sharpe(equity: list[float]) -> float | None:
+    """Annualised Sharpe of daily equity returns (rf=0), ~252 trading days.
+
+    Relocated verbatim from the retired per-ticker lab
+    (edgefinder/backtest/daily_backtest.py) — this is the SINGLE Sharpe
+    definition the live scorecard shares with historical validation runs
+    (population stdev, rounded to 2dp).
+    """
+    rets = [equity[i] / equity[i - 1] - 1 for i in range(1, len(equity)) if equity[i - 1] > 0]
+    if len(rets) < 2:
+        return None
+    sd = statistics.pstdev(rets)
+    if sd == 0:
+        return None
+    return round(statistics.mean(rets) / sd * math.sqrt(252), 2)
 
 _ET = ZoneInfo("America/New_York")
 
@@ -215,15 +233,19 @@ def compute_all_scorecards(
 ) -> list[dict]:
     """Scorecards for the live strategy set.
 
-    Defaults to the ``live_strategies`` allowlist — the strategies actually
-    trading. Research candidates are registered in the StrategyRegistry too,
-    but they are lab-only by definition and have no live evidence to score;
-    listing them on the Live Proof panel just reads as noise.
+    Defaults to the strategies that actually have paper accounts — every
+    distinct strategy_accounts row, union the active promoted_strategies
+    registry (a freshly promoted strategy may not have a marked account yet).
+    Lab-only candidates have no live evidence to score; listing them on the
+    Live Proof panel just reads as noise.
     """
     if strategies is None:
-        from config.settings import settings
+        from edgefinder.db.models import PromotedStrategy, StrategyAccount
 
-        strategies = sorted(settings.live_strategies)
+        names = {n for (n,) in session.query(StrategyAccount.strategy_name).all()}
+        names |= {n for (n,) in session.query(PromotedStrategy.strategy_name)
+                  .filter(PromotedStrategy.active.is_(True)).all()}
+        strategies = sorted(names)
     return [
         compute_scorecard(
             session, s, days=days, pass_min_trades=pass_min_trades, now=now

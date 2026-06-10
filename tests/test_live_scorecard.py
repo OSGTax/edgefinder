@@ -150,10 +150,25 @@ class TestComputeScorecard:
 
 
 class TestComputeAllScorecards:
-    def test_enumerates_registry_with_empty_db(self, db_session):
+    def test_empty_db_yields_no_cards(self, db_session):
+        # the live set is DB-driven now (accounts + active promotions)
+        assert compute_all_scorecards(db_session, days=30, now=NOW) == []
+
+    def test_enumerates_accounts_and_active_promotions(self, db_session):
+        from edgefinder.db.models import PromotedStrategy, StrategyAccount
+
+        db_session.add(StrategyAccount(strategy_name="equal_weight",
+                                       cash_balance=100000.0))
+        db_session.add(PromotedStrategy(
+            strategy_name="dual_momentum", spec="dual_momentum",
+            symbols=["SPY"], schedule="monthly", tier="paper", active=True))
+        db_session.add(PromotedStrategy(
+            strategy_name="demoted_one", spec="x",
+            symbols=["SPY"], schedule="monthly", tier="paper", active=False))
+        db_session.commit()
         cards = compute_all_scorecards(db_session, days=30, now=NOW)
-        names = {c["strategy_name"] for c in cards}
-        assert {"coward", "gambler", "degenerate"} <= names
+        names = [c["strategy_name"] for c in cards]
+        assert names == ["dual_momentum", "equal_weight"]
         assert all(c["status"] == "insufficient_data" for c in cards)
 
 

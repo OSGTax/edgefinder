@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from dashboard.dependencies import get_db
-from dashboard.services import get_arena
 from edgefinder.trading.journal import TradeJournal
 
 ET = ZoneInfo("America/New_York")
@@ -95,14 +94,15 @@ def _as_dict(raw):
 
 
 def _get_live_prices(symbols: list[str]) -> dict[str, float]:
-    """Fetch current prices for a list of symbols from the arena's provider."""
-    from dashboard.services import _provider
-    if not _provider:
+    """Fetch current prices for a list of symbols from the shared provider."""
+    from dashboard.services import get_provider
+    provider = get_provider()
+    if not provider:
         return {}
     prices = {}
     for sym in symbols:
         try:
-            p = _provider.get_latest_price(sym)
+            p = provider.get_latest_price(sym)
             if p:
                 prices[sym] = p
         except Exception:

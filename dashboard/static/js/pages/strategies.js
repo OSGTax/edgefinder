@@ -1,21 +1,21 @@
-/* Strategies — two lanes (Arena $5k / V2 $100k), registry-driven cards
-   (zero hardcoded names/risk), detail drawer: equity curve, scorecard,
-   dividend-credit ledger (v2), parameter audit, validation linkage. */
+/* Strategies — DB-driven cards (zero hardcoded names/risk), detail drawer:
+   equity curve, scorecard, dividend-credit ledger, parameter audit,
+   validation linkage. All accounts are v2 now (arena lane retired). */
 
 import { apiGet } from '../core/net.js';
 import { fmtDollar, fmtPnl, fmtPct, fmtNum, fmtInt, fmtDate, upDownClass } from '../core/fmt.js';
 import { h, clear, skeleton, renderError, renderEmpty, panel } from '../core/dom.js';
 import { createChart, colors } from '../core/charts.js';
 
-const state = { lane: '', meta: new Map(), accounts: [] };
+const state = { meta: new Map(), accounts: [] };
 let detailChart = null;
 
 async function loadCards() {
   const el = document.getElementById('st-cards');
   await panel(el, () => apiGet('/api/strategies/accounts'), (host, accounts) => {
     state.accounts = accounts;
-    const rows = accounts.filter(a => !state.lane || a.lane === state.lane);
-    if (!rows.length) { renderEmpty(host, 'No strategies in this lane'); return; }
+    const rows = accounts;
+    if (!rows.length) { renderEmpty(host, 'No strategies yet'); return; }
     clear(host);
     for (const a of rows) {
       const name = a.strategy_name || a.name;
@@ -156,14 +156,6 @@ async function init() {
     for (const m of meta) state.meta.set(m.name, m);
   } catch { /* cards render without slots */ }
 
-  document.getElementById('st-lane').addEventListener('click', (e) => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    for (const x of document.querySelectorAll('#st-lane button')) x.classList.remove('active');
-    b.classList.add('active');
-    state.lane = b.dataset.lane;
-    loadCards();
-  });
   document.getElementById('st-drawer-close').addEventListener('click', () =>
     document.getElementById('st-drawer').classList.remove('open'));
 

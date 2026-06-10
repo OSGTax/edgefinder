@@ -1,13 +1,13 @@
-/* Screener — hand-rolled sector treemap (Chart.js retired), the scanner's
-   ranked qualification watchlist, and the active-universe table with
-   sector/strategy/search filtering and symbol deep-links. */
+/* Screener — hand-rolled sector treemap (Chart.js retired) and the
+   active-universe table with sector/search filtering and symbol deep-links.
+   (The ranked qualification watchlist was retired with the old arena.) */
 
 import { apiGet } from '../core/net.js';
 import { fmtPrice, fmtPct, fmtNum, fmtCompact, upDownClass } from '../core/fmt.js';
 import { h, clear, renderEmpty, panel } from '../core/dom.js';
 import { treemap } from '../components/treemap.js';
 
-const state = { stocks: [], sector: '', strategy: '', search: '', sortCol: 'market_cap', sortDir: -1 };
+const state = { stocks: [], sector: '', search: '', sortCol: 'market_cap', sortDir: -1 };
 
 async function loadTreemap() {
   const el = document.getElementById('sc-treemap');
@@ -52,29 +52,6 @@ function renderClear() {
     : h('span', { class: 't-dim', text: 'click a sector to filter' }));
 }
 
-async function loadWatchlist() {
-  const el = document.getElementById('sc-watchlist');
-  const q = state.strategy ? `&strategy=${state.strategy}` : '';
-  await panel(el, () => apiGet(`/api/research/qualifications?qualified=true&limit=50${q}`), (host, rows) => {
-    if (!rows.length) { renderEmpty(host, 'No qualified tickers — scanner runs nightly'); return; }
-    const tbody = h('tbody');
-    for (const r of rows) {
-      tbody.append(h('tr', {
-        class: 'clickable',
-        onclick: () => { window.location.href = `/symbol/${r.symbol}`; },
-      },
-        h('td', { class: 'num', text: r.symbol }),
-        h('td', { text: r.strategy_name }),
-        h('td', { class: 'num', text: r.score != null ? fmtNum(r.score, 0) : '—' })));
-    }
-    clear(host).append(h('table', { class: 'c-table' },
-      h('thead', {}, h('tr', {},
-        h('th', { text: 'Symbol' }), h('th', { text: 'Strategy' }),
-        h('th', { class: 'num', text: 'Score' }))),
-      tbody));
-  });
-}
-
 const COLS = [
   ['symbol', 'Symbol', s => s.symbol, false],
   ['company_name', 'Company', s => s.company_name || '—', false],
@@ -90,7 +67,6 @@ const COLS = [
 function filtered() {
   let rows = state.stocks;
   if (state.sector) rows = rows.filter(s => (s.sector || 'Unknown') === state.sector);
-  if (state.strategy) rows = rows.filter(s => (s.qualifying_strategies || []).includes(state.strategy));
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter(s => s.symbol.toLowerCase().includes(q)
@@ -142,19 +118,6 @@ async function loadStocks() {
 }
 
 async function init() {
-  try {
-    const meta = await apiGet('/api/strategies/meta');
-    const sel = document.getElementById('sc-strategy');
-    for (const m of meta.filter(m => m.lane === 'arena')) {
-      sel.append(h('option', { value: m.name, text: m.name }));
-    }
-  } catch { /* dropdown stays generic */ }
-
-  document.getElementById('sc-strategy').addEventListener('change', (e) => {
-    state.strategy = e.target.value;
-    loadWatchlist();
-    renderTable();
-  });
   let t = null;
   document.getElementById('sc-search').addEventListener('input', (e) => {
     clearTimeout(t);
@@ -163,7 +126,6 @@ async function init() {
 
   await loadStocks();
   loadTreemap();
-  loadWatchlist();
 }
 
 document.addEventListener('DOMContentLoaded', init);

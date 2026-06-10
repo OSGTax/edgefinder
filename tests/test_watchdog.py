@@ -251,21 +251,22 @@ class TestPersistChecks:
 
 # ── cycle liveness ──────────────────────────────────────────
 
-# Wed 2026-06-03 14:00 UTC = 10:00 ET (EDT) — mid-session, past the open grace.
-_MID_SESSION = datetime(2026, 6, 3, 14, 0, tzinfo=timezone.utc)
+# Wed 2026-06-03 15:00 UTC = 11:00 ET (EDT) — a weekday after the 10:00 ET
+# check-window opens (the v2 cycle fires daily at 9:45 ET).
+_MID_SESSION = datetime(2026, 6, 3, 15, 0, tzinfo=timezone.utc)
 
 
 def _make_heartbeat(
     session,
-    component: str = "intraday_cycle",
-    age_min: float = 2.0,
+    component: str = "v2_portfolio_cycle",
+    age_hours: float = 1.0,
     ok: bool = True,
     detail: dict | None = None,
     now: datetime = _MID_SESSION,
 ) -> SystemHeartbeat:
     hb = SystemHeartbeat(
         component=component,
-        last_run_at=now - timedelta(minutes=age_min),
+        last_run_at=now - timedelta(hours=age_hours),
         ok=ok,
         detail=detail or {},
     )
@@ -276,62 +277,71 @@ def _make_heartbeat(
 
 class TestCheckCycleLiveness:
     def test_fresh_heartbeat_is_healthy(self, db_session):
-        _make_heartbeat(db_session, age_min=2.0)
-        assert check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION) == []
+        _make_heartbeat(db_session, age_hours=1.0)
+        assert check_cycle_liveness(db_session, 26, now=_MID_SESSION) == []
+
+    def test_yesterdays_heartbeat_is_still_healthy(self, db_session):
+        # ~24h old (yesterday's daily cycle) must NOT alarm — 26h tolerates
+        # normal daily jitter.
+        _make_heartbeat(db_session, age_hours=24.5)
+        assert check_cycle_liveness(db_session, 26, now=_MID_SESSION) == []
 
     def test_stale_heartbeat_is_critical(self, db_session):
-        _make_heartbeat(db_session, age_min=30.0)
-        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        # older than 26h on a weekday after 10:00 ET = a fully missed day
+        _make_heartbeat(db_session, age_hours=30.0)
+        specs = check_cycle_liveness(db_session, 26, now=_MID_SESSION)
         assert len(specs) == 1
         assert specs[0].severity == "CRITICAL"
         assert specs[0].category == "cycle_liveness"
-        assert specs[0].dedup_key == ("cycle_liveness", "intraday_cycle")
+        assert specs[0].dedup_key == ("cycle_liveness", "v2_portfolio_cycle")
         assert specs[0].metadata["reason"] == "stale"
 
-    def test_stale_outside_market_hours_is_silent(self, db_session):
-        _make_heartbeat(db_session, age_min=120.0)
-        saturday = datetime(2026, 6, 6, 14, 0, tzinfo=timezone.utc)
-        assert check_cycle_liveness(db_session, 15, 10, now=saturday) == []
+    def test_stale_on_weekend_is_silent(self, db_session):
+        _make_heartbeat(db_session, age_hours=60.0)
+        saturday = datetime(2026, 6, 6, 15, 0, tzinfo=timezone.utc)
+        assert check_cycle_liveness(db_session, 26, now=saturday) == []
+
+    def test_before_check_window_is_silent(self, db_session):
+        # 13:30 UTC = 09:30 ET (EDT) — before 10:00 ET, the cycle (9:45) may
+        # legitimately not have run yet today.
+        early = datetime(2026, 6, 3, 13, 30, tzinfo=timezone.utc)
+        _make_heartbeat(db_session, age_hours=30.0, now=early)
+        assert check_cycle_liveness(db_session, 26, now=early) == []
 
     def test_errored_run_is_critical(self, db_session):
         _make_heartbeat(
-            db_session, age_min=2.0, ok=False,
+            db_session, age_hours=1.0, ok=False,
             detail={"error": "ValueError: boom"},
         )
-        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        specs = check_cycle_liveness(db_session, 26, now=_MID_SESSION)
         assert len(specs) == 1
         assert specs[0].metadata["reason"] == "error"
         assert "boom" in specs[0].message
 
-    def test_holiday_skip_reads_healthy(self, db_session):
-        # A controlled skip writes a *fresh* ok=True heartbeat → not a stall,
-        # so the watchdog needs no holiday calendar of its own.
+    def test_controlled_skip_reads_healthy(self, db_session):
+        # A controlled skip (holiday / nothing promoted) writes a *fresh*
+        # ok=True heartbeat → not a stall, so the watchdog needs no holiday
+        # calendar of its own.
         _make_heartbeat(
-            db_session, age_min=1.0, ok=True,
-            detail={"skipped": "market holiday"},
+            db_session, age_hours=0.5, ok=True,
+            detail={"skip": "none promoted"},
         )
-        assert check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION) == []
+        assert check_cycle_liveness(db_session, 26, now=_MID_SESSION) == []
 
     def test_missing_heartbeat_is_critical(self, db_session):
-        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        specs = check_cycle_liveness(db_session, 26, now=_MID_SESSION)
         assert len(specs) == 1
         assert specs[0].metadata["reason"] == "missing"
 
-    def test_within_open_grace_is_silent(self, db_session):
-        # 13:35 UTC = 09:35 ET (EDT); grace=10 ⇒ window opens 09:40 ⇒ suppressed.
-        early = datetime(2026, 6, 3, 13, 35, tzinfo=timezone.utc)
-        _make_heartbeat(db_session, age_min=30.0, now=early)
-        assert check_cycle_liveness(db_session, 15, 10, now=early) == []
-
     def test_reconciliation_resolves_when_fresh_again(self, db_session):
-        _make_heartbeat(db_session, age_min=30.0)
-        specs = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        _make_heartbeat(db_session, age_hours=30.0)
+        specs = check_cycle_liveness(db_session, 26, now=_MID_SESSION)
         summary = persist_checks(db_session, specs, agent_name="watchdog")
         assert summary["new"] == 1
 
         hb = db_session.query(SystemHeartbeat).one()
-        hb.last_run_at = _MID_SESSION - timedelta(minutes=2)
+        hb.last_run_at = _MID_SESSION - timedelta(hours=1)
         db_session.commit()
-        specs2 = check_cycle_liveness(db_session, 15, 10, now=_MID_SESSION)
+        specs2 = check_cycle_liveness(db_session, 26, now=_MID_SESSION)
         summary2 = persist_checks(db_session, specs2, agent_name="watchdog")
         assert summary2["resolved"] == 1

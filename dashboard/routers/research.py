@@ -80,67 +80,32 @@ def active_tickers(service: ResearchService = Depends(_get_research_service)):
 
 
 @router.post("/scan")
-def trigger_scan(db: Session = Depends(get_db)):
-    """Trigger a unified scan in the background. Returns immediately."""
+def trigger_scan():
+    """Trigger a unified data scan in the background. Returns immediately."""
     import threading
-    from dashboard.services import (
-        _provider, _session_factory, _load_watchlists,
-        _populate_fundamentals_cache, _resolve_scan_universe, get_arena,
-    )
+    from dashboard import services
     from edgefinder.scanner.unified_scanner import UnifiedScanner
-    from edgefinder.strategies.base import StrategyRegistry
 
-    if not _provider:
+    provider = services.get_provider()
+    session_factory = services._session_factory
+    if not provider:
         return {"error": "No Polygon API key configured"}
-    if not _session_factory:
+    if not session_factory:
         return {"error": "Database not initialized"}
 
     def _run_scan():
         import logging
         logger = logging.getLogger(__name__)
 
-        tickers = _resolve_scan_universe()
+        tickers = services._resolve_scan_universe()
         logger.info("Manual scan triggered: %d tickers", len(tickers))
 
-        strategies = list(StrategyRegistry.get_instances())
-        scanner = UnifiedScanner(strategies, _provider, _session_factory)
+        scanner = UnifiedScanner(provider, session_factory)
         try:
             summary = scanner.run(tickers)
             logger.info("Manual scan results: %s", summary)
         except Exception:
             logger.exception("Manual scan failed")
-            return
-
-        arena = get_arena()
-        if arena:
-            watchlists = _load_watchlists()
-            if watchlists:
-                arena.set_watchlists(watchlists)
-                _populate_fundamentals_cache()
-        logger.info("Manual scan complete")
 
     threading.Thread(target=_run_scan, daemon=True, name="manual-scan").start()
     return {"status": "scanning", "message": "Unified scan started in background."}
-
-
-@router.get("/qualifications")
-def qualifications(
-    strategy: str | None = Query(None),
-    qualified: bool = Query(True),
-    limit: int = Query(200, le=500),
-    db: Session = Depends(get_db),
-):
-    """Ranked watchlist: what the scanner actually qualified, by score."""
-    from edgefinder.db.models import TickerStrategyQualification as Q
-
-    q = db.query(Q)
-    if strategy:
-        q = q.filter(Q.strategy_name == strategy)
-    if qualified:
-        q = q.filter(Q.qualified.is_(True))
-    rows = q.order_by(Q.score.desc().nullslast()).limit(limit).all()
-    return [{
-        "symbol": r.symbol, "strategy_name": r.strategy_name,
-        "qualified": r.qualified, "score": r.score,
-        "scan_date": r.scan_date.isoformat() if r.scan_date else None,
-    } for r in rows]

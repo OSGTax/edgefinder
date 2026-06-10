@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from edgefinder.backtest.validate import record_validation_run
+from edgefinder.engine.record import record_validation_run
 from edgefinder.db.models import TradeRecord, ValidationRun
 
 

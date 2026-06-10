@@ -1,23 +1,22 @@
-/* Hunt/Lab Explorer — scoreboard toward the 10-finalist goal, the full
-   validation_runs browser (filters, detail drawer, compare ≤4), and the
-   legacy quick-backtest tab rebuilt on net.js/poll.js (bounded polling). */
+/* Hunt/Lab Explorer — scoreboard toward the 10-finalist goal and the full
+   validation_runs browser (filters, detail drawer, compare ≤4). */
 
-import { apiGet, apiPost } from '../core/net.js';
-import { fmtPct, fmtNum, fmtInt, fmtDate, fmtDollar, upDownClass, toEpochSec } from '../core/fmt.js';
+import { apiGet } from '../core/net.js';
+import { fmtPct, fmtNum, fmtInt, fmtDate, upDownClass } from '../core/fmt.js';
 import { h, clear, skeleton, renderError, renderEmpty, panel } from '../core/dom.js';
 import { createChart, colors } from '../core/charts.js';
-import { poller } from '../core/poll.js';
 
 /* ════ tabs ════ */
 function activeTab() {
-  return new URLSearchParams(location.search).get('tab') || 'scoreboard';
+  const tab = new URLSearchParams(location.search).get('tab');
+  return (tab === 'runs') ? 'runs' : 'scoreboard';
 }
 
 function switchTab(tab) {
   for (const b of document.querySelectorAll('#lab-tabs button')) {
     b.classList.toggle('active', b.dataset.tab === tab);
   }
-  for (const id of ['scoreboard', 'runs', 'backtest']) {
+  for (const id of ['scoreboard', 'runs']) {
     document.getElementById(`tab-${id}`).classList.toggle('hidden', id !== tab);
   }
   const q = new URLSearchParams(location.search);
@@ -348,105 +347,6 @@ async function openCompare() {
     h('table', { class: 'c-table' }, h('thead', {}, thead), tbody)));
 }
 
-/* ════ backtest tab (rebuilt on net/poll) ════ */
-let btPoller = null;
-
-async function initBacktest() {
-  const sel = document.getElementById('bt-strategy');
-  try {
-    const strategies = await apiGet('/api/strategies');
-    sel.replaceChildren(...strategies.map(s => h('option', { value: s.name, text: s.name })));
-  } catch { sel.replaceChildren(h('option', { text: 'coward' })); }
-
-  const modeSel = document.getElementById('bt-mode');
-  const sync = () => {
-    document.getElementById('bt-symbols-wrap').classList.toggle('hidden', modeSel.value !== 'symbols');
-    document.getElementById('bt-topn-wrap').classList.toggle('hidden', modeSel.value !== 'top');
-  };
-  modeSel.addEventListener('change', sync);
-  sync();
-
-  document.getElementById('bt-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    btPoller?.stop();
-    const results = document.getElementById('bt-results');
-    const body = {
-      strategy: sel.value,
-      mode: modeSel.value,
-      symbols: document.getElementById('bt-symbols').value.split(',').map(s => s.trim()).filter(Boolean),
-      top_n: parseInt(document.getElementById('bt-topn').value, 10) || 100,
-      starting_cash: parseFloat(document.getElementById('bt-cash').value) || 10000,
-    };
-    const start = document.getElementById('bt-start').value;
-    const end = document.getElementById('bt-end').value;
-    if (start) body.start = start;
-    if (end) body.end = end;
-    if (start && end && start > end) {
-      renderError(results, { message: 'start date is after end date' });
-      return;
-    }
-    skeleton(results, 'chart');
-    let jobId;
-    try {
-      jobId = (await apiPost('/api/backtest/jobs', body)).job_id;
-    } catch (err) {
-      renderError(results, err);
-      return;
-    }
-    btPoller = poller(async () => {
-      const job = await apiGet(`/api/backtest/jobs/${jobId}`);
-      if (job.status === 'done') { renderBtResult(job.result); return false; }
-      if (job.status === 'error') {
-        renderError(results, { message: job.error || 'backtest failed' });
-        return false;
-      }
-      const p = job.progress || {};
-      clear(results).append(h('div', { class: 'c-empty' },
-        h('div', { class: 'c-skel mb-8' }),
-        h('div', { text: `${p.phase || job.status}… ${p.done ?? ''}${p.total ? ' / ' + p.total : ''}` })));
-      return true;
-    }, {
-      intervalMs: 1500, maxFailures: 5,
-      onGiveUp: () => renderError(results,
-        { message: 'job lost — backtest jobs are in-memory and reset on restart' },
-        () => document.getElementById('bt-form').requestSubmit()),
-    });
-  });
-}
-
-function renderBtResult(d) {
-  const results = document.getElementById('bt-results');
-  const s = d.stats || {};
-  const stat = (label, value, cls = '') => h('div', { class: 'c-stat' },
-    h('div', { class: 'label', text: label }),
-    h('div', { class: `value num ${cls}`, text: value }));
-  clear(results).append(
-    h('div', { class: 't-dim mb-8', text: `${d.strategy} · ${d.universe_mode} · ${fmtDollar(d.starting_cash)} start` }),
-    h('div', { class: 'grid-4 mb-16' },
-      stat('Return', fmtPct(s.return_pct), upDownClass(s.return_pct)),
-      stat('Sharpe', fmtNum(s.sharpe)),
-      stat('Max drawdown', fmtPct(s.max_drawdown_pct, { signed: false }), 't-down'),
-      stat('Win rate', s.win_rate != null ? fmtPct(s.win_rate, { signed: false }) : '—'),
-      stat('vs ' + (s.benchmark_symbol || 'benchmark'), s.excess_return_pct != null ? fmtPct(s.excess_return_pct) : '—', upDownClass(s.excess_return_pct)),
-      stat('Profit factor', fmtNum(s.profit_factor)),
-      stat('Exposure', s.exposure_pct != null ? fmtPct(s.exposure_pct, { signed: false }) : '—'),
-      stat('Closed trades', fmtInt(s.num_closed_trades)),
-    ),
-    h('div', { class: 'c-card mb-16' },
-      h('div', { class: 'c-card-header', text: 'Equity curve' }),
-      h('div', { class: 'c-card-body' }, h('div', { class: 'ch-pane equity', id: 'bt-chart' }))),
-  );
-  const c = colors();
-  const chart = createChart(document.getElementById('bt-chart'));
-  const area = chart.addAreaSeries({
-    lineColor: c.accent, topColor: c.accent + '33', bottomColor: 'transparent', lineWidth: 2,
-  });
-  area.setData((d.equity_curve || []).map(p => ({
-    time: toEpochSec(p.date), value: p.equity,
-  })).filter(p => p.time != null));
-  chart.timeScale().fitContent();
-}
-
 /* ════ boot ════ */
 async function init() {
   document.getElementById('lab-tabs').addEventListener('click', (e) => {
@@ -471,7 +371,6 @@ async function init() {
     for (const p of labels.prefixes) sel.append(h('option', { value: p, text: p }));
   } catch { /* dropdown stays generic */ }
 
-  initBacktest();
   switchTab(activeTab());
 }
 

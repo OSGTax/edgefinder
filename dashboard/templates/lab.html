@@ -7,7 +7,6 @@
   <div class="c-seg" id="lab-tabs">
     <button data-tab="scoreboard" class="active">Scoreboard</button>
     <button data-tab="runs">Runs</button>
-    <button data-tab="backtest">Backtest</button>
   </div>
 </div>
 
@@ -35,37 +34,6 @@
   </div>
   <div class="c-card"><div class="c-card-body tight c-table-wrap" id="runs-table"></div></div>
   <div class="flex items-center gap-12 mt-8" id="runs-pager"></div>
-</section>
-
-<!-- Backtest tab -->
-<section id="tab-backtest" class="hidden">
-  <div class="c-card mb-16">
-    <div class="c-card-header">Quick backtest (legacy per-ticker lab)</div>
-    <div class="c-card-body">
-      <form id="bt-form" class="flex flex-wrap gap-12 items-end">
-        <label class="flex-col gap-4">Strategy
-          <select id="bt-strategy" class="c-select"></select></label>
-        <label class="flex-col gap-4">Universe
-          <select id="bt-mode" class="c-select">
-            <option value="symbols">Symbols</option>
-            <option value="top">Top-N liquid</option>
-            <option value="full">Full</option>
-          </select></label>
-        <label class="flex-col gap-4" id="bt-symbols-wrap">Symbols
-          <input id="bt-symbols" class="c-input" value="AAPL,NVDA,TSLA"></label>
-        <label class="flex-col gap-4 hidden" id="bt-topn-wrap">Top N
-          <input id="bt-topn" class="c-input" type="number" value="100"></label>
-        <label class="flex-col gap-4">Start
-          <input id="bt-start" class="c-input" type="date"></label>
-        <label class="flex-col gap-4">End
-          <input id="bt-end" class="c-input" type="date"></label>
-        <label class="flex-col gap-4">Cash
-          <input id="bt-cash" class="c-input" type="number" value="10000"></label>
-        <button class="c-btn primary" type="submit">Run</button>
-      </form>
-    </div>
-  </div>
-  <div id="bt-results"></div>
 </section>
 
 <!-- run detail drawer -->

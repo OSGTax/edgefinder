@@ -63,7 +63,7 @@ def ops_health(db: Session = Depends(get_db)):
         "other": sum(1 for o in unresolved if o.severity not in ("CRITICAL", "WARN")),
     }
 
-    from dashboard.services import get_last_signal_check, get_scheduler
+    from dashboard.services import get_scheduler
 
     scheduler = get_scheduler()
     sched = {"running": False}
@@ -73,7 +73,6 @@ def ops_health(db: Session = Depends(get_db)):
             "running": status.get("running", True),
             "next_runs": status.get("next_runs", {}),
         }
-    sched["last_signal_check"] = get_last_signal_check()
 
     return {
         "heartbeats": heartbeats,

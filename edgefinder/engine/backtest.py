@@ -25,11 +25,45 @@ from datetime import date
 
 import pandas as pd
 
-# Reuse the vetted precompute + OHLC sanitizer; rebuild only the trade loop.
+# Reuse the vetted cost-model spread estimator; rebuild only the trade loop.
 from edgefinder.backtest.costs import corwin_schultz_spread
-from edgefinder.backtest.daily_backtest import _sanitize_ohlcv, precompute_snapshots
+
+# Faithful per-row snapshot builder lives in indicator_engine (relocated from
+# the retired per-ticker lab). Kept under the original local name so call
+# sites and the proven equivalence vs old runs stay unchanged.
+from edgefinder.data.indicator_engine import compute_snapshot_series as precompute_snapshots
 
 _COST_WINDOW = 20   # trailing days for ADV / volatility (matches the old lab)
+
+
+def _sanitize_ohlcv(ohlcv: pd.DataFrame) -> pd.DataFrame:
+    """Repair impossible OHLC bars (bad prints) before they distort a backtest.
+
+    A single corrupt low (e.g. SPY 2026-02-02 printed low=69 instead of ~690, a
+    dropped digit) trips the catastrophic stop and fabricates a ~-20% trade —
+    in ANY strategy. Daily OHLC must satisfy low <= min(open,close) <=
+    max(open,close) <= high; a low far below (or high far above) the open/close
+    body is a data error, not a real intrabar move. We clamp the offending
+    extreme back to the open/close body (conservative: never invents a move),
+    leaving valid bars untouched.
+
+    (Relocated verbatim from the retired edgefinder/backtest/daily_backtest.py.)
+    """
+    o, h, l, c = ohlcv["open"], ohlcv["high"], ohlcv["low"], ohlcv["close"]
+    body_lo = pd.concat([o, c], axis=1).min(axis=1)
+    body_hi = pd.concat([o, c], axis=1).max(axis=1)
+    # A low below 50% of the body low (or non-positive) is an impossible
+    # single-session move → clamp to the body low. Symmetric for highs.
+    bad_low = (l < body_lo * 0.5) | (l <= 0)
+    bad_high = h > body_hi * 2.0
+    if bad_low.any() or bad_high.any():
+        ohlcv = ohlcv.copy()
+        ohlcv.loc[bad_low, "low"] = body_lo[bad_low]
+        ohlcv.loc[bad_high, "high"] = body_hi[bad_high]
+        # Also enforce ordinary consistency (low <= body, high >= body).
+        ohlcv["low"] = pd.concat([ohlcv["low"], body_lo], axis=1).min(axis=1)
+        ohlcv["high"] = pd.concat([ohlcv["high"], body_hi], axis=1).max(axis=1)
+    return ohlcv
 from edgefinder.engine.strategy import (
     AssetView,
     RebalanceContext,

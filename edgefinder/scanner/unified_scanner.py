@@ -1,24 +1,18 @@
-"""EdgeFinder v2 — Unified multi-strategy scanner.
+"""EdgeFinder v2 — Unified nightly DATA scanner.
 
-Replaces the per-strategy `StrategyScanner.run()` loop. Instead of running
-the same Pass 1 fundamentals fetch 4 times (once per strategy), it fetches
-each ticker's fundamentals ONCE and evaluates every strategy's
-qualifies_stock() against the shared result.
+The scanner is a pure data collector (the per-strategy qualification layer
+was retired with the old arena): it fetches each ticker's fundamentals ONCE
+(concurrently) and persists tickers + fundamentals so the permanent data
+asset keeps growing. The nightly PIT fundamentals snapshot
+(edgefinder/data/pit_fundamentals.snapshot_fundamentals) reads what this
+writes — that is how the honest fundamental-strategy history accumulates.
 
-Performance gains vs the old per-strategy loop:
-- Pass 1 API calls: O(tickers) instead of O(tickers × strategies) — 4x fewer
-  fetches when running 4 strategies (alpha/bravo/charlie/degenerate).
-- Concurrency: ThreadPoolExecutor parallelizes the network-bound fetches,
-  10x throughput at 10 workers (Polygon Starter is "unlimited" calls).
+Performance properties kept from the original design:
+- Concurrency: ThreadPoolExecutor parallelizes the network-bound fetches.
 - Incremental commits: persists every N tickers so a deploy mid-scan
   doesn't lose all progress.
-
-Combined with the universe pre-filter (top 1000 by dollar volume), the
-total scan time drops from ~2 hours to ~30-60 seconds.
-
-The old StrategyScanner is kept intact for backward compatibility — only
-the orchestration in dashboard/services.py is updated to call
-UnifiedScanner.run() instead of looping per-strategy.
+- Combined with the universe pre-filter (top N by dollar volume), a full
+  nightly scan completes in seconds-to-minutes, not hours.
 """
 
 from __future__ import annotations
@@ -26,68 +20,62 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Callable
 
 from sqlalchemy.orm import Session
 
 from config.settings import settings
 from edgefinder.core.interfaces import DataProvider
-from edgefinder.core.profile import StockProfile
-from edgefinder.db.models import Fundamental, Ticker, TickerStrategyQualification
-from edgefinder.scanner.scoring import compute_score, compute_universe_stats
-from edgefinder.strategies.base import BaseStrategy
+from edgefinder.core.models import TickerFundamentals
+from edgefinder.db.models import Fundamental, Ticker
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class TickerScanData:
-    """Pass 1 result for a single ticker — fundamentals + per-strategy qualification flags."""
+    """Pass 1 result for a single ticker — its fetched fundamentals."""
     symbol: str
-    profile: StockProfile
-    qualified_by: dict[str, bool]  # strategy_name -> qualified
-    score_by: dict[str, float]      # strategy_name -> score (set in scoring phase)
+    fundamentals: TickerFundamentals
 
 
 class UnifiedScanner:
-    """Scan the universe ONCE, qualify against all strategies in parallel.
+    """Scan the universe once: fetch fundamentals, persist tickers + rows.
 
     Usage:
-        scanner = UnifiedScanner(strategies, provider, session_factory)
+        scanner = UnifiedScanner(provider, session_factory)
         summary = scanner.run(tickers)
-        # summary = {"alpha": 30, "bravo": 12, "charlie": 8, "degenerate": 45}
+        # summary = {"scanned": 980, "persisted": 975}
     """
 
     def __init__(
         self,
-        strategies: list[BaseStrategy],
         provider: DataProvider,
         session_factory: Callable[[], Session],
         max_workers: int | None = None,
         commit_batch_size: int | None = None,
     ) -> None:
-        self._strategies = list(strategies)
         self._provider = provider
         self._session_factory = session_factory
         self._max_workers = max_workers or settings.scanner_concurrent_workers
         self._commit_batch_size = commit_batch_size or settings.scanner_commit_batch_size
 
     def run(self, tickers: list[str]) -> dict[str, int]:
-        """Execute the unified scan. Returns per-strategy qualified counts."""
+        """Execute the data scan. Returns {"scanned": N, "persisted": M}."""
         total = len(tickers)
         logger.info(
-            "Unified scan starting: %d tickers x %d strategies (workers=%d, batch=%d)",
-            total, len(self._strategies), self._max_workers, self._commit_batch_size,
+            "Unified scan starting: %d tickers (workers=%d, batch=%d)",
+            total, self._max_workers, self._commit_batch_size,
         )
         start_ts = datetime.now()
 
-        # ── Pass 1: Concurrent fundamentals fetch + qualification ──
+        # ── Pass 1: concurrent fundamentals fetch ──
         scan_data: list[TickerScanData] = []
         completed = 0
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             futures = {
-                pool.submit(self._fetch_and_qualify, ticker): ticker
+                pool.submit(self._fetch_one, ticker): ticker
                 for ticker in tickers
             }
             for fut in as_completed(futures):
@@ -108,139 +96,78 @@ class UnifiedScanner:
             elapsed_pass1, len(scan_data), total,
         )
 
-        # ── Pass 2: Concurrent enrichment of qualified tickers ──
-        # A ticker is "enriched" if ANY strategy qualified it. Enrichment is
-        # strategy-agnostic — full_refresh=True fetches the same TIER 2 data
-        # regardless of which strategy asked.
-        enrich_set = {
-            d.symbol for d in scan_data
-            if any(d.qualified_by.values())
-        }
-        if enrich_set:
-            logger.info("Unified scan: enriching %d qualified tickers", len(enrich_set))
-            self._enrich_concurrent(scan_data, enrich_set)
+        # ── Pass 2: concurrent TIER-2 enrichment (technicals, short
+        # interest, news sentiment). The old scanner enriched only
+        # strategy-qualified tickers; with qualification retired the whole
+        # scanned set is enriched so the data asset keeps its richness.
+        if scan_data:
+            logger.info("Unified scan: enriching %d tickers", len(scan_data))
+            self._enrich_concurrent(scan_data)
 
-        # ── Score per strategy (in-memory, fast) ──
-        for strategy in self._strategies:
-            qualified_for_strategy = [
-                d for d in scan_data if d.qualified_by.get(strategy.name)
-            ]
-            if not qualified_for_strategy:
-                continue
-            if strategy.scoring_profile:
-                profiles = [d.profile for d in qualified_for_strategy]
-                stats = compute_universe_stats(profiles, strategy.scoring_profile.factors)
-                for d in qualified_for_strategy:
-                    d.score_by[strategy.name] = compute_score(
-                        d.profile, strategy.scoring_profile, stats,
-                    )
-            else:
-                for d in qualified_for_strategy:
-                    d.score_by[strategy.name] = 100.0
+        # ── Pass 3: persist with incremental commits ──
+        persisted = self._persist_incremental(scan_data)
 
-        # ── Pass 3: Persist with incremental commits ──
-        summary = self._persist_incremental(scan_data)
-
+        summary = {"scanned": len(scan_data), "persisted": persisted}
         elapsed_total = (datetime.now() - start_ts).total_seconds()
         logger.info(
-            "Unified scan complete in %.1fs: %s",
-            elapsed_total,
-            ", ".join(f"{k}={v}" for k, v in summary.items()),
+            "Unified scan complete in %.1fs: %s", elapsed_total, summary,
         )
         return summary
 
-    # ── Pass 1: per-ticker fetch + qualify ──
+    # ── Pass 1: per-ticker fetch ──
 
-    def _fetch_and_qualify(self, ticker: str) -> TickerScanData | None:
-        """Fetch fundamentals once, evaluate every strategy's qualifies_stock."""
+    def _fetch_one(self, ticker: str) -> TickerScanData | None:
+        """Fetch fundamentals once for ``ticker``."""
         try:
             fund = self._provider.get_fundamentals(ticker, full_refresh=False)
         except Exception:
             logger.exception("get_fundamentals failed for %s", ticker)
             return None
-
         if fund is None or fund.company_name is None:
             return None
+        return TickerScanData(symbol=ticker, fundamentals=fund)
 
-        profile = StockProfile(symbol=ticker, fundamentals=fund)
-        qualified_by: dict[str, bool] = {}
-        for strategy in self._strategies:
-            try:
-                qualified_by[strategy.name] = strategy.qualifies_stock(fund)
-            except Exception:
-                logger.exception(
-                    "[%s] qualifies_stock failed for %s", strategy.name, ticker,
-                )
-                qualified_by[strategy.name] = False
-        return TickerScanData(
-            symbol=ticker,
-            profile=profile,
-            qualified_by=qualified_by,
-            score_by={},
-        )
+    # ── Pass 2: concurrent enrichment ──
 
-    # ── Pass 2: concurrent enrichment of qualified set ──
-
-    def _enrich_concurrent(
-        self,
-        scan_data: list[TickerScanData],
-        enrich_set: set[str],
-    ) -> None:
-        """Replace fundamentals on qualified tickers with full-refresh enriched data.
-
-        Mutates scan_data in place. Concurrent like Pass 1.
-        """
-        # Build symbol -> TickerScanData index for fast lookup
-        index = {d.symbol: d for d in scan_data if d.symbol in enrich_set}
-
+    def _enrich_concurrent(self, scan_data: list[TickerScanData]) -> None:
+        """Replace fundamentals with full-refresh enriched data (in place)."""
+        index = {d.symbol: d for d in scan_data}
         completed = 0
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             futures = {
                 pool.submit(self._enrich_one, symbol): symbol
-                for symbol in enrich_set
+                for symbol in index
             }
             for fut in as_completed(futures):
                 completed += 1
                 if completed % 25 == 0 or completed == 1:
-                    logger.info("Unified scan: enrich %d/%d", completed, len(enrich_set))
+                    logger.info("Unified scan: enrich %d/%d", completed, len(index))
                 symbol = futures[fut]
                 try:
                     fund = fut.result()
                 except Exception:
                     logger.exception("Enrich failed for %s", symbol)
                     continue
-                if fund is None:
-                    continue
-                # Replace the fundamentals on the existing scan_data entry
-                target = index.get(symbol)
-                if target is not None:
-                    target.profile = StockProfile(
-                        symbol=symbol,
-                        fundamentals=fund,
-                    )
+                if fund is not None:
+                    index[symbol].fundamentals = fund
 
     def _enrich_one(self, ticker: str):
         return self._provider.get_fundamentals(ticker, full_refresh=True)
 
     # ── Pass 3: incremental persistence ──
 
-    def _persist_incremental(
-        self, scan_data: list[TickerScanData],
-    ) -> dict[str, int]:
+    def _persist_incremental(self, scan_data: list[TickerScanData]) -> int:
         """Persist scan results in batches, committing every N to survive deploys."""
-        summary = {s.name: 0 for s in self._strategies}
-        scanned_symbols: set[str] = set()
+        persisted = 0
         now = datetime.now(timezone.utc)
 
         session = self._session_factory()
         try:
             in_batch = 0
             for data in scan_data:
-                fund = data.profile.fundamentals
+                fund = data.fundamentals
                 if fund is None or fund.company_name is None:
                     continue
-                scanned_symbols.add(data.symbol)
-                any_qualified = any(data.qualified_by.values())
 
                 # ── Upsert ticker ──
                 ticker_row = (
@@ -257,7 +184,7 @@ class UnifiedScanner:
                         market_cap=fund.market_cap,
                         last_price=fund.price,
                         source="scanner",
-                        is_active=any_qualified,
+                        is_active=True,
                     )
                     session.add(ticker_row)
                     session.flush()
@@ -267,8 +194,7 @@ class UnifiedScanner:
                     ticker_row.industry = fund.industry or ticker_row.industry
                     ticker_row.market_cap = fund.market_cap or ticker_row.market_cap
                     ticker_row.last_price = fund.price or ticker_row.last_price
-                    if any_qualified:
-                        ticker_row.is_active = True
+                    ticker_row.is_active = True
 
                 # ── Upsert fundamental ──
                 fund_data = dict(
@@ -305,13 +231,6 @@ class UnifiedScanner:
                     raw_data=fund.raw_data,
                     scan_date=now,
                 )
-                tier1_fields = {
-                    "symbol", "peg_ratio", "earnings_growth", "debt_to_equity",
-                    "revenue_growth", "fcf_yield", "price_to_tangible_book",
-                    "ev_to_ebitda", "current_ratio", "price_to_earnings",
-                    "price_to_book", "return_on_equity", "return_on_assets",
-                    "scan_date",
-                }
                 existing_fund = (
                     session.query(Fundamental)
                     .filter_by(ticker_id=ticker_row.id)
@@ -319,70 +238,25 @@ class UnifiedScanner:
                 )
                 if existing_fund is None:
                     session.add(Fundamental(**fund_data))
-                elif any_qualified:
+                else:
                     for key, val in fund_data.items():
                         if key != "ticker_id":
                             setattr(existing_fund, key, val)
-                else:
-                    for key in tier1_fields:
-                        if key in fund_data:
-                            setattr(existing_fund, key, fund_data[key])
 
-                # ── Upsert one qualification row per strategy ──
-                for strategy in self._strategies:
-                    qualified = data.qualified_by.get(strategy.name, False)
-                    score = data.score_by.get(strategy.name) if qualified else None
-                    existing_qual = (
-                        session.query(TickerStrategyQualification)
-                        .filter_by(ticker_id=ticker_row.id, strategy_name=strategy.name)
-                        .first()
-                    )
-                    if existing_qual is None:
-                        session.add(TickerStrategyQualification(
-                            ticker_id=ticker_row.id,
-                            symbol=data.symbol,
-                            strategy_name=strategy.name,
-                            qualified=qualified,
-                            score=score,
-                            scan_date=now,
-                        ))
-                    else:
-                        existing_qual.qualified = qualified
-                        existing_qual.score = score
-                        existing_qual.scan_date = now
-
-                    if qualified:
-                        summary[strategy.name] += 1
-
+                persisted += 1
                 in_batch += 1
                 if in_batch >= self._commit_batch_size:
                     session.commit()
                     in_batch = 0
                     logger.debug(
-                        "Unified scan: incremental commit (running totals: %s)",
-                        summary,
+                        "Unified scan: incremental commit (%d persisted)", persisted,
                     )
 
-            # Final commit + bulk deactivation
             session.commit()
-
-            # Deactivate tickers no strategy qualified for (1 query, not N)
-            if scanned_symbols:
-                qualified_ids = (
-                    session.query(TickerStrategyQualification.ticker_id)
-                    .filter(TickerStrategyQualification.qualified == True)
-                    .subquery()
-                )
-                session.query(Ticker).filter(
-                    Ticker.symbol.in_(scanned_symbols),
-                    Ticker.is_active == True,
-                    ~Ticker.id.in_(qualified_ids),
-                ).update({"is_active": False}, synchronize_session="fetch")
-                session.commit()
         except Exception:
             logger.exception("Unified scan persist failed")
             session.rollback()
         finally:
             session.close()
 
-        return summary
+        return persisted
