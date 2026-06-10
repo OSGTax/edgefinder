@@ -33,6 +33,9 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
 
 from edgefinder.core.models import Direction, Trade, TradeStatus, TradeType
 from edgefinder.db.models import DailyBar, PromotedStrategy, StrategyAccount, SystemHeartbeat
@@ -54,6 +57,16 @@ REBALANCE_BAND = 0.01          # skip re-trues smaller than 1% of equity
 SLIPPAGE_BPS = 5.0             # paper-fill slippage, both sides
 HISTORY_DAYS = 450             # calendar days of bars to load (>=210 trading)
 HEARTBEAT = "v2_portfolio_cycle"
+
+
+def _memoized(price_fn):
+    cache: dict[str, float | None] = {}
+
+    def lookup(symbol: str):
+        if symbol not in cache:
+            cache[symbol] = price_fn(symbol)
+        return cache[symbol]
+    return lookup
 
 
 def _is_rebalance_day(today: date, prev_trading_day: date, schedule: str) -> bool:
@@ -106,7 +119,8 @@ def ensure_recent_bars(session, provider, symbols: list[str], today: date) -> in
             if latest_date is not None and latest_date >= today - timedelta(days=1):
                 continue
             start = (latest_date + timedelta(days=1)) if latest_date else today - timedelta(days=HISTORY_DAYS)
-            df = provider.get_bars(sym, "day", start, today)
+            fetch = getattr(provider, "get_bars_fresh", provider.get_bars)
+            df = fetch(sym, "day", start, today)
             if df is None or not len(df):
                 continue
             for ts, row in df.iterrows():   # timestamp is the frame's index
@@ -190,10 +204,13 @@ def run_portfolio_cycle(
     """Run one daily cycle over every active promoted strategy.
 
     ``price_fn(symbol) -> float | None`` supplies fill prices (defaults to
-    the provider's latest price; tests inject a stub). ``dry_run`` computes
-    and reports intended trades without persisting anything.
+    the provider's latest price, memoized per cycle; tests inject a stub).
+    ``dry_run`` computes and reports intended trades without persisting
+    anything (its trade list is approximate when sells fund buys).
     """
-    today = today or datetime.now(timezone.utc).date()
+    # the trading day is an ET concept — a UTC date would roll over at 8 PM
+    # ET and an evening manual run would trade "tomorrow"
+    today = today or datetime.now(ET).date()
     summary: dict = {"date": str(today), "strategies": {}, "dry_run": dry_run}
 
     session = session_factory()
@@ -210,6 +227,7 @@ def run_portfolio_cycle(
             if provider is None:
                 raise ValueError("need a provider or an explicit price_fn")
             price_fn = provider.get_latest_price
+        price_fn = _memoized(price_fn)   # one quote per symbol per cycle
 
         ok = True
         for promo in promos:
@@ -236,16 +254,15 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
     strategy = factory()
 
     ensure_recent_bars(session, provider, symbols, today)
-    bars = load_bars(session, symbols, start=today - timedelta(days=HISTORY_DAYS))
-    bars = {s: df for s, df in bars.items() if len(df)}
-    if not bars:
-        return {"action": "skip", "reason": "no bars"}
 
-    prep, calendar = prepare_bars(bars)
-    decision_dates = [d for d in calendar if d < today]
-    if not decision_dates:
+    # cheap schedule gate BEFORE the expensive load + indicator precompute —
+    # on a hold day only the account mark runs
+    latest = (session.query(DailyBar.date)
+              .filter(DailyBar.symbol.in_(symbols), DailyBar.date < today)
+              .order_by(DailyBar.date.desc()).first())
+    if latest is None:
         return {"action": "skip", "reason": "no completed bars before today"}
-    decision_date = decision_dates[-1]
+    decision_date = latest[0]
 
     journal = TradeJournal(session)
     open_lots = _open_lots(journal, promo.strategy_name)
@@ -253,6 +270,12 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
     if has_history and not _is_rebalance_day(today, decision_date, promo.schedule):
         _mark_account(session, promo.strategy_name, journal, price_fn, dry_run)
         return {"action": "hold", "reason": f"not a {promo.schedule} boundary"}
+
+    bars = load_bars(session, symbols, start=today - timedelta(days=HISTORY_DAYS))
+    bars = {s: df for s, df in bars.items() if len(df)}
+    if not bars:
+        return {"action": "skip", "reason": "no bars"}
+    prep, _ = prepare_bars(bars)
 
     ctx = _build_context(prep, decision_date, None)
     weights = strategy.rebalance(ctx) or {}

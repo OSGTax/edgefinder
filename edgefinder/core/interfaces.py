@@ -128,6 +128,16 @@ class DataHub:
     ) -> pd.DataFrame | None:
         return self._primary.get_bars(ticker, timeframe, start, end)
 
+    def get_bars_fresh(
+        self, ticker: str, timeframe: str, start: date, end: date | None = None
+    ) -> pd.DataFrame | None:
+        """Cache-bypassing bars for freshness-critical callers (falls back to
+        get_bars when the primary has no fresh path, e.g. a raw provider)."""
+        fresh = getattr(self._primary, "get_bars_fresh", None)
+        if fresh is not None:
+            return fresh(ticker, timeframe, start, end)
+        return self._primary.get_bars(ticker, timeframe, start, end)
+
     def get_latest_price(self, ticker: str) -> float | None:
         return self._primary.get_latest_price(ticker)
 

@@ -123,6 +123,17 @@ def init_database():
         )""",
         """CREATE INDEX IF NOT EXISTS idx_validation_runs_strat_ts
             ON validation_runs (strategy_name, run_at)""",
+        """CREATE TABLE IF NOT EXISTS promoted_strategies (
+            id SERIAL PRIMARY KEY,
+            strategy_name VARCHAR(50) UNIQUE NOT NULL,
+            spec VARCHAR(100) NOT NULL,
+            symbols JSON,
+            schedule VARCHAR(10) DEFAULT 'monthly',
+            tier VARCHAR(20) DEFAULT 'experimental',
+            validation_run_id INTEGER,
+            active BOOLEAN DEFAULT TRUE,
+            promoted_at TIMESTAMP DEFAULT NOW()
+        )""",
     ]
     with engine.begin() as conn:
         for ddl in table_ddls:

@@ -44,6 +44,25 @@ class CachedDataProvider:
             self._cache.store_bars(ticker, timeframe, df)
         return df
 
+    def get_bars_fresh(
+        self,
+        ticker: str,
+        timeframe: str,
+        start: date,
+        end: date | None = None,
+    ) -> pd.DataFrame | None:
+        """Fetch bars bypassing the cache READ (still refreshes the cache).
+
+        The file cache ignores the requested date range and the daily TTL is
+        long (18h), so a morning caller asking for yesterday's close can be
+        served a frame cached before that close existed. Freshness-critical
+        callers (the v2 portfolio runner's daily_bars append) use this.
+        """
+        df = self._provider.get_bars(ticker, timeframe, start, end)
+        if df is not None and not df.empty:
+            self._cache.store_bars(ticker, timeframe, df)
+        return df
+
     def get_latest_price(self, ticker: str) -> float | None:
         """Get latest price with 30s in-memory cache.
 
