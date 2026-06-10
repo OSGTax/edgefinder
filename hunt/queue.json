@@ -1,9 +1,13 @@
 {
-  "wave": "r2-equivalence-retry",
+  "wave": "post-slim-verification",
   "runs": [
     {
-      "id": "r2-equivalence-xsec",
-      "args": "--strategy xsec_mom_12_1 --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --warmup-days 290 --schedule monthly --bars-from r2 --record --universe-label hunt-r1:r2-equiv"
+      "id": "postslim-null-control",
+      "args": "--strategy buy_and_hold:SPY --symbols SPY --schedule monthly --holdout-start 2025-12-05 --record --universe-label postslim:null"
+    },
+    {
+      "id": "postslim-r2-equivalence",
+      "args": "--strategy xsec_mom_12_1 --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --warmup-days 290 --schedule monthly --bars-from r2 --record --universe-label postslim:r2-equiv"
     }
   ]
 }
