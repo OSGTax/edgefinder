@@ -32,6 +32,11 @@ class BenchmarkService:
         Returns number of records stored.
         """
         target_date = as_of or date.today()
+        if not self._is_trading_day(target_date):
+            logger.info(
+                "Benchmark collection skipped — %s is not a trading day", target_date
+            )
+            return 0
         stored = 0
 
         for symbol in settings.index_symbols:
@@ -156,6 +161,30 @@ class BenchmarkService:
                 result["dates"] = dates
 
         return result
+
+    def _is_trading_day(self, target_date: date) -> bool:
+        """Weekend + market-holiday gate for the daily collector.
+
+        Without this, a scheduler tick on a weekday holiday (e.g. Memorial
+        Day 2026-05-25) stores the PRIOR session's prices under the holiday
+        date — phantom index_daily rows on a day the market never traded.
+        Fails open on provider errors: a missed real trading day is worse
+        than a deletable phantom row.
+        """
+        if target_date.weekday() >= 5:
+            return False
+        holidays_fn = getattr(self._provider, "get_market_holidays", None)
+        if holidays_fn is None:
+            return True
+        try:
+            closed = {
+                h.get("date") for h in holidays_fn()
+                if h.get("status") == "closed"
+            }
+            return target_date.isoformat() not in closed
+        except Exception:
+            logger.warning("Holiday check failed — collecting anyway", exc_info=True)
+            return True
 
     def _get_previous_close(self, symbol: str) -> float | None:
         """Get the most recent close for a symbol."""

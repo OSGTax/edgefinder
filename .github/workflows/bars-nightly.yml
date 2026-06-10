@@ -1,0 +1,78 @@
+name: Nightly daily-bars catch-up
+
+# Keeps the permanent data asset growing MARKET-WIDE, not just for the
+# symbols the live system happens to trade (engine/live.ensure_recent_bars
+# only advances the promoted universes). Each night this ingests the day's
+# top-1000 common stocks by dollar volume — active AND delisted, the same
+# survivorship-free methodology as the historical bulk ingest — plus the
+# benchmark ETFs, from the Polygon/Massive day_aggs flat files.
+#
+# Self-healing: every run covers a trailing 5-day window. The S3 LIST in
+# available_days() only returns files that exist, so holidays/weekends are
+# skipped naturally (no holiday calendar needed) and a missed run is
+# topped up by the next one (upserts on (symbol, date) are idempotent).
+#
+# Kill switch: repo variable BARS_NIGHTLY_ENABLED must be exactly 'true'.
+#
+# --- Required repo secrets --------------------------------------------
+#   DATABASE_URL                              (Supabase pooler URL)
+#   EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID       (flat-files S3 key)
+#   EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY   (flat-files S3 secret)
+#   EDGEFINDER_POLYGON_API_KEY                (REST key — the top-per-day
+#       keep-set pulls the active+delisted common-stock ticker lists)
+
+on:
+  schedule:
+    # 04:15 UTC Tue-Sat = Mon-Fri evening ET (11:15 PM EDT / 12:15 AM EST
+    # next day), after the day's flat file is published.
+    - cron: "15 4 * * 2-6"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  catchup:
+    if: vars.BARS_NIGHTLY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      # shared with the manual backfill workflow so the two never write
+      # daily_bars concurrently
+      group: daily-bars-backfill
+      cancel-in-progress: false
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      EDGEFINDER_POLYGON_API_KEY: ${{ secrets.EDGEFINDER_POLYGON_API_KEY }}
+      EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID: ${{ secrets.EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID }}
+      EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY: ${{ secrets.EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check secrets
+        run: |
+          set -euo pipefail
+          for v in DATABASE_URL EDGEFINDER_POLYGON_API_KEY \
+                   EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID \
+                   EDGEFINDER_POLYGON_S3_SECRET_ACCESS_KEY; do
+            if [ -z "${!v:-}" ]; then
+              echo "::error::repo secret $v is not set"; exit 1
+            fi
+          done
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Catch up daily_bars (trailing 5-day window)
+        run: |
+          set -euo pipefail
+          START="$(date -u -d '5 days ago' +%F)"
+          END="$(date -u +%F)"
+          echo "Running: backfill_daily_bars.py --start $START --end $END --top-per-day 1000 --execute"
+          python scripts/backfill_daily_bars.py \
+            --start "$START" --end "$END" --top-per-day 1000 --execute
