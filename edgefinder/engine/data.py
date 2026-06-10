@@ -66,6 +66,67 @@ def load_bars_from_store(
     return bars
 
 
+def load_dividends(db: Session, symbols: list[str]) -> dict[str, list[tuple]]:
+    """{symbol: [(ex_date, cash_amount), ...]} sorted by ex_date."""
+    from edgefinder.db.models import DividendRecord
+
+    out: dict[str, list[tuple]] = {}
+    for i in range(0, len(symbols), _IN_CHUNK):
+        rows = (db.query(DividendRecord.symbol, DividendRecord.ex_date,
+                         DividendRecord.cash_amount)
+                .filter(DividendRecord.symbol.in_(symbols[i:i + _IN_CHUNK]))
+                .order_by(DividendRecord.symbol, DividendRecord.ex_date).all())
+        for sym, ex, amt in rows:
+            out.setdefault(sym, []).append((ex, amt))
+    return out
+
+
+def adjust_for_dividends(
+    bars_by_symbol: dict[str, pd.DataFrame],
+    dividends: dict[str, list[tuple]],
+) -> dict[str, pd.DataFrame]:
+    """Back-adjust OHLC to a total-return basis (CRSP-style).
+
+    For each ex-date, all prices strictly BEFORE it are scaled by
+    ``1 - dividend / close_on_the_day_before_ex`` — the standard
+    back-adjustment that makes a buy-and-hold of the adjusted series equal
+    the dividend-reinvested return. The LAST close is unchanged (adjusted
+    and raw series converge at the present). Volume is untouched. Symbols
+    without dividends pass through unchanged (same object).
+    """
+    out: dict[str, pd.DataFrame] = {}
+    for sym, df in bars_by_symbol.items():
+        divs = dividends.get(sym)
+        if not divs:
+            out[sym] = df
+            continue
+        df = df.sort_values("date").reset_index(drop=True)
+        dates = list(df["date"])
+        factor = pd.Series(1.0, index=df.index)
+        import bisect as _bisect
+        for ex_date, amount in divs:
+            idx = _bisect.bisect_left(dates, ex_date)
+            # idx == 0: ex-date precedes our history (nothing to adjust);
+            # idx == len: a DECLARED future dividend that has not gone ex —
+            # adjusting on it would rescale the entire series including the
+            # last close on information the market hasn't priced yet
+            if idx <= 0 or idx >= len(dates):
+                continue
+            prev_close = float(df["close"].iloc[idx - 1])
+            if prev_close <= 0 or amount >= prev_close:
+                continue                      # bad print / bogus dividend
+            factor.iloc[:idx] *= (1.0 - amount / prev_close)
+        adj = df.copy()
+        for col in ("open", "high", "low", "close"):
+            adj[col] = df[col] * factor
+        # the raw close rides along: cost models must size liquidity (dollar
+        # ADV vs absolute thresholds) on prices as they actually printed, not
+        # on levels rescaled by FUTURE dividends
+        adj["close_raw"] = df["close"]
+        out[sym] = adj
+    return out
+
+
 def spy_series(db: Session) -> pd.DataFrame:
     """Longest available SPY series for benchmarking/regime tagging.
 

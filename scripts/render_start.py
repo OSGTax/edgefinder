@@ -45,6 +45,7 @@ def init_database():
     logger.info("Running column migrations...")
     migrations = [
         ("strategy_accounts", "realized_pnl", "FLOAT DEFAULT 0.0"),
+        ("promoted_strategies", "prices_basis", "VARCHAR(60)"),
         ("tickers", "scan_batch", "INTEGER"),
         # Extended fundamentals columns (Phase 1 data expansion)
         ("fundamentals", "price_to_earnings", "FLOAT"),
@@ -143,6 +144,17 @@ def init_database():
         )""",
         """CREATE INDEX IF NOT EXISTS idx_fund_snap_symbol_asof
             ON fundamentals_snapshots (symbol, as_of)""",
+        """CREATE TABLE IF NOT EXISTS dividends (
+            id SERIAL PRIMARY KEY,
+            symbol VARCHAR(10) NOT NULL,
+            ex_date DATE NOT NULL,
+            cash_amount FLOAT NOT NULL,
+            CONSTRAINT uq_dividends_symbol_exdate UNIQUE (symbol, ex_date)
+        )""",
+        """CREATE INDEX IF NOT EXISTS ix_dividends_symbol
+            ON dividends (symbol)""",
+        """CREATE INDEX IF NOT EXISTS ix_dividends_ex_date
+            ON dividends (ex_date)""",
     ]
     with engine.begin() as conn:
         for ddl in table_ddls:

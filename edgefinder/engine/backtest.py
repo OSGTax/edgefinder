@@ -26,7 +26,10 @@ from datetime import date
 import pandas as pd
 
 # Reuse the vetted precompute + OHLC sanitizer; rebuild only the trade loop.
+from edgefinder.backtest.costs import corwin_schultz_spread
 from edgefinder.backtest.daily_backtest import _sanitize_ohlcv, precompute_snapshots
+
+_COST_WINDOW = 20   # trailing days for ADV / volatility (matches the old lab)
 from edgefinder.engine.strategy import (
     AssetView,
     RebalanceContext,
@@ -130,21 +133,46 @@ def _build_context(prep: dict, decision_date, fundamentals) -> RebalanceContext:
 def _execute_to_target(
     weights: dict, open_px: dict, holdings: dict, cash: float,
     cost_rate: float, trades: list, dt,
+    cost_model=None, cost_ctx: dict | None = None,
 ) -> float:
     """Trade current holdings toward the target weights at today's open.
 
     Returns the new cash. Sells settle before buys (cash-only, no leverage);
-    buys are capped by available cash; every fill pays ``cost_rate`` of notional.
+    buys are capped by available cash. Costs: with ``cost_model`` (and the
+    per-symbol look-ahead-free ``cost_ctx`` of (adv_dollars, volatility,
+    spread_frac)), every fill pays spread + impact and buys are capped at the
+    participation limit; otherwise every fill pays flat ``cost_rate``.
     """
     equity = cash + sum(sh * open_px[s] for s, sh in holdings.items() if s in open_px)
     target: dict[str, int] = {}
+    frozen: set = set()
     for s, w in weights.items():
         if w and w > 0 and s in open_px and open_px[s] > 0:
-            target[s] = int((w * equity) / open_px[s])
+            n = int((w * equity) / open_px[s])
+            if cost_model is not None:
+                adv, _, _ = (cost_ctx or {}).get(s, (0.0, 0.0, 0.0))
+                capped = cost_model.cap_shares(n, open_px[s], adv)
+                if capped == 0 and n > 0 and holdings.get(s):
+                    # the strategy WANTS this name but its liquidity collapsed
+                    # below the tradeable floor: freeze the existing holding —
+                    # force-dumping a position into a name we just declared
+                    # untradeable would be self-contradictory
+                    frozen.add(s)
+                n = capped
+            target[s] = n
+
+    def _fill(s: str, side: str, shares: int) -> float:
+        px = open_px[s]
+        if cost_model is None:
+            return px * (1 + cost_rate) if side == "BUY" else px * (1 - cost_rate)
+        adv, vol, spread = (cost_ctx or {}).get(s, (0.0, 0.0, 0.0))
+        return cost_model.fill_price(
+            px, side, order_dollars=shares * px,
+            adv_dollars=adv, volatility=vol, spread_frac=spread)
 
     deltas = {}
     for s in sorted(set(holdings) | set(target)):   # deterministic fill order
-        if s not in open_px:           # untradeable today — leave the holding
+        if s not in open_px or s in frozen:   # untradeable today — hold as-is
             continue
         d = target.get(s, 0) - holdings.get(s, 0)
         if d != 0:
@@ -152,21 +180,23 @@ def _execute_to_target(
 
     for s, d in deltas.items():        # sells first (raise cash)
         if d < 0:
-            px = open_px[s]
-            cash += (-d) * px * (1 - cost_rate)
+            fill = _fill(s, "SELL", -d)
+            cash += (-d) * fill
             holdings[s] = holdings.get(s, 0) + d
             trades.append({"date": dt, "symbol": s, "side": "SELL",
-                           "shares": -d, "price": round(px, 4)})
+                           "shares": -d, "price": round(fill, 4)})
     for s, d in deltas.items():        # then buys (capped by cash)
         if d > 0:
-            px = open_px[s]
-            unit = px * (1 + cost_rate)
+            # impact is priced on the intended order; if cash then truncates
+            # the executed size, the fill conservatively keeps the larger
+            # order's impact (overstates cost — can never manufacture alpha)
+            unit = _fill(s, "BUY", d)
             buy = min(d, int(cash / unit) if unit > 0 else 0)
             if buy > 0:
                 cash -= buy * unit
                 holdings[s] = holdings.get(s, 0) + buy
                 trades.append({"date": dt, "symbol": s, "side": "BUY",
-                               "shares": buy, "price": round(px, 4)})
+                               "shares": buy, "price": round(unit, 4)})
 
     for s in [s for s, sh in holdings.items() if sh == 0]:
         del holdings[s]
@@ -180,6 +210,7 @@ def run_backtest(
     start_cash: float = 10_000.0,
     schedule: str = "weekly",
     cost_bps: float = 2.0,
+    cost_model=None,
     warmup_days: int = 200,
     trade_start: date | None = None,
     benchmark: pd.DataFrame | None = None,
@@ -202,6 +233,28 @@ def run_backtest(
     cost_rate = cost_bps / 1e4
 
     prep, calendar = prepare_bars(bars_by_symbol)
+    if cost_model is not None:
+        # look-ahead-free liquidity stats per symbol, aligned to bar index;
+        # the loop reads index j-1 (data strictly before today) — same
+        # semantics as the old lab's microcap cost mode. Dollar-ADV prefers
+        # the RAW close when the caller dividend-adjusted the bars (an
+        # adjusted close embeds factors for FUTURE ex-dates, so a name's
+        # tradeability at t would otherwise depend on dividends paid after t).
+        for sym, p in prep.items():
+            o = p["ohlcv"]
+            src = bars_by_symbol[sym]
+            if "close_raw" in src.columns:
+                # same sort prepare_bars applied, so rows align with o
+                close_for_adv = (src.sort_values("date")
+                                 .reset_index(drop=True)["close_raw"])
+            else:
+                close_for_adv = o["close"]
+            dollar = close_for_adv * o["volume"]
+            p["adv"] = dollar.rolling(_COST_WINDOW, min_periods=2).mean().to_numpy()
+            p["vol"] = (o["close"].pct_change()
+                        .rolling(_COST_WINDOW, min_periods=2).std().to_numpy())
+            p["hi"] = o["high"].to_numpy()
+            p["lo"] = o["low"].to_numpy()
     warm_idx = (bisect.bisect_left(calendar, trade_start)
                 if trade_start is not None else warmup_days)
 
@@ -213,23 +266,50 @@ def run_backtest(
     last_price: dict[str, float] = {}
 
     for i, dt in enumerate(calendar):
-        # today's tradable bars
+        # today's tradable bars (+ look-ahead-free cost context when costed)
         today_open: dict[str, float] = {}
         today_close: dict[str, float] = {}
+        cost_ctx: dict[str, tuple] = {}
         for sym, p in prep.items():
             j = p["idx"].get(dt)
             if j is not None:
                 today_open[sym] = float(p["ohlcv"]["open"].iloc[j])
                 today_close[sym] = float(p["ohlcv"]["close"].iloc[j])
                 last_price[sym] = today_close[sym]
+                if cost_model is not None and j >= 2:
+                    adv, vol = p["adv"][j - 1], p["vol"][j - 1]
+                    spread = corwin_schultz_spread(
+                        p["hi"][j - 2], p["lo"][j - 2],
+                        p["hi"][j - 1], p["lo"][j - 1])
+                    cost_ctx[sym] = (
+                        float(adv) if adv == adv else 0.0,   # NaN-safe
+                        float(vol) if vol == vol else 0.0,
+                        spread)
 
-        # delist: a holding whose data has ended is closed at its last real price
+        # delist: a holding whose data has ended is closed at its last real
+        # price — through the cost model when costed (a forced full-position
+        # liquidation of a dying name is the most cost-hostile fill in the
+        # whole backtest; charging it flat bps would flatter exactly the
+        # microcap band the cost model exists for)
         for sym in list(holdings):
             if holdings[sym] and dt > prep[sym]["last_date"]:
                 px = prep[sym]["last_close"]
-                cash += holdings[sym] * px * (1 - cost_rate)
+                if cost_model is not None:
+                    p = prep[sym]
+                    last = len(p["dates"]) - 1
+                    adv = float(p["adv"][last]) if p["adv"][last] == p["adv"][last] else 0.0
+                    vol = float(p["vol"][last]) if p["vol"][last] == p["vol"][last] else 0.0
+                    spread = (corwin_schultz_spread(
+                        p["hi"][last - 1], p["lo"][last - 1],
+                        p["hi"][last], p["lo"][last]) if last >= 1 else 0.0)
+                    fill = cost_model.fill_price(
+                        px, "SELL", order_dollars=holdings[sym] * px,
+                        adv_dollars=adv, volatility=vol, spread_frac=spread)
+                else:
+                    fill = px * (1 - cost_rate)
+                cash += holdings[sym] * fill
                 trades.append({"date": dt, "symbol": sym, "side": "SELL",
-                               "shares": holdings[sym], "price": round(px, 4),
+                               "shares": holdings[sym], "price": round(fill, 4),
                                "reason": "DELISTED"})
                 del holdings[sym]
 
@@ -245,7 +325,8 @@ def run_backtest(
             if total > 1.0:                      # never lever; scale to 100%
                 weights = {s: w / total for s, w in weights.items()}
             cash = _execute_to_target(weights, today_open, holdings, cash,
-                                      cost_rate, trades, dt)
+                                      cost_rate, trades, dt,
+                                      cost_model=cost_model, cost_ctx=cost_ctx)
             if log_weights:
                 weights_log.append({"date": dt, "weights": dict(weights)})
 

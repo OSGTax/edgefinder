@@ -66,6 +66,7 @@ def promote(session, *, spec: str, symbols: list[str], schedule: str,
     row.schedule = schedule
     row.tier = tier
     row.validation_run_id = run.id if run is not None else None
+    row.prices_basis = (run.config or {}).get("prices") if run is not None else None
     row.active = True
     session.commit()
     return row

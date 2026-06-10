@@ -192,11 +192,11 @@ def _gap_series() -> pd.DataFrame:
         p = 85.0 + i
         rows.append({"date": start + timedelta(days=i),
                      "open": p, "high": p * 1.01, "low": p * 0.99,
-                     "close": p, "volume": 1_000_000.0})
+                     "close": p, "volume": 100_000.0})
     # signal bar: close == 100 (probe fires). Its OWN open is 98.
     rows.append({"date": start + timedelta(days=12),
                  "open": 98.0, "high": 101.0, "low": 97.0,
-                 "close": 100.0, "volume": 1_000_000.0})
+                 "close": 100.0, "volume": 100_000.0})
     # fill bar: open gaps to 112 — the fill must land here, not at the 100 close.
     for j in range(13, 18):
         rows.append({"date": start + timedelta(days=j),
@@ -214,9 +214,9 @@ def _gap_down_after_entry():
     for i in range(12):
         p = 85.0 + i
         rows.append({"date": start + timedelta(days=i), "open": p, "high": p*1.01,
-                     "low": p*0.99, "close": p, "volume": 1_000_000.0})
+                     "low": p*0.99, "close": p, "volume": 100_000.0})
     rows.append({"date": start + timedelta(days=12), "open": 98.0, "high": 101.0,
-                 "low": 97.0, "close": 100.0, "volume": 1_000_000.0})
+                 "low": 97.0, "close": 100.0, "volume": 100_000.0})
     for j in (13, 14):  # fill + hold at ~112 → entry well above the eventual gap
         rows.append({"date": start + timedelta(days=j), "open": 112.0, "high": 113.0,
                      "low": 111.0, "close": 112.0, "volume": 1_000_000.0})
@@ -253,7 +253,7 @@ def _gap_event_series(n_warm: int = 250) -> pd.DataFrame:
         p = 100.0 + (i % 5) * 0.3  # mild noise so indicators are sane
         rows.append({"date": start + timedelta(days=i),
                      "open": p, "high": p * 1.01, "low": p * 0.99,
-                     "close": p, "volume": 1_000_000.0})
+                     "close": p, "volume": 100_000.0})
     # gap day: opens +7%, holds into a strong close, 3x volume
     rows.append({"date": start + timedelta(days=n_warm),
                  "open": 107.0, "high": 108.2, "low": 106.8,
@@ -431,10 +431,14 @@ def test_cost_model_makes_entry_fill_worse(probe_strategy):
 
 
 def test_cost_model_only_reduces_pnl_end_to_end():
-    # High-volume name (cap never binds), so the cost model changes ONLY fill
-    # prices — round-trips can therefore only cost money, never make it.
+    # Small-cap-tier name (0.002 spread floor > the flat 5bps slippage of the
+    # baseline run), so the cost model can only cost money vs the baseline.
+    # NB: for $50M+ ADV names the TIERED floor (<=0.0005) is legitimately
+    # CHEAPER than flat 5bps — that case is covered by the tier tests.
     from edgefinder.backtest.costs import CostModel
-    bars = {"TEST": _series(_decline_then_rally())}  # volume 1e6 → ADV huge
+    frame = _series(_decline_then_rally())
+    frame["volume"] = 100_000.0      # ADV ~$10M -> the 0.002 floor tier
+    bars = {"TEST": frame}
     no_cost = run_daily_backtest("coward", bars, starting_cash=10_000.0)
     costed = run_daily_backtest("coward", bars, starting_cash=10_000.0,
                                 cost_model=CostModel())

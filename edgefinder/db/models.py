@@ -288,6 +288,11 @@ class PromotedStrategy(Base):
     schedule: Mapped[str] = mapped_column(String(10), default="monthly")
     tier: Mapped[str] = mapped_column(String(20), default="experimental")
     validation_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # the price basis the strategy was validated on (config.prices of the
+    # validation run); the live runner trades RAW prices, so a strategy
+    # validated on total-return prices has a disclosed lab/live divergence
+    # for high-yield names
+    prices_basis: Mapped[str | None] = mapped_column(String(60), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     promoted_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -317,6 +322,29 @@ class FundamentalsSnapshot(Base):
     symbol: Mapped[str] = mapped_column(String(10), index=True)
     as_of: Mapped[date] = mapped_column(Date, index=True)
     data: Mapped[dict] = mapped_column(JSON)
+
+
+# ── dividends ───────────────────────────────────────────
+
+
+class DividendRecord(Base):
+    """Cash dividends per (symbol, ex_date) — fuel for total-return adjustment.
+
+    Backfilled from Polygon reference dividends (data/dividends_backfill.py).
+    Raw bars stay dividend-UNadjusted everywhere (DB and R2); total-return is
+    a load-time transform (engine/data.adjust_for_dividends), so the raw
+    record is immutable and the adjustment can be revised/audited freely.
+    """
+
+    __tablename__ = "dividends"
+    __table_args__ = (
+        UniqueConstraint("symbol", "ex_date", name="uq_dividends_symbol_exdate"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    ex_date: Mapped[date] = mapped_column(Date, index=True)
+    cash_amount: Mapped[float] = mapped_column(Float)
 
 
 # ── system_heartbeat ────────────────────────────────────

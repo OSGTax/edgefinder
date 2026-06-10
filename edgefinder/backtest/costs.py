@@ -83,11 +83,31 @@ class CostModel:
     spread_floor: float = 0.005  # 0.5% minimum spread for thin names
     min_adv_dollars: float = 25_000.0
 
+    # Liquidity-tiered spread floors (FIXED constants, never optimized): the
+    # 0.5% microcap floor is ~50-300x a mega-cap's true spread — applied to a
+    # liquid top-N universe it would be a systematic FAIL bias, not honesty.
+    # Tiers keyed by trailing dollar ADV, descending; names below the last
+    # cutoff (and legacy callers that pass no ADV) keep the microcap floor.
+    SPREAD_FLOOR_TIERS: tuple = ((1e9, 0.0002), (50e6, 0.0005), (5e6, 0.002))
+
+    # The sqrt impact law is only valid for participation << 1; unclamped, a
+    # forced exit into collapsed liquidity can exceed 1.0 — a NEGATIVE sell
+    # fill (cash falling on a sale). Clamp the total one-way fraction.
+    MAX_COST_FRACTION: float = 0.5
+
     # ── individual cost components (all fractions of price) ──
 
-    def half_spread(self, spread_frac: float) -> float:
+    def spread_floor_for(self, adv_dollars: float | None) -> float:
+        """The liquidity-appropriate minimum spread for a name."""
+        if adv_dollars:
+            for cutoff, floor in self.SPREAD_FLOOR_TIERS:
+                if adv_dollars >= cutoff:
+                    return floor
+        return self.spread_floor
+
+    def half_spread(self, spread_frac: float, adv_dollars: float | None = None) -> float:
         """Half the (floored) proportional spread — paid on each side."""
-        return max(spread_frac, self.spread_floor) / 2.0
+        return max(spread_frac, self.spread_floor_for(adv_dollars)) / 2.0
 
     def impact(self, order_dollars: float, adv_dollars: float, volatility: float) -> float:
         """Square-root market impact as a fraction of price.
@@ -109,10 +129,13 @@ class CostModel:
         volatility: float,
         spread_frac: float,
     ) -> float:
-        """Total one-way cost as a fraction of price = half-spread + impact."""
-        return self.half_spread(spread_frac) + self.impact(
+        """Total one-way cost as a fraction of price = half-spread + impact,
+        clamped at MAX_COST_FRACTION (the sqrt law breaks down far above full
+        participation, and a fraction > 1 would mean negative sell proceeds)."""
+        frac = self.half_spread(spread_frac, adv_dollars) + self.impact(
             order_dollars, adv_dollars, volatility
         )
+        return min(frac, self.MAX_COST_FRACTION)
 
     def fill_price(
         self,

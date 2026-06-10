@@ -101,6 +101,37 @@ def _window(start, end) -> str:
     return f"{start}..{end}"
 
 
+def plan_folds(
+    days: list, *,
+    is_days: int = 378, oos_days: int = 126, step_days: int = 126,
+    holdout_days: int = 0, holdout_start=None,
+) -> tuple[list[tuple], tuple | None]:
+    """The fold/holdout geometry, as pure date arithmetic.
+
+    Returns ``(folds, holdout)`` where folds is ``[(oos_start, oos_end), ...]``
+    and holdout is ``(start, end)`` or None. Exposed so a caller can resolve
+    per-fold point-in-time universes BEFORE loading bars (the CLI does this
+    with the SPY calendar, which is the NYSE trading calendar).
+    """
+    n = len(days)
+    if holdout_start is not None:
+        wf_n = bisect.bisect_left(days, holdout_start)
+        holdout_days = n - wf_n
+    else:
+        wf_n = n - holdout_days
+    if wf_n < is_days + oos_days:
+        raise ValueError(
+            f"not enough history: {n} trading days minus {holdout_days} holdout "
+            f"leaves {wf_n}, need >= is_days+oos_days = {is_days + oos_days}")
+    folds = []
+    i = 0
+    while i + is_days + oos_days <= wf_n:
+        folds.append((days[i + is_days], days[i + is_days + oos_days - 1]))
+        i += step_days
+    holdout = (days[wf_n], days[-1]) if holdout_days > 0 else None
+    return folds, holdout
+
+
 def run_walkforward(
     bars_by_symbol: dict[str, pd.DataFrame],
     strategy_factory: Callable[[], Strategy],
@@ -118,6 +149,10 @@ def run_walkforward(
     cost_bps: float = 2.0,
     risk_adjusted: bool = True,
     pass_min_trades: int = 30,
+    universe_fn: Callable[[date], list[str]] | None = None,
+    cost_model=None,
+    prices_label: str = "split-adjusted, dividend-unadjusted",
+    calendar: list | None = None,
 ) -> dict:
     """Run rolling out-of-sample folds (and optionally the sealed holdout) and
     return the scorecard dict (same shape the old harness recorded).
@@ -134,52 +169,72 @@ def run_walkforward(
     ``start_cash`` defaults high so integer-share flooring is negligible —
     at $10k across 7 ETFs the flooring alone measured ~-1.3pp/fold of phantom
     deficit against the frictionless benchmark.
+
+    ``universe_fn(oos_start) -> [symbols]`` restricts each window to its own
+    POINT-IN-TIME universe (resolved as of the day before the window's first
+    scored day — without this, a top-N stock universe ranked on the whole
+    table selects tomorrow's winners into yesterday's menu, measured at
+    ~+3pp/126d of free excess). ``cost_model`` threads the realistic cost
+    engine (spread + impact + participation caps) into every fill.
+
+    ``calendar``: the trading calendar to plan fold geometry on. A caller
+    that resolved per-window universes against its own calendar (the CLI
+    plans on SPY's) MUST pass that same calendar — otherwise geometry is
+    re-derived from the union of loaded bars, and one stray off-calendar bar
+    would silently shift every window boundary.
     """
-    days = _all_dates(bars_by_symbol)
-    n = len(days)
+    days = calendar if calendar is not None else _all_dates(bars_by_symbol)
+    planned, planned_holdout = plan_folds(
+        days, is_days=is_days, oos_days=oos_days, step_days=step_days,
+        holdout_days=holdout_days, holdout_start=holdout_start)
     if holdout_start is not None:
-        wf_n = bisect.bisect_left(days, holdout_start)
-        holdout_days = n - wf_n
-    else:
-        wf_n = n - holdout_days
-    if wf_n < is_days + oos_days:
-        raise ValueError(
-            f"not enough history: {n} trading days minus {holdout_days} holdout "
-            f"leaves {wf_n}, need >= is_days+oos_days = {is_days + oos_days}")
+        holdout_days = len(days) - bisect.bisect_left(days, holdout_start)
+
+    def _window_bars(start, end, window_anchor) -> dict:
+        bars = _slice_bars(bars_by_symbol, start, end)
+        if universe_fn is not None:
+            allowed = universe_fn(window_anchor)
+            if allowed is None:
+                raise ValueError(
+                    f"no PIT universe resolved for window anchor {window_anchor}: "
+                    "the universe was planned on a different calendar than the "
+                    "fold geometry — pass the planning calendar via calendar=")
+            bars = {s: df for s, df in bars.items() if s in set(allowed)}
+        return bars
 
     probe = strategy_factory()
     strategy_name = probe.name
 
     folds: list[Fold] = []
-    i = 0
-    while i + is_days + oos_days <= wf_n:
-        oos_start = days[i + is_days]
-        oos_end = days[i + is_days + oos_days - 1]
-        warm_start = days[max(0, i + is_days - warmup_days)]
+    for oos_start, oos_end in planned:
+        warm_idx = max(0, bisect.bisect_left(days, oos_start) - warmup_days)
+        warm_start = days[warm_idx]
         result = run_backtest(
-            _slice_bars(bars_by_symbol, warm_start, oos_end),
+            _window_bars(warm_start, oos_end, oos_start),
             strategy_factory(),
             start_cash=start_cash,
             schedule=schedule,
             cost_bps=cost_bps,
+            cost_model=cost_model,
             trade_start=oos_start,
             benchmark=_slice(spy_bars, oos_start, oos_end) if spy_bars is not None else None,
         )
         folds.append(Fold(
             index=len(folds), oos_start=oos_start, oos_end=oos_end,
             stats=result.stats, regime=_regime(spy_bars, oos_start, oos_end)))
-        i += step_days
 
     holdout = None
-    if holdout_days > 0 and holdout_eval:
-        h_start, h_end = days[wf_n], days[-1]
-        warm_start = days[max(0, wf_n - warmup_days)]
+    if planned_holdout is not None and holdout_eval:
+        h_start, h_end = planned_holdout
+        warm_idx = max(0, bisect.bisect_left(days, h_start) - warmup_days)
+        warm_start = days[warm_idx]
         h = run_backtest(
-            _slice_bars(bars_by_symbol, warm_start, h_end),
+            _window_bars(warm_start, h_end, h_start),
             strategy_factory(),
             start_cash=start_cash,
             schedule=schedule,
             cost_bps=cost_bps,
+            cost_model=cost_model,
             trade_start=h_start,
             benchmark=_slice(spy_bars, h_start, h_end) if spy_bars is not None else None,
         ).stats
@@ -215,10 +270,13 @@ def run_walkforward(
         start_cash=start_cash, holdout=holdout, holdout_days=holdout_days,
         holdout_eval=holdout_eval, risk_adjusted=risk_adjusted,
         pass_min_trades=pass_min_trades)
-    if holdout_days > 0:
+    card["config"]["costed"] = cost_model is not None
+    card["config"]["pit_universe"] = universe_fn is not None
+    card["config"]["prices"] = prices_label
+    if planned_holdout is not None:
         # pin the sealed boundary in the record — the carve is count-relative,
         # so without this the "sealed" region would drift as new bars accrue
-        card["config"]["holdout_window"] = _window(days[wf_n], days[-1])
+        card["config"]["holdout_window"] = _window(*planned_holdout)
     return card
 
 

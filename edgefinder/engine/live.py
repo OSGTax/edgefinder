@@ -253,6 +253,14 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
     factory = make_strategy_factory(promo.spec)
     strategy = factory()
 
+    basis = getattr(promo, "prices_basis", None)
+    if basis and "dividend-adjusted" in basis:
+        # the live runner trades RAW prices; a strategy validated on
+        # total-return prices sees systematically different signals on
+        # high-yield names — disclosed, not blocked (paper tier)
+        logger.warning("%s was validated on '%s' but live trades raw prices",
+                       promo.strategy_name, basis)
+
     ensure_recent_bars(session, provider, symbols, today)
 
     # cheap schedule gate BEFORE the expensive load + indicator precompute —
