@@ -35,6 +35,30 @@ def test_vendored_chart_library_is_served(client):
     assert "v4.1.0" in r.text[:300]
 
 
+NEW_ASSETS = [
+    "/static/css/tokens.css",
+    "/static/css/base.css",
+    "/static/css/components.css",
+    "/static/css/charts.css",
+    "/static/js/core/net.js",
+    "/static/js/core/fmt.js",
+    "/static/js/core/dom.js",
+    "/static/js/core/theme.js",
+    "/static/js/core/charts.js",
+    "/static/js/core/nav.js",
+    "/static/js/core/poll.js",
+    "/static/js/components/sparkline.js",
+    "/static/js/components/heatmap.js",
+]
+
+
+@pytest.mark.parametrize("path", NEW_ASSETS)
+def test_redesign_assets_are_served(client, path):
+    r = client.get(path)
+    assert r.status_code == 200, path
+    assert len(r.content) > 100, path
+
+
 def test_base_template_loads_vendored_not_cdn_for_lightweight_charts():
     html = (TEMPLATES / "base.html").read_text()
     assert "/static/vendor/lightweight-charts" in html
@@ -47,11 +71,9 @@ def _inline_styles(name: str) -> list[str]:
 
 # Coverage expands as each page is rebuilt (redesign phases 1-9). The end
 # state is every template in dashboard/templates/ inline-style-free.
-STYLE_FREE_TEMPLATES: list[str] = []
+STYLE_FREE_TEMPLATES: list[str] = ["base.html"]
 
 
-@pytest.mark.parametrize("name", STYLE_FREE_TEMPLATES or ["__none__"])
+@pytest.mark.parametrize("name", STYLE_FREE_TEMPLATES)
 def test_templates_have_no_inline_styles(name):
-    if name == "__none__":
-        pytest.skip("no templates migrated yet (redesign phase 0)")
     assert _inline_styles(name) == [], f"{name} has inline styles"

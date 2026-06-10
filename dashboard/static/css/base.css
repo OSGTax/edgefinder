@@ -1,0 +1,245 @@
+/* ═══════════════════════════════════════════════════════════════
+   EdgeFinder base shell — nav, bottom tab bar, layout, utilities.
+   Mobile-first; breakpoints at 480 / 768 / 1100. Reads tokens.css
+   names only. Coexists with theme.css until the cleanup phase.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── numerals: monospace + tabular everywhere they carry data ── */
+.num {
+  font-family: var(--t-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── top navigation (restyle of existing markup/IDs) ── */
+.topnav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: var(--t-nav-h);
+  padding: 0 14px;
+  background: var(--t-surface);
+  border-bottom: 1px solid var(--t-border);
+}
+
+.topnav-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 700;
+  font-size: var(--t-fs-lg);
+  color: var(--t-text);
+  white-space: nowrap;
+}
+
+.topnav-brand .icon { color: var(--t-accent); }
+
+.topnav-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.topnav-tabs::-webkit-scrollbar { display: none; }
+
+.topnav-tab {
+  padding: 6px 11px;
+  border-radius: var(--t-radius-sm);
+  color: var(--t-text-2);
+  text-decoration: none;
+  font-size: var(--t-fs-base);
+  white-space: nowrap;
+}
+.topnav-tab:hover { color: var(--t-text); background: var(--t-surface-2); }
+.topnav-tab.active { color: var(--t-text); background: var(--t-surface-3); }
+
+.topnav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.topnav-indices { display: flex; gap: 16px; }
+.topnav-index { display: flex; gap: 5px; font-size: var(--t-fs-sm); }
+.topnav-index .sym { color: var(--t-text-3); }
+
+.theme-toggle {
+  background: none;
+  border: 1px solid var(--t-border);
+  border-radius: var(--t-radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: var(--t-fs-base);
+}
+
+.topnav-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-fs-sm);
+  color: var(--t-text-2);
+  font-family: var(--t-font-mono);
+}
+.topnav-status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--t-text-3);
+}
+.topnav-status .dot.ok { background: var(--t-up); }
+.topnav-status .dot.bad { background: var(--t-down); }
+
+/* ── bottom tab bar (mobile) ── */
+.tabbar {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 120;
+  height: calc(var(--t-tabbar-h) + env(safe-area-inset-bottom, 0px));
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--t-surface);
+  border-top: 1px solid var(--t-border);
+}
+
+.tabbar-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 44px;
+  color: var(--t-text-3);
+  text-decoration: none;
+  font-size: var(--t-fs-xs);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--t-font-ui);
+}
+.tabbar-item .glyph { font-size: 17px; line-height: 1; }
+.tabbar-item.active { color: var(--t-accent); }
+
+/* ── "More" bottom sheet ── */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 131;
+  background: var(--t-surface);
+  border-top: 1px solid var(--t-border-strong);
+  border-radius: 14px 14px 0 0;
+  padding: 10px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(105%);
+  transition: transform 0.18s ease;
+}
+.sheet-open .sheet-backdrop { opacity: 1; pointer-events: auto; }
+.sheet-open .sheet { transform: translateY(0); }
+.sheet-grab {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--t-border-strong);
+  margin: 0 auto 10px;
+}
+.sheet-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 6px;
+  min-height: 44px;
+  color: var(--t-text);
+  text-decoration: none;
+  font-size: var(--t-fs-lg);
+  border-bottom: 1px solid var(--t-border);
+  background: none;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  width: 100%;
+  cursor: pointer;
+  font-family: var(--t-font-ui);
+  text-align: left;
+}
+.sheet-link:last-child { border-bottom: none; }
+.sheet-link.active { color: var(--t-accent); }
+
+/* ── page container ── */
+.page {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 14px;
+}
+
+/* ── layout utilities ── */
+.flex { display: flex; }
+.flex-col { display: flex; flex-direction: column; }
+.flex-wrap { flex-wrap: wrap; }
+.items-center { align-items: center; }
+.items-end { align-items: flex-end; }
+.justify-between { justify-content: space-between; }
+.justify-center { justify-content: center; }
+.flex-1 { flex: 1; }
+.gap-4 { gap: 4px; }
+.gap-8 { gap: 8px; }
+.gap-12 { gap: 12px; }
+.gap-16 { gap: 16px; }
+.mt-8 { margin-top: 8px; }
+.mt-16 { margin-top: 16px; }
+.mb-8 { margin-bottom: 8px; }
+.mb-16 { margin-bottom: 16px; }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+.hidden { display: none !important; }
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+.grid { display: grid; gap: 12px; }
+.grid-2 { display: grid; gap: 12px; grid-template-columns: repeat(2, 1fr); }
+.grid-3 { display: grid; gap: 12px; grid-template-columns: repeat(3, 1fr); }
+.grid-4 { display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); }
+
+/* ── text color utilities (token-backed) ── */
+.t-up { color: var(--t-up); }
+.t-down { color: var(--t-down); }
+.t-warn { color: var(--t-warn); }
+.t-info { color: var(--t-info); }
+.t-dim { color: var(--t-text-3); }
+.t-2 { color: var(--t-text-2); }
+
+/* ── responsive ── */
+@media (max-width: 1100px) {
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 768px) {
+  /* nav collapses; bottom bar takes over */
+  .topnav-tabs { display: none; }
+  .topnav-indices { display: none; }
+  .tabbar { display: flex; }
+  .page {
+    padding: 10px;
+    padding-bottom: calc(var(--t-tabbar-h) + env(safe-area-inset-bottom, 0px) + 16px);
+  }
+  .grid-3 { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .grid-2, .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  :root { --t-fs-hero: 22px; }
+}

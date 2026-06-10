@@ -1,0 +1,69 @@
+/* ═══════════════════════════════════════════════════════════════
+   Chart shells — wrappers around lightweight-charts panes, the
+   synced pane stack, crosshair legend, range chips, fullscreen.
+   ═══════════════════════════════════════════════════════════════ */
+
+.ch-shell {
+  position: relative;
+  width: 100%;
+}
+
+.ch-pane { position: relative; width: 100%; }
+.ch-pane.price { height: 380px; }
+.ch-pane.sub { height: 120px; border-top: 1px solid var(--t-border); }
+.ch-pane.equity { height: 300px; }
+.ch-pane.mini { height: 160px; }
+
+/* crosshair-driven OHLC legend (top-left of price pane) */
+.ch-legend {
+  position: absolute;
+  top: 6px;
+  left: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--t-font-mono);
+  font-size: var(--t-fs-xs);
+  color: var(--t-text-2);
+  pointer-events: none;
+  background: color-mix(in srgb, var(--t-surface) 72%, transparent);
+  padding: 3px 7px;
+  border-radius: var(--t-radius-sm);
+}
+.ch-legend b { color: var(--t-text); font-weight: 600; }
+
+.ch-pane-label {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  z-index: 5;
+  font-size: var(--t-fs-xs);
+  color: var(--t-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+}
+
+/* chart toolbar row (range chips + toggles + fullscreen) */
+.ch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+}
+
+/* fullscreen */
+.ch-shell:fullscreen {
+  background: var(--t-bg);
+  padding: 10px;
+  overflow-y: auto;
+}
+.ch-shell:fullscreen .ch-pane.price { height: 62vh; }
+
+@media (max-width: 768px) {
+  .ch-pane.price { height: 56vh; }
+  .ch-pane.equity { height: 240px; }
+  .ch-pane.sub { height: 100px; }
+}

@@ -6,13 +6,15 @@
 
 function initTheme() {
   const saved = localStorage.getItem('ef-theme');
-  if (saved === 'light') {
-    document.body.classList.add('light-mode');
-  }
+  const light = saved === 'light';
+  document.body.classList.toggle('light-mode', light);
+  // bridge: new token CSS keys off <html data-theme>
+  document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
 }
 
 function toggleTheme() {
   const isLight = document.body.classList.toggle('light-mode');
+  document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
   localStorage.setItem('ef-theme', isLight ? 'light' : 'dark');
   const btn = document.getElementById('theme-toggle-btn');
   if (btn) btn.textContent = isLight ? '☀️' : '🌙';
@@ -182,7 +184,7 @@ async function loadTopBarHealth() {
     const el = document.getElementById('topnav-status');
     if (!el) return;
     const ok = data.status === 'ok';
-    el.innerHTML = `<span class="dot" style="background:${ok ? 'var(--positive)' : 'var(--negative)'}"></span> v${data.version}`;
+    el.innerHTML = `<span class="dot ${ok ? 'ok' : 'bad'}"></span> v${data.version}`;
   } catch (e) {}
 }
 

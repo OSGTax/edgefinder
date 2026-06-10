@@ -2,16 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>{% block title %}EdgeFinder{% endblock %}</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9670;</text></svg>">
+  <script>
+    // pre-paint theme (no flash): data-theme drives the new token CSS;
+    // the legacy body class is mirrored in common.js on DOMContentLoaded
+    document.documentElement.setAttribute('data-theme',
+      localStorage.getItem('ef-theme') === 'light' ? 'light' : 'dark');
+  </script>
   <link rel="stylesheet" href="/static/css/theme.css">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/base.css">
+  <link rel="stylesheet" href="/static/css/components.css">
+  <link rel="stylesheet" href="/static/css/charts.css">
   <!-- vendored (pinned, no CDN dependency) — TradingView Lightweight Charts v4.1.0, Apache-2.0 -->
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
   <!-- Chart.js stays on CDN only until the screener treemap is replaced (redesign phase 7) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-treemap@2.3.0"></script>
   <script src="/static/js/common.js"></script>
+  <script type="module" src="/static/js/core/nav.js"></script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -31,7 +42,7 @@
     <a href="/backtest" class="topnav-tab">Backtest</a>
   </div>
   <div class="topnav-right">
-    <div id="topnav-indices" style="display:flex;gap:16px;"></div>
+    <div id="topnav-indices" class="topnav-indices"></div>
     <button id="theme-toggle-btn" class="theme-toggle" onclick="toggleTheme()">🌙</button>
     <div id="topnav-status" class="topnav-status">
       <span class="dot"></span> ...
@@ -43,6 +54,22 @@
 <main class="page">
   {% block content %}{% endblock %}
 </main>
+
+<!-- Mobile bottom tab bar (hidden ≥768px) -->
+<nav class="tabbar">
+  <a href="/" class="tabbar-item"><span class="glyph">&#9632;</span>Portfolio</a>
+  <a href="/research" class="tabbar-item"><span class="glyph">&#9651;</span>Chart</a>
+  <a href="/trades" class="tabbar-item"><span class="glyph">&#8645;</span>Trades</a>
+  <a href="/backtest" class="tabbar-item"><span class="glyph">&#9881;</span>Lab</a>
+  <button id="tabbar-more" class="tabbar-item" type="button"><span class="glyph">&#8943;</span>More</button>
+</nav>
+<div class="sheet-backdrop"></div>
+<div class="sheet">
+  <div class="sheet-grab"></div>
+  <a href="/strategies" class="sheet-link">Strategies</a>
+  <a href="/screener" class="sheet-link">Screener</a>
+  <button class="sheet-link" type="button" onclick="toggleTheme()">Toggle theme</button>
+</div>
 
 {% block scripts %}{% endblock %}
 </body>

@@ -1,0 +1,128 @@
+/* ═══════════════════════════════════════════════════════════════
+   EdgeFinder design tokens — single source of truth (redesign v5.37+)
+
+   Dark trading-terminal is the DEFAULT (:root). Light mode is the
+   override under html[data-theme="light"]. New components must read
+   ONLY these token names; the legacy names (--bg, --positive, …) are
+   aliased at :root so the old pages re-tint to the new dark palette
+   during the transition, while their own light-mode styling (set on
+   body.light-mode in theme.css) keeps working untouched.
+   ═══════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── surfaces ── */
+  --t-bg: #0a0e13;
+  --t-surface: #10161f;
+  --t-surface-2: #161e2a;
+  --t-surface-3: #1c2634;
+  --t-border: #1f2a3a;
+  --t-border-strong: #2c3a4f;
+
+  /* ── text (3 tiers) ── */
+  --t-text: #dde7f2;
+  --t-text-2: #8ba3bd;
+  --t-text-3: #5a7490;
+
+  /* ── semantic ── */
+  --t-up: #26d49c;
+  --t-down: #f04a4a;
+  --t-warn: #f0b429;
+  --t-info: #58a6ff;
+  --t-accent: #26d49c;
+  --t-up-dim: rgba(38, 212, 156, 0.12);
+  --t-down-dim: rgba(240, 74, 74, 0.12);
+  --t-warn-dim: rgba(240, 180, 41, 0.12);
+  --t-info-dim: rgba(88, 166, 255, 0.12);
+  --t-accent-dim: rgba(38, 212, 156, 0.12);
+
+  /* ── series palette (8 slots, assigned by registry index) ── */
+  --t-s0: #26d49c;
+  --t-s1: #58a6ff;
+  --t-s2: #f0b429;
+  --t-s3: #c084fc;
+  --t-s4: #fb7185;
+  --t-s5: #34d399;
+  --t-s6: #fbbf24;
+  --t-s7: #94a3b8;
+  /* benchmark (SPY etc.) — always the neutral dashed gray */
+  --t-benchmark: #7d8da1;
+
+  /* ── typography ── */
+  --t-font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  --t-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo,
+                 Consolas, monospace;
+  --t-fs-xs: 11px;
+  --t-fs-sm: 12px;
+  --t-fs-base: 13px;
+  --t-fs-lg: 15px;
+  --t-fs-xl: 20px;
+  --t-fs-hero: 28px;
+
+  /* ── density & shape ── */
+  --t-pad-card: 14px;
+  --t-pad-cell: 6px 10px;
+  --t-radius: 8px;
+  --t-radius-sm: 5px;
+  --t-nav-h: 48px;
+  --t-tabbar-h: 56px;
+
+  /* ── legacy aliases (transition only; removed in cleanup phase) ──
+     Old pages + theme.css read these; pointing them at the new dark
+     palette re-tints everything consistently. Their light mode is
+     still served by theme.css's body.light-mode overrides, which win
+     via inheritance from <body>. */
+  --bg: var(--t-bg);
+  --surface: var(--t-surface);
+  --surface-elevated: var(--t-surface-2);
+  --border: var(--t-border);
+  --positive: var(--t-up);
+  --negative: var(--t-down);
+  --warning: var(--t-warn);
+  --accent: var(--t-accent);
+  --text-primary: var(--t-text);
+  --text-secondary: var(--t-text-2);
+  --text-muted: var(--t-text-3);
+  --dim-positive: var(--t-up-dim);
+  --dim-negative: var(--t-down-dim);
+  --dim-warning: var(--t-warn-dim);
+  --dim-accent: var(--t-accent-dim);
+  --radius: var(--t-radius);
+  --radius-sm: var(--t-radius-sm);
+}
+
+/* Light mode — NEW token names only (old pages keep theme.css's own
+   body.light-mode palette during the transition). */
+html[data-theme="light"] {
+  --t-bg: #f4f6f9;
+  --t-surface: #ffffff;
+  --t-surface-2: #f0f3f7;
+  --t-surface-3: #e7ecf2;
+  --t-border: #d8dfe8;
+  --t-border-strong: #bcc7d4;
+
+  --t-text: #16202c;
+  --t-text-2: #4a5d72;
+  --t-text-3: #7d8da1;
+
+  --t-up: #0a9e74;
+  --t-down: #d3382f;
+  --t-warn: #b97e0a;
+  --t-info: #2f6fd0;
+  --t-accent: #0a9e74;
+  --t-up-dim: rgba(10, 158, 116, 0.10);
+  --t-down-dim: rgba(211, 56, 47, 0.10);
+  --t-warn-dim: rgba(185, 126, 10, 0.12);
+  --t-info-dim: rgba(47, 111, 208, 0.10);
+  --t-accent-dim: rgba(10, 158, 116, 0.10);
+
+  --t-s0: #0a9e74;
+  --t-s1: #2f6fd0;
+  --t-s2: #b97e0a;
+  --t-s3: #8b46d8;
+  --t-s4: #d8447a;
+  --t-s5: #15803d;
+  --t-s6: #c2660a;
+  --t-s7: #64748b;
+  --t-benchmark: #8a99ab;
+}
