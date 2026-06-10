@@ -106,11 +106,20 @@ def check_cash_drift(
             TradeRecord.strategy_name == account.strategy_name,
             TradeRecord.status == "OPEN",
         ).scalar() or 0.0
-        credits = session.query(
-            func.coalesce(func.sum(DividendCredit.amount), 0.0)
-        ).filter(
-            DividendCredit.strategy_name == account.strategy_name,
-        ).scalar() or 0.0
+        try:
+            credits = session.query(
+                func.coalesce(func.sum(DividendCredit.amount), 0.0)
+            ).filter(
+                DividendCredit.strategy_name == account.strategy_name,
+            ).scalar() or 0.0
+        except Exception:
+            # dividend_credits may not exist yet on a DB the new code reaches
+            # before its deploy migration (Actions cron vs Render deploy race)
+            # — a missing credits term must degrade the formula, not kill the
+            # whole watchdog tick
+            session.rollback()
+            logger.warning("dividend_credits unavailable — treating as 0")
+            credits = 0.0
 
         correct_cash = account.starting_capital + realized + credits - open_cost
         diff = account.cash_balance - correct_cash
