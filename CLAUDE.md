@@ -7,6 +7,13 @@ multi-source sentiment analysis, and multi-strategy competition in isolated virt
 
 **Key principles:**
 - Polygon.io is the sole data source (no fallback chains)
+- Two-tier storage (v5.35): Cloudflare R2 holds the permanent, GROW-ONLY
+  bar history (Parquet per symbol, merge-sync nightly — never shrinks);
+  Supabase holds the operational hot set only (protected ETFs full-history
+  + trailing-365d top-1000/day; nightly fingerprint-guarded prune keeps it
+  under the free-tier cap). Deep/breadth backtests read R2 via
+  `engine.validate --bars-from r2` (works with --universe; equivalence
+  vs the DB path proven bit-exact)
 - Every strategy gets its own isolated $5,000 virtual account
 - Every trade captures a market-wide snapshot (SPY, QQQ, IWM, DIA, VIX, sectors)
 - Per-strategy views everywhere — no aggregate P&L

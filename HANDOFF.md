@@ -292,31 +292,93 @@ ran via the supabase MCP and temporary push-triggered Actions jobs.
 inserted (dividends id 167005), `dividend_credits` pre-created in prod,
 branch merged to main (Render deploys v5.32).
 
-**Owner actions remaining (~2 min each — they need credentials/values no
-agent session holds: R2 values live only in Codespaces secrets, and no
-session has a GitHub-secrets write path or Render API key):**
-1. Render env: add the four `R2_*` vars (values in GitHub → Codespaces
-   secrets) → nightly R2 mirror self-enables on next deploy.
-2. Actions secrets: add `EDGEFINDER_POLYGON_API_KEY` → the nightly bars
-   catch-up self-enables (it skips green until the secret exists; no repo
-   variable needed — set `BARS_NIGHTLY_ENABLED=false` to pause it).
+**Owner actions: NONE remaining.** All secrets are placed everywhere they're
+needed (R2_* in Codespaces + Actions + Render; EDGEFINDER_POLYGON_API_KEY in
+Actions; nightly bars catch-up and R2 mirror both self-enabled and verified).
+
+### 🗄️ TWO-TIER STORAGE OPERATIONAL (2026-06-10, v5.35 — owner-approved "Option B")
+
+Supabase free tier was at 2.7x its 500MB cap (1.36GB; `daily_bars` alone
+1.26GB) and throttling (statement timeouts, dropped connections). Fixed
+architecturally, no paid tier:
+
+- **R2 = the permanent asset, GROW-ONLY.** `barstore.sync` now MERGES
+  (parquet = R2 ∪ DB, DB wins on conflicting dates, shed rows preserved) —
+  a sync after a DB prune can never shrink the mirror. The manifest carries
+  a separate `db_rows/db_max` fingerprint for change detection; `verify`
+  proves DB ⊆ R2 (subset). Known limitation: a pure in-place VALUE edit
+  doesn't move the fingerprint — force with `sync --symbols X`.
+- **DB = the operational hot set (184MB total, was 1.36GB).** `daily_bars`
+  rebuilt to 318,224 rows / 69MB: 24 protected symbols full-history (deep
+  ETF menu SPY/QQQ/IWM/DIA/GLD/TLT/EFA/AGG/LQD/HYG + index symbols +
+  promoted universes + open-trade names) + trailing-365d per-day top-1000.
+  One-shot tool: `scripts/slim_daily_bars.py` (dry-run default, R2-currency
+  gate, executed via `.github/workflows/db-slim.yml` flag file).
+- **Self-maintaining:** the 7PM-ET Render job is now sync→prune
+  (`prune_db`: age-based, fingerprint-guarded, protected set exempt), so
+  the DB stays flat as the nightly ingest appends.
+- **Deep/breadth backtests read R2:** `validate --bars-from r2` now works
+  WITH `--universe` (full-market store load + in-memory PIT ranking,
+  parity-tested vs the SQL path). **Equivalence proven: the xsec_mom_12_1
+  top-500 run reproduces from R2 bit-identically** (validation_runs ids
+  45=75; re-verified post-slim). The microcap band (top:2000+1000) MUST
+  use `--bars-from r2` now — those rows live only in R2.
+- Verification trail (2026-06-10): mirror catch-up 1385/1385 + verify 50/50
+  clean → equivalence exact → dry-run counts → EXECUTE (owner go) →
+  318,224 rows kept exactly as projected → post-slim null control + R2
+  equivalence re-run clean.
+
+### 🏹 HUNT ROUND 1 — COMPLETE (2026-06-10, v5.33; full report `reviews/HUNT-ROUND-1.md`)
+
+35 pre-registered candidates (engine/hunt_r1.py, commit f5feb12) through
+fixed-param folds, PIT universes (trailing rw126), costed, TR; sealed
+holdout 2025-12-05 NEVER evaluated. Controls in-batch: null 0.00/−0.02pp,
+menu control −3.3pp (no tilt), dumb sweep 0/6 false positives (noise floor
+≈ −7pp).
+
+**Scoreboard: 1 confirmed finalist + 1 borderline.**
+- ✅ `xsec_mom_12_1` (12-1 momentum, trend-gated, top-20): +9.17pp/fold,
+  4/6 folds, survived ALL THREE adversarial re-checks (fold shifts ±21d:
+  +18.6/+7.2pp; late subperiod: +21.1pp 4/4). Total-return bar only —
+  drawdowns 13-20pp deeper than SPY (disclosed).
+- 🟡 `deep_value_pe10` (P/E<10 profitable, top-20): +8.7pp/fold, fold
+  Sharpe 1.98 (round's best), but re-check 2/3 (shift− dropped to 3/6).
+  Ruled NOT confirmed (conservative); destined for experimental paper
+  trading. **Re-check standard now pinned: all three perturbations must
+  pass** (set before the next candidate reaches it).
+- Family learnings for round 2: momentum return-premium is real but
+  violent; value-with-profitability is the Lynch lane's live vein (3 more
+  cousins each ONE fold short); ETF defensive cuts drawdowns, never beats
+  SPY Sharpe (inverse-vol missed by literally one fold, 19/38); churn dies
+  to costs exactly as modeled.
+- **Promotion to paper trading PENDING one design decision:** a top-500
+  cross-sectional strategy needs a concrete live universe (resolve-at-
+  promotion static list vs nightly re-resolve). Flagged for the owner with
+  the dashboard revamp.
+- Round 2 runs the same loop via `hunt/queue.json` + the hunt-batch
+  workflow (waves of ~10-25; stock/Lynch lanes should now use
+  `--bars-from r2`).
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
 The machine is fidelity-verified end to end. Lanes ready:
-- **ETF lane** (21 yr, 2005→now, 11 symbols):
+- **ETF lane** (21 yr, 2005→now, protected symbols — runs from the DB):
   `python -m edgefinder.engine.validate --strategy X --symbols ... --schedule monthly --holdout-start 2025-12-05 --record`
-- **Stock lane** (5 yr, 2021-06→now, PIT top-N incl. graveyard, costed, TR):
-  `python -m edgefinder.engine.validate --strategy X --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --record`
+- **Stock lane** (5 yr, 2021-06→now, PIT top-N incl. graveyard, costed, TR
+  — **runs from R2 since the slim**):
+  `python -m edgefinder.engine.validate --strategy X --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record`
 - **Fundamental/Lynch lane**: PIT fundamentals 2019→now (128,854 snapshots);
-  strategies read `a.fundamentals.earnings_growth` etc. in rebalance(ctx);
-  compute P/E-style ratios from `a.price` at decision time.
-- New strategy = ~10 lines in `engine/strategies.py` + a spec in
-  `make_strategy_factory`. Pre-register (commit params BEFORE first run).
+  add `--pit-fundamentals`; strategies read `a.fundamentals.earnings_growth`
+  etc. in rebalance(ctx); compute P/E-style ratios from `a.price` at
+  decision time.
+- New strategy = ~10 lines in `engine/strategies.py` (or a hunt roster
+  module) + a spec in `make_strategy_factory`. Pre-register (commit params
+  BEFORE first run).
 - **Discipline:** pin ONE `--holdout-start` date for the whole research
   round and never evaluate it without explicit owner sign-off
   (`--burn-holdout`); promote candidates as `experimental` tier to
-  paper-trade; `validated` tier requires the passing sealed holdout.
+  paper-trade; `validated` tier requires the passing sealed holdout;
+  adversarial re-check = all three perturbations must pass.
 
 ### Remaining cleanup (parked for the dashboard-overhaul phase)
 
@@ -362,7 +424,7 @@ syncs them. When something can't authenticate, check this table first.
 | `DATABASE_URL` (use the **pooler** form!) | ✅ set | ✅ set | ✅ set | add if needed |
 | `EDGEFINDER_POLYGON_API_KEY` | ✅ set | — | ✅ set | add if needed |
 | `EDGEFINDER_POLYGON_S3_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` | ✅ set | ✅ set | — | — |
-| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ENDPOINT` / `R2_BUCKET` | ✅ set | — | ⬜ **pending** (enables nightly R2 mirror) | add if needed |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ENDPOINT` / `R2_BUCKET` | ✅ set (rotated 2026-06-10) | ✅ set | ✅ set | add if needed |
 | `CLAUDE_CODE_OAUTH_TOKEN` | ⬜ (re-add if watchdog CLI needed here) | ✅ set | — | n/a |
 
 ¹ GitHub → Settings → Codespaces → Secrets (scoped to this repo). Env vars in
