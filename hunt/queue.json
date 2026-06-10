@@ -1,18 +1,9 @@
 {
-  "wave": 4,
-  "lane": "recheck-deep-value",
+  "wave": "r2-equivalence",
   "runs": [
     {
-      "id": "recheck-dv-shift-minus",
-      "args": "--strategy deep_value_pe10 --universe top:500 --costed --div-adjust --pit-fundamentals --holdout-start 2025-12-05 --record --schedule monthly --start 2021-06-01 --is-days 357 --universe-label hunt-r1:recheck2-shift-"
-    },
-    {
-      "id": "recheck-dv-shift-plus",
-      "args": "--strategy deep_value_pe10 --universe top:500 --costed --div-adjust --pit-fundamentals --holdout-start 2025-12-05 --record --schedule monthly --start 2021-06-01 --is-days 399 --universe-label hunt-r1:recheck2-shift+"
-    },
-    {
-      "id": "recheck-dv-late",
-      "args": "--strategy deep_value_pe10 --universe top:500 --costed --div-adjust --pit-fundamentals --holdout-start 2025-12-05 --record --schedule monthly --start 2022-06-01 --universe-label hunt-r1:recheck2-late"
+      "id": "r2-equivalence-xsec",
+      "args": "--strategy xsec_mom_12_1 --universe top:500 --start 2021-06-01 --costed --div-adjust --holdout-start 2025-12-05 --warmup-days 290 --schedule monthly --bars-from r2 --record --universe-label hunt-r1:r2-equiv"
     }
   ]
 }
