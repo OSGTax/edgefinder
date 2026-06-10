@@ -57,4 +57,14 @@ jobs:
         run: |
           set -euo pipefail
           echo "Running: python -m edgefinder.engine.validate ${{ matrix.args }}"
-          python -m edgefinder.engine.validate ${{ matrix.args }}
+          # transient pooler connection timeouts happen under parallel load
+          # (wave 1 lost one job to it); a run records only at its very end,
+          # so a retry after an early connection failure cannot double-record
+          for attempt in 1 2 3; do
+            if python -m edgefinder.engine.validate ${{ matrix.args }}; then
+              exit 0
+            fi
+            echo "attempt $attempt failed — retrying in 30s"
+            sleep 30
+          done
+          exit 1
