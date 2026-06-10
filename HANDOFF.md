@@ -115,11 +115,41 @@ deterministic fill order, open-anchored benchmark return.
   daily = 13k fills of churn). A no-trade band is a sensible future engine feature;
   monthly cadence is the canonical workaround meanwhile.
 
+### ⚠️ SCOPE (owner directive, 2026-06-09): build and verify the MACHINE only
+
+Phases 3 and 4 plus the PIT fundamentals store are in scope. **The Phase-5 wide
+strategy hunt (batch-testing new strategies, the Lynch/GARP screens, dumb-strategy
+sweeps) is explicitly OUT OF SCOPE until the owner says go.** A major dashboard
+overhaul is planned AFTER the mechanics are solid — defer frontend work and park
+consolidation debt for that phase (heartbeat-upsert duplication, lab/live
+_is_rebalance + execute-math duplication, the validated-rule living in both
+promote.py and the strategies router, SLIPPAGE_BPS(5bps live) vs cost_bps(2bps
+lab) disclosure).
+
+### PHASE 3 — DONE ✅ (v5.24.0 `12742bf` + review fixes v5.24.1 `61bde2a`; 608 tests)
+
+The owner's loop, closed and verified live: **promote → self-running paper
+trading → dashboard tables.**
+- `promoted_strategies` table + `engine/promote.py` CLI (tier `validated` requires
+  criteria.all_met AND a passing sealed holdout — the dashboard's exact rule;
+  `experimental` is the explicit throw-it-in-and-watch tier; demotion deactivates).
+- `engine/live.py` — daily portfolio runner: SAME decision semantics as the
+  backtest engine (shared prepare_bars/_build_context path, decide on data through
+  yesterday, fill at today's price +5bps); schedule-gated with forced first-cycle
+  fill; 1%-of-equity no-trade band; partial sells split lots (remainder reopens at
+  ORIGINAL entry); cash recomputed from trades every cycle (CLAUDE.md formula);
+  bar-freshness step appends missing daily_bars (the data asset grows itself);
+  v2 accounts start at **$100k** (a $5k book can't hold 1 share each of 7 modern
+  ETFs — SPY ~$739). Scheduler job 9:45 AM ET + `v2_portfolio_cycle` heartbeat.
+- **Verified against prod:** `equal_weight` + `dual_momentum_v2` promoted
+  (experimental), seeded — integrity exact to the cent; correct holds on
+  non-boundary days; daily_bars backfilled 05-27→06-08 by the freshness step.
+- 7-angle review pass applied (v5.24.1): promoted_strategies DDL in render_start
+  (create_all is SKIPPED on Render — new tables MUST be added there), cache-bypass
+  `get_bars_fresh` for the freshness step (18h TTL + range-ignoring cache served
+  stale frames), ET-not-UTC trading day, gate-before-prep, per-cycle price memo.
+
 ### ROADMAP — resume here
-- **PHASE 3 — Promotion pipeline (the loop the owner wants).** `backtest clears bar →
-  auto-deploy to self-running paper trading → shows on dashboard.` Pieces exist
-  (plugins, virtual accounts, intraday loop, dashboard, `live_strategies` allowlist);
-  mostly wiring + a clean "promote" action. (This is the long-deferred P3.)
 - **PHASE 4 — Storage: two-tier (R2), parallel & non-blocking.** History (`daily_bars`,
   ~1.3 GB, write-once/read-heavy) → **Parquet on Cloudflare R2** (10 GB free, zero
   egress, S3-compatible; ~1.3 GB → ~200-400 MB compressed). `data/flatfiles.py`
@@ -133,13 +163,19 @@ deterministic fill order, open-anchored benchmark return.
   **On resume verify first:** `env | grep -E '^R2_'` (never print secret values). If
   present, wire the bar store to R2; if absent, build on current data and note it's
   pending (non-blocking).
-- **PHASE 5 — Go wide (the actual hunt).** Stop hand-crafting one strategy at a time;
-  use the honest lab as a high-throughput screen. Port the old strategies onto the new
-  interface and re-test HONESTLY (some "failures" were the old bugs). **Build the
-  untouched fundamental/Lynch lane** (e.g. "hold 20 lowest-PEG names with >15% earnings
-  growth, equal-weight, monthly"). Add a few deliberately-dumb ones. Batch through
-  validation; surface survivors. With ultracode/workflows on, fan out: many backtests
-  in parallel, survivors adversarially re-validated, winners promoted.
+- **PHASE 5a — PIT fundamentals store (IN SCOPE — machine work).** The fundamentals
+  table is current-snapshot-only (1 row/symbol, overwritten each scan) — any
+  historical backtest using it is pure look-ahead, so the Lynch/GARP lane cannot be
+  honestly tested until point-in-time fundamentals exist. Build the store: snapshot
+  the fundamentals table on every scan keyed by as_of date (forward accumulation
+  starts immediately), and evaluate Polygon financials-by-filing-date for historical
+  backfill. The engine's AssetView.fundamentals then needs a PIT lookup per
+  decision date instead of the static dict.
+- **PHASE 5b — Go wide (the actual hunt). ⛔ OUT OF SCOPE until the owner says go.**
+  When unlocked: use the honest lab as a high-throughput screen — the Lynch lane on
+  the PIT store, deliberately-dumb strategies, batch validation, survivors
+  adversarially re-validated, winners promoted. Do NOT start this on your own
+  initiative; the owner explicitly gated it (2026-06-09).
 
 ### Working agreements (how the owner wants this run)
 
