@@ -1175,6 +1175,19 @@ def _nightly_scan_job() -> None:
         logger.exception("Nightly scan failed")
         return
 
+    # PIT fundamentals: snapshot what tonight's scan wrote, dated today —
+    # this is how the honest fundamental-strategy history accumulates.
+    try:
+        from edgefinder.data.pit_fundamentals import snapshot_fundamentals
+
+        session = _session_factory()
+        try:
+            snapshot_fundamentals(session)
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("PIT fundamentals snapshot failed")
+
     # Reload per-strategy watchlists into the live arena
     watchlists = _load_watchlists()
     if watchlists and _arena:

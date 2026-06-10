@@ -292,6 +292,33 @@ class PromotedStrategy(Base):
     promoted_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+# ── fundamentals_snapshots ──────────────────────────────
+
+
+class FundamentalsSnapshot(Base):
+    """Point-in-time fundamentals: one row per (symbol, as_of) snapshot.
+
+    The live ``fundamentals`` table is current-snapshot-only (one row per
+    symbol, overwritten each scan) — any historical backtest reading it is
+    pure look-ahead. This table accumulates dated copies (written after each
+    nightly scan) so a backtest can ask "what was known about AAPL on date
+    X?" honestly. ``data`` is the full TickerFundamentals dict; hydration is
+    ``TickerFundamentals(**row.data)``. Forward accumulation only — history
+    starts the day snapshotting starts.
+    """
+
+    __tablename__ = "fundamentals_snapshots"
+    __table_args__ = (
+        UniqueConstraint("symbol", "as_of", name="uq_fund_snap_symbol_asof"),
+        Index("idx_fund_snap_symbol_asof", "symbol", "as_of"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    as_of: Mapped[date] = mapped_column(Date, index=True)
+    data: Mapped[dict] = mapped_column(JSON)
+
+
 # ── system_heartbeat ────────────────────────────────────
 
 

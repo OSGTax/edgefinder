@@ -134,6 +134,15 @@ def init_database():
             active BOOLEAN DEFAULT TRUE,
             promoted_at TIMESTAMP DEFAULT NOW()
         )""",
+        """CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
+            id SERIAL PRIMARY KEY,
+            symbol VARCHAR(10) NOT NULL,
+            as_of DATE NOT NULL,
+            data JSON NOT NULL,
+            CONSTRAINT uq_fund_snap_symbol_asof UNIQUE (symbol, as_of)
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_fund_snap_symbol_asof
+            ON fundamentals_snapshots (symbol, as_of)""",
     ]
     with engine.begin() as conn:
         for ddl in table_ddls:

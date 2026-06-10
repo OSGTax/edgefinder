@@ -98,8 +98,16 @@ def prepare_bars(bars_by_symbol: dict[str, pd.DataFrame]) -> tuple[dict, list]:
     return prep, sorted(all_dates)
 
 
-def _build_context(prep: dict, decision_date, fundamentals: dict | None) -> RebalanceContext:
-    """Snapshot the whole universe as of ``decision_date`` (inclusive)."""
+def _build_context(prep: dict, decision_date, fundamentals) -> RebalanceContext:
+    """Snapshot the whole universe as of ``decision_date`` (inclusive).
+
+    ``fundamentals`` is either a static ``{symbol: TickerFundamentals}`` dict
+    (CAUTION: applies the same values to every date — look-ahead unless the
+    run is disclosed as such) or a point-in-time source exposing
+    ``asof(symbol, date)`` (e.g. data.pit_fundamentals.PITFundamentals),
+    which is the honest path for fundamental strategies.
+    """
+    pit = getattr(fundamentals, "asof", None)
     assets: dict[str, AssetView] = {}
     for sym, p in prep.items():
         di = _resolve_index(p["dates"], decision_date)
@@ -113,7 +121,8 @@ def _build_context(prep: dict, decision_date, fundamentals: dict | None) -> Reba
             price=price,
             indicators=p["snaps"][di],
             history=p["ohlcv"].iloc[: di + 1],
-            fundamentals=(fundamentals or {}).get(sym),
+            fundamentals=(pit(sym, decision_date) if pit
+                          else (fundamentals or {}).get(sym)),
         )
     return RebalanceContext(date=decision_date, assets=assets)
 
