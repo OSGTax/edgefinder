@@ -13,6 +13,8 @@
 .ch-pane.sub { height: 120px; border-top: 1px solid var(--t-border); }
 .ch-pane.equity { height: 300px; }
 .ch-pane.mini { height: 160px; }
+/* the portfolio centerpiece — viewport-fluid (ResizeObserver tracks it) */
+.ch-pane.tall { height: clamp(320px, 48vh, 560px); }
 
 /* crosshair-driven OHLC legend (top-left of price pane) */
 .ch-legend {
@@ -66,6 +68,7 @@
   .ch-pane.price { height: 56vh; }
   .ch-pane.equity { height: 240px; }
   .ch-pane.sub { height: 100px; }
+  .ch-pane.tall { height: 55vh; }
 }
 
 /* ── symbol workstation layout ── */

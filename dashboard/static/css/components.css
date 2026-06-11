@@ -326,7 +326,7 @@
 .c-tl .what .sub { color: var(--t-text-3); font-size: var(--t-fs-xs); }
 
 /* ── series dot (strategy color by slot) ── */
-.c-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.c-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .c-dot.s0 { background: var(--t-s0); }
 .c-dot.s1 { background: var(--t-s1); }
 .c-dot.s2 { background: var(--t-s2); }
@@ -335,6 +335,60 @@
 .c-dot.s5 { background: var(--t-s5); }
 .c-dot.s6 { background: var(--t-s6); }
 .c-dot.s7 { background: var(--t-s7); }
+/* hollow ring = second trip through the 8-slot palette (dashed series) */
+.c-dot.ring { border: 2px solid; }
+.c-dot.ring.s0 { background: transparent; border-color: var(--t-s0); }
+.c-dot.ring.s1 { background: transparent; border-color: var(--t-s1); }
+.c-dot.ring.s2 { background: transparent; border-color: var(--t-s2); }
+.c-dot.ring.s3 { background: transparent; border-color: var(--t-s3); }
+.c-dot.ring.s4 { background: transparent; border-color: var(--t-s4); }
+.c-dot.ring.s5 { background: transparent; border-color: var(--t-s5); }
+.c-dot.ring.s6 { background: transparent; border-color: var(--t-s6); }
+.c-dot.ring.s7 { background: transparent; border-color: var(--t-s7); }
+
+/* ── portfolio (v5.52): fleet strip, series legend, account grid ── */
+.pf-fleet {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-size: var(--t-fs-sm);
+  color: var(--t-text-2);
+  font-family: var(--t-font-mono);
+  min-width: 0;
+}
+.pf-fleet b { font-size: var(--t-fs-lg); color: var(--t-text); }
+.pf-fleet .c-skel { min-height: 18px; width: 220px; }
+
+.pf-legend {
+  padding: 8px var(--t-pad-card);
+  border-bottom: 1px solid var(--t-border);
+}
+.pf-legend .c-chip { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.pf-legend .c-chip.off { opacity: 0.4; }
+.pf-legend .c-chip.off:hover { opacity: 0.75; }
+
+/* crosshair legend entries: dot + name + return% + equity $ */
+.pf-xlegend { max-width: calc(100% - 70px); gap: 4px 12px; }
+.pf-xlegend .e { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.pf-xlegend .e b { font-weight: 600; }
+
+.pf-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+}
+.pf-acct { cursor: pointer; transition: opacity 0.12s ease, border-color 0.12s ease; }
+.pf-acct:hover { border-color: var(--t-border-strong); }
+.pf-acct.dim { opacity: 0.45; }
+.pf-acct .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-acct .eq { font-size: var(--t-fs-lg); font-weight: 700; }
+.pf-acct .meta { font-size: var(--t-fs-xs); }
+
+@media (max-width: 768px) {
+  .pf-grid { grid-template-columns: 1fr; }
+  .pf-low { grid-template-columns: 1fr; }
+}
 
 /* ── heatmap (calendar P&L) ── */
 .c-heat { display: grid; grid-auto-flow: column; gap: 3px; }
