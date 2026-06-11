@@ -93,21 +93,29 @@ def _as_dict(raw):
         return None
 
 
-def _get_live_prices(symbols: list[str]) -> dict[str, float]:
-    """Fetch current prices for a list of symbols from the shared provider."""
-    from dashboard.services import get_provider
-    provider = get_provider()
-    if not provider:
+def _get_live_prices(db: Session, symbols: list[str]) -> dict[str, float]:
+    """Last completed close per symbol, in ONE query.
+
+    This used to fetch a live quote per symbol from the provider — fine
+    for two ETF accounts (7 names), a 60s+ hang once the fleet held ~146
+    open lots across ~130 names (serial REST calls). The trades LIST marks
+    against the last close; the 30-min account snapshots remain the
+    live-quote mark.
+    """
+    if not symbols:
         return {}
-    prices = {}
-    for sym in symbols:
-        try:
-            p = provider.get_latest_price(sym)
-            if p:
-                prices[sym] = p
-        except Exception:
-            logger.warning("Failed to fetch live price for %s", sym, exc_info=True)
-    return prices
+    from sqlalchemy import func as sa_func
+
+    from edgefinder.db.models import DailyBar
+
+    latest = (db.query(DailyBar.symbol,
+                       sa_func.max(DailyBar.date).label("d"))
+              .filter(DailyBar.symbol.in_(symbols))
+              .group_by(DailyBar.symbol).subquery())
+    rows = (db.query(DailyBar.symbol, DailyBar.close)
+            .join(latest, (DailyBar.symbol == latest.c.symbol)
+                  & (DailyBar.date == latest.c.d)).all())
+    return {sym: float(close) for sym, close in rows if close}
 
 
 @router.get("")
@@ -124,7 +132,7 @@ def list_trades(
     )
     # Fetch live prices for open trades
     open_symbols = list({t.symbol for t in trades if t.status == "OPEN"})
-    live_prices = _get_live_prices(open_symbols) if open_symbols else {}
+    live_prices = _get_live_prices(db, open_symbols) if open_symbols else {}
     return [_enrich_trade(t, live_prices) for t in trades]
 
 

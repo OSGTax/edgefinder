@@ -185,7 +185,7 @@ def check_account_paused(session: Session) -> list[ObservationSpec]:
             category="account_paused",
             message=(
                 f"{account.strategy_name}: paused "
-                f"(drawdown {account.drawdown_pct * 100:.1f}%, "
+                f"(drawdown {account.drawdown_pct:.1f}%, "
                 f"cash ${account.cash_balance:.2f})"
             ),
             metadata={
@@ -212,8 +212,11 @@ def check_high_drawdown(
             severity=severity,
             category="high_drawdown",
             message=(
+                # strategy_accounts stores drawdown_pct ALREADY in percent
+                # (2.34 = 2.34%) — the old arena stored a fraction; the *100
+                # here produced impossible "drawdown 234%" CRITICALs
                 f"{account.strategy_name}: drawdown "
-                f"{account.drawdown_pct * 100:.1f}% (breaker at "
+                f"{account.drawdown_pct:.1f}% (breaker at "
                 f"{settings.drawdown_circuit_breaker_pct * 100:.0f}%)"
             ),
             metadata={
@@ -335,8 +338,8 @@ def run_checks(
     """
     cfg = config_settings or {}
     drift_threshold = float(cfg.get("drift_threshold_pct", 0.01))
-    drawdown_warn = float(cfg.get("drawdown_warn_pct", 0.15))
-    drawdown_critical = float(cfg.get("drawdown_critical_pct", 0.18))
+    drawdown_warn = float(cfg.get("drawdown_warn_pct", 15.0))
+    drawdown_critical = float(cfg.get("drawdown_critical_pct", 18.0))
 
     specs: list[ObservationSpec] = []
     specs.extend(check_cash_drift(session, drift_threshold))

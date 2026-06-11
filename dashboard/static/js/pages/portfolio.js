@@ -131,7 +131,11 @@ async function loadProof() {
     const wrap = h('div', { class: 'flex-col gap-8' });
     for (const cdt of cards) {
       const crit = cdt.criteria || {};
-      const pill = (ok) => h('span', { class: `c-pill ${ok ? 'up' : 'down'}`, text: ok ? 'PASS' : 'FAIL' });
+      /* a strategy without enough live history hasn't FAILED anything —
+         it just hasn't been graded yet */
+      const pill = (ok) => cdt.status === 'insufficient_data'
+        ? h('span', { class: 'c-pill neutral', text: 'PENDING' })
+        : h('span', { class: `c-pill ${ok ? 'up' : 'down'}`, text: ok ? 'PASS' : 'FAIL' });
       wrap.append(h('div', { class: 'flex items-center gap-8 flex-wrap' },
         h('span', { class: 'num flex-1', text: cdt.strategy_name }),
         h('span', { class: 'num t-2', text: `Sharpe ${fmtNum(cdt.sharpe)}` }),

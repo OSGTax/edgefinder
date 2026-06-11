@@ -82,7 +82,9 @@ class TestTradesAPI:
         self._seed_trades(db_session)
         resp = client.get("/api/trades/stats?strategy=alpha")
         data = resp.json()
-        assert data["total_trades"] == 2
+        # total counts ALL trades; win/loss metrics stay closed-based
+        assert data["total_trades"] == data["open_trades"] + 2
+        assert data["closed_trades"] == 2
         assert data["wins"] == 1
         assert data["losses"] == 1
 

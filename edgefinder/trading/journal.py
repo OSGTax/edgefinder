@@ -136,9 +136,9 @@ class TradeJournal:
         strategy_name: str | None = None,
         status: str | None = None,
         symbol: str | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[TradeRecord]:
-        """Query trades with optional filters."""
+        """Query trades with optional filters (``limit=None`` = no cap)."""
         q = self._session.query(TradeRecord)
         if strategy_name:
             q = q.filter(TradeRecord.strategy_name == strategy_name)
@@ -146,20 +146,29 @@ class TradeJournal:
             q = q.filter(TradeRecord.status == status)
         if symbol:
             q = q.filter(TradeRecord.symbol == symbol)
-        return q.order_by(TradeRecord.created_at.desc()).limit(limit).all()
+        q = q.order_by(TradeRecord.created_at.desc())
+        if limit is not None:
+            q = q.limit(limit)
+        return q.all()
 
+    # UNCAPPED on purpose: these back the live engine's lot accounting and
+    # the stats — a default limit=100 silently dropped lots once the fleet
+    # held ~146 open positions (the dashboard read "100 open")
     def get_open_trades(self, strategy_name: str | None = None) -> list[TradeRecord]:
-        return self.get_trades(strategy_name=strategy_name, status="OPEN")
+        return self.get_trades(strategy_name=strategy_name, status="OPEN", limit=None)
 
     def get_closed_trades(self, strategy_name: str | None = None) -> list[TradeRecord]:
-        return self.get_trades(strategy_name=strategy_name, status="CLOSED")
+        return self.get_trades(strategy_name=strategy_name, status="CLOSED", limit=None)
 
     def compute_stats(self, strategy_name: str | None = None) -> dict:
         """Compute trading statistics for a strategy (or all)."""
         open_count = len(self.get_open_trades(strategy_name))
         closed = self.get_closed_trades(strategy_name)
         if not closed:
-            return {"total_trades": 0, "open_trades": open_count}
+            # total = ALL trades; the old "total_trades: 0" with open lots
+            # on the books rendered as "TRADES 0" on the dashboard
+            return {"total_trades": open_count, "open_trades": open_count,
+                    "closed_trades": 0}
 
         wins = [t for t in closed if t.pnl_dollars and t.pnl_dollars > 0]
         losses = [t for t in closed if t.pnl_dollars and t.pnl_dollars <= 0]
@@ -176,8 +185,9 @@ class TradeJournal:
         )
 
         return {
-            "total_trades": len(closed),
+            "total_trades": open_count + len(closed),
             "open_trades": open_count,
+            "closed_trades": len(closed),
             "wins": len(wins),
             "losses": len(losses),
             "win_rate": len(wins) / len(closed) if closed else 0,
