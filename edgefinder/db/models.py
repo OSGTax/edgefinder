@@ -277,6 +277,13 @@ class PromotedStrategy(Base):
     paper-trade without a passing backtest — the owner's "throw it in and
     watch it run" stage). Demotion sets ``active`` False; rows are never
     deleted, so the promotion history is auditable.
+
+    A strategy trades EITHER a fixed ``symbols`` list OR a cross-sectional
+    ``universe_spec`` (e.g. "top:500"): the live runner re-resolves the
+    point-in-time universe at every rebalance boundary (trailing
+    ``rank_window`` trading days of dollar volume — the validator's exact
+    semantics) and persists the last good resolution in
+    ``resolved_symbols``/``resolved_at`` as the shrink-guard fallback.
     """
 
     __tablename__ = "promoted_strategies"
@@ -285,6 +292,11 @@ class PromotedStrategy(Base):
     strategy_name: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     spec: Mapped[str] = mapped_column(String(100))       # factory spec, e.g. "dual_momentum"
     symbols: Mapped[list | None] = mapped_column(JSON)   # the universe it trades
+    # cross-sectional universe promotion (mutually exclusive with symbols):
+    universe_spec: Mapped[str | None] = mapped_column(String(30), nullable=True)   # "top:N[+OFF]"
+    rank_window: Mapped[int | None] = mapped_column(Integer, nullable=True)        # trailing trading days
+    resolved_symbols: Mapped[list | None] = mapped_column(JSON, nullable=True)     # last good resolution
+    resolved_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     schedule: Mapped[str] = mapped_column(String(10), default="monthly")
     tier: Mapped[str] = mapped_column(String(20), default="experimental")
     validation_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)

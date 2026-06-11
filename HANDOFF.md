@@ -490,10 +490,22 @@ window). **NEW HOLDOUT WALL: 2026-06-11** — all future validations use
 `--holdout-start 2026-06-11`; the burned window is ordinary in-sample
 now and may never be cited as out-of-sample.
 
-**NEXT (single remaining owner decision):** live-universe mechanics for
-cross-sectional finalists (resolve-at-promotion vs re-resolve at each
-rebalance; recommendation = re-resolve with a <450-names guard) — then
-promote the twelve to $100k paper accounts via `engine.promote`.
+**NEXT:** live-universe mechanics are BUILT (v5.50): the live runner
+re-resolves `--universe top:N` point-in-time at each rebalance boundary
+(R2 frames + DB recency top-up, trailing `--rank-window` dollar-volume
+ranking, PIT fundamentals in the context — validator-mirroring helpers
+shared via `engine/data.py`), with a <90%-of-top_n shrink guard that falls
+back to the last good `resolved_symbols` and raises a CRITICAL
+`live_universe` observation; hold days stay cheap (no R2 load). Schema:
+`promoted_strategies` gains `universe_spec`/`rank_window`/
+`resolved_symbols`/`resolved_at` (migration f1a9c4d27e55 — production
+ALTER still to be applied). `engine.promote` gains `--universe`,
+`--rank-window`, and `--finalist` (gates tier "validated" on the
+pre-registered total-return standard: EVALUATED holdout, positive excess —
+the burned-cohort bar — instead of `criteria.all_met`, which none of the
+12 clear). REMAINING: promote the twelve to $100k paper accounts, e.g.
+`python -m edgefinder.engine.promote --spec mom_3_12 --universe top:500
+--schedule monthly --finalist`.
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 

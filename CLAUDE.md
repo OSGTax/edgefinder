@@ -219,9 +219,21 @@ finalists need majority-of-folds wins AND all three adversarial re-checks
 without owner sign-off. Waves run via
 `hunt/queue.json` → `.github/workflows/hunt-batch.yml` (push-triggered).
 
-**Promotion:** `python -m edgefinder.engine.promote --spec X --symbols ...`
-— refuses specs whose latest validation_run did not pass. `--list`,
-`--demote NAME`. The 9:45 ET cycle then trades it daily, unattended.
+**Promotion:** `python -m edgefinder.engine.promote --spec X` with exactly
+one of `--symbols A,B,C` (fixed list) or `--universe top:N[+OFF]`
+(cross-sectional; `--rank-window`, default 126) — refuses specs whose
+latest validation_run did not pass. `--finalist` swaps the
+tier-"validated" gate for the hunt's pre-registered total-return standard
+(EVALUATED holdout with positive excess vs SPY) instead of
+`criteria.all_met` — see the promote.py docstring for why both bars exist.
+`--list`, `--demote NAME`. The 9:45 ET cycle then trades it daily,
+unattended. Universe promotions re-resolve the PIT top-N at each rebalance
+boundary (R2 full-market frames + DB recency top-up, trailing-window
+dollar-volume ranking, split adjustment, PIT fundamentals — the
+validator's exact semantics); a resolution under 90% of top_n is refused:
+the runner falls back to the last good `resolved_symbols` and writes a
+CRITICAL `live_universe` observation. Hold days stay cheap — no R2 load,
+bar/dividend top-ups only over open-lot names.
 
 ## Key Configuration (config/settings.py)
 All parameters can be overridden via env vars with `EDGEFINDER_` prefix.
