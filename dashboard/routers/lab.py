@@ -109,42 +109,55 @@ def run_detail(run_id: int, db: Session = Depends(get_db)):
 
 @router.get("/scoreboard")
 def scoreboard(db: Session = Depends(get_db)):
-    """Progress toward the 10-finalist goal.
+    """The hunt scoreboard: goal state + the CONFIRMED finalists.
 
-    Finalist candidate = newest run per base strategy (the label prefix is
-    stripped from grouping; re-checks share the strategy name) with
-    criteria.all_met. Holdout status and promotion are joined per name.
+    Ground truth for "finalist" is a promoted_strategies row at tier
+    "validated" (promotion through either gate requires the recorded
+    evidence — for the hunt's twelve, the --finalist gate over the burned
+    holdout; see reviews/HOLDOUT-BURN.md). Earlier versions derived
+    finalists from criteria.all_met, the RISK-ADJUSTED bar — which none of
+    the confirmed twelve clear and which old retired-arena runs could pass,
+    so the board showed exactly the wrong set. Each finalist is joined to
+    its linked validation run (the holdout-burn run for the twelve).
     """
-    rows = (db.query(ValidationRun)
-            .order_by(ValidationRun.run_at.desc(), ValidationRun.id.desc())
-            .all())
-    newest: dict[str, ValidationRun] = {}
-    for r in rows:
-        newest.setdefault(r.strategy_name, r)
-
-    promoted = {p.strategy_name: p for p in db.query(PromotedStrategy).all()}
+    promos = (db.query(PromotedStrategy)
+              .filter(PromotedStrategy.active.is_(True),
+                      PromotedStrategy.tier == "validated")
+              .all())
+    runs_by_id = {}
+    run_ids = [p.validation_run_id for p in promos if p.validation_run_id]
+    if run_ids:
+        runs_by_id = {r.id: r for r in (db.query(ValidationRun)
+                      .filter(ValidationRun.id.in_(run_ids)).all())}
 
     finalists = []
-    counts = {"criteria_passing": 0, "holdout_passed": 0, "promoted": 0}
-    for name, r in newest.items():
-        crit = r.criteria or {}
-        if not crit.get("all_met"):
-            continue
-        counts["criteria_passing"] += 1
-        status = _holdout_status(r)
-        if status == "pass":
-            counts["holdout_passed"] += 1
-        promo = promoted.get(name)
-        if promo and promo.active:
-            counts["promoted"] += 1
+    for p in promos:
+        r = runs_by_id.get(p.validation_run_id)
+        holdout = (r.holdout or {}) if r is not None else {}
         finalists.append({
-            **_summary(r),
-            "promoted": bool(promo and promo.active),
-            "tier": promo.tier if promo else None,
+            **(_summary(r) if r is not None else {"strategy_name": p.strategy_name}),
+            "holdout_excess_vs_spy_pct": holdout.get("excess_vs_spy_pct"),
+            "promoted": True,
+            "tier": p.tier,
+            "universe_spec": p.universe_spec,
+            "schedule": p.schedule,
         })
-    finalists.sort(key=lambda f: (f["holdout_status"] != "pass",
-                                  -(f["mean_excess_vs_spy_pct"] or 0)))
-    return {"target": 10, "finalists": finalists, "counts": counts}
+    finalists.sort(key=lambda f: -(f.get("holdout_excess_vs_spy_pct") or 0))
+
+    confirmed = len(finalists)
+    return {
+        "target": 10,
+        "confirmed": confirmed,
+        "goal_reached": confirmed >= 10,
+        "holdout": "burned 2026-06-11 — COHORT PASS 12/12 (re-sealed at "
+                   "2026-06-11; see reviews/HOLDOUT-BURN.md)",
+        "finalists": finalists,
+        "counts": {"confirmed": confirmed,
+                   "promoted": confirmed,
+                   "holdout_positive": sum(
+                       1 for f in finalists
+                       if (f.get("holdout_excess_vs_spy_pct") or 0) > 0)},
+    }
 
 
 @router.get("/labels")

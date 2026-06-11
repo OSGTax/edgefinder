@@ -27,8 +27,14 @@ def ops_health(db: Session = Depends(get_db)):
     """Heartbeats + unresolved watchdog observations + scheduler state."""
     now = datetime.now(timezone.utc)
 
+    # components retired with the old arena (v5.47) — their last heartbeat
+    # rows persist for audit but must not render as live system state
+    retired = {"intraday_cycle", "signal_check", "scanner_cycle", "keepalive"}
+
     heartbeats = []
     for hb in db.query(SystemHeartbeat).order_by(SystemHeartbeat.component).all():
+        if hb.component in retired:
+            continue
         last = hb.last_run_at
         if last is not None and last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)

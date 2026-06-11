@@ -41,7 +41,7 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/api/lab/runs?limit=5", ["total", "runs"], {200}),
     ("/api/lab/scoreboard", ["target", "finalists", "counts"], {200}),
     ("/api/lab/labels", ["prefixes"], {200}),
-    ("/api/strategies/summary", ["arena", "v2", "all"], {200}),
+    ("/api/strategies/summary", ["v2", "all"], {200}),
     ("/api/strategies/promoted", [], {200}),
     ("/api/strategies/meta", [], {200}),
     ("/api/ops/activity?limit=10", ["items"], {200}),

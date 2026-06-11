@@ -1,11 +1,14 @@
 """Cross-sectional universe promotions + the live universe trading path.
 
-The live runner must mirror engine/validate's --universe semantics: full-
-market RAW frames (R2 store + DB recency top-up), trailing-dollar-volume
-PIT ranking as of the decision date, split adjustment on the traded slice,
-PIT fundamentals in the context — plus the live-only pieces: the <90%
-shrink guard with last-good fallback + CRITICAL observation, persistence of
-resolved_symbols, and a cheap hold-day path that never touches the store.
+The live runner must mirror engine/validate's --universe semantics, with
+the RANKING run in SQL over daily_bars (resolve_universe — the hot set
+holds the nightly top-1000, a superset of any top-500; the full-manifest
+store load OOM'd production on 2026-06-11) and frames loaded from R2 only
+for the resolved set + held names (with DB recency top-up), split
+adjustment on the traded slice, PIT fundamentals in the context — plus the
+live-only pieces: the <90% shrink guard with last-good fallback + CRITICAL
+observation, persistence of resolved_symbols, and a cheap hold-day path
+that never touches the store.
 """
 
 from datetime import date, timedelta
@@ -36,12 +39,12 @@ def factory():
 
 
 def _seed_db_bars(session, symbol: str, start: date, end: date,
-                  price: float = 100.0) -> None:
+                  price: float = 100.0, volume: float = 1e6) -> None:
     d = start
     while d <= end:
         if d.weekday() < 5:
             session.add(DailyBar(symbol=symbol, date=d, open=price, high=price,
-                                 low=price, close=price, volume=1e6,
+                                 low=price, close=price, volume=volume,
                                  source="test"))
         d += timedelta(days=1)
     session.commit()
@@ -73,9 +76,12 @@ def _market(end: date = JAN_END) -> dict[str, pd.DataFrame]:
 
 
 def _stub_store(monkeypatch, frames: dict) -> None:
+    # the live loader is TARGETED now — serve only the requested symbols,
+    # like the real store reader
     monkeypatch.setattr(
         live_mod, "load_bars_from_store",
-        lambda symbols, start=None, end=None: dict(frames))
+        lambda symbols, start=None, end=None: {
+            s: frames[s] for s in (symbols or frames) if s in frames})
 
 
 class TestPromoteUniverse:
@@ -172,9 +178,15 @@ class TestFinalistGate:
 
 
 class TestLiveUniverseCycle:
-    def _promote(self, factory, top_n=5):
+    def _promote(self, factory, top_n=5, candidates=None):
+        """Seed the DB ranking source (daily_bars carries the hot set the
+        SQL resolver ranks) and promote. ``candidates`` limits which
+        ranked names exist in the DB (the shrink tests' lever)."""
         session = factory()
-        _seed_db_bars(session, "SPY", START, JAN_END)
+        for sym, vol in VOLUMES.items():
+            if candidates is not None and sym not in candidates and sym != "SPY":
+                continue
+            _seed_db_bars(session, sym, START, JAN_END, volume=vol)
         promote(session, spec="equal_weight", universe=f"top:{top_n}",
                 rank_window=126, schedule="monthly", tier="experimental")
         session.close()
@@ -240,7 +252,12 @@ class TestLiveUniverseCycle:
         frames["EEE"] = _frame(START, date(2024, 2, 28), volume=1.0)
         _stub_store(monkeypatch, frames)
         session = factory()
-        _seed_db_bars(session, "SPY", date(2024, 2, 1), feb_end)
+        for sym, vol in VOLUMES.items():
+            _seed_db_bars(session, sym, date(2024, 2, 1), feb_end, volume=vol)
+        # the ranking is SQL-side now: EEE collapses in daily_bars too
+        session.query(DailyBar).filter(DailyBar.symbol == "EEE").update(
+            {DailyBar.volume: 1.0})
+        session.commit()
         session.close()
 
         summary = run_portfolio_cycle(factory, today=date(2024, 3, 1),
@@ -259,7 +276,7 @@ class TestLiveUniverseCycle:
         session.close()
 
     def test_shrink_guard_falls_back_and_alerts(self, factory, monkeypatch):
-        self._promote(factory)
+        self._promote(factory, candidates=("AAA", "BBB"))
         session = factory()
         promo = session.query(PromotedStrategy).one()
         promo.resolved_symbols = ["AAA", "BBB", "CCC", "DDD", "EEE"]
@@ -267,7 +284,9 @@ class TestLiveUniverseCycle:
         session.commit()
         session.close()
 
-        # only 3 names resolvable (< 90% of 5) -> guard fires
+        # only 3 names rankable in the DB incl. tiny SPY (< 90% of 5)
+        # -> guard fires;
+        # frames exist only for AAA/BBB of the fallback list
         shrunk = {s: f for s, f in _market().items()
                   if s in ("SPY", "AAA", "BBB")}
         _stub_store(monkeypatch, shrunk)
@@ -292,7 +311,7 @@ class TestLiveUniverseCycle:
         session.close()
 
     def test_shrink_guard_without_fallback_errors(self, factory, monkeypatch):
-        self._promote(factory)
+        self._promote(factory, candidates=("AAA", "BBB"))
         shrunk = {s: f for s, f in _market().items()
                   if s in ("SPY", "AAA", "BBB")}
         _stub_store(monkeypatch, shrunk)
