@@ -18,7 +18,8 @@ for anything that beats the market.
   vs the DB path proven bit-exact)
 - Honesty before performance: parameters pre-registered in git BEFORE the
   first run, point-in-time universes/fundamentals, realistic costs,
-  total-return prices, a sealed holdout (2025-12-05), null/random controls
+  total-return prices, a sealed holdout (re-sealed 2026-06-11 after the
+  one-look burn — see reviews/HOLDOUT-BURN.md), null/random controls
   in every batch, adversarial re-checks before any "finalist" claim
 - Every promoted strategy trades an isolated $100,000 paper account; the
   trades table (+ dividend_credits) is the source of truth for balances
@@ -31,8 +32,10 @@ for anything that beats the market.
 > 2026-06-11: 12 confirmed finalists** across 4 rounds / 73 pre-registered
 > candidates (reports `reviews/HUNT-ROUND-{1..4}.md`). Confirmation
 > standard: criteria-passing + ALL THREE adversarial re-checks. The
-> holdout (2025-12-05) is STILL SEALED — burning it on the finalists is
-> the next owner decision, then live-universe mechanics + promotion.
+> holdout was BURNED 2026-06-11 under a pre-registered protocol:
+> **COHORT PASS, 12/12 positive** (`reviews/HOLDOUT-BURN.md`); a new
+> holdout is sealed at 2026-06-11. Next: live-universe mechanics, then
+> promotion.
 > Full state in **`HANDOFF.md` → "CURRENT INITIATIVE"**. If asked to
 > "continue," read that first. Conversation history does NOT survive a
 > Codespace rebuild — durable context lives in `HANDOFF.md`, not chat.
@@ -123,7 +126,7 @@ python -m edgefinder.engine.validate --strategy equal_weight \
 # Universe-scale, honest everything, straight from R2:
 python -m edgefinder.engine.validate --strategy mom_6m_k20 \
     --universe top:500 --start 2021-06-01 --costed --div-adjust \
-    --bars-from r2 --holdout-start 2025-12-05 --record
+    --bars-from r2 --holdout-start 2026-06-11 --record
 
 # Dashboard (demo data for offline dev)
 python scripts/seed_demo_data.py --db-url sqlite:///data/demo.db
@@ -212,7 +215,8 @@ run; run a null control (buy_and_hold:SPY) per batch; score both bars
 (risk-adjusted criteria recorded + total-return computed from folds);
 finalists need majority-of-folds wins AND all three adversarial re-checks
 (`--is-days 357`, `--is-days 399`, late `--start 2022-06-01`); the holdout
-(2025-12-05) stays sealed without owner sign-off. Waves run via
+(2026-06-11 wall — re-sealed after the 2026-06-11 burn) stays sealed
+without owner sign-off. Waves run via
 `hunt/queue.json` → `.github/workflows/hunt-batch.yml` (push-triggered).
 
 **Promotion:** `python -m edgefinder.engine.promote --spec X --symbols ...`
