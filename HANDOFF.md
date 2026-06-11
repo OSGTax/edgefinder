@@ -502,8 +502,13 @@ applied 2026-06-11 (migration f1a9c4d27e55). All 12 finalists promoted
 via the flag-gated promote-finalists workflow: tier "validated" through
 `--finalist` (the pre-registered total-return + burned-holdout standard),
 universe top:500 @ rank-window 126, monthly, each row linked to its
-holdout-burn run (ids 184–195). First forced rebalance: the next 9:45 ET
-cycle. **MONITORING PHASE:** watchdog liveness + alerts cover failures;
+holdout-burn run (ids 184–195). First cycle EXECUTED 2026-06-11 via the
+run-v2-cycle workflow (the 9:45 in-process cycle was killed by the
+full-market R2 load — fixed in v5.51: SQL ranking over the DB hot set +
+targeted R2 frames; dry-run verified, then executed: 12/12 resolved
+500/500, 138 lots opened, 14 accounts live). v5.51 also fixed the lab
+scoreboard (finalists = tier-validated promotions, was criteria.all_met),
+pending-account rows, arena-lane removal, retired-heartbeat filtering. **MONITORING PHASE:** watchdog liveness + alerts cover failures;
 the live-vs-lab scorecard (/strategies) accumulates the real proof over
 the coming weeks/months. Disclosed deviation: validated on total-return
 prices; live trades raw prices + dividend_credits.
