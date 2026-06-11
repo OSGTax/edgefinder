@@ -1,65 +1,89 @@
 {
-  "wave": "hunt-r4-w1",
+  "wave": "hunt-r4-rechecks",
   "runs": [
     {
-      "id": "null-control",
-      "args": "--strategy buy_and_hold:SPY --symbols SPY --schedule monthly --holdout-start 2025-12-05 --record --universe-label hunt-r4:null"
+      "id": "rc-gmb-shift-minus",
+      "args": "--strategy growth_mom_barbell --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-shift-"
     },
     {
-      "id": "fast-growers-rev",
-      "args": "--strategy fast_growers_rev --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals"
+      "id": "rc-gmb-shift-plus",
+      "args": "--strategy growth_mom_barbell --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 399 --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-shift+"
     },
     {
-      "id": "fast-growers-mom",
-      "args": "--strategy fast_growers_mom --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals --warmup-days 290"
+      "id": "rc-gmb-late",
+      "args": "--strategy growth_mom_barbell --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-late"
     },
     {
-      "id": "peg-growers",
-      "args": "--strategy peg_growers --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals"
+      "id": "rc-ts-shift-minus",
+      "args": "--strategy tri_sleeve --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-shift-"
     },
     {
-      "id": "steady-compounders",
-      "args": "--strategy steady_compounders --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals"
+      "id": "rc-ts-shift-plus",
+      "args": "--strategy tri_sleeve --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 399 --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-shift+"
     },
     {
-      "id": "growth-value-barbell",
-      "args": "--strategy growth_value_barbell --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals"
+      "id": "rc-ts-late",
+      "args": "--strategy tri_sleeve --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-late"
     },
     {
-      "id": "growth-mom-barbell",
-      "args": "--strategy growth_mom_barbell --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals --warmup-days 290"
+      "id": "rc-gvb-shift-minus",
+      "args": "--strategy growth_value_barbell --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --pit-fundamentals --universe-label hunt-r4:recheck-shift-"
     },
     {
-      "id": "tri-sleeve",
-      "args": "--strategy tri_sleeve --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals --warmup-days 290"
+      "id": "rc-gvb-shift-plus",
+      "args": "--strategy growth_value_barbell --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 399 --pit-fundamentals --universe-label hunt-r4:recheck-shift+"
     },
     {
-      "id": "mom-3-12",
-      "args": "--strategy mom_3_12 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500 --warmup-days 290"
+      "id": "rc-gvb-late",
+      "args": "--strategy growth_value_barbell --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --universe-label hunt-r4:recheck-late"
     },
     {
-      "id": "mom-sharpe-rank",
-      "args": "--strategy mom_sharpe_rank --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500 --warmup-days 290"
+      "id": "rc-m31-shift-minus",
+      "args": "--strategy mom_3_12 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --warmup-days 290 --universe-label hunt-r4:recheck-shift-"
     },
     {
-      "id": "value-cr-fortress",
-      "args": "--strategy value_cr_fortress --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals"
+      "id": "rc-m31-shift-plus",
+      "args": "--strategy mom_3_12 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 399 --warmup-days 290 --universe-label hunt-r4:recheck-shift+"
     },
     {
-      "id": "roe-value",
-      "args": "--strategy roe_value --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500-pit --pit-fundamentals"
+      "id": "rc-m31-late",
+      "args": "--strategy mom_3_12 --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --warmup-days 290 --universe-label hunt-r4:recheck-late"
     },
     {
-      "id": "min-vol-uptrend",
-      "args": "--strategy min_vol_uptrend --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500"
+      "id": "rc-pg-shift-minus",
+      "args": "--strategy peg_growers --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --pit-fundamentals --universe-label hunt-r4:recheck-shift-"
     },
     {
-      "id": "random-20-s47",
-      "args": "--strategy random_20_s47 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500"
+      "id": "rc-pg-shift-plus",
+      "args": "--strategy peg_growers --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 399 --pit-fundamentals --universe-label hunt-r4:recheck-shift+"
     },
     {
-      "id": "random-20-s53",
-      "args": "--strategy random_20_s53 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --universe-label hunt-r4:top500"
+      "id": "rc-pg-late",
+      "args": "--strategy peg_growers --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --universe-label hunt-r4:recheck-late"
+    },
+    {
+      "id": "rc-fgr-shift-minus",
+      "args": "--strategy fast_growers_rev --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --pit-fundamentals --universe-label hunt-r4:recheck-shift-"
+    },
+    {
+      "id": "rc-fgr-shift-plus",
+      "args": "--strategy fast_growers_rev --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 399 --pit-fundamentals --universe-label hunt-r4:recheck-shift+"
+    },
+    {
+      "id": "rc-fgr-late",
+      "args": "--strategy fast_growers_rev --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --universe-label hunt-r4:recheck-late"
+    },
+    {
+      "id": "rc-fgm-shift-minus",
+      "args": "--strategy fast_growers_mom --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-shift-"
+    },
+    {
+      "id": "rc-fgm-shift-plus",
+      "args": "--strategy fast_growers_mom --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 399 --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-shift+"
+    },
+    {
+      "id": "rc-fgm-late",
+      "args": "--strategy fast_growers_mom --universe top:500 --start 2022-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --pit-fundamentals --warmup-days 290 --universe-label hunt-r4:recheck-late"
     }
   ]
 }
