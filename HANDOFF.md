@@ -490,22 +490,23 @@ window). **NEW HOLDOUT WALL: 2026-06-11** — all future validations use
 `--holdout-start 2026-06-11`; the burned window is ordinary in-sample
 now and may never be cited as out-of-sample.
 
-**NEXT:** live-universe mechanics are BUILT (v5.50): the live runner
-re-resolves `--universe top:N` point-in-time at each rebalance boundary
-(R2 frames + DB recency top-up, trailing `--rank-window` dollar-volume
-ranking, PIT fundamentals in the context — validator-mirroring helpers
-shared via `engine/data.py`), with a <90%-of-top_n shrink guard that falls
-back to the last good `resolved_symbols` and raises a CRITICAL
-`live_universe` observation; hold days stay cheap (no R2 load). Schema:
-`promoted_strategies` gains `universe_spec`/`rank_window`/
-`resolved_symbols`/`resolved_at` (migration f1a9c4d27e55 — production
-ALTER still to be applied). `engine.promote` gains `--universe`,
-`--rank-window`, and `--finalist` (gates tier "validated" on the
-pre-registered total-return standard: EVALUATED holdout, positive excess —
-the burned-cohort bar — instead of `criteria.all_met`, which none of the
-12 clear). REMAINING: promote the twelve to $100k paper accounts, e.g.
-`python -m edgefinder.engine.promote --spec mom_3_12 --universe top:500
---schedule monthly --finalist`.
+**DONE — ALL TWELVE PROMOTED 2026-06-11 (v5.50 live in prod):**
+live-universe mechanics are BUILT: the live runner re-resolves
+`--universe top:N` point-in-time at each rebalance boundary (R2 frames +
+DB recency top-up, trailing `--rank-window` dollar-volume ranking, PIT
+fundamentals in the context — validator-mirroring helpers shared via
+`engine/data.py`), with a <90%-of-top_n shrink guard that falls back to
+the last good `resolved_symbols` and raises a CRITICAL `live_universe`
+observation; hold days stay cheap (no R2 load). Schema: production ALTER
+applied 2026-06-11 (migration f1a9c4d27e55). All 12 finalists promoted
+via the flag-gated promote-finalists workflow: tier "validated" through
+`--finalist` (the pre-registered total-return + burned-holdout standard),
+universe top:500 @ rank-window 126, monthly, each row linked to its
+holdout-burn run (ids 184–195). First forced rebalance: the next 9:45 ET
+cycle. **MONITORING PHASE:** watchdog liveness + alerts cover failures;
+the live-vs-lab scorecard (/strategies) accumulates the real proof over
+the coming weeks/months. Disclosed deviation: validated on total-return
+prices; live trades raw prices + dividend_credits.
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
