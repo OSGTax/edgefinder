@@ -26,14 +26,15 @@ for anything that beats the market.
   intraday signal loop, coach) was **retired in v5.47** — the v2 engine is
   the only trading path
 
-> ## 🎯 ACTIVE INITIATIVE — read `HANDOFF.md` first
-> Current goal: **find 10 winning strategies** (criteria-passing + surviving
-> ALL THREE adversarial re-checks; holdout sealed at 2025-12-05, burns need
-> owner sign-off). Hunt Round 1 complete (1 confirmed finalist:
-> xsec_mom_12_1; full report `reviews/HUNT-ROUND-1.md`); Round 2 in flight.
-> The full vision, roadmap, working agreements, and storage plan are in
-> **`HANDOFF.md` → "CURRENT INITIATIVE"**. If asked to "continue" or "finish
-> autonomously," read that first. Conversation history does NOT survive a
+> ## 🏆 ACTIVE INITIATIVE — read `HANDOFF.md` first
+> The hunt goal (**find 10 winning strategies**) was **REACHED on
+> 2026-06-11: 12 confirmed finalists** across 4 rounds / 73 pre-registered
+> candidates (reports `reviews/HUNT-ROUND-{1..4}.md`). Confirmation
+> standard: criteria-passing + ALL THREE adversarial re-checks. The
+> holdout (2025-12-05) is STILL SEALED — burning it on the finalists is
+> the next owner decision, then live-universe mechanics + promotion.
+> Full state in **`HANDOFF.md` → "CURRENT INITIATIVE"**. If asked to
+> "continue," read that first. Conversation history does NOT survive a
 > Codespace rebuild — durable context lives in `HANDOFF.md`, not chat.
 
 ## Architecture

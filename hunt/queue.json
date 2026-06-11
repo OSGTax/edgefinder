@@ -1,9 +1,4 @@
 {
-  "wave": "hunt-r4-rechecks-redo",
-  "runs": [
-    {
-      "id": "rc-m31-shift-minus",
-      "args": "--strategy mom_3_12 --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record --schedule monthly --is-days 357 --warmup-days 290 --universe-label hunt-r4:recheck-shift-"
-    }
-  ]
+  "wave": "idle",
+  "runs": []
 }
