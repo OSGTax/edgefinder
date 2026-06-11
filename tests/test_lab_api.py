@@ -92,20 +92,34 @@ class TestLabRuns:
         assert client.get("/api/lab/runs/99999").status_code == 404
 
     def test_scoreboard(self, client, db_session):
+        """Finalists = active tier-"validated" promotions joined to their
+        linked runs — NOT criteria.all_met (the risk-adjusted bar none of
+        the confirmed twelve clear, which old arena runs could pass)."""
         self._seed(db_session)
+        run_id = client.get("/api/lab/runs?strategy=xsec").json()["runs"][0]["id"]
+        run = db_session.get(ValidationRun, run_id)
+        run.holdout = {"excess_vs_spy_pct": 55.8, "passes": None}
         db_session.add(PromotedStrategy(strategy_name="xsec_mom_12_1",
-                                        spec="xsec_mom_12_1", symbols=["A"],
+                                        spec="xsec_mom_12_1",
+                                        universe_spec="top:500",
+                                        schedule="monthly", tier="validated",
+                                        validation_run_id=run_id, active=True))
+        # experimental + inactive promotions are NOT finalists
+        db_session.add(PromotedStrategy(strategy_name="equal_weight",
+                                        spec="equal_weight", symbols=["SPY"],
                                         schedule="monthly", tier="experimental",
                                         active=True))
         db_session.commit()
         sb = client.get("/api/lab/scoreboard").json()
         assert sb["target"] == 10
+        assert sb["confirmed"] == 1 and sb["goal_reached"] is False
         names = {f["strategy_name"] for f in sb["finalists"]}
-        assert names == {"xsec_mom_12_1", "deep_value_pe10"}
-        assert sb["counts"]["criteria_passing"] == 2
-        assert sb["counts"]["promoted"] == 1
-        xsec = next(f for f in sb["finalists"] if f["strategy_name"] == "xsec_mom_12_1")
-        assert xsec["promoted"] is True and xsec["tier"] == "experimental"
+        assert names == {"xsec_mom_12_1"}
+        xsec = sb["finalists"][0]
+        assert xsec["promoted"] is True and xsec["tier"] == "validated"
+        assert xsec["holdout_excess_vs_spy_pct"] == 55.8
+        assert xsec["universe_spec"] == "top:500"
+        assert sb["counts"]["holdout_positive"] == 1
 
     def test_labels(self, client, db_session):
         self._seed(db_session)
@@ -169,11 +183,10 @@ class TestStrategiesAdditions:
         assert lanes["equal_weight"] == "v2"
 
     def test_summary_lane_rollups(self, client, db_session):
-        # keys stay {arena, v2, all} for API stability; arena is all zeros
+        # the arena lane was retired in v5.47 — only v2/all are reported
         self._seed(db_session)
         s = client.get("/api/strategies/summary").json()
-        assert s["arena"]["starting_capital"] == 0
-        assert s["arena"]["strategies"] == 0
+        assert set(s) == {"v2", "all"}
         assert s["v2"]["starting_capital"] == 105000
         assert s["all"]["total_equity"] == 110500
         assert s["all"]["total_pnl"] == 5500

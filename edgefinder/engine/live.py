@@ -62,7 +62,7 @@ from edgefinder.engine.data import (
     load_bars_from_store,
     load_splits,
     parse_universe_spec,
-    rank_top_universe,
+    resolve_universe,
     trailing_rank_start,
 )
 from edgefinder.engine.strategies import make_strategy_factory
@@ -362,29 +362,39 @@ def run_portfolio_cycle(
         session.close()
 
 
-def _load_market_frames(session, today: date) -> dict[str, pd.DataFrame]:
-    """Full-market RAW frames for PIT universe ranking: the R2 store, topped
-    up with any fresher rows already in the DB.
+def _spy_calendar(session, as_of: date) -> list[date]:
+    """SPY's trading dates through ``as_of`` — the NYSE calendar the
+    validator plans on (SPY is a protected full-history symbol)."""
+    rows = (session.query(DailyBar.date)
+            .filter(DailyBar.symbol == "SPY", DailyBar.date <= as_of)
+            .order_by(DailyBar.date).all())
+    return [r[0] for r in rows]
 
-    Ranking happens on raw as-traded frames exactly as the validator ranks
-    raw store frames (dollar volume is split-invariant); split adjustment is
-    applied later, only to the slice that will actually be traded.
+
+def _load_frames(session, symbols: list[str], today: date) -> dict[str, pd.DataFrame]:
+    """RAW frames for ``symbols``: R2 deep history topped up with any
+    fresher rows already in the DB.
+
+    Targeted by design — the first live cycle proved a full-manifest store
+    load does not fit the production instance's memory; ranking happens in
+    SQL over the DB hot set instead (see _resolve_universe_frames), so only
+    the resolved universe (+ held names) ever needs frames.
 
     Recency top-up: R2 syncs nightly at 19:00 ET while the 04:15 UTC
     bars-nightly ingest can leave the DB one day fresher at the 9:45 cycle —
     frames whose last date trails the latest DB bar get the newer DB rows
     appended (raw, deduped by date).
     """
-    market = load_bars_from_store(
-        None, start=today - timedelta(days=UNIVERSE_HISTORY_DAYS))
+    frames = load_bars_from_store(
+        symbols, start=today - timedelta(days=UNIVERSE_HISTORY_DAYS))
     db_latest = (session.query(func.max(DailyBar.date))
                  .filter(DailyBar.date < today).scalar())
     if db_latest is None:
-        return market
-    stale = {s: df["date"].iloc[-1] for s, df in market.items()
+        return frames
+    stale = {s: df["date"].iloc[-1] for s, df in frames.items()
              if len(df) and df["date"].iloc[-1] < db_latest}
     if not stale:
-        return market
+        return frames
     fresh = load_bars(session, sorted(stale),
                       start=min(stale.values()) + timedelta(days=1),
                       end=db_latest, split_adjust=False)   # raw, like the store
@@ -396,14 +406,14 @@ def _load_market_frames(session, today: date) -> dict[str, pd.DataFrame]:
         add = add[add["date"] > last]                       # dedupe by date
         if not len(add):
             continue
-        market[sym] = (pd.concat(
-            [market[sym], add[["date", "open", "high", "low", "close", "volume"]]],
+        frames[sym] = (pd.concat(
+            [frames[sym], add[["date", "open", "high", "low", "close", "volume"]]],
             ignore_index=True).sort_values("date").reset_index(drop=True))
         topped += 1
     if topped:
         logger.info("universe frames: topped up %d symbols from the DB "
                     "(store lagged %s)", topped, db_latest)
-    return market
+    return frames
 
 
 def _resolve_universe_frames(session, promo, decision_date: date, today: date,
@@ -413,32 +423,28 @@ def _resolve_universe_frames(session, promo, decision_date: date, today: date,
 
     Returns ``(resolved, frames, fundamentals, note)``; ``resolved`` is None
     when the shrink guard fired with no last-good fallback (the caller must
-    not trade). Mirrors the validator's --universe semantics: rank the RAW
-    full-market frames by trailing dollar volume as of the trading day
-    before the first scored day, then split-adjust the traded slice and
-    hand the strategy PIT fundamentals.
+    not trade). Mirrors the validator's --universe semantics — but the
+    RANKING runs in SQL over daily_bars (resolve_universe, the store
+    ranker's parity-tested twin; the hot set holds the nightly top-1000, a
+    strict superset of any top-500) so the cycle never loads full-market
+    frames: the production instance OOM'd on that during the first live
+    cycle (2026-06-11, no heartbeat, no resolutions persisted). Frames are
+    then loaded from R2 ONLY for the resolved set + held names,
+    split-adjusted, with PIT fundamentals handed to the context.
     """
     top_n, rank_offset = parse_universe_spec(promo.universe_spec)
     rank_window = promo.rank_window if promo.rank_window is not None else 126
 
-    market = cache.get("market")
-    if market is None:
-        market = _load_market_frames(session, today)
-        cache["market"] = market
-
     key = (promo.universe_spec, rank_window)
     resolved = cache.setdefault("resolved", {}).get(key)
     if resolved is None:
-        # the validator plans rank_start on SPY's calendar (the NYSE trading
-        # calendar); mirror that, falling back to the union calendar only if
-        # SPY is somehow absent from the store
-        spy = market.get("SPY")
-        calendar = (list(spy["date"]) if spy is not None and len(spy)
-                    else sorted({d for df in market.values() for d in df["date"]}))
-        rank_start = trailing_rank_start(calendar, decision_date, rank_window)
-        resolved = rank_top_universe(market, decision_date, top_n,
-                                     rank_offset=rank_offset,
-                                     rank_start=rank_start)
+        calendar = _spy_calendar(session, decision_date)
+        rank_start = (trailing_rank_start(calendar, decision_date, rank_window)
+                      if calendar else None)
+        resolved = resolve_universe(session, "top", [], top_n,
+                                    as_of=decision_date,
+                                    rank_offset=rank_offset,
+                                    rank_start=rank_start)
         cache["resolved"][key] = resolved
 
     note = None
@@ -467,9 +473,14 @@ def _resolve_universe_frames(session, promo, decision_date: date, today: date,
         session.commit()
 
     # frames for the resolved set PLUS any held names that dropped out of
-    # it — their last close backs the sell fill if the quote source fails
+    # it — their last close backs the sell fill if the quote source fails;
+    # cached per cycle so the twelve top:500 promos share one R2 load
     needed = sorted(set(resolved) | set(lot_symbols))
-    frames = {s: market[s] for s in needed if s in market and len(market[s])}
+    have: dict = cache.setdefault("frames", {})
+    missing = [s for s in needed if s not in have]
+    if missing:
+        have.update(_load_frames(session, missing, today))
+    frames = {s: have[s] for s in needed if s in have and len(have[s])}
     frames = adjust_for_splits(frames, load_splits(session, list(frames)))
 
     # PIT fundamentals, exactly as the validator hands them to the context:

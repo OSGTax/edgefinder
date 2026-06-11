@@ -43,10 +43,18 @@ def list_strategies(db: Session = Depends(get_db)):
 @router.get("/accounts")
 def get_accounts(db: Session = Depends(get_db)):
     """Get strategy account states from the DB (the source of truth —
-    the v2 engine marks strategy_accounts every cycle/snapshot)."""
+    the v2 engine marks strategy_accounts every cycle/snapshot).
+
+    ACTIVE promoted strategies whose account row doesn't exist yet (no
+    cycle has traded them) appear as PENDING rows at starting capital —
+    a freshly promoted strategy must be visible on the dashboard before
+    its first rebalance, not invisible until it trades.
+    """
+    from edgefinder.engine.live import STARTING_CAPITAL
+
     v2 = _v2_names(db)
     accounts = db.query(StrategyAccount).all()
-    return [
+    rows = [
         {
             "lane": _lane(a.strategy_name, v2),
             "strategy_name": a.strategy_name,
@@ -60,9 +68,22 @@ def get_accounts(db: Session = Depends(get_db)):
             "unrealized_pnl": 0.0,
             "pdt_enabled": a.pdt_enabled,
             "is_paused": a.is_paused,
+            "pending": False,
         }
         for a in accounts
     ]
+    have = {r["strategy_name"] for r in rows}
+    for name in sorted(v2 - have):
+        rows.append({
+            "lane": "v2", "strategy_name": name,
+            "starting_capital": STARTING_CAPITAL, "cash": STARTING_CAPITAL,
+            "open_positions_value": 0.0, "total_equity": STARTING_CAPITAL,
+            "peak_equity": STARTING_CAPITAL, "drawdown_pct": 0.0,
+            "realized_pnl": 0.0, "unrealized_pnl": 0.0,
+            "pdt_enabled": False, "is_paused": False,
+            "pending": True,   # promoted; awaiting its first trading cycle
+        })
+    return rows
 
 
 @router.get("/positions")
@@ -239,7 +260,8 @@ def promoted_strategies(db: Session = Depends(get_db)):
 
 @router.get("/summary")
 def lane_summary(db: Session = Depends(get_db)):
-    """Server-computed header rollups per lane (arena / v2 / all).
+    """Server-computed header rollups per lane (v2 / all — the arena
+    lane was retired in v5.47 and is no longer reported).
 
     The ONLY source for the portfolio hero stats — the client never invents
     capital figures (the old FALLBACK_STARTING_CAPITAL bug class); if this
@@ -255,7 +277,7 @@ def lane_summary(db: Session = Depends(get_db)):
                                 tzinfo=timezone.utc)
 
     lanes: dict[str, dict] = {}
-    for lane_name in ("arena", "v2", "all"):
+    for lane_name in ("v2", "all"):
         lanes[lane_name] = {
             "starting_capital": 0.0, "total_equity": 0.0, "day_pnl": None,
             "unrealized_pnl": 0.0, "open_positions": 0, "win_rate": None,
@@ -281,10 +303,10 @@ def lane_summary(db: Session = Depends(get_db)):
             if (t.pnl_dollars or 0) > 0:
                 wins[t.strategy_name] = wins.get(t.strategy_name, 0) + 1
 
-    day_pnl_acc: dict[str, float] = {"arena": 0.0, "v2": 0.0, "all": 0.0}
-    day_pnl_known: dict[str, bool] = {"arena": False, "v2": False, "all": False}
-    closed_acc = {"arena": 0, "v2": 0, "all": 0}
-    wins_acc = {"arena": 0, "v2": 0, "all": 0}
+    day_pnl_acc: dict[str, float] = {"v2": 0.0, "all": 0.0}
+    day_pnl_known: dict[str, bool] = {"v2": False, "all": False}
+    closed_acc = {"v2": 0, "all": 0}
+    wins_acc = {"v2": 0, "all": 0}
 
     for a in accounts:
         name = a.get("strategy_name") or a.get("name", "")

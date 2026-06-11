@@ -14,9 +14,16 @@ def test_ops_health_endpoint(db_session):
     from dashboard.routers import ops as ops_router
 
     db_session.add(SystemHeartbeat(
-        component="intraday_cycle",
+        component="v2_portfolio_cycle",
         last_run_at=datetime(2026, 6, 5, 15, 25),  # naive UTC, as stored
         ok=True, detail={"opened": 0, "closed": 0},
+    ))
+    # retired with the arena (v5.47): kept in the DB for audit, FILTERED
+    # from the live ops view
+    db_session.add(SystemHeartbeat(
+        component="intraday_cycle",
+        last_run_at=datetime(2026, 6, 5, 15, 25),
+        ok=True, detail={},
     ))
     db_session.add(AgentObservation(
         agent_name="watchdog", severity="CRITICAL", category="cycle_liveness",
@@ -29,7 +36,7 @@ def test_ops_health_endpoint(db_session):
     app.dependency_overrides[get_db] = lambda: db_session
     body = TestClient(app).get("/api/ops/health").json()
 
-    assert body["heartbeats"][0]["component"] == "intraday_cycle"
+    assert [h["component"] for h in body["heartbeats"]] == ["v2_portfolio_cycle"]
     assert body["heartbeats"][0]["ok"] is True
     assert body["heartbeats"][0]["age_minutes"] is not None
     assert body["observation_counts"]["critical"] == 1
