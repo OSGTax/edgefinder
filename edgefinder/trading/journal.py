@@ -146,6 +146,14 @@ class TradeJournal:
             q = q.filter(TradeRecord.status == status)
         if symbol:
             q = q.filter(TradeRecord.symbol == symbol)
+        # the model defers the rich-context columns (reasoning, indicator
+        # JSON, ...); callers here serialize them, and leaving them deferred
+        # meant FIVE lazy round-trips PER ROW — ~50s for the fleet's 148
+        # open lots over the production pooler (the dashboard trades page
+        # hang, 2026-06-11). One query, all columns.
+        from sqlalchemy.orm import undefer
+
+        q = q.options(undefer("*"))
         q = q.order_by(TradeRecord.created_at.desc())
         if limit is not None:
             q = q.limit(limit)
