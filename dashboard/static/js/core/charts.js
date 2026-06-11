@@ -2,9 +2,13 @@
    Wraps the vendored lightweight-charts v4.1 global:
    - themed options from tokens, restyled live on theme toggle
    - pan/zoom/kinetic scroll fully enabled (mouse + touch)
+   - magnet crosshair (snaps to data points — the multi-series legend
+     readout always lands on a real mark, never interpolated air)
    - pane sync: shared visible range + crosshair across price/RSI/MACD
    - range switcher chips, fullscreen, double-click fit
-   - one shared ResizeObserver for autosizing */
+   - one shared ResizeObserver for FLUID autosizing: charts track their
+     container on BOTH axes (vh-based panes reflow on rotation/viewport
+     change, not just window-resize) */
 
 import { chartColors, onThemeChange } from './theme.js';
 
@@ -14,7 +18,15 @@ const registry = new Set(); // every chart, for theme restyle
 const ro = new ResizeObserver(entries => {
   for (const e of entries) {
     const chart = e.target.__efChart;
-    if (chart) chart.applyOptions({ width: Math.floor(e.contentRect.width) });
+    if (!chart) continue;
+    const opts = { width: Math.floor(e.contentRect.width) };
+    // Height follows the container only when the container actually has
+    // one (CSS-sized panes). Content-sized hosts report the chart's own
+    // height back — a no-op — while a collapsed/hidden host (0px) must
+    // not zero the chart out.
+    const hgt = Math.floor(e.contentRect.height);
+    if (hgt > 40) opts.height = hgt;
+    chart.applyOptions(opts);
   }
 });
 
@@ -35,7 +47,7 @@ function baseOptions() {
       horzLines: { color: c.grid, style: LWC.LineStyle.Dotted },
     },
     crosshair: {
-      mode: LWC.CrosshairMode.Normal,
+      mode: LWC.CrosshairMode.Magnet,
       vertLine: { color: c.text, width: 1, style: LWC.LineStyle.Dashed, labelBackgroundColor: c.border },
       horzLine: { color: c.text, width: 1, style: LWC.LineStyle.Dashed, labelBackgroundColor: c.border },
     },
@@ -48,6 +60,7 @@ function baseOptions() {
     },
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
     handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
+    kineticScroll: { mouse: true, touch: true },
   };
 }
 
