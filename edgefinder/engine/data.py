@@ -19,6 +19,41 @@ from edgefinder.db.models import DailyBar, IndexDaily
 _IN_CHUNK = 500  # keep IN() clauses bounded for the pooler
 
 
+def parse_universe_spec(spec: str) -> tuple[int, int]:
+    """``top:N[+OFFSET]`` -> ``(top_n, rank_offset)``; raises ValueError.
+
+    The one parser for cross-sectional universe specs — shared by the
+    validation CLI, the promotion CLI, and the live runner so a spec string
+    means the same thing everywhere.
+    """
+    import re
+
+    m = re.fullmatch(r"top:(\d+)(?:\+(\d+))?", spec or "")
+    if not m:
+        raise ValueError(f"bad universe spec {spec!r} (use top:N[+OFFSET])")
+    return int(m.group(1)), int(m.group(2) or 0)
+
+
+def trailing_rank_start(calendar_days: list, as_of, rank_window: int | None):
+    """First day of the trailing ``rank_window`` trading days ending at
+    ``as_of`` on ``calendar_days`` (a sorted trading calendar — the
+    validator plans on SPY's). Returns None when ``rank_window`` is 0/None
+    (legacy lifetime-through-as_of ranking).
+
+    This is the validator's exact arithmetic (``days[max(0, i - rank_window)]``
+    with ``as_of = days[i - 1]``), factored out so the live runner's
+    per-rebalance universe resolution mirrors it bit-for-bit.
+    """
+    if not rank_window:
+        return None
+    import bisect
+
+    j = bisect.bisect_right(calendar_days, as_of) - 1
+    if j < 0:
+        return None
+    return calendar_days[max(0, j - rank_window + 1)]
+
+
 def resolve_universe(db: Session, mode: str, symbols: list[str], top_n: int,
                      as_of=None, rank_offset: int = 0,
                      rank_start=None) -> list[str]:

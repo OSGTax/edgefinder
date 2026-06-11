@@ -1,0 +1,50 @@
+name: Promote finalists
+
+# Flag-gated (push-triggered): runs `engine.promote` for the 12 confirmed
+# hunt finalists against the production DB. ops/promote.flag containing
+# exactly "EXECUTE" promotes; any other content lists current promotions
+# (dry). Same convention as db-slim / retire-arena.
+
+on:
+  push:
+    branches: [claude/handoff-doc-review-176vbl, main]
+    paths: [ops/promote.flag]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-finalists
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -e .
+      - name: Promote the twelve (or dry-list)
+        run: |
+          set -euo pipefail
+          MODE=$(tr -d '[:space:]' < ops/promote.flag)
+          if [ "$MODE" != "EXECUTE" ]; then
+            echo "flag is '$MODE' (not EXECUTE) — listing current promotions only"
+            python -m edgefinder.engine.promote --list
+            exit 0
+          fi
+          for spec in xsec_mom_12_1 value_mom_barbell mom_inverse_vol \
+                      mom_earnings_tilt barbell_trend_value fast_growers \
+                      growth_mom_barbell tri_sleeve growth_value_barbell \
+                      mom_3_12 peg_growers fast_growers_rev; do
+            python -m edgefinder.engine.promote --spec "$spec" \
+              --universe top:500 --rank-window 126 --schedule monthly \
+              --tier validated --finalist
+          done
+          python -m edgefinder.engine.promote --list

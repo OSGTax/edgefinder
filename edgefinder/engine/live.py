@@ -41,9 +41,12 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 
+import pandas as pd
 from sqlalchemy import func
 
+from edgefinder.agents.journal import record_observation
 from edgefinder.core.models import Direction, Trade, TradeStatus, TradeType
+from edgefinder.data.pit_fundamentals import PITFundamentals
 from edgefinder.db.models import (
     DailyBar,
     DividendCredit,
@@ -53,7 +56,15 @@ from edgefinder.db.models import (
     SystemHeartbeat,
 )
 from edgefinder.engine.backtest import _build_context, prepare_bars
-from edgefinder.engine.data import load_bars
+from edgefinder.engine.data import (
+    adjust_for_splits,
+    load_bars,
+    load_bars_from_store,
+    load_splits,
+    parse_universe_spec,
+    rank_top_universe,
+    trailing_rank_start,
+)
 from edgefinder.engine.strategies import make_strategy_factory
 from edgefinder.trading.journal import TradeJournal
 
@@ -69,6 +80,14 @@ STARTING_CAPITAL = 100_000.0
 REBALANCE_BAND = 0.01          # skip re-trues smaller than 1% of equity
 SLIPPAGE_BPS = 5.0             # paper-fill slippage, both sides
 HISTORY_DAYS = 450             # calendar days of bars to load (>=210 trading)
+# cross-sectional universes need ranking breadth + indicator warmup; 550
+# calendar days covers the 126-trading-day rank window AND the engine's
+# 210-trading-day indicator warmup with margin
+UNIVERSE_HISTORY_DAYS = 550
+# shrink guard: refuse to trade a resolution carrying fewer than this
+# fraction of top_n names (a thin store/manifest would otherwise quietly
+# concentrate the book into whatever happened to load)
+UNIVERSE_MIN_FRACTION = 0.9
 HEARTBEAT = "v2_portfolio_cycle"
 
 
@@ -318,12 +337,18 @@ def run_portfolio_cycle(
             price_fn = provider.get_latest_price
         price_fn = _memoized(price_fn)   # one quote per symbol per cycle
 
+        # one cycle-scoped cache for the full-market R2 load + per-spec
+        # universe resolutions — ~1000+ frames must load ONCE per cycle and
+        # be shared by every universe strategy, never re-loaded per strategy
+        universe_cache: dict = {}
+
         ok = True
         for promo in promos:
             try:
                 summary["strategies"][promo.strategy_name] = _run_one(
                     session, promo, provider=provider, today=today,
-                    price_fn=price_fn, dry_run=dry_run)
+                    price_fn=price_fn, dry_run=dry_run,
+                    universe_cache=universe_cache)
             except Exception as e:
                 ok = False
                 logger.exception("v2 cycle failed for %s", promo.strategy_name)
@@ -337,8 +362,127 @@ def run_portfolio_cycle(
         session.close()
 
 
-def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
-    symbols = list(promo.symbols or [])
+def _load_market_frames(session, today: date) -> dict[str, pd.DataFrame]:
+    """Full-market RAW frames for PIT universe ranking: the R2 store, topped
+    up with any fresher rows already in the DB.
+
+    Ranking happens on raw as-traded frames exactly as the validator ranks
+    raw store frames (dollar volume is split-invariant); split adjustment is
+    applied later, only to the slice that will actually be traded.
+
+    Recency top-up: R2 syncs nightly at 19:00 ET while the 04:15 UTC
+    bars-nightly ingest can leave the DB one day fresher at the 9:45 cycle —
+    frames whose last date trails the latest DB bar get the newer DB rows
+    appended (raw, deduped by date).
+    """
+    market = load_bars_from_store(
+        None, start=today - timedelta(days=UNIVERSE_HISTORY_DAYS))
+    db_latest = (session.query(func.max(DailyBar.date))
+                 .filter(DailyBar.date < today).scalar())
+    if db_latest is None:
+        return market
+    stale = {s: df["date"].iloc[-1] for s, df in market.items()
+             if len(df) and df["date"].iloc[-1] < db_latest}
+    if not stale:
+        return market
+    fresh = load_bars(session, sorted(stale),
+                      start=min(stale.values()) + timedelta(days=1),
+                      end=db_latest, split_adjust=False)   # raw, like the store
+    topped = 0
+    for sym, last in stale.items():
+        add = fresh.get(sym)
+        if add is None or not len(add):
+            continue
+        add = add[add["date"] > last]                       # dedupe by date
+        if not len(add):
+            continue
+        market[sym] = (pd.concat(
+            [market[sym], add[["date", "open", "high", "low", "close", "volume"]]],
+            ignore_index=True).sort_values("date").reset_index(drop=True))
+        topped += 1
+    if topped:
+        logger.info("universe frames: topped up %d symbols from the DB "
+                    "(store lagged %s)", topped, db_latest)
+    return market
+
+
+def _resolve_universe_frames(session, promo, decision_date: date, today: date,
+                             *, lot_symbols: list[str], dry_run: bool,
+                             cache: dict):
+    """Resolve a cross-sectional promo's PIT universe and build its frames.
+
+    Returns ``(resolved, frames, fundamentals, note)``; ``resolved`` is None
+    when the shrink guard fired with no last-good fallback (the caller must
+    not trade). Mirrors the validator's --universe semantics: rank the RAW
+    full-market frames by trailing dollar volume as of the trading day
+    before the first scored day, then split-adjust the traded slice and
+    hand the strategy PIT fundamentals.
+    """
+    top_n, rank_offset = parse_universe_spec(promo.universe_spec)
+    rank_window = promo.rank_window if promo.rank_window is not None else 126
+
+    market = cache.get("market")
+    if market is None:
+        market = _load_market_frames(session, today)
+        cache["market"] = market
+
+    key = (promo.universe_spec, rank_window)
+    resolved = cache.setdefault("resolved", {}).get(key)
+    if resolved is None:
+        # the validator plans rank_start on SPY's calendar (the NYSE trading
+        # calendar); mirror that, falling back to the union calendar only if
+        # SPY is somehow absent from the store
+        spy = market.get("SPY")
+        calendar = (list(spy["date"]) if spy is not None and len(spy)
+                    else sorted({d for df in market.values() for d in df["date"]}))
+        rank_start = trailing_rank_start(calendar, decision_date, rank_window)
+        resolved = rank_top_universe(market, decision_date, top_n,
+                                     rank_offset=rank_offset,
+                                     rank_start=rank_start)
+        cache["resolved"][key] = resolved
+
+    note = None
+    if len(resolved) < UNIVERSE_MIN_FRACTION * top_n:
+        message = (f"{promo.strategy_name}: universe {promo.universe_spec} "
+                   f"resolved only {len(resolved)}/{top_n} names as of "
+                   f"{decision_date} — refusing to trade on it")
+        logger.error(message)
+        if not dry_run:
+            record_observation(
+                session, agent_name="engine.live", severity="CRITICAL",
+                category="live_universe", message=message,
+                metadata={"strategy": promo.strategy_name,
+                          "universe": promo.universe_spec,
+                          "resolved": len(resolved), "top_n": top_n,
+                          "decision_date": str(decision_date)})
+        last_good = list(getattr(promo, "resolved_symbols", None) or [])
+        if not last_good:
+            return None, None, None, message
+        resolved = last_good
+        note = (f"shrunken universe ({message.split(': ', 1)[1]}); fell back "
+                f"to the last good resolution of {promo.resolved_at}")
+    elif not dry_run:
+        promo.resolved_symbols = list(resolved)
+        promo.resolved_at = today
+        session.commit()
+
+    # frames for the resolved set PLUS any held names that dropped out of
+    # it — their last close backs the sell fill if the quote source fails
+    needed = sorted(set(resolved) | set(lot_symbols))
+    frames = {s: market[s] for s in needed if s in market and len(market[s])}
+    frames = adjust_for_splits(frames, load_splits(session, list(frames)))
+
+    # PIT fundamentals, exactly as the validator hands them to the context:
+    # without these, value/growth sleeves silently see None and go all-cash
+    pit = cache.get("pit")
+    if pit is None:
+        pit = cache["pit"] = PITFundamentals(session)
+    pit.preload(needed)
+    return list(resolved), frames, pit, note
+
+
+def _run_one(session, promo, *, provider, today, price_fn, dry_run,
+             universe_cache=None) -> dict:
     factory = make_strategy_factory(promo.spec)
     strategy = factory()
 
@@ -350,20 +494,31 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
         logger.warning("%s was validated on '%s' but live trades raw prices",
                        promo.strategy_name, basis)
 
-    ensure_recent_bars(session, provider, symbols, today)
-    ensure_recent_dividends(session, provider, symbols)
+    journal = TradeJournal(session)
+    open_lots = _open_lots(journal, promo.strategy_name)
+    universe_spec = getattr(promo, "universe_spec", None)
+    if universe_spec:
+        # cross-sectional universe: per-symbol Polygon top-ups over 500+
+        # names would be 500 REST calls; bars-nightly already ingests the
+        # top-1000 into the DB. Refresh only the held names (their bars
+        # back the cheap account mark + dividend credits).
+        refresh_symbols = sorted({t.symbol for t in open_lots})
+    else:
+        refresh_symbols = list(promo.symbols or [])
+    ensure_recent_bars(session, provider, refresh_symbols, today)
+    ensure_recent_dividends(session, provider, refresh_symbols)
 
     # cheap schedule gate BEFORE the expensive load + indicator precompute —
-    # on a hold day only the account mark runs
-    latest = (session.query(DailyBar.date)
-              .filter(DailyBar.symbol.in_(symbols), DailyBar.date < today)
-              .order_by(DailyBar.date.desc()).first())
+    # on a hold day only the account mark runs (universe strategies must
+    # never touch the R2 store on hold days)
+    latest_q = session.query(DailyBar.date).filter(DailyBar.date < today)
+    if not universe_spec:
+        latest_q = latest_q.filter(DailyBar.symbol.in_(refresh_symbols))
+    latest = latest_q.order_by(DailyBar.date.desc()).first()
     if latest is None:
         return {"action": "skip", "reason": "no completed bars before today"}
     decision_date = latest[0]
 
-    journal = TradeJournal(session)
-    open_lots = _open_lots(journal, promo.strategy_name)
     # credit ex-dates crossed since the last cycle BEFORE any trading or
     # marking — runs on hold days too (ex-dates rarely land on boundaries)
     if not dry_run:
@@ -373,13 +528,32 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
         _mark_account(session, promo.strategy_name, journal, price_fn, dry_run)
         return {"action": "hold", "reason": f"not a {promo.schedule} boundary"}
 
-    bars = load_bars(session, symbols, start=today - timedelta(days=HISTORY_DAYS))
+    universe_note = None
+    fundamentals = None
+    if universe_spec:
+        symbols, bars, fundamentals, universe_note = _resolve_universe_frames(
+            session, promo, decision_date, today,
+            lot_symbols=refresh_symbols, dry_run=dry_run,
+            cache=universe_cache if universe_cache is not None else {})
+        if symbols is None:
+            return {"action": "error", "reason": universe_note}
+    else:
+        symbols = refresh_symbols
+        bars = load_bars(session, symbols,
+                         start=today - timedelta(days=HISTORY_DAYS))
+
     bars = {s: df for s, df in bars.items() if len(df)}
     if not bars:
         return {"action": "skip", "reason": "no bars"}
     prep, _ = prepare_bars(bars)
 
-    ctx = _build_context(prep, decision_date, None)
+    # the decision context covers ONLY the (resolved) universe — the
+    # validator restricts each window's bars to its PIT universe the same
+    # way, so a held name that dropped out gets no weight and is sold below;
+    # its frame stays in prep so the sell fill can fall back to last close
+    universe_set = set(symbols)
+    ctx = _build_context({s: p for s, p in prep.items() if s in universe_set},
+                         decision_date, fundamentals)
     weights = strategy.rebalance(ctx) or {}
     weights = {s: w for s, w in weights.items() if w and w > 0}
     total = sum(weights.values())
@@ -387,7 +561,7 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
         weights = {s: w / total for s, w in weights.items()}
 
     prices: dict[str, float] = {}
-    for s in set(symbols) | set(t.symbol for t in open_lots):
+    for s in set(weights) | set(t.symbol for t in open_lots):
         px = price_fn(s)
         if px is None or px <= 0:    # stale/halted: fall back to last close
             px = prep[s]["last_close"] if s in prep else 0.0
@@ -469,10 +643,15 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run) -> dict:
         session.commit()
         _mark_account(session, promo.strategy_name, journal, price_fn, dry_run)
 
-    return {"action": "rebalance" if actions else "hold",
-            "decision_date": str(decision_date),
-            "weights": {s: round(w, 4) for s, w in weights.items()},
-            "trades": actions}
+    result = {"action": "rebalance" if actions else "hold",
+              "decision_date": str(decision_date),
+              "weights": {s: round(w, 4) for s, w in weights.items()},
+              "trades": actions}
+    if universe_spec:
+        result["universe"] = {"spec": universe_spec, "size": len(symbols)}
+        if universe_note:
+            result["universe"]["note"] = universe_note
+    return result
 
 
 def _mark_account(session, strategy_name: str, journal: TradeJournal,

@@ -138,15 +138,13 @@ def main(argv: list[str] | None = None) -> dict:
         # POINT-IN-TIME universe: plan the fold geometry on SPY's calendar
         # (the NYSE trading calendar), resolve each window's top-N as of the
         # trading day BEFORE its first scored day, then load the union once.
-        import re
-
-        from edgefinder.engine.data import resolve_universe
+        from edgefinder.engine.data import parse_universe_spec, resolve_universe
         from edgefinder.engine.walkforward import plan_folds
 
-        m = re.fullmatch(r"top:(\d+)(?:\+(\d+))?", args.universe)
-        if not m:
-            raise SystemExit(f"bad --universe {args.universe!r} (use top:N[+OFFSET])")
-        top_n, rank_offset = int(m.group(1)), int(m.group(2) or 0)
+        try:
+            top_n, rank_offset = parse_universe_spec(args.universe)
+        except ValueError as e:
+            raise SystemExit(str(e)) from None
 
         session = get_session_factory(get_engine())()
         try:
@@ -172,14 +170,16 @@ def main(argv: list[str] | None = None) -> dict:
                     rank_top_universe,
                 )
                 market = load_bars_from_store(None, start=None)
+            from edgefinder.engine.data import trailing_rank_start
+
             per_window: dict = {}
             for w_start, _ in windows:
                 i = days.index(w_start)
                 as_of = days[max(0, i - 1)]
                 # trailing rank window: the --rank-window trading days
-                # ending at as_of (0 = lifetime-through-as_of, legacy)
-                rank_start = (days[max(0, i - args.rank_window)]
-                              if args.rank_window else None)
+                # ending at as_of (0 = lifetime-through-as_of, legacy);
+                # shared arithmetic with the live runner (engine/data)
+                rank_start = trailing_rank_start(days, as_of, args.rank_window)
                 if market is not None:
                     per_window[w_start] = rank_top_universe(
                         market, as_of, top_n, rank_offset=rank_offset,
