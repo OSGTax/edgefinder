@@ -72,6 +72,19 @@ export function fmtDate(t) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+/* Full trade timestamp in US/Eastern, for independent fill verification.
+   The trades API already serializes entry/exit times as ET ISO strings
+   (offset included), so rendering in that SAME zone — not the viewer's —
+   is what makes the displayed time match the broker clock. */
+export function fmtDateTimeET(iso) {
+  if (!iso) return DASH;
+  const d = new Date(iso);
+  return d.toLocaleString('en-US', {
+    timeZone: 'America/New_York', month: 'numeric', day: 'numeric',
+    hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
+  }) + ' ET';
+}
+
 export function fmtTime(iso) {
   if (!iso) return DASH;
   const d = new Date(iso);

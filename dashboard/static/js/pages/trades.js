@@ -3,7 +3,7 @@
    on filter change (the old page's stale-sort bug). */
 
 import { apiGet } from '../core/net.js';
-import { fmtPnl, fmtPct, fmtPrice, fmtNum, fmtInt, fmtDate, fmtDuration, upDownClass } from '../core/fmt.js';
+import { fmtDateTimeET, fmtPnl, fmtPct, fmtPrice, fmtNum, fmtInt, fmtDate, fmtDuration, upDownClass } from '../core/fmt.js';
 import { h, clear, renderEmpty, panel } from '../core/dom.js';
 
 const state = { strategy: '', status: '', symbol: '', sortCol: 'entry_time', sortDir: -1, expanded: null, trades: [] };
@@ -19,7 +19,7 @@ const COLS = [
   ['r_multiple', 'R', t => fmtNum(t.r_multiple, 1), true],
   ['hold_duration_hours', 'Held', t => fmtDuration(t.hold_duration_hours), true],
   ['status', 'Status', t => t.status, false],
-  ['entry_time', 'Opened', t => fmtDate(t.entry_time), true],
+  ['entry_time', 'Opened', t => fmtDateTimeET(t.entry_time), true],
 ];
 
 function filtered() {
@@ -53,11 +53,11 @@ function expandRow(t) {
   td.append(
     h('div', { class: 'grid-2 gap-12' },
       h('div', {},
-        h('h4', { text: `Entry — ${fmtDate(t.entry_time)} @ ${fmtPrice(t.entry_price)}` }),
+        h('h4', { text: `Entry — ${fmtDateTimeET(t.entry_time)} @ ${fmtPrice(t.entry_price)}` }),
         h('p', { class: 't-2', text: t.entry_reasoning || 'no reasoning recorded' }),
         indicatorChips(t.indicators_at_entry)),
       h('div', {},
-        h('h4', { text: t.exit_time ? `Exit — ${fmtDate(t.exit_time)} @ ${fmtPrice(t.exit_price)} (${t.exit_reason || '—'})` : 'Still open' }),
+        h('h4', { text: t.exit_time ? `Exit — ${fmtDateTimeET(t.exit_time)} @ ${fmtPrice(t.exit_price)} (${t.exit_reason || '—'})` : 'Still open' }),
         h('p', { class: 't-2', text: t.exit_reasoning || (t.exit_time ? 'no reasoning recorded' : '') }),
         t.exit_time ? indicatorChips(t.indicators_at_exit) : null),
     ),
