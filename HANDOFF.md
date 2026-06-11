@@ -482,22 +482,27 @@ engines, not 12 independent edges; total-return bar only — none clear
 risk-adjusted) in `reviews/HUNT-ROUND-4.md`. The CONTINUOUS LOOP IS
 STOPPED — goal exceeded. Queue idle.
 
-**NEXT (owner decisions, in order):**
-1. **Burn the sealed holdout (2025-12-05→) on the twelve** — needs
-   explicit owner sign-off; it has never been looked at, through all
-   four rounds.
-2. **Live-universe mechanics** for cross-sectional finalists
-   (resolve-at-promotion vs nightly re-resolve) — then promote
-   survivors to $100k paper accounts via `engine.promote`.
+**HOLDOUT BURNED 2026-06-11 — COHORT PASS, 12/12 positive excess
+(median +25.9pp; null −0.02 valid).** Pre-registered protocol
+`reviews/HOLDOUT-BURN-PROTOCOL.md`; restricted report
+`reviews/HOLDOUT-BURN.md` (cohort-only read — do NOT dissect the burned
+window). **NEW HOLDOUT WALL: 2026-06-11** — all future validations use
+`--holdout-start 2026-06-11`; the burned window is ordinary in-sample
+now and may never be cited as out-of-sample.
+
+**NEXT (single remaining owner decision):** live-universe mechanics for
+cross-sectional finalists (resolve-at-promotion vs re-resolve at each
+rebalance; recommendation = re-resolve with a <450-names guard) — then
+promote the twelve to $100k paper accounts via `engine.promote`.
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
 The machine is fidelity-verified end to end. Lanes ready:
 - **ETF lane** (21 yr, 2005→now, protected symbols — runs from the DB):
-  `python -m edgefinder.engine.validate --strategy X --symbols ... --schedule monthly --holdout-start 2025-12-05 --record`
+  `python -m edgefinder.engine.validate --strategy X --symbols ... --schedule monthly --holdout-start 2026-06-11 --record`
 - **Stock lane** (5 yr, 2021-06→now, PIT top-N incl. graveyard, costed, TR
   — **runs from R2 since the slim**):
-  `python -m edgefinder.engine.validate --strategy X --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2025-12-05 --record`
+  `python -m edgefinder.engine.validate --strategy X --universe top:500 --start 2021-06-01 --costed --div-adjust --bars-from r2 --holdout-start 2026-06-11 --record`
 - **Fundamental/Lynch lane**: PIT fundamentals 2019→now (128,854 snapshots);
   add `--pit-fundamentals`; strategies read `a.fundamentals.earnings_growth`
   etc. in rebalance(ctx); compute P/E-style ratios from `a.price` at
