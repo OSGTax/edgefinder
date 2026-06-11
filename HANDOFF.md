@@ -463,19 +463,32 @@ double-fired wave (trigger now session-branch-only) and silently lost
 records on pooler timeouts (validate.py exits 3 after 4 record attempts;
 max-parallel 6→4; v5.48.1).
 
-### 🏹 HUNT ROUND 4 — IN FLIGHT (2026-06-10, v5.49 roster `engine/hunt_r4.py`)
+### 🏆 HUNT ROUND 4 — COMPLETE · **GOAL REACHED: 12 of 10 CONFIRMED FINALISTS** (2026-06-11; report `reviews/HUNT-ROUND-4.md`)
 
-CONTINUOUS-LOOP hunt (owner directive: loop until 10 confirmed).
-Roster (12 + 2 randoms, frozen pre-run): growth-vein probes
-(fast_growers_rev, fast_growers_mom, peg_growers, steady_compounders),
-sleeve pairings of the three confirmed engines (growth_value_barbell,
-growth_mom_barbell, tri_sleeve), momentum formation cousins (mom_3_12,
-mom_sharpe_rank), covered-field value cousins (value_cr_fortress,
-roe_value), min_vol_uptrend. Wave hunt-r4-w1 in `hunt/queue.json`;
-results label hunt-r4:* (ids > 146). If resuming in a fresh session:
-verdict standard in `reviews/HUNT-ROUND-3.md`, then continue the loop —
-evaluate wave → re-check TR-bar passers (shifts ±21d + late) → confirm
-on 3/3 → pre-register next round.
+Round 4 confirmed SIX of seven re-checked candidates — the goal round:
+**growth_mom_barbell** (+19.6 main; re-checks +26.7/+15.6/+36.2 — lab
+records), **tri_sleeve**, **growth_value_barbell** (best risk profile:
+Sharpe 2.10, dd 21.5%), **mom_3_12**, **peg_growers**,
+**fast_growers_rev** (thinnest pass). Killed: fast_growers_mom (2/3 —
+integrations die, sleeves survive), mom_sharpe_rank, roe_value,
+value_cr_fortress, steady_compounders, min_vol_uptrend. Controls clean.
+
+**FINAL SCOREBOARD (4 rounds, 73 candidates, 12 confirmed, 16% hit
+rate):** xsec_mom_12_1 · value_mom_barbell · mom_inverse_vol ·
+mom_earnings_tilt · barbell_trend_value · fast_growers ·
+growth_mom_barbell · tri_sleeve · growth_value_barbell · mom_3_12 ·
+peg_growers · fast_growers_rev. Full rollup + caveats (THREE underlying
+engines, not 12 independent edges; total-return bar only — none clear
+risk-adjusted) in `reviews/HUNT-ROUND-4.md`. The CONTINUOUS LOOP IS
+STOPPED — goal exceeded. Queue idle.
+
+**NEXT (owner decisions, in order):**
+1. **Burn the sealed holdout (2025-12-05→) on the twelve** — needs
+   explicit owner sign-off; it has never been looked at, through all
+   four rounds.
+2. **Live-universe mechanics** for cross-sectional finalists
+   (resolve-at-promotion vs nightly re-resolve) — then promote
+   survivors to $100k paper accounts via `engine.promote`.
 
 ### 🚀 HUNT KICKOFF (for the next session, when the owner says go)
 
