@@ -87,3 +87,65 @@ jobs:
           echo "Running: backfill_daily_bars.py --start $START --end $END --top-per-day 1000 --execute"
           python scripts/backfill_daily_bars.py \
             --start "$START" --end "$END" --top-per-day 1000 --execute
+
+  # Intraday pilot: append yesterday's RTH minute bars for the frozen menu
+  # (intraday/menu.json) to the R2 minute store. Merge-only and self-healing
+  # (trailing 5-day window — a missed night is topped up by the next run).
+  # Skips green while the menu is unresolved or secrets are missing, the
+  # same convention as the daily job above. No DB involved — R2 only.
+  minute-append:
+    if: vars.BARS_NIGHTLY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      # shared with the flag-triggered backfill so the two never write the
+      # minute store concurrently
+      group: minute-backfill
+      cancel-in-progress: false
+    env:
+      EDGEFINDER_POLYGON_API_KEY: ${{ secrets.EDGEFINDER_POLYGON_API_KEY }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check menu + secrets (skip green until both exist)
+        id: gate
+        run: |
+          set -euo pipefail
+          ready=true
+          for v in EDGEFINDER_POLYGON_API_KEY R2_ACCESS_KEY_ID \
+                   R2_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET; do
+            if [ -z "${!v:-}" ]; then
+              echo "::notice::repo secret $v is not set — minute append skipped (self-enables once all secrets exist)"
+              ready=false
+            fi
+          done
+          N="$(python3 -c "import json; print(len(json.load(open('intraday/menu.json')).get('symbols', [])))")"
+          if [ "$N" = "0" ]; then
+            echo "::notice::intraday/menu.json has no symbols yet — minute append skipped (run the MENU mode of minute-backfill first)"
+            ready=false
+          fi
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install package
+        if: steps.gate.outputs.ready == 'true'
+        run: pip install -e .
+
+      - name: Append yesterday's minute bars (trailing 5-day window)
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          START="$(date -u -d '5 days ago' +%F)"
+          END="$(date -u -d 'yesterday' +%F)"
+          echo "Running: backfill_minute_bars.py --menu intraday/menu.json --start $START --end $END"
+          python scripts/backfill_minute_bars.py \
+            --menu intraday/menu.json --start "$START" --end "$END"
