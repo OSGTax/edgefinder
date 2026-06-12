@@ -12,6 +12,53 @@ since PIVOTED (see below). Read it for context, not as the current plan.
 
 ---
 
+## ⏱️ INTRADAY INITIATIVE — PHASE 1 (2026-06-12): minute-bar data layer
+
+**Status: data layer BUILT (store + resumable backfill + nightly append +
+flag-gated workflow, fully tested offline); the real backfill is PENDING the
+owner flipping `ops/minute-backfill.flag` to EXECUTE.** No dashboard changes,
+no version bump (data-layer only).
+
+**Phases:** 1 data ✅ · 2 intraday backtest semantics · 3 intraday hunt ·
+4 live intraday loop · 5 full-market streaming (NOT the pilot loader).
+
+What exists (this phase):
+- `intraday/menu.json` — the FROZEN pilot menu (pre-registration: the
+  criteria string — top-50 by trailing-126-trading-day mean dollar volume
+  as of 2026-06-11, resolve_universe semantics, + the 10 protected ETFs —
+  is committed with `symbols: []`; the first real MENU-mode run prints the
+  list and the orchestrator commits it).
+- `scripts/resolve_intraday_menu.py` — computes the menu from the DAILY
+  store/DB (`engine/data.resolve_universe` + `trailing_rank_start`, SPY
+  calendar).
+- `edgefinder/data/minutestore.py` — minute-bar R2 store:
+  `minute/{SYMBOL}/{YYYY-MM}.parquet` (ts = UTC epoch seconds int64,
+  OHLCV), **RTH bars only** (09:30–15:59 ET bar-starts), sorted/deduped,
+  merge-only grow-only sync (same discipline as the daily barstore),
+  `minute/_manifest.json` with per-month rows/min_ts/max_ts/`complete`,
+  `verify()` proves manifest == objects both directions. Pilot budget:
+  ~60 symbols × ~390 bars/day × ~1,260 days ≈ 30M rows ≈ ~2 GB.
+- `scripts/backfill_minute_bars.py` — RESUMABLE backfill from Polygon
+  REST minute aggs: month-aligned 2-month chunks (worst-case extended
+  session 2×23×960 = 44k bars < the 50k REST cap; a maxed response fails
+  loudly), only manifest-`complete` months are skipped on rerun (a partial
+  nightly top-up can never mask a hole), per-symbol failure logs and
+  continues but the run **exits non-zero if any symbol is incomplete**.
+- `.github/workflows/minute-backfill.yml` — push-triggered on
+  `ops/minute-backfill.flag` (currently `dry`): `MENU` → resolve+print the
+  menu; `EXECUTE` → full backfill from the committed menu; anything else →
+  `--dry-run` plan. `bars-nightly.yml` gained a `minute-append` job
+  (trailing 5-day RTH append for the menu; skips green while the menu is
+  empty or secrets are missing — same convention as the daily job).
+- Tests: `tests/test_minutestore.py`, `tests/test_minute_backfill.py`,
+  `tests/test_intraday_menu.py` (29 tests, stubbed S3/client, no network).
+
+Go-live sequence (owner/orchestrator): flag `MENU` → commit the printed
+symbols into `intraday/menu.json` → flag `EXECUTE` (resumable; re-flip on
+failure) → nightly append self-enables once the menu has symbols.
+
+---
+
 ## 🎯 CURRENT INITIATIVE (2026-06-09) — CLEAN ENGINE REBUILD + GENERAL WORKBENCH
 
 > **If you are a fresh session asked to "continue" or "finish the project

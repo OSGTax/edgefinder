@@ -1,0 +1,9 @@
+{
+  "frozen_at": "2026-06-12",
+  "criteria": "top-50 by trailing-126-trading-day mean dollar volume as of 2026-06-11 (the daily store's ranking, resolve_universe semantics) + the protected ETF menu",
+  "as_of": "2026-06-11",
+  "top_n": 50,
+  "rank_window": 126,
+  "etfs": ["SPY", "QQQ", "IWM", "DIA", "GLD", "TLT", "EFA", "AGG", "LQD", "HYG"],
+  "symbols": []
+}
