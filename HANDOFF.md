@@ -14,10 +14,18 @@ since PIVOTED (see below). Read it for context, not as the current plan.
 
 ## ⏱️ INTRADAY INITIATIVE — PHASE 1 (2026-06-12): minute-bar data layer
 
-**Status: data layer BUILT (store + resumable backfill + nightly append +
-flag-gated workflow, fully tested offline); the real backfill is PENDING the
-owner flipping `ops/minute-backfill.flag` to EXECUTE.** No dashboard changes,
-no version bump (data-layer only).
+**Status: PHASE 1 COMPLETE (2026-06-12).** Store backfilled and verified:
+52/52 menu symbols, 0 failed, 3,049 Parquet objects, **628 MB** (~25M RTH
+minute rows, 2021-06 → now; ~6% of the R2 free tier). The resume-or-noop
+path is proven in production (re-push of the EXECUTE flag scanned the
+manifest and exited green in 2 min, topping up only the in-progress
+month). Nightly minute-append is live in bars-nightly.yml. Frozen menu:
+`intraday/menu.json` (52 symbols, mechanical criteria, committed before
+any intraday backtest exists). No dashboard changes, no version bump
+(data-layer only). **NEXT: PHASE 2 — the intraday backtest engine**
+(next-bar fills, punitive intraday spread/impact cost model, session
+handling, day-based folds over minute bars) — start it in a fresh
+session from this note.
 
 **Phases:** 1 data ✅ · 2 intraday backtest semantics · 3 intraday hunt ·
 4 live intraday loop · 5 full-market streaming (NOT the pilot loader).
