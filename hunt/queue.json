@@ -1,17 +1,4 @@
 {
-  "wave": "daily-r2-rechecks",
-  "runs": [
-    {
-      "id": "rc-shift-minus",
-      "args": "--strategy sh_trend_hold --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --is-days 357 --universe-label daily-r2:recheck-shift-"
-    },
-    {
-      "id": "rc-shift-plus",
-      "args": "--strategy sh_trend_hold --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --is-days 399 --universe-label daily-r2:recheck-shift+"
-    },
-    {
-      "id": "rc-late",
-      "args": "--strategy sh_trend_hold --universe top:500 --start 2022-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:recheck-late"
-    }
-  ]
+  "wave": "idle",
+  "runs": []
 }
