@@ -1,3 +1,5 @@
+**INTRADAY ROUND 1 COMPLETE (2026-06-14) — 0 of 10 finalists.** Full report reviews/INTRADAY-ROUND-1.md. Every fast-signal family on the liquid mega-caps, traded every 5 min flat-at-close, FAILED — none beat SPY on fold-majority; none cleared the do-nothing floor. Toll thesis confirmed quantitatively: losses ~monotonic in trade count (momentum 169k trades −60.6pp, reversal 164k −60.5, vwap −24, orb −16; vs the light gap_fade 6k −2.5 ≈ the do-nothing anchor). Controls clean: flat −1.29, buy_hold_open anchor −2.45 (the honest intraday floor — flatten-at-close forfeits overnight drift), randoms ~−6. Holdout 2026-04-01 sealed/unburned. NO re-checks (nothing passed). In-flight fix this round: record.py now coerces numpy scalars to JSON (v5.54.1 — 9/12 jobs computed fine but failed the write on np.bool_). NEXT (owner call): ROUND 2 tests the turnover hypothesis — enter-once hold-to-close gap/ORB, coarse cadence (30-60min), optional overnight-hold (a thesis change). Do NOT retune the round-1 losers.
+
 # HANDOFF — trading-edge validation effort
 
 Continuation notes for picking this work up in a Codespace (or any fresh
