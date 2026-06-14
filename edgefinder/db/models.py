@@ -673,3 +673,49 @@ class DailyBar(Base):
     transactions: Mapped[int | None] = mapped_column(Integer)
     source: Mapped[str] = mapped_column(String(20), default="flatfiles")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 20. llm_decision_cache ─────────────────────────────
+
+
+class LLMDecisionCache(Base):
+    """Memoized LLM strategy decisions, keyed by the anonymized-context hash.
+
+    LLMStrategy serializes the point-in-time universe into an ANONYMIZED,
+    dateless, ticker-relabeled payload, hashes it, and asks the model for
+    target weights. Caching by that hash makes a re-run reproduce identical
+    trades — preserving the reproducible-scorecard / re-check discipline
+    (and avoiding paid calls on a re-run). One row per distinct context.
+    """
+
+    __tablename__ = "llm_decision_cache"
+
+    context_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    weights_json: Mapped[dict] = mapped_column(JSON)   # {anon_label: weight}
+    model: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 21. llm_decision_log ───────────────────────────────
+
+
+class LLMDecisionLog(Base):
+    """Append-only audit of every LLM strategy decision (cache miss).
+
+    Stores the full prompt and raw response alongside the parsed weights so
+    the anonymized backtest — explicitly non-authoritative because an LLM
+    has memorized real market history — is fully auditable after the fact.
+    """
+
+    __tablename__ = "llm_decision_log"
+    __table_args__ = (
+        Index("idx_llm_decision_log_hash", "context_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    context_hash: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[str] = mapped_column(String(60))
+    prompt: Mapped[str] = mapped_column(Text)
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    weights_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
