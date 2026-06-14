@@ -65,6 +65,21 @@ def _menu_symbols(path: str) -> list[str]:
     return syms
 
 
+def _split_frames(frames: dict, symbols: list[str]) -> tuple[dict, "object"]:
+    """Split loaded minute frames into (tradable bars, SPY benchmark frame).
+
+    SPY is always loaded for the benchmark, but it is ALSO a legitimate
+    tradable symbol — so we must NOT remove it from the tradable set when
+    splitting. (Popping SPY out for the benchmark produced a false
+    "no minute bars for SPY" whenever SPY itself was traded — caught by the
+    first real-data smoke, 2026-06-14.) Returns the bars dict restricted to
+    the requested symbols and the SPY frame (None if absent)."""
+    want = set(symbols)
+    spy = frames.get("SPY")
+    bars = {s: df for s, df in frames.items() if s in want}
+    return bars, spy
+
+
 def main(argv: list[str] | None = None) -> dict:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--strategy", required=True,
@@ -125,13 +140,12 @@ def main(argv: list[str] | None = None) -> dict:
     store = MinuteStore()
     load = sorted(set(symbols) | {"SPY"})
     frames = store.load_minute_bars(load, start, end)
-    spy = frames.pop("SPY", None)
-    bars = {s: df for s, df in frames.items() if s in set(symbols)}
+    bars, spy = _split_frames(frames, symbols)
+    if spy is None:
+        raise SystemExit("SPY not in the minute store — backfill it first")
     missing = [s for s in symbols if s not in bars]
     if missing:
         raise SystemExit(f"no minute bars for: {', '.join(missing)}")
-    if spy is None:
-        raise SystemExit("SPY not in the minute store — backfill it first")
 
     cost_model = None
     if args.costed:

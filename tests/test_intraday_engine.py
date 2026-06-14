@@ -420,3 +420,32 @@ class TestRecord:
         assert row.config["engine"] == "intraday"
         assert row.universe == "intraday:1syms"
         assert row.verdict in ("PASS", "FAIL")
+
+
+# ── CLI frame-split (the SPY-as-traded-symbol regression) ───────────────
+
+
+class TestCLISplitFrames:
+    def test_spy_as_traded_symbol_is_not_dropped(self):
+        # SPY is the benchmark AND a tradable name; splitting must keep it in
+        # bars (the pop() bug returned a false "no minute bars for SPY").
+        from edgefinder.engine.intraday_validate import _split_frames
+
+        frames = {"SPY": "spy_df", "AAA": "aaa_df"}
+        bars, spy = _split_frames(frames, ["SPY"])
+        assert spy == "spy_df"
+        assert bars == {"SPY": "spy_df"}          # SPY survives as tradable
+
+    def test_spy_benchmark_only_excluded_from_bars(self):
+        from edgefinder.engine.intraday_validate import _split_frames
+
+        frames = {"SPY": "spy_df", "AAA": "aaa_df"}
+        bars, spy = _split_frames(frames, ["AAA"])
+        assert spy == "spy_df"                     # benchmark available
+        assert bars == {"AAA": "aaa_df"}           # SPY not traded
+
+    def test_missing_spy_returns_none(self):
+        from edgefinder.engine.intraday_validate import _split_frames
+
+        bars, spy = _split_frames({"AAA": "aaa_df"}, ["AAA"])
+        assert spy is None and bars == {"AAA": "aaa_df"}
