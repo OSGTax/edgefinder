@@ -172,6 +172,7 @@ def run_intraday_backtest(
     flatten_at_close: bool = True,
     benchmark: pd.DataFrame | None = None,
     bar_seconds: int = 60,
+    rebalance_band: float = 0.0,
     log_decisions: bool = False,
 ) -> IntradayBacktestResult:
     """Replay ``strategy`` bar-by-bar over a minute calendar; return a DAILY
@@ -182,7 +183,17 @@ def run_intraday_backtest(
     ET clock; ``decision_interval`` thins decisions to every Nth bar; costs use
     ``cost_model`` (the FIXED intraday model) or flat ``cost_bps`` otherwise.
     ``trade_start_day`` gates both trading and marks (sessions before it feed
-    history only)."""
+    history only).
+
+    ``rebalance_band`` (default 0.0): skip a name's re-true when
+    ``abs(delta)*open_px < rebalance_band*equity`` UNLESS the trade opens
+    (holdings 0 -> >0) or fully closes (target 0) the position — mirrors the
+    DAILY engine's _execute_to_target band EXACTLY. This is what makes an
+    "enter-once, hold-to-close" strategy actually hold: the same stable target
+    basket every decision bar re-trues only on meaningful drift, so the cost is
+    ~2 tolls/day (entry + MOC flatten) instead of integer-share churn as the
+    equity mark drifts. Default 0.0 = exact re-true, preserving every prior
+    (round-1) result bit-for-bit."""
     cost_rate = cost_bps / 1e4
     bar_min = max(1, bar_seconds // 60)
 
@@ -237,7 +248,7 @@ def run_intraday_backtest(
             cash = _execute(
                 pending["weights"], prep, ts_int, holdings, cash,
                 cost_model, cost_rate, trades, sess_date,
-                pending["decision_idx_by_sym"])
+                pending["decision_idx_by_sym"], rebalance_band)
             pending = None
 
         # ── 2. flatten-at-close: at each session's last bar, sell to MOC ──
@@ -336,9 +347,14 @@ def _build_context(prep, ts_int, sess_date, minute, bar_min, is_session_last):
 
 
 def _execute(weights, prep, ts_int, holdings, cash, cost_model, cost_rate,
-             trades, sess_date, decision_idx_by_sym):
+             trades, sess_date, decision_idx_by_sym, rebalance_band=0.0):
     """Trade toward target weights at THIS bar's open. Sells settle before buys;
     buys capped by cash; integer shares. Guards raise on look-ahead violations.
+
+    ``rebalance_band`` skips a name's re-true when ``abs(delta)*open_px <
+    rebalance_band*equity`` UNLESS the trade opens or fully closes the position
+    — mirrors the DAILY engine exactly (the dust/churn guard that makes
+    enter-once-hold strategies actually hold). Default 0.0 = exact re-true.
     """
     open_px: dict[str, float] = {}
     fill_idx: dict[str, int] = {}
@@ -375,8 +391,13 @@ def _execute(weights, prep, ts_int, holdings, cash, cost_model, cost_rate,
         if s not in open_px or s in frozen:
             continue
         d = target.get(s, 0) - holdings.get(s, 0)
-        if d != 0:
-            deltas[s] = d
+        if d == 0:
+            continue
+        opens_or_closes = holdings.get(s, 0) == 0 or target.get(s, 0) == 0
+        if (rebalance_band > 0.0 and not opens_or_closes
+                and abs(d) * open_px[s] < rebalance_band * equity):
+            continue
+        deltas[s] = d
 
     for s, d in deltas.items():                 # sells first (raise cash)
         if d < 0:

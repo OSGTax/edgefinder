@@ -53,13 +53,18 @@ def make_intraday_factory(spec: str):
         return lambda: IntradayMeanReversion(sym, lookback, z)
 
     from edgefinder.engine.intraday_roster import INTRADAY_R1_SPECS
+    from edgefinder.engine.intraday_roster_r2 import INTRADAY_R2_SPECS
 
     if spec in INTRADAY_R1_SPECS:
         return INTRADAY_R1_SPECS[spec]
+    if spec in INTRADAY_R2_SPECS:
+        return INTRADAY_R2_SPECS[spec]
     raise ValueError(
         f"unknown intraday strategy spec {spec!r} (use flat, buy_hold_open:SYM, "
         "mean_rev:SYM[:lookback:z], or a pre-registered roster spec from "
-        f"intraday_roster.INTRADAY_R1_SPECS: {', '.join(sorted(INTRADAY_R1_SPECS))})")
+        f"intraday_roster.INTRADAY_R1_SPECS ({', '.join(sorted(INTRADAY_R1_SPECS))}) "
+        f"or intraday_roster_r2.INTRADAY_R2_SPECS "
+        f"({', '.join(sorted(INTRADAY_R2_SPECS))}))")
 
 
 def _menu_symbols(path: str) -> list[str]:
@@ -108,6 +113,11 @@ def main(argv: list[str] | None = None) -> dict:
                     help="carry positions across sessions (overnight gap marked in)")
     p.add_argument("--decision-interval", type=int, default=1,
                    help="decide every Nth bar (1 = every bar)")
+    p.add_argument("--rebalance-band", type=float, default=0.0,
+                   help="skip re-true deltas smaller than this fraction of "
+                        "equity unless they open/close a position (the "
+                        "enter-once-hold churn guard; 0.0 = exact re-true). "
+                        "Round 2 uses 0.01.")
     p.add_argument("--bar-seconds", type=int, default=60)
     p.add_argument("--is-days", type=int, default=60)
     p.add_argument("--oos-days", type=int, default=21)
@@ -169,7 +179,8 @@ def main(argv: list[str] | None = None) -> dict:
         holdout_eval=args.burn_holdout, warmup_days=args.warmup_days,
         start_cash=args.start_cash, cost_model=cost_model, cost_bps=args.cost_bps,
         flatten_at_close=args.flatten, decision_interval=args.decision_interval,
-        bar_seconds=args.bar_seconds, risk_adjusted=not args.total_return)
+        bar_seconds=args.bar_seconds, rebalance_band=args.rebalance_band,
+        risk_adjusted=not args.total_return)
     print(json.dumps(scorecard, indent=2, default=str))
 
     if args.record:

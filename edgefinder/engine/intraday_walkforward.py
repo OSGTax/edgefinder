@@ -86,6 +86,7 @@ def run_intraday_walkforward(
     flatten_at_close: bool = True,
     decision_interval: int = 1,
     bar_seconds: int = 60,
+    rebalance_band: float = 0.0,
     risk_adjusted: bool = True,
     pass_min_trades: int = 30,
     calendar: list | None = None,
@@ -127,7 +128,8 @@ def run_intraday_walkforward(
             start_cash=start_cash, decision_interval=decision_interval,
             cost_model=cost_model, cost_bps=cost_bps,
             trade_start_day=oos_start, flatten_at_close=flatten_at_close,
-            benchmark=bench, bar_seconds=bar_seconds)
+            benchmark=bench, bar_seconds=bar_seconds,
+            rebalance_band=rebalance_band)
         folds.append(Fold(
             index=len(folds), oos_start=oos_start, oos_end=oos_end,
             stats=result.stats, regime=_regime(spy_daily, oos_start, oos_end)))
@@ -144,7 +146,8 @@ def run_intraday_walkforward(
             start_cash=start_cash, decision_interval=decision_interval,
             cost_model=cost_model, cost_bps=cost_bps,
             trade_start_day=h_start, flatten_at_close=flatten_at_close,
-            benchmark=bench, bar_seconds=bar_seconds).stats
+            benchmark=bench, bar_seconds=bar_seconds,
+            rebalance_band=rebalance_band).stats
         h_exs = _excess_sharpe(h)
         if risk_adjusted:
             h_passes = ((h_exs or 0) > 0
@@ -181,6 +184,7 @@ def run_intraday_walkforward(
     card["config"]["bar"] = "1min"
     card["config"]["flatten_at_close"] = flatten_at_close
     card["config"]["decision_interval"] = decision_interval
+    card["config"]["rebalance_band"] = rebalance_band
     card["config"]["costed"] = cost_model is not None
     card["config"]["prices"] = prices_label
     # mean intraday drawdown across folds (the honest intra-session figure)
