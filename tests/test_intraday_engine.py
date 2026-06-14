@@ -495,3 +495,32 @@ class TestCLISplitFrames:
 
         bars, spy = _split_frames({"AAA": "aaa_df"}, ["AAA"])
         assert spy is None and bars == {"AAA": "aaa_df"}
+
+
+# ── record numpy-coercion (intraday-r1 wave-1 write bug) ────────────────
+
+
+class TestRecordNumpyCoercion:
+    def test_numpy_scalars_in_scorecard_round_trip(self, db_session):
+        """np.float64/np.bool_ in a scorecard must not break the JSON write
+        (9/12 intraday-r1 jobs computed fine but failed here, 2026-06-14)."""
+        import numpy as np
+        from edgefinder.engine.record import record_validation_run
+
+        card = {
+            "strategy": "np_probe",
+            "config": {"engine": "intraday", "costed": np.True_},
+            "oos": {"mean_excess_vs_spy_pct": np.float64(-12.34),
+                    "nan_metric": np.float64("nan"),
+                    "n": np.int64(7)},
+            "criteria": {"mean_excess_positive": np.False_, "all_met": np.False_},
+            "holdout": None,
+            "verdict": "FAIL",
+        }
+        rid = record_validation_run(db_session, card, universe="intraday-r1:np_probe")
+        row = db_session.get(ValidationRun, rid)
+        assert row.criteria["mean_excess_positive"] is False
+        assert row.config["costed"] is True
+        assert row.oos["mean_excess_vs_spy_pct"] == -12.34
+        assert row.oos["nan_metric"] is None      # non-finite nulled
+        assert row.oos["n"] == 7
