@@ -1,10 +1,6 @@
 {
-  "wave": "intraday-r1-w1",
+  "wave": "intraday-r1-w1-redo",
   "runs": [
-    {
-      "id": "null-flat",
-      "args": "--strategy flat --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --flatten-at-close --decision-interval 5 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --universe-label intraday-r1:flat"
-    },
     {
       "id": "anchor-bh-spy",
       "args": "--strategy buy_hold_open:SPY --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --flatten-at-close --decision-interval 5 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --universe-label intraday-r1:buy_hold_open:SPY"
@@ -28,14 +24,6 @@
     {
       "id": "ir-orb",
       "args": "--strategy ir_orb --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --flatten-at-close --decision-interval 5 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --universe-label intraday-r1:ir_orb"
-    },
-    {
-      "id": "ir-gap-fade",
-      "args": "--strategy ir_gap_fade --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --flatten-at-close --decision-interval 5 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --universe-label intraday-r1:ir_gap_fade"
-    },
-    {
-      "id": "ir-gap-go",
-      "args": "--strategy ir_gap_go --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --flatten-at-close --decision-interval 5 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --universe-label intraday-r1:ir_gap_go"
     },
     {
       "id": "ir-late-mom",
