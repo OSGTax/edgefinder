@@ -49,5 +49,29 @@ jobs:
             echo "intraday.flag is idle — nothing to run"
             exit 0
           fi
+          if [ "$(echo "$ARGS" | cut -d' ' -f1)" = "diag" ]; then
+            SYM="$(echo "$ARGS" | cut -d' ' -f2)"; SYM="${SYM:-SPY}"
+            echo "DIAG: store stats + manifest + load probe for $SYM"
+            python - "$SYM" <<'PY'
+import sys, json
+from datetime import date
+from edgefinder.data.minutestore import MinuteStore
+sym = sys.argv[1]
+s = MinuteStore()
+print("stats:", json.dumps(s.stats()))
+months = s.months(sym)
+keys = sorted(months)
+print(f"{sym}: {len(keys)} manifest months; first={keys[:2]} last={keys[-2:]}")
+recent = [m for m in keys if m >= "2025-06"]
+print(f"{sym}: months>=2025-06: {recent}")
+for m in recent[:1] + recent[-1:]:
+    print(f"  {m}: {months[m]}")
+for a, b in [(date(2026,6,1), date(2026,6,11)), (date(2025,6,2), date(2025,6,6))]:
+    f = s.load_minute_bars([sym], a, b)
+    df = f.get(sym)
+    print(f"load {a}..{b}: {0 if df is None else len(df)} rows")
+PY
+            exit 0
+          fi
           echo "Running: python -m edgefinder.engine.intraday_validate $ARGS"
           python -m edgefinder.engine.intraday_validate $ARGS
