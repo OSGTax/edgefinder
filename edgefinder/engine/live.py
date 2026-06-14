@@ -562,9 +562,18 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run,
     # validator restricts each window's bars to its PIT universe the same
     # way, so a held name that dropped out gets no weight and is sold below;
     # its frame stays in prep so the sell fill can fall back to last close
+    # current book + cash BEFORE the decision, so a stateful strategy sees
+    # its holdings (as weights, at decision-date closes — look-ahead-free,
+    # identical to the backtest's _build_context) and can choose to HOLD.
+    cash = _recalc_cash(session, journal, promo.strategy_name)
+    current: dict[str, int] = {}
+    for t in open_lots:
+        current[t.symbol] = current.get(t.symbol, 0) + t.shares
+
     universe_set = set(symbols)
     ctx = _build_context({s: p for s, p in prep.items() if s in universe_set},
-                         decision_date, fundamentals)
+                         decision_date, fundamentals,
+                         holdings_shares=current, cash=cash)
     weights = strategy.rebalance(ctx) or {}
     weights = {s: w for s, w in weights.items() if w and w > 0}
     total = sum(weights.values())
@@ -578,10 +587,6 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run,
             px = prep[s]["last_close"] if s in prep else 0.0
         prices[s] = px
 
-    cash = _recalc_cash(session, journal, promo.strategy_name)
-    current: dict[str, int] = {}
-    for t in open_lots:
-        current[t.symbol] = current.get(t.symbol, 0) + t.shares
     equity = cash + sum(sh * prices.get(s, 0.0) for s, sh in current.items())
 
     slip = SLIPPAGE_BPS / 1e4
