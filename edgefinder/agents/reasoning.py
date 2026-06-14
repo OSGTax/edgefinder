@@ -225,19 +225,20 @@ def _extract_json_object(text: str) -> str:
     raise ValueError(f"No JSON object found in response: {text[:200]!r}")
 
 
-def _call_claude_cli(
-    system_prompt: str,
-    memory: str,
-    user_content: str,
+def call_claude_json(
+    prompt: str,
     model: str,
     runner: Any | None = None,
 ) -> str:
-    """Invoke `claude -p` and return the inner JSON text.
+    """Invoke `claude -p` over a fully-built prompt; return the inner JSON text.
 
-    Consumes the Claude Pro/Max/Team/Enterprise subscription quota via
-    `CLAUDE_CODE_OAUTH_TOKEN` — no Anthropic API key required. The
-    prompt is piped via stdin (argv has length limits). `runner`
-    defaults to subprocess.run; tests inject a stub.
+    The shared transport: consumes the Claude Pro/Max/Team/Enterprise
+    subscription quota via `CLAUDE_CODE_OAUTH_TOKEN` (no Anthropic API key),
+    pipes the prompt via stdin (argv has length limits), parses the
+    `--output-format json` envelope, and strips any prose wrapping to the
+    first balanced JSON object. `runner` defaults to subprocess.run; tests
+    inject a stub. Reused by both the watchdog reasoning step and the blind
+    LLM strategy (engine/llm_strategy.py) so the call path lives in one place.
     """
     runner = runner or subprocess.run
 
@@ -246,17 +247,6 @@ def _call_claude_cli(
             "CLAUDE_CODE_OAUTH_TOKEN not set. Generate locally with "
             "`claude setup-token` and add it as a GitHub Actions secret."
         )
-
-    schema_str = json.dumps(RESPONSE_SCHEMA, indent=2)
-    prompt = (
-        f"{system_prompt}\n\n"
-        f"## Required output schema (JSON Schema draft 2020-12)\n\n"
-        f"```json\n{schema_str}\n```\n\n"
-        f"## Current agent memory\n\n{memory}\n\n"
-        f"## Input\n\n{user_content}\n\n"
-        "Respond with ONE JSON object that validates against the schema above. "
-        "No markdown fences, no commentary, no text outside the JSON."
-    )
 
     result = runner(
         ["claude", "-p", "--model", model, "--output-format", "json"],
@@ -278,6 +268,27 @@ def _call_claude_cli(
             f"Unexpected claude -p envelope (no 'result' string): {result.stdout[:300]}"
         )
     return _extract_json_object(response_text)
+
+
+def _call_claude_cli(
+    system_prompt: str,
+    memory: str,
+    user_content: str,
+    model: str,
+    runner: Any | None = None,
+) -> str:
+    """Build the watchdog reasoning prompt and call through `call_claude_json`."""
+    schema_str = json.dumps(RESPONSE_SCHEMA, indent=2)
+    prompt = (
+        f"{system_prompt}\n\n"
+        f"## Required output schema (JSON Schema draft 2020-12)\n\n"
+        f"```json\n{schema_str}\n```\n\n"
+        f"## Current agent memory\n\n{memory}\n\n"
+        f"## Input\n\n{user_content}\n\n"
+        "Respond with ONE JSON object that validates against the schema above. "
+        "No markdown fences, no commentary, no text outside the JSON."
+    )
+    return call_claude_json(prompt, model, runner)
 
 
 def reason_over_tick(
