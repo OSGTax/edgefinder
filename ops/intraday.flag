@@ -1,0 +1,1 @@
+--strategy mean_rev:SPY --symbols SPY --start 2025-06-01 --end 2026-06-11 --bars-from r2 --costed --flatten-at-close
