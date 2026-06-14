@@ -200,6 +200,66 @@ class TestLiveCycle:
         assert summary["note"] == "no active promoted strategies"
 
 
+class TestStatefulHoldings:
+    """Live parity for the stateful interface (v5.57): the runner threads the
+    current book into ctx.holdings, so a stateful strategy that decides to HOLD
+    its existing positions produces NO churn across cycles."""
+
+    seen_holdings: list = []
+
+    def _setup(self, factory, monkeypatch):
+        session = factory()
+        _seed_bars(session, "AAA", date(2023, 1, 2), 260, price=100.0)
+        _seed_bars(session, "BBB", date(2023, 1, 2), 260, price=50.0)
+        promote(session, spec="equal_weight", symbols=["AAA", "BBB"],
+                schedule="daily", tier="experimental")
+        session.close()
+
+        TestStatefulHoldings.seen_holdings = []
+
+        class HoldWhatYouHave:
+            """Stateful: on a flat book, equal-weight; once holding, KEEP the
+            exact current weights (reads ctx.holdings -> zero churn)."""
+
+            name = "equal_weight"
+
+            def rebalance(self, ctx):
+                TestStatefulHoldings.seen_holdings.append(dict(ctx.holdings))
+                if ctx.holdings:
+                    return dict(ctx.holdings)        # hold the existing book
+                syms = ctx.symbols()
+                return {s: 1.0 / len(syms) for s in syms} if syms else {}
+
+        import edgefinder.engine.live as live_mod
+        monkeypatch.setattr(live_mod, "make_strategy_factory",
+                            lambda spec: HoldWhatYouHave)
+        return _prices(factory)
+
+    def test_stateful_strategy_holds_across_cycles_no_churn(self, factory,
+                                                            monkeypatch):
+        price_fn = self._setup(factory, monkeypatch)
+        # first cycle opens the book (flat -> equal-weight)
+        first = run_portfolio_cycle(
+            factory, today=date(2024, 2, 1), price_fn=price_fn)
+        assert first["strategies"]["equal_weight"]["action"] == "rebalance"
+        assert TestStatefulHoldings.seen_holdings[0] == {}     # opened flat
+
+        # next trading day, daily schedule, SAME prices -> strategy sees its
+        # book in ctx.holdings and holds: no SELL/BUY churn
+        session = factory()
+        _seed_bars(session, "AAA", date(2024, 2, 1), 1, price=100.0)
+        _seed_bars(session, "BBB", date(2024, 2, 1), 1, price=50.0)
+        session.close()
+        second = run_portfolio_cycle(
+            factory, today=date(2024, 2, 2), price_fn=price_fn)
+        res = second["strategies"]["equal_weight"]
+        # the second decision SAW a populated book (the live runner threaded it)
+        assert any(h for h in TestStatefulHoldings.seen_holdings[1:]), \
+            "live runner never threaded holdings into ctx"
+        # ...and the strategy held its existing book -> NO churn (no trades)
+        assert res["trades"] == []
+
+
 class TestDividendCredits:
     """Live TR parity: ex-dates crossed while holding credit cash.
 

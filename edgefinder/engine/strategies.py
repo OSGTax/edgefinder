@@ -50,6 +50,9 @@ def make_strategy_factory(spec: str):
     from edgefinder.engine.hunt_daily_r1 import HUNT_DAILY_R1_SPECS
     if spec in HUNT_DAILY_R1_SPECS:
         return HUNT_DAILY_R1_SPECS[spec]
+    from edgefinder.engine.hunt_daily_r2 import HUNT_DAILY_R2_SPECS
+    if spec in HUNT_DAILY_R2_SPECS:
+        return HUNT_DAILY_R2_SPECS[spec]
     if spec == "llm_blind" or spec.startswith("llm_blind:"):
         from edgefinder.engine.llm_strategy import make_llm_strategy_factory
         model = spec.split(":", 1)[1] if ":" in spec else None

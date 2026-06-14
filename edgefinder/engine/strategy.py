@@ -23,7 +23,7 @@ strategy CANNOT have a 'trading-sequence bug'. That lives in one tested place.
 from __future__ import annotations
 
 import bisect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Protocol, runtime_checkable
 
@@ -56,10 +56,21 @@ class AssetView:
 
 @dataclass(frozen=True)
 class RebalanceContext:
-    """The whole universe, point-in-time, handed to a strategy each rebalance."""
+    """The whole universe, point-in-time, handed to a strategy each rebalance.
+
+    ``holdings`` is the strategy's CURRENT book at decision time, expressed as
+    a fraction of equity per held symbol (the engine drives it; the strategy
+    only reads it). It is computed look-ahead-free from the PRE-fill shares and
+    the SAME decision-date close prices the strategy sees in ``assets`` — never
+    today's fill. It defaults to ``{}`` so every existing stateless strategy is
+    byte-identical (a strategy that ignores ``holdings`` is unaffected). A
+    stateful hold/exit strategy reads it via ``held``/``held_symbols`` to decide
+    keep/exit/enter per position instead of reselecting the whole book daily.
+    """
 
     date: date
     assets: dict[str, AssetView]
+    holdings: dict[str, float] = field(default_factory=dict)
 
     def symbols(self) -> list[str]:
         return list(self.assets)
@@ -70,6 +81,14 @@ class RebalanceContext:
     def price(self, symbol: str) -> float | None:
         a = self.assets.get(symbol)
         return a.price if a else None
+
+    def held(self, symbol: str) -> float:
+        """Current weight of ``symbol`` in the book (0.0 if not held)."""
+        return self.holdings.get(symbol, 0.0)
+
+    def held_symbols(self) -> list[str]:
+        """Symbols currently held with a positive weight."""
+        return [s for s, w in self.holdings.items() if w > 0]
 
 
 @runtime_checkable

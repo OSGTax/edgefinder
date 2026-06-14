@@ -12,7 +12,7 @@ from datetime import date, timedelta
 import pandas as pd
 import pytest
 
-from edgefinder.engine.backtest import run_backtest
+from edgefinder.engine.backtest import _build_context, prepare_bars, run_backtest
 from edgefinder.engine.strategy import BuyAndHold, EqualWeight, RebalanceContext
 
 
@@ -169,3 +169,85 @@ def test_rebalance_band_zero_is_default_exact_retrue():
                             rebalance_band=0.0)
     assert default.trades == explicit.trades
     assert default.stats == explicit.stats
+
+
+# ── stateful holdings context (v5.57) ────────────────────────────────────
+
+
+class _HoldingsProbe:
+    """Records ctx.holdings on every rebalance but ignores it (stays
+    equal-weight), so a stateless run is provably unaffected by the new field
+    while we can still inspect what the engine fed in."""
+
+    name = "holdings_probe"
+
+    def __init__(self):
+        self.seen: list[dict] = []
+
+    def rebalance(self, ctx):
+        self.seen.append(dict(ctx.holdings))
+        syms = ctx.symbols()
+        return {s: 1.0 / len(syms) for s in syms} if syms else {}
+
+
+def test_holdings_threading_does_not_change_a_stateless_strategy():
+    # Backward-compat golden proof: EqualWeight (and any strategy that ignores
+    # ctx.holdings) produces byte-identical equity_curve + trades whether or
+    # not the engine threads holdings — the new field is present but inert.
+    a = _bars([100 + 0.1 * i for i in range(40)], "AAA")
+    b = _bars([100 - 0.05 * i for i in range(40)], "BBB")
+    baseline = run_backtest({"AAA": a, "BBB": b}, EqualWeight(),
+                            schedule="daily", cost_bps=2.0, warmup_days=2,
+                            rebalance_band=0.01)
+    # the probe threads/inspects holdings but trades identically to EqualWeight
+    probe = _HoldingsProbe()
+    threaded = run_backtest({"AAA": a, "BBB": b}, probe,
+                            schedule="daily", cost_bps=2.0, warmup_days=2,
+                            rebalance_band=0.01)
+    assert threaded.equity_curve == baseline.equity_curve
+    assert threaded.trades == baseline.trades
+    # and the engine actually POPULATED holdings after the first fill (the
+    # first decision is on a flat book -> empty; later ones see the position)
+    assert probe.seen[0] == {}
+    assert any(d for d in probe.seen[1:]), "holdings never populated"
+
+
+def test_holdings_are_prefill_weights_at_decision_close_no_lookahead():
+    # Hand-built 3-bar / 2-symbol case: after entering on day 2, the day-3
+    # decision must see holdings as the PRE-fill shares * the DECISION-date
+    # (day-2) close / equity — never day-3's price, never today's fill.
+    aaa = _bars([10, 10, 10], "AAA")     # flat at 10
+    bbb = _bars([20, 20, 20], "BBB")     # flat at 20
+    seen: list[tuple] = []
+
+    class Recorder:
+        name = "recorder"
+
+        def rebalance(self, ctx):
+            seen.append((ctx.date, dict(ctx.holdings)))
+            return {"AAA": 0.5, "BBB": 0.5}
+
+    res = run_backtest({"AAA": aaa, "BBB": bbb}, Recorder(),
+                       start_cash=10_000.0, schedule="daily", cost_bps=0.0,
+                       warmup_days=1)
+    # decision dates are day-1 (flat) and day-2 (after the day-2 fill book)
+    assert seen[0][1] == {}                       # first decision: flat book
+    holdings = seen[1][1]
+    # day-2 fill: 10k @ 50/50 -> 500 AAA @10 (5000), 250 BBB @20 (5000);
+    # cash leftover 0 -> equity 10000; weights exactly 0.5 / 0.5 at day-2 close
+    assert holdings["AAA"] == pytest.approx(0.5, abs=1e-9)
+    assert holdings["BBB"] == pytest.approx(0.5, abs=1e-9)
+
+
+def test_build_context_holdings_uses_decision_close_not_future():
+    # Unit-level look-ahead guard on _build_context directly: a held name's
+    # weight is computed from the decision-date close, even when later bars
+    # would move the price.
+    aaa = _bars([10, 99, 99], "AAA")     # decision-date close (day-0) is 10
+    prep, calendar = prepare_bars({"AAA": aaa})
+    ctx = _build_context(prep, calendar[0], None,
+                         holdings_shares={"AAA": 100}, cash=0.0)
+    # equity = 100 * 10 = 1000 (uses day-0 close 10, NOT day-1's 99)
+    assert ctx.held("AAA") == pytest.approx(1.0)
+    assert ctx.held_symbols() == ["AAA"]
+    assert ctx.held("ZZZ") == 0.0

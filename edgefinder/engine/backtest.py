@@ -135,7 +135,11 @@ def prepare_bars(bars_by_symbol: dict[str, pd.DataFrame]) -> tuple[dict, list]:
     return prep, sorted(all_dates)
 
 
-def _build_context(prep: dict, decision_date, fundamentals) -> RebalanceContext:
+def _build_context(
+    prep: dict, decision_date, fundamentals,
+    holdings_shares: dict[str, int] | None = None,
+    cash: float | None = None,
+) -> RebalanceContext:
     """Snapshot the whole universe as of ``decision_date`` (inclusive).
 
     ``fundamentals`` is either a static ``{symbol: TickerFundamentals}`` dict
@@ -143,6 +147,13 @@ def _build_context(prep: dict, decision_date, fundamentals) -> RebalanceContext:
     run is disclosed as such) or a point-in-time source exposing
     ``asof(symbol, date)`` (e.g. data.pit_fundamentals.PITFundamentals),
     which is the honest path for fundamental strategies.
+
+    ``holdings_shares`` (the PRE-fill book) and ``cash`` enrich the context
+    with the strategy's current holdings as WEIGHTS, look-ahead-free: each
+    held name's weight is ``shares * price / equity`` using the SAME
+    decision-date close in ``assets[s].price`` the strategy already sees (so
+    it is self-consistent and never reflects today's fill). Omit them (the
+    default) and ``holdings`` stays ``{}`` — every stateless run is unchanged.
     """
     pit = getattr(fundamentals, "asof", None)
     assets: dict[str, AssetView] = {}
@@ -161,7 +172,18 @@ def _build_context(prep: dict, decision_date, fundamentals) -> RebalanceContext:
             fundamentals=(pit(sym, decision_date) if pit
                           else (fundamentals or {}).get(sym)),
         )
-    return RebalanceContext(date=decision_date, assets=assets)
+    holdings_weights: dict[str, float] = {}
+    if holdings_shares:
+        equity = (cash or 0.0) + sum(
+            sh * assets[s].price
+            for s, sh in holdings_shares.items() if s in assets)
+        if equity > 0:
+            holdings_weights = {
+                s: (sh * assets[s].price) / equity
+                for s, sh in holdings_shares.items()
+                if s in assets and sh}
+    return RebalanceContext(date=decision_date, assets=assets,
+                            holdings=holdings_weights)
 
 
 def _execute_to_target(
@@ -365,7 +387,8 @@ def run_backtest(
         # benchmark is invested from day 1 (a measured ~-1.8pp/fold artifact).
         if i >= warm_idx and (
                 i == max(warm_idx, 1) or _is_rebalance(i, calendar, schedule)):
-            ctx = _build_context(prep, calendar[i - 1], fundamentals)
+            ctx = _build_context(prep, calendar[i - 1], fundamentals,
+                                 holdings_shares=holdings, cash=cash)
             weights = strategy.rebalance(ctx) or {}
             total = sum(w for w in weights.values() if w and w > 0)
             if total > 1.0:                      # never lever; scale to 100%
