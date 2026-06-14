@@ -1,33 +1,17 @@
 {
-  "wave": "daily-r2-w1",
+  "wave": "daily-r2-rechecks",
   "runs": [
     {
-      "id": "null-spy",
-      "args": "--strategy buy_and_hold:SPY --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:buy_and_hold:SPY"
+      "id": "rc-shift-minus",
+      "args": "--strategy sh_trend_hold --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --is-days 357 --universe-label daily-r2:recheck-shift-"
     },
     {
-      "id": "sh-mom-20",
-      "args": "--strategy sh_mom_20 --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:sh_mom_20"
+      "id": "rc-shift-plus",
+      "args": "--strategy sh_trend_hold --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --is-days 399 --universe-label daily-r2:recheck-shift+"
     },
     {
-      "id": "sh-trend-hold",
-      "args": "--strategy sh_trend_hold --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:sh_trend_hold"
-    },
-    {
-      "id": "sh-high-break",
-      "args": "--strategy sh_high_break --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:sh_high_break"
-    },
-    {
-      "id": "sh-reversal-5",
-      "args": "--strategy sh_reversal_5 --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:sh_reversal_5"
-    },
-    {
-      "id": "sh-random-71",
-      "args": "--strategy sh_random_71 --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:sh_random_71"
-    },
-    {
-      "id": "sh-random-73",
-      "args": "--strategy sh_random_73 --universe top:500 --start 2021-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:sh_random_73"
+      "id": "rc-late",
+      "args": "--strategy sh_trend_hold --universe top:500 --start 2022-06-01 --schedule daily --rebalance-band 0.01 --costed --div-adjust --bars-from r2 --holdout-start 2026-04-01 --record --total-return --warmup-days 290 --universe-label daily-r2:recheck-late"
     }
   ]
 }
