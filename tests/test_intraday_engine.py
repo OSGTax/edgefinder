@@ -91,6 +91,52 @@ def _synthetic_session(symbols, days, *, bars_per_day=390, start=date(2024, 1, 2
     return out
 
 
+# ── IntradayAssetView.opening_range ─────────────────────────────────────
+
+
+class TestOpeningRange:
+    def _view(self, highs, lows, i, session_start=0):
+        """Build an IntradayAssetView at index ``i`` from explicit hi/lo arrays."""
+        from edgefinder.engine.intraday_strategy import IntradayAssetView
+        n = len(highs)
+        h = np.array(highs, dtype=float)
+        l = np.array(lows, dtype=float)
+        c = (h + l) / 2.0
+        o = c.copy()
+        v = np.ones(n)
+        ts = np.arange(n, dtype=np.int64)
+        return IntradayAssetView(symbol="AAA", _o=o, _h=h, _l=l, _c=c, _v=v,
+                                 _ts=ts, i=i, session_start=session_start)
+
+    def test_equals_first_m_bar_hi_lo(self):
+        highs = [10, 11, 9, 15, 8, 7]
+        lows = [5, 6, 4, 7, 3, 2]
+        # fully past the range (i well beyond session_start+m): first 3 bars
+        v = self._view(highs, lows, i=5, session_start=0)
+        assert v.opening_range(3) == (11.0, 4.0)   # max(10,11,9), min(5,6,4)
+
+    def test_partial_when_range_not_yet_formed(self):
+        highs = [10, 11, 9, 15, 8, 7]
+        lows = [5, 6, 4, 7, 3, 2]
+        # bars_since_open (i+1) < m: only the bars seen so far count
+        v = self._view(highs, lows, i=1, session_start=0)   # 2 bars seen, m=3
+        assert v.opening_range(3) == (11.0, 5.0)   # max(10,11), min(5,6)
+
+    def test_never_reads_future_bars(self):
+        # a huge spike LATER in the session must not leak into the OR
+        highs = [10, 11, 9, 999, 8, 7]
+        lows = [5, 6, 4, -50, 3, 2]
+        v = self._view(highs, lows, i=2, session_start=0)   # 3 bars seen, m=3
+        assert v.opening_range(3) == (11.0, 4.0)   # spike at idx 3 ignored
+
+    def test_respects_session_start(self):
+        # opening range is THIS session's first m bars, not the array's
+        highs = [99, 99, 10, 11, 9, 15]
+        lows = [1, 1, 5, 6, 4, 7]
+        v = self._view(highs, lows, i=5, session_start=2)   # session starts idx 2
+        assert v.opening_range(3) == (11.0, 4.0)   # bars 2,3,4 -> max(10,11,9)
+
+
 # ── basic plumbing ─────────────────────────────────────────────────────
 
 

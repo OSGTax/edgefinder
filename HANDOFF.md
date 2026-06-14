@@ -27,8 +27,74 @@ any intraday backtest exists). No dashboard changes, no version bump
 handling, day-based folds over minute bars) — start it in a fresh
 session from this note.
 
-**Phases:** 1 data ✅ · 2 intraday backtest semantics ✅ · 3 intraday hunt ·
-4 live intraday loop · 5 full-market streaming (NOT the pilot loader).
+**Phases:** 1 data ✅ · 2 intraday backtest semantics ✅ · 3 intraday hunt
+(roster pre-registered ✅; wave fired separately) · 4 live intraday loop ·
+5 full-market streaming (NOT the pilot loader).
+
+---
+
+## ⏱️ INTRADAY INITIATIVE — PHASE 3 (2026-06-14): the pre-registered hunt
+
+**Status: PHASE 3 ROSTER PRE-REGISTERED (2026-06-14, v5.54.0).** The intraday
+hunt roster + matrix workflow are built and tested (667 tests green; +24 new),
+committed with the queue IDLE — the roster code and FIXED parameters land
+BEFORE any run (pre-registration is structural, not procedural). No
+commit/push yet (`git add -A` staged per task scope; offline/stubbed
+everywhere). The orchestrator fires the wave SEPARATELY by filling +
+committing `intraday/queue.json`.
+
+THE LANE (one config for the round): the frozen `intraday/menu.json`
+(top-50 by trailing-126d dollar volume + protected ETFs, as of 2026-06-11);
+`--costed` (FIXED intraday cost model); `--flatten-at-close` (no overnight
+risk); decision every 5 bars; walk-forward vs SPY scored over the same
+sessions; **sealed holdout pinned at `--holdout-start 2026-04-01`** (never
+evaluated without `--burn-holdout` + owner sign-off); total-return bar
+PRIMARY, risk-adjusted alongside; all-three-adversarial-re-checks before any
+"finalist" claim. LONG-ONLY (no shorting in the engine): reversal/gap-fade
+go LONG the losers/gapped-down names.
+
+What exists (this phase):
+- `edgefinder/engine/intraday_strategy.py` — added ONE accessor:
+  `IntradayAssetView.opening_range(m) -> (high, low) | None` over THIS
+  session's first m bars, look-ahead-free (slice `[session_start :
+  min(i+1, session_start+m)]`; partial range before it forms).
+- `edgefinder/engine/intraday_roster.py` — the pre-registration (module
+  docstring = the statement). 10 specs in `INTRADAY_R1_SPECS`, all
+  LONG-ONLY cross-sectional baskets (equal-weight top-K, K=5; `_topk_ew`
+  helper; fewer than K signaling ⇒ partial; none ⇒ all-cash; always {} on
+  `is_last_decision_bar`). Families:
+  - REVERSAL (buy intraday losers): `ir_reversal` (most-negative ret(30)),
+    `ir_vwap_rev` (most below VWAP, band 0.3%, needs ≥10 bars).
+  - MOMENTUM (deliberate opposite): `ir_momentum` (most-positive ret(30)),
+    `ir_high_break` (new session highs, ranked by ret(30), ≥10 bars).
+  - BREAKOUT: `ir_orb` (price > opening_range(30).high, ranked by % above).
+  - GAP: `ir_gap_fade` (fade open gap-downs ≥0.5%, first half-hour only),
+    `ir_gap_go` (ride gap-ups ≥0.5% holding the gain, first hour only).
+  - CLOSE-EFFECT: `ir_late_mom` (last-hour day-return winners).
+  - CONTROLS: `ir_random_101`, `ir_random_103` — deterministic
+    hash(seed, session_date, symbol) coin flips (the false-positive floor).
+  (The `flat` null + `buy_hold_open:SPY` anchor already exist in
+  `make_intraday_factory`; the queue includes them — not re-added.)
+- `edgefinder/engine/intraday_validate.py` — `make_intraday_factory` now
+  resolves any `INTRADAY_R1_SPECS` spec (after the built-ins, before the
+  ValueError, which now lists the roster).
+- `.github/workflows/intraday-batch.yml` — mirrors hunt-batch.yml EXACTLY
+  (plan reads `intraday/queue.json` → matrix; run job max-parallel 4,
+  fail-fast false, 3-attempt retry, R2_* + DATABASE_URL secrets, session-
+  branch-only trigger on `paths: [intraday/queue.json]`) but runs
+  `python -m edgefinder.engine.intraday_validate`.
+- `intraday/queue.json` — `{"wave":"idle","runs":[]}`. **Committing a
+  filled queue FIRES the wave.**
+- Tests: `tests/test_intraday_engine.py` (+4: opening_range equals first-m
+  hi/lo, partial before it forms, never reads future bars, respects
+  session_start). `tests/test_intraday_roster.py` (+20): every spec builds /
+  valid weights / flat-at-close / empty-universe-safe; reversal vs momentum
+  pick opposites; ORB only after the range forms; gap_fade only on
+  gap-downs + cash after the half-hour; HighBreak waits to settle;
+  late_mom silent outside the last hour; RandomBasket deterministic per
+  (seed, date) and seed/date-dependent; factory wiring + error message.
+
+**NEXT: PHASE 4 — the live intraday loop** (once the round names finalists).
 
 ---
 

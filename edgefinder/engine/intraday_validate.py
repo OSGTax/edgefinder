@@ -51,9 +51,15 @@ def make_intraday_factory(spec: str):
         lookback = int(parts[2]) if len(parts) > 2 else 20
         z = float(parts[3]) if len(parts) > 3 else 1.0
         return lambda: IntradayMeanReversion(sym, lookback, z)
+
+    from edgefinder.engine.intraday_roster import INTRADAY_R1_SPECS
+
+    if spec in INTRADAY_R1_SPECS:
+        return INTRADAY_R1_SPECS[spec]
     raise ValueError(
         f"unknown intraday strategy spec {spec!r} (use flat, buy_hold_open:SYM, "
-        "or mean_rev:SYM[:lookback:z])")
+        "mean_rev:SYM[:lookback:z], or a pre-registered roster spec from "
+        f"intraday_roster.INTRADAY_R1_SPECS: {', '.join(sorted(INTRADAY_R1_SPECS))})")
 
 
 def _menu_symbols(path: str) -> list[str]:

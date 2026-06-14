@@ -126,6 +126,23 @@ class IntradayAssetView:
             return None
         return float(self._c[j])
 
+    def opening_range(self, m: int) -> tuple[float, float] | None:
+        """(high, low) over the FIRST ``m`` bars of THIS session.
+
+        Look-ahead-free by construction: it reads the slice
+        ``[session_start : min(i+1, session_start+m)]`` — never past the
+        decision index ``i``. Before the range has fully formed
+        (``bars_since_open < m``) it returns the PARTIAL high/low over the
+        bars seen so far. Returns None only if the session has no bar yet
+        (degenerate; can't happen at a decision bar)."""
+        s = self.session_start
+        e = min(self.i + 1, s + m)
+        if e <= s:
+            return None
+        hi = float(self._h[s:e].max())
+        lo = float(self._l[s:e].min())
+        return (hi, lo)
+
 
 @dataclass(frozen=True)
 class IntradayContext:
