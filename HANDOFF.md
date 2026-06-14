@@ -27,10 +27,80 @@ any intraday backtest exists). No dashboard changes, no version bump
 handling, day-based folds over minute bars) — start it in a fresh
 session from this note.
 
-**Phases:** 1 data ✅ · 2 intraday backtest semantics · 3 intraday hunt ·
+**Phases:** 1 data ✅ · 2 intraday backtest semantics ✅ · 3 intraday hunt ·
 4 live intraday loop · 5 full-market streaming (NOT the pilot loader).
 
+---
+
+## ⏱️ INTRADAY INITIATIVE — PHASE 2 (2026-06-14): the intraday backtest engine
+
+**Status: PHASE 2 COMPLETE (2026-06-14, v5.53.0).** The honest gate every
+intraday strategy idea faces is built + tested (643 tests green; +18 new,
++1 stale PHASE-1 menu test corrected — it asserted the menu was still
+unfrozen, but PHASE 1 froze 52 symbols). No commit/push yet (`git add -A`
+staged per task scope; offline/stubbed everywhere).
+
 What exists (this phase):
+- `edgefinder/engine/intraday_strategy.py` — `IntradayAssetView` (frozen,
+  backed by numpy arrays + a current index for O(1) per-bar access — NEVER
+  slices the full history, so a 390-bar session stays O(n) not O(n²)),
+  `IntradayContext` (ts/session_date/minute_of_day/bars_since_open/
+  bars_until_close/is_last_decision_bar), `IntradayStrategy` Protocol
+  (`decide(ctx) -> weights`), and reference strategies `IntradayFlat`,
+  `BuyHoldFromOpen(sym)` (per-session anchor), `IntradayMeanReversion`.
+- `edgefinder/engine/intraday_backtest.py` — `run_intraday_backtest`. Steps
+  bar-by-bar over the unified minute calendar but emits a DAILY equity curve
+  (one (session_date, equity) point per session close) so Sharpe annualizes
+  sqrt(252) and reuses the daily aggregate — directly comparable to SPY.
+  Honesty invariants copied EXACTLY from engine/backtest.py: decision through
+  bar i, fill at bar i+1's open, cost context read strictly before the fill
+  bar, sells before buys, integer shares, weights>1 scaled, trade_start_day
+  gates trading AND marks. Reuses CostModel (FIXED N=30 trailing bars for
+  ADV/vol, corwin_schultz_spread on the two bars before the fill). Also
+  reports `intraday_max_drawdown_pct` (from intra-session lows) and
+  `avg_trades_per_day`. Assert-guards raise on any fill_idx<=decision_idx.
+- `edgefinder/engine/intraday_walkforward.py` — `run_intraday_walkforward`.
+  Plans folds on the trading-DAY calendar via the EXISTING `plan_folds`,
+  replays each fold with the intraday engine, tags regimes from daily SPY
+  (derived from minute session closes), and feeds the daily `_aggregate` so
+  the scorecard is byte-shape-identical to a daily one (criteria/verdict/
+  holdout/by_regime free). Adds config engine=intraday, bar=1min,
+  flatten_at_close, decision_interval.
+- `edgefinder/engine/intraday_validate.py` — CLI mirroring engine/validate.py:
+  `--strategy {flat|buy_hold_open:SYM|mean_rev:SYM[:lookback:z]}`,
+  `--symbols`|`--menu`, `--start/--end`, `--bars-from r2` (MinuteStore),
+  `--costed`, `--flatten-at-close/--hold-overnight`, `--decision-interval`,
+  fold/holdout flags, `--record` (reuses engine/record.py with the hardened
+  4-attempt/SystemExit(3) retry). SPY benchmark from the minute store.
+- Tests: `tests/test_intraday_engine.py` (18) — synthetic RTH minute frames,
+  no look-ahead (cheater earns no excess), the BuyHoldFromOpen anchor
+  (daily return == open->close; costed == 1 entry + 1 MOC/day), next-bar
+  fill on a hand-built frame, toll bleed (churn < trade-once; flat exactly
+  flat), session counters + flatten/hold-overnight, daily-curve + intraday-dd
+  >= close-to-close dd, walkforward shape == daily + holdout + determinism,
+  and a performance guard (5 syms × 10 sessions = 19,500 bars in well under
+  10s — proves no O(n²) slicing).
+
+KEY JUDGMENT CALLS (carried for PHASE 3+):
+- **flatten-at-close MOC proxy:** on each session's last bar the engine forces
+  target {} and sells at THAT bar's CLOSE with tolls (the one place a fill
+  uses the same bar's close). Justified: MOC is a real order type, and the
+  alternative (gap out at next open) would let an overnight move flatter a
+  flat-by-design strategy's daily return. Documented in the module docstring.
+- **bars_until_close from the ET CLOCK** (minutes to 16:00 / bar interval),
+  NOT by counting future bars — so it's live-replicable and not look-ahead.
+- **O(1) history:** every AssetView accessor is a numpy slice/scalar read of
+  a pre-built whole-window array at the current index; no per-bar DataFrame
+  copies (the performance-guard test enforces this).
+
+**NEXT: PHASE 3 — the intraday hunt.** Pre-register an intraday strategy
+roster (a hunt_intraday.py module, committed BEFORE the first run, same
+discipline as the daily hunt_r{1..4}: roster fixed, a flat null control per
+batch, all-three-adversarial-re-check standard, holdout sealed at
+2026-06-11). Run it via a flag-gated push-triggered workflow (mirror
+hunt-batch.yml) against the frozen `intraday/menu.json` over R2 minute bars.
+
+What exists (PHASE 1):
 - `intraday/menu.json` — the FROZEN pilot menu (pre-registration: the
   criteria string — top-50 by trailing-126-trading-day mean dollar volume
   as of 2026-06-11, resolve_universe semantics, + the 10 protected ETFs —

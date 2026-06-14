@@ -50,12 +50,16 @@ class TestResolveMenu:
         menu = resolve_menu(db_session, AS_OF, top_n=4, rank_window=126)
         assert menu["symbols"].count("SPY") == 1
 
-    def test_menu_json_is_valid_and_unfrozen_symbols_empty(self):
-        # the committed file is the pre-registration: criteria fixed,
-        # symbols intentionally empty until the first real (MENU-mode) run
+    def test_menu_json_is_valid_and_frozen(self):
+        # the committed file is the pre-registration: criteria fixed; the
+        # symbols list was frozen by the first real MENU-mode run (PHASE 1
+        # complete, 2026-06-12 — 52 symbols incl. the protected ETFs).
         with open("intraday/menu.json") as f:
             menu = json.load(f)
-        assert menu["symbols"] == []
+        assert isinstance(menu["symbols"], list) and len(menu["symbols"]) > 0
+        # the protected ETF menu is always present in the frozen list
+        for etf in DB_PROTECTED_ETFS:
+            assert etf.upper() in menu["symbols"]
         assert menu["frozen_at"] == "2026-06-12"
         assert "trailing-126-trading-day" in menu["criteria"]
         assert menu["etfs"] == list(DB_PROTECTED_ETFS)
