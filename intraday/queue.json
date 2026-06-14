@@ -1,4 +1,65 @@
 {
-  "wave": "idle",
-  "runs": []
+  "wave": "intraday-r2-w1",
+  "runs": [
+    {
+      "id": "flat-null",
+      "args": "--strategy flat --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:flat-null"
+    },
+    {
+      "id": "flat-anchor",
+      "args": "--strategy buy_hold_open:SPY --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:anchor-flat"
+    },
+    {
+      "id": "iro_gap_fade-flat",
+      "args": "--strategy iro_gap_fade --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:iro_gap_fade-flat"
+    },
+    {
+      "id": "iro_gap_go-flat",
+      "args": "--strategy iro_gap_go --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:iro_gap_go-flat"
+    },
+    {
+      "id": "iro_orb-flat",
+      "args": "--strategy iro_orb --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:iro_orb-flat"
+    },
+    {
+      "id": "iro_morning_trend-flat",
+      "args": "--strategy iro_morning_trend --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:iro_morning_trend-flat"
+    },
+    {
+      "id": "iro_random_201-flat",
+      "args": "--strategy iro_random_201 --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:iro_random_201-flat"
+    },
+    {
+      "id": "iro_random_203-flat",
+      "args": "--strategy iro_random_203 --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --flatten-at-close --universe-label intraday-r2:iro_random_203-flat"
+    },
+    {
+      "id": "on-anchor",
+      "args": "--strategy buy_hold_open:SPY --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --hold-overnight --universe-label intraday-r2:anchor-on"
+    },
+    {
+      "id": "iro_gap_fade-on",
+      "args": "--strategy iro_gap_fade --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --hold-overnight --universe-label intraday-r2:iro_gap_fade-on"
+    },
+    {
+      "id": "iro_gap_go-on",
+      "args": "--strategy iro_gap_go --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --hold-overnight --universe-label intraday-r2:iro_gap_go-on"
+    },
+    {
+      "id": "iro_orb-on",
+      "args": "--strategy iro_orb --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --hold-overnight --universe-label intraday-r2:iro_orb-on"
+    },
+    {
+      "id": "iro_morning_trend-on",
+      "args": "--strategy iro_morning_trend --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --hold-overnight --universe-label intraday-r2:iro_morning_trend-on"
+    },
+    {
+      "id": "iro_random_201-on",
+      "args": "--strategy iro_random_201 --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --hold-overnight --universe-label intraday-r2:iro_random_201-on"
+    },
+    {
+      "id": "iro_random_203-on",
+      "args": "--strategy iro_random_203 --symbols SPY,QQQ,IWM,AAPL,MSFT,NVDA,AMZN,META,TSLA,AMD,GOOGL,AVGO,NFLX --start 2024-01-01 --bars-from r2 --costed --decision-interval 5 --rebalance-band 0.01 --is-days 60 --oos-days 21 --step-days 21 --holdout-start 2026-04-01 --record --total-return --hold-overnight --universe-label intraday-r2:iro_random_203-on"
+    }
+  ]
 }
