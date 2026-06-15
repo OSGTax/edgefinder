@@ -149,6 +149,13 @@ class TradeRecord(Base):
     sequence_num: Mapped[int | None] = mapped_column(Integer, index=True)
     integrity_hash: Mapped[str | None] = mapped_column(String(64))
 
+    # Real-money execution audit (deferred, nullable): a paper/simulated trade
+    # leaves these NULL; a real-book fill placed through a broker (Robinhood
+    # via MCP) records the broker name and its order id, giving every
+    # real-money row an audit trail and an idempotency key.
+    broker: Mapped[str | None] = mapped_column(String(30), deferred=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String(64), deferred=True)
+
     # Rich trade context (new) — deferred to avoid SELECT errors if columns
     # haven't been added yet (Supabase pooler can block DDL migrations)
     entry_reasoning: Mapped[str | None] = mapped_column(Text, deferred=True)
@@ -298,6 +305,12 @@ class PromotedStrategy(Base):
     resolved_symbols: Mapped[list | None] = mapped_column(JSON, nullable=True)     # last good resolution
     resolved_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     schedule: Mapped[str] = mapped_column(String(10), default="monthly")
+    # execution_mode: "paper" (the simulated v2 runner, the default for every
+    # promoted strategy) or "live_manual" (the real-money book — orders are
+    # PROPOSED as a ticket, approved by a human, and placed via the broker's
+    # MCP server; engine/live_ticket builds the ticket). The unattended paper
+    # runner must NEVER place real orders, so the distinction is explicit.
+    execution_mode: Mapped[str] = mapped_column(String(20), default="paper")
     tier: Mapped[str] = mapped_column(String(20), default="experimental")
     validation_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # the price basis the strategy was validated on (config.prices of the

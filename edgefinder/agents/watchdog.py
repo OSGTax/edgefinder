@@ -33,10 +33,15 @@ from edgefinder.agents.journal import record_observation
 from edgefinder.db.models import (
     AgentObservation,
     DividendCredit,
+    PromotedStrategy,
     StrategyAccount,
     SystemHeartbeat,
     TradeRecord,
 )
+
+# Heartbeat component prefix the real-money ritual writes after each
+# reconcile() — one per live_manual book, ok=False on a DB-vs-broker mismatch.
+RECONCILE_COMPONENT_PREFIX = "real_book_reconcile:"
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +330,42 @@ def check_cycle_liveness(
     return []
 
 
+def check_real_book_reconciliation(session: Session) -> list[ObservationSpec]:
+    """Flag a real-money book whose last reconciliation found a mismatch.
+
+    The monthly real-money ritual (engine/live_ticket) writes a SystemHeartbeat
+    ``real_book_reconcile:<strategy>`` after each reconcile() — ok=True when the
+    DB book matches the broker, ok=False (with the diff in ``detail``) when it
+    does not. The watchdog is pure-DB, so it cannot call the broker itself; it
+    instead ESCALATES a recorded mismatch to a CRITICAL observation (which the
+    alerts pipeline projects onto a GitHub issue). No live_manual books → no
+    work, so this is a no-op for the all-paper fleet.
+    """
+    specs: list[ObservationSpec] = []
+    live_books = session.query(PromotedStrategy.strategy_name).filter(
+        PromotedStrategy.execution_mode == "live_manual",
+        PromotedStrategy.active.is_(True),
+    ).all()
+    for (name,) in live_books:
+        hb = session.query(SystemHeartbeat).filter(
+            SystemHeartbeat.component == RECONCILE_COMPONENT_PREFIX + name
+        ).one_or_none()
+        if hb is None or hb.ok:
+            continue   # never reconciled (fresh book) or last reconcile clean
+        detail = hb.detail or {}
+        specs.append(ObservationSpec(
+            severity="CRITICAL",
+            category="real_book_reconcile",
+            message=(
+                f"{name}: REAL-MONEY book out of sync with the broker — "
+                f"{detail.get('summary', 'positions/cash mismatch')}"
+            ),
+            metadata={"key": name, **detail},
+            dedup_key=("real_book_reconcile", name),
+        ))
+    return specs
+
+
 # ── Orchestration ──────────────────────────────────────────
 
 
@@ -346,6 +387,7 @@ def run_checks(
     specs.extend(check_negative_cash(session))
     specs.extend(check_account_paused(session))
     specs.extend(check_high_drawdown(session, drawdown_warn, drawdown_critical))
+    specs.extend(check_real_book_reconciliation(session))
     if bool(cfg.get("liveness_enabled", settings.liveness_enabled)):
         specs.extend(check_cycle_liveness(
             session,

@@ -494,6 +494,18 @@ def _resolve_universe_frames(session, promo, decision_date: date, today: date,
 
 def _run_one(session, promo, *, provider, today, price_fn, dry_run,
              universe_cache=None) -> dict:
+    # a paused account never trades — neither the paper runner nor a real
+    # (live_manual) book. It is still MARKED so its equity curve stays
+    # continuous; the dry-run path yields no weights, so a paused book also
+    # produces no real-money ticket (engine/live_ticket.dry_run_weights).
+    acct = (session.query(StrategyAccount)
+            .filter(StrategyAccount.strategy_name == promo.strategy_name)
+            .one_or_none())
+    if acct is not None and acct.is_paused:
+        _mark_account(session, promo.strategy_name, TradeJournal(session),
+                      price_fn, dry_run)
+        return {"action": "skip", "reason": "account paused"}
+
     factory = make_strategy_factory(promo.spec)
     strategy = factory()
 

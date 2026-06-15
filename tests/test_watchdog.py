@@ -7,16 +7,19 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from edgefinder.agents.watchdog import (
+    RECONCILE_COMPONENT_PREFIX,
     check_account_paused,
     check_cash_drift,
     check_cycle_liveness,
     check_high_drawdown,
     check_negative_cash,
+    check_real_book_reconciliation,
     persist_checks,
     run_checks,
 )
 from edgefinder.db.models import (
     AgentObservation,
+    PromotedStrategy,
     StrategyAccount,
     SystemHeartbeat,
     TradeRecord,
@@ -345,3 +348,47 @@ class TestCheckCycleLiveness:
         specs2 = check_cycle_liveness(db_session, 26, now=_MID_SESSION)
         summary2 = persist_checks(db_session, specs2, agent_name="watchdog")
         assert summary2["resolved"] == 1
+
+
+class TestRealBookReconciliation:
+    def _live_book(self, session, name="live_core"):
+        session.add(PromotedStrategy(
+            strategy_name=name, spec="growth_value_barbell",
+            execution_mode="live_manual", active=True))
+        session.commit()
+
+    def _reconcile_hb(self, session, name, ok, detail=None):
+        session.add(SystemHeartbeat(
+            component=RECONCILE_COMPONENT_PREFIX + name,
+            last_run_at=datetime.now(timezone.utc), ok=ok, detail=detail or {}))
+        session.commit()
+
+    def test_no_live_books_is_noop(self, db_session):
+        assert check_real_book_reconciliation(db_session) == []
+
+    def test_clean_reconcile_not_flagged(self, db_session):
+        self._live_book(db_session)
+        self._reconcile_hb(db_session, "live_core", ok=True)
+        assert check_real_book_reconciliation(db_session) == []
+
+    def test_never_reconciled_not_flagged(self, db_session):
+        # a freshly created live book may not be funded/reconciled yet
+        self._live_book(db_session)
+        assert check_real_book_reconciliation(db_session) == []
+
+    def test_recorded_mismatch_is_critical(self, db_session):
+        self._live_book(db_session)
+        self._reconcile_hb(db_session, "live_core", ok=False,
+                           detail={"summary": "SPY: db=5 broker=4"})
+        specs = check_real_book_reconciliation(db_session)
+        assert len(specs) == 1
+        assert specs[0].severity == "CRITICAL"
+        assert "SPY" in specs[0].message
+
+    def test_paper_book_ignored(self, db_session):
+        db_session.add(PromotedStrategy(
+            strategy_name="paper_book", spec="equal_weight",
+            execution_mode="paper", active=True))
+        self._reconcile_hb(db_session, "paper_book", ok=False)
+        db_session.commit()
+        assert check_real_book_reconciliation(db_session) == []
