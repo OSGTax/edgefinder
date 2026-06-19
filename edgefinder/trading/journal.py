@@ -89,6 +89,8 @@ class TradeJournal:
                 indicators_at_entry=getattr(trade, 'indicators_at_entry', None),
                 fundamentals_at_entry=getattr(trade, 'fundamentals_at_entry', None),
                 market_context_at_entry=getattr(trade, 'market_context_at_entry', None),
+                broker=getattr(trade, 'broker', None),
+                broker_order_id=getattr(trade, 'broker_order_id', None),
             )
             self._session.add(record)
 

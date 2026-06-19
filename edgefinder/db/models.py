@@ -149,6 +149,13 @@ class TradeRecord(Base):
     sequence_num: Mapped[int | None] = mapped_column(Integer, index=True)
     integrity_hash: Mapped[str | None] = mapped_column(String(64))
 
+    # Real-money execution audit (deferred, nullable): a paper/simulated trade
+    # leaves these NULL; a real-book fill placed through a broker (Robinhood
+    # via MCP) records the broker name and its order id, giving every
+    # real-money row an audit trail and an idempotency key.
+    broker: Mapped[str | None] = mapped_column(String(30), deferred=True)
+    broker_order_id: Mapped[str | None] = mapped_column(String(64), deferred=True)
+
     # Rich trade context (new) — deferred to avoid SELECT errors if columns
     # haven't been added yet (Supabase pooler can block DDL migrations)
     entry_reasoning: Mapped[str | None] = mapped_column(Text, deferred=True)
@@ -298,6 +305,12 @@ class PromotedStrategy(Base):
     resolved_symbols: Mapped[list | None] = mapped_column(JSON, nullable=True)     # last good resolution
     resolved_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     schedule: Mapped[str] = mapped_column(String(10), default="monthly")
+    # execution_mode: "paper" (the simulated v2 runner, the default for every
+    # promoted strategy) or "live_manual" (the real-money book — orders are
+    # PROPOSED as a ticket, approved by a human, and placed via the broker's
+    # MCP server; engine/live_ticket builds the ticket). The unattended paper
+    # runner must NEVER place real orders, so the distinction is explicit.
+    execution_mode: Mapped[str] = mapped_column(String(20), default="paper")
     tier: Mapped[str] = mapped_column(String(20), default="experimental")
     validation_run_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # the price basis the strategy was validated on (config.prices of the
@@ -718,4 +731,45 @@ class LLMDecisionLog(Base):
     prompt: Mapped[str] = mapped_column(Text)
     response: Mapped[str | None] = mapped_column(Text, nullable=True)
     weights_json: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+# ── 22. agent_decisions ─────────────────────────────────
+
+
+class AgentDecision(Base):
+    """A research agent's daily portfolio decision + its evidence dossier.
+
+    One row per (strategy_name, decision_date). The analyst research job
+    (edgefinder/agents/analyst.py) writes it BEFORE the live cycle; the
+    AnalystStrategy (engine/analyst_strategy.py) reads ``target_weights``
+    during the cycle to trade the account, and the dashboard reads ``picks``
+    + ``summary`` to render the "show your work" report.
+
+    The decision is decoupled from execution on purpose: the agent's research
+    (screen -> backtest -> news -> LLM synthesis) is slow and must NOT run
+    inside the 9:45 portfolio cycle. ``decision_date`` is the data date the
+    decision was computed on (the latest completed trading day) — the same
+    date the cycle's RebalanceContext carries — so the strategy reads the
+    matching row. A re-run for the same (strategy, date) upserts.
+
+    ``picks`` is a list of per-name dossiers: the firing entry rules, the
+    metrics/evidence, the intended action (buy/add/hold/trim), and the
+    rationale text. ``target_weights`` is the executable {symbol: weight}.
+    """
+
+    __tablename__ = "agent_decisions"
+    __table_args__ = (
+        UniqueConstraint("strategy_name", "decision_date",
+                         name="uq_agent_decision_strategy_date"),
+        Index("idx_agent_decision_strategy_date", "strategy_name", "decision_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    strategy_name: Mapped[str] = mapped_column(String(50), index=True)
+    decision_date: Mapped[date] = mapped_column(Date, index=True)
+    target_weights: Mapped[dict] = mapped_column(JSON)   # {symbol: weight}
+    picks: Mapped[list | None] = mapped_column(JSON)      # per-name dossiers
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model: Mapped[str | None] = mapped_column(String(60), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

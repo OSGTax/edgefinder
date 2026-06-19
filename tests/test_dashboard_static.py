@@ -51,6 +51,7 @@ NEW_ASSETS = [
     "/static/js/components/heatmap.js",
     "/static/js/pages/symbol.js",
     "/static/js/pages/lab.js",
+    "/static/js/pages/picks.js",
     "/static/js/pages/portfolio.js",
     "/static/js/pages/trades.js",
     "/static/js/pages/strategies.js",
@@ -113,6 +114,10 @@ def test_no_cdn_script_tags_remain():
 
 def test_ops_page(client):
     assert client.get("/ops").status_code == 200
+
+
+def test_picks_page(client):
+    assert client.get("/picks").status_code == 200
 
 
 def test_legacy_assets_are_gone(client):

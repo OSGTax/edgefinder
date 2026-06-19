@@ -45,6 +45,7 @@ class EdgeFinderScheduler:
     def setup(
         self,
         portfolio_rebalance_fn=None,
+        analyst_fn=None,
         v2_snapshot_fn=None,
         nightly_scan_fn=None,
         benchmark_collect_fn=None,
@@ -70,6 +71,19 @@ class EdgeFinderScheduler:
                 replace_existing=True,
             )
             self._jobs["v2_portfolio_rebalance"] = "Daily at 9:45 AM ET"
+
+        if analyst_fn:
+            # 30 min BEFORE the portfolio cycle: the research agent screens +
+            # backtests + writes its daily decision so the 9:45 cycle can trade
+            # it. The slow agentic work must never run inside that cycle.
+            self._scheduler.add_job(
+                analyst_fn,
+                CronTrigger(hour=9, minute=15, day_of_week="mon-fri", timezone=ET),
+                id="analyst_research",
+                name="AI Analyst Research",
+                replace_existing=True,
+            )
+            self._jobs["analyst_research"] = "Daily at 9:15 AM ET"
 
         if v2_snapshot_fn:
             # Cron grid is :15/:45 across 9-16 ET; the wrapper clips it to the

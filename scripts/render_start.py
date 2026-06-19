@@ -75,6 +75,12 @@ def init_database():
         ("trades", "market_context_at_entry", "TEXT"),
         ("trades", "pdt_flag", "BOOLEAN DEFAULT 0"),
         ("trades", "hold_duration_hours", "FLOAT"),
+        # Real-money execution audit (v5.58) — the ORM inserts these on every
+        # trade and SELECTs them via undefer, so prod MUST have them or all
+        # trade writes/reads break.
+        ("trades", "broker", "VARCHAR(30)"),
+        ("trades", "broker_order_id", "VARCHAR(64)"),
+        ("promoted_strategies", "execution_mode", "VARCHAR(20) DEFAULT 'paper'"),
     ]
     with engine.begin() as conn:
         for table, column, col_type in migrations:
@@ -168,6 +174,21 @@ def init_database():
         )""",
         """CREATE INDEX IF NOT EXISTS ix_dividend_credits_strategy_name
             ON dividend_credits (strategy_name)""",
+        # AI analyst account's daily decisions (v5.60)
+        """CREATE TABLE IF NOT EXISTS agent_decisions (
+            id SERIAL PRIMARY KEY,
+            strategy_name VARCHAR(50) NOT NULL,
+            decision_date DATE NOT NULL,
+            target_weights JSON NOT NULL,
+            picks JSON,
+            summary TEXT,
+            model VARCHAR(60),
+            created_at TIMESTAMP DEFAULT NOW(),
+            CONSTRAINT uq_agent_decision_strategy_date
+                UNIQUE (strategy_name, decision_date)
+        )""",
+        """CREATE INDEX IF NOT EXISTS idx_agent_decision_strategy_date
+            ON agent_decisions (strategy_name, decision_date)""",
     ]
     with engine.begin() as conn:
         for ddl in table_ddls:

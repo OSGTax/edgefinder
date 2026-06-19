@@ -128,6 +128,9 @@ class Trade(BaseModel):
     market_context_at_entry: Optional[dict] = None
     pdt_flag: bool = False
     hold_duration_hours: Optional[float] = None
+    # real-money execution audit; NULL for paper/simulated trades
+    broker: Optional[str] = None
+    broker_order_id: Optional[str] = None
 
 
 class MarketSnapshot(BaseModel):
