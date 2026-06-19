@@ -24,7 +24,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from config.settings import settings
@@ -366,6 +366,44 @@ def check_real_book_reconciliation(session: Session) -> list[ObservationSpec]:
     return specs
 
 
+def check_fill_price_sanity(session: Session) -> list[ObservationSpec]:
+    """Flag any OPEN lot whose entry price is outside its entry-day bar range.
+
+    The next-day backstop to the live cycle's fill-time guard: once the
+    entry-date daily bar exists, an honest fill must sit within [low, high].
+    A lot outside it was almost certainly booked off a stale/garbage quote
+    (the 2026-06-11 first-cycle bug). Pure-DB, so it runs every watchdog tick;
+    lots whose bar hasn't landed yet are skipped (no false positives)."""
+    from edgefinder.db.models import DailyBar
+
+    specs: list[ObservationSpec] = []
+    rows = (session.query(
+                TradeRecord.trade_id, TradeRecord.strategy_name,
+                TradeRecord.symbol, TradeRecord.entry_price,
+                DailyBar.low, DailyBar.high)
+            .join(DailyBar, and_(
+                DailyBar.symbol == TradeRecord.symbol,
+                DailyBar.date == func.date(TradeRecord.entry_time)))
+            .filter(TradeRecord.status == "OPEN").all())
+    for trade_id, strat, sym, entry, low, high in rows:
+        if entry is None or low is None or high is None or high <= 0:
+            continue
+        if low * 0.99 <= entry <= high * 1.01:
+            continue
+        specs.append(ObservationSpec(
+            severity="WARN",
+            category="fill_price",
+            message=(f"{strat}: {sym} entry ${entry:.2f} is outside its "
+                     f"fill-day range [${low:.2f}, ${high:.2f}] — likely a "
+                     "stale-quote fill (wrong cost basis)"),
+            metadata={"key": trade_id, "strategy": strat, "symbol": sym,
+                      "entry_price": round(entry, 4),
+                      "low": round(low, 2), "high": round(high, 2)},
+            dedup_key=("fill_price", trade_id),
+        ))
+    return specs
+
+
 # ── Orchestration ──────────────────────────────────────────
 
 
@@ -388,6 +426,7 @@ def run_checks(
     specs.extend(check_account_paused(session))
     specs.extend(check_high_drawdown(session, drawdown_warn, drawdown_critical))
     specs.extend(check_real_book_reconciliation(session))
+    specs.extend(check_fill_price_sanity(session))
     if bool(cfg.get("liveness_enabled", settings.liveness_enabled)):
         specs.extend(check_cycle_liveness(
             session,

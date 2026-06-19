@@ -103,6 +103,31 @@ class TestLiveCycle:
         session.close()
         return _prices(factory)
 
+    def test_implausible_quote_is_refused(self, factory):
+        # A stale/garbage quote (>2x the last close) must NOT be filled — the
+        # name is skipped and a fill_price observation is recorded (the
+        # 2026-06-11 stale-fill class).
+        from edgefinder.db.models import AgentObservation
+        session = factory()
+        _seed_bars(session, "AAA", date(2023, 1, 2), 260, price=100.0)
+        _seed_bars(session, "BBB", date(2023, 1, 2), 260, price=50.0)
+        promote(session, spec="equal_weight", symbols=["AAA", "BBB"],
+                schedule="monthly", tier="experimental")
+        session.close()
+
+        def bad_price(sym):
+            return 100.0 if sym == "AAA" else 500.0   # BBB = 10x its ~50 close
+
+        run_portfolio_cycle(factory, today=date(2024, 2, 1), price_fn=bad_price)
+
+        session = factory()
+        syms = {t.symbol for t in session.query(TradeRecord)
+                .filter_by(strategy_name="equal_weight", status="OPEN").all()}
+        assert "AAA" in syms and "BBB" not in syms     # BBB refused
+        obs = session.query(AgentObservation).filter_by(category="fill_price").all()
+        assert len(obs) >= 1
+        session.close()
+
     def test_first_cycle_opens_positions_and_account(self, factory):
         price_fn = self._setup(factory)
         summary = run_portfolio_cycle(

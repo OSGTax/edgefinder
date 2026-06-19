@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -11,6 +11,7 @@ from edgefinder.agents.watchdog import (
     check_account_paused,
     check_cash_drift,
     check_cycle_liveness,
+    check_fill_price_sanity,
     check_high_drawdown,
     check_negative_cash,
     check_real_book_reconciliation,
@@ -348,6 +349,38 @@ class TestCheckCycleLiveness:
         specs2 = check_cycle_liveness(db_session, 26, now=_MID_SESSION)
         summary2 = persist_checks(db_session, specs2, agent_name="watchdog")
         assert summary2["resolved"] == 1
+
+
+class TestCheckFillPriceSanity:
+    def _bar(self, session, symbol, d, low, high):
+        from edgefinder.db.models import DailyBar
+        session.add(DailyBar(symbol=symbol, date=d, open=(low + high) / 2,
+                             high=high, low=low, close=(low + high) / 2,
+                             volume=1e6, source="test"))
+        session.commit()
+
+    def test_in_range_not_flagged(self, db_session):
+        _make_trade(db_session, "alpha", "AAA", "OPEN", entry=100.0, shares=10)
+        self._bar(db_session, "AAA", date(2026, 4, 10), 95.0, 105.0)
+        assert check_fill_price_sanity(db_session) == []
+
+    def test_out_of_range_flagged(self, db_session):
+        # _make_trade stamps entry_time on 2026-04-10
+        _make_trade(db_session, "alpha", "AAA", "OPEN", entry=60.0, shares=10)
+        self._bar(db_session, "AAA", date(2026, 4, 10), 95.0, 105.0)
+        specs = check_fill_price_sanity(db_session)
+        assert len(specs) == 1
+        assert specs[0].category == "fill_price" and specs[0].severity == "WARN"
+        assert specs[0].metadata["symbol"] == "AAA"
+
+    def test_no_bar_is_skipped(self, db_session):
+        _make_trade(db_session, "alpha", "AAA", "OPEN", entry=60.0, shares=10)
+        assert check_fill_price_sanity(db_session) == []
+
+    def test_closed_trades_ignored(self, db_session):
+        _make_trade(db_session, "alpha", "AAA", "CLOSED", entry=60.0, shares=10)
+        self._bar(db_session, "AAA", date(2026, 4, 10), 95.0, 105.0)
+        assert check_fill_price_sanity(db_session) == []
 
 
 class TestRealBookReconciliation:
