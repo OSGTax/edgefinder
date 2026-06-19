@@ -79,6 +79,13 @@ logger = logging.getLogger(__name__)
 STARTING_CAPITAL = 100_000.0
 REBALANCE_BAND = 0.01          # skip re-trues smaller than 1% of equity
 SLIPPAGE_BPS = 5.0             # paper-fill slippage, both sides
+# fill-price sanity band vs the last completed close: a quote outside [0.5x,
+# 2.0x] is treated as implausible (stale prior session / garbage) and the name
+# is skipped this cycle rather than booked at a wrong basis. Wide enough to
+# pass real gaps (even 3x leveraged ETFs); the watchdog backstops with the
+# actual next-day bar range.
+FILL_SANITY_LOW = 0.5
+FILL_SANITY_HIGH = 2.0
 HISTORY_DAYS = 450             # calendar days of bars to load (>=210 trading)
 # cross-sectional universes need ranking breadth + indicator warmup; 550
 # calendar days covers the 126-trading-day rank window AND the engine's
@@ -597,6 +604,30 @@ def _run_one(session, promo, *, provider, today, price_fn, dry_run,
         px = price_fn(s)
         if px is None or px <= 0:    # stale/halted: fall back to last close
             px = prep[s]["last_close"] if s in prep else 0.0
+        # sanity guard: refuse to fill on an implausible quote (a stale
+        # prior-session or garbage price) rather than book a wrong cost basis.
+        # The full day's range isn't known intraday, so we bound the quote to
+        # a wide band around the last completed close; the watchdog's
+        # fill_price check is the next-day backstop against the real bar range.
+        # (Root-caused 2026-06-19: the 6/11 first cycle booked stale prices.)
+        last_close = prep[s]["last_close"] if s in prep else None
+        if px > 0 and last_close and last_close > 0 and not (
+                FILL_SANITY_LOW <= px / last_close <= FILL_SANITY_HIGH):
+            logger.error("%s: %s quote %.4f is %.2fx the last close %.4f — "
+                         "refusing to fill (implausible/stale quote)",
+                         promo.strategy_name, s, px, px / last_close, last_close)
+            if not dry_run:
+                record_observation(
+                    session, agent_name="engine.live", severity="CRITICAL",
+                    category="fill_price",
+                    message=(f"{promo.strategy_name}: {s} quote {px:.2f} is "
+                             f"{px / last_close:.2f}x last close {last_close:.2f} "
+                             "— refused fill (implausible/stale quote)"),
+                    metadata={"strategy": promo.strategy_name, "symbol": s,
+                              "quote": round(px, 4),
+                              "last_close": round(last_close, 4),
+                              "ratio": round(px / last_close, 4)})
+            px = 0.0    # 0 => the sell/buy loops below skip this name this cycle
         prices[s] = px
 
     equity = cash + sum(sh * prices.get(s, 0.0) for s, sh in current.items())
