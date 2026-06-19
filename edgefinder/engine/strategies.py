@@ -57,6 +57,12 @@ def make_strategy_factory(spec: str):
         from edgefinder.engine.llm_strategy import make_llm_strategy_factory
         model = spec.split(":", 1)[1] if ":" in spec else None
         return make_llm_strategy_factory(model=model)
+    if spec == "ai_analyst" or spec.startswith("ai_analyst:"):
+        # the research-agent paper account — trades the daily decision the
+        # analyst job persisted to agent_decisions (engine/analyst_strategy)
+        from edgefinder.engine.analyst_strategy import make_analyst_strategy_factory
+        name = spec.split(":", 1)[1] if ":" in spec else "ai_analyst"
+        return make_analyst_strategy_factory(name=name)
     raise ValueError(
         f"unknown strategy spec {spec!r} (use equal_weight, dual_momentum, "
         "buy_and_hold:SYM, trend_timer:SYM, or a hunt roster spec from "
