@@ -82,26 +82,31 @@ def init_database():
         ("trades", "broker_order_id", "VARCHAR(64)"),
         ("promoted_strategies", "execution_mode", "VARCHAR(20) DEFAULT 'paper'"),
     ]
-    with engine.begin() as conn:
-        for table, column, col_type in migrations:
-            # Use IF NOT EXISTS to avoid inspection (which hangs on Supabase pooler)
-            try:
+    # ONE TRANSACTION PER COLUMN — critical: Postgres aborts the whole
+    # transaction on the first failing statement, so a single shared
+    # transaction would silently SKIP every column after the first error
+    # (e.g. a BOOLEAN DEFAULT 0 on a fresh DB). Per-column transactions mean
+    # one bad ALTER can't block the rest. (Found 2026-06-19: a deploy added
+    # agent_decisions but skipped trades.broker/execution_mode this way.)
+    for table, column, col_type in migrations:
+        try:
+            # IF NOT EXISTS avoids inspection (which hangs on the Supabase pooler)
+            with engine.begin() as conn:
                 conn.execute(text(
                     f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}"
                 ))
-            except Exception:
-                # SQLite doesn't support IF NOT EXISTS — fall back to inspect
-                try:
-                    from sqlalchemy import inspect
-                    inspector = inspect(engine)
-                    existing = [c["name"] for c in inspector.get_columns(table)]
-                    if column not in existing:
+        except Exception:
+            # SQLite (dev) lacks ADD COLUMN IF NOT EXISTS — inspect + plain add
+            try:
+                from sqlalchemy import inspect
+                if column not in [c["name"] for c in inspect(engine).get_columns(table)]:
+                    with engine.begin() as conn:
                         conn.execute(text(
                             f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
                         ))
-                        logger.info("Added column %s.%s", table, column)
-                except Exception:
-                    pass  # Column likely already exists
+                    logger.info("Added column %s.%s", table, column)
+            except Exception:
+                logger.debug("column %s.%s skipped", table, column, exc_info=True)
 
     logger.info("Column migrations complete")
 
