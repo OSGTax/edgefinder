@@ -97,9 +97,14 @@ def init_services() -> None:
         logger.info("Scheduler disabled via EDGEFINDER_SCHEDULER_ENABLED=false")
     else:
         _scheduler = EdgeFinderScheduler()
+        # NOTE: the AI analyst's DAILY research runs on GitHub Actions
+        # (.github/workflows/analyst.yml), not here — the rationale step needs
+        # the `claude` CLI, which the Render web process doesn't have. The
+        # on-demand run_analyst_job (Picks "Run now") still works here, with
+        # deterministic text. Scheduling it here too would clobber the richer
+        # Actions decision, so analyst_fn is intentionally not wired.
         _scheduler.setup(
             portfolio_rebalance_fn=_v2_portfolio_job,
-            analyst_fn=_analyst_job,
             v2_snapshot_fn=_v2_snapshot_job,
             nightly_scan_fn=_nightly_scan_job,
             benchmark_collect_fn=_benchmark_job,
@@ -221,11 +226,6 @@ def run_analyst_job(strategy_name: str = "ai_analyst",
         _record_heartbeat("analyst", ok=False,
                           detail={"error": f"{type(exc).__name__}: {exc}"})
         return None
-
-
-def _analyst_job() -> None:
-    """9:15 AM ET — produce the AI analyst account's daily decision."""
-    run_analyst_job()
 
 
 def _v2_snapshot_job(now: datetime | None = None) -> None:
