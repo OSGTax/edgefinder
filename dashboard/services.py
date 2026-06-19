@@ -99,6 +99,7 @@ def init_services() -> None:
         _scheduler = EdgeFinderScheduler()
         _scheduler.setup(
             portfolio_rebalance_fn=_v2_portfolio_job,
+            analyst_fn=_analyst_job,
             v2_snapshot_fn=_v2_snapshot_job,
             nightly_scan_fn=_nightly_scan_job,
             benchmark_collect_fn=_benchmark_job,
@@ -180,6 +181,51 @@ def _v2_portfolio_job() -> None:
         logger.info("V2 portfolio cycle: %s", summary)
     except Exception:
         logger.exception("V2 portfolio cycle failed")
+
+
+def run_analyst_job(strategy_name: str = "ai_analyst",
+                    universe_spec: str | None = None) -> int | None:
+    """Run the AI analyst's daily research and persist its decision.
+
+    Shared by the 9:15 ET scheduled job and the on-demand /api/picks/run
+    endpoint. Resolves the account's universe from its promoted row (default
+    top:200 so the page can preview picks even before the account is
+    activated). Narrates with the LLM when CLAUDE_CODE_OAUTH_TOKEN is set,
+    deterministic otherwise. Writes the ``analyst`` heartbeat either way.
+    """
+    if not _session_factory:
+        return None
+    try:
+        from edgefinder.agents.analyst import run_analyst
+
+        spec = universe_spec
+        if spec is None:
+            session = _session_factory()
+            try:
+                promo = (session.query(PromotedStrategy)
+                         .filter(PromotedStrategy.strategy_name == strategy_name)
+                         .one_or_none())
+                spec = (promo.universe_spec if promo else None) or "top:200"
+            finally:
+                session.close()
+        rid = run_analyst(_session_factory, strategy_name=strategy_name,
+                          universe_spec=spec,
+                          use_llm=bool(os.getenv("CLAUDE_CODE_OAUTH_TOKEN")))
+        _record_heartbeat("analyst", ok=rid is not None,
+                          detail={"strategy": strategy_name,
+                                  "decision_id": rid, "universe": spec})
+        logger.info("Analyst run for %s: decision_id=%s", strategy_name, rid)
+        return rid
+    except Exception as exc:
+        logger.exception("Analyst job failed")
+        _record_heartbeat("analyst", ok=False,
+                          detail={"error": f"{type(exc).__name__}: {exc}"})
+        return None
+
+
+def _analyst_job() -> None:
+    """9:15 AM ET — produce the AI analyst account's daily decision."""
+    run_analyst_job()
 
 
 def _v2_snapshot_job(now: datetime | None = None) -> None:

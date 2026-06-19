@@ -101,7 +101,13 @@ def score_rs_momentum(a: AssetView) -> RuleHit | None:
                    f"6-month return {r * 100:.0f}%")
 
 
-RULES = (score_trend, score_breakout, score_pullback, score_rs_momentum)
+RULE_BY_NAME = {
+    "trend": score_trend,
+    "breakout": score_breakout,
+    "pullback": score_pullback,
+    "rs_momentum": score_rs_momentum,
+}
+RULES = tuple(RULE_BY_NAME.values())
 
 
 @dataclass
@@ -241,6 +247,58 @@ def build_decision(
     return target, picks
 
 
+class _RuleStrategy:
+    """A rule expressed as a portfolio strategy: equal-weight every name that
+    currently fires the rule. Used only to BACKTEST the rule's track record
+    (the "proof") — never traded live."""
+
+    def __init__(self, rule_name: str, rule_fn) -> None:
+        self._name = f"rule_{rule_name}"
+        self._rule = rule_fn
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def rebalance(self, ctx: RebalanceContext) -> dict[str, float]:
+        fired = [s for s, a in ctx.assets.items() if self._rule(a) is not None]
+        if not fired:
+            return {}
+        w = 1.0 / len(fired)
+        return {s: w for s in fired}
+
+
+def rule_track_records(bars: dict, rule_names: list[str]) -> dict[str, dict]:
+    """Backtest each named entry rule over ``bars`` -> compact track-record stats.
+
+    The honesty backbone of a pick: "buy the names this rule fires on, hold,
+    rebalance monthly — here's the historical result." Stats only (no curve);
+    the dossier's chart is the ticker's own price history (fetched live)."""
+    from edgefinder.engine.backtest import run_backtest
+
+    out: dict[str, dict] = {}
+    for name in rule_names:
+        fn = RULE_BY_NAME.get(name)
+        if fn is None:
+            continue
+        try:
+            res = run_backtest(bars, _RuleStrategy(name, fn),
+                               start_cash=100_000.0, schedule="monthly",
+                               warmup_days=210)
+            st = res.stats
+            out[name] = {
+                "return_pct": st.get("return_pct"),
+                "sharpe": st.get("sharpe"),
+                "max_drawdown_pct": st.get("max_drawdown_pct"),
+                "excess_vs_spy_pct": st.get("excess_return_pct"),
+                "trades": st.get("num_trades"),
+            }
+        except Exception:
+            logger.warning("rule track-record backtest failed for %s", name,
+                           exc_info=True)
+    return out
+
+
 def _deterministic_summary(picks: list[dict]) -> str:
     buys = [p["symbol"] for p in picks if p["action"] in ("buy", "add")]
     sells = [p["symbol"] for p in picks if p["action"] == "sell"]
@@ -288,6 +346,7 @@ def run_analyst(
     enter_rank: int = DEFAULT_ENTER_RANK,
     exit_rank: int = DEFAULT_EXIT_RANK,
     use_llm: bool = False,
+    with_proof: bool = True,
     model: str = "claude-haiku-4-5-20251001",
     runner: Any | None = None,
 ) -> int | None:
@@ -342,6 +401,13 @@ def run_analyst(
             enter_rank=enter_rank, exit_rank=exit_rank)
         news = gather_news(session, selected)
         target, picks = build_decision(selected, candidates, ctx.holdings, news)
+
+        # attach the backtested track record of each pick's firing rules
+        if with_proof and picks:
+            fired_rules = sorted({r for p in picks for r in p.get("rules", [])})
+            tracks = rule_track_records(bars, fired_rules) if fired_rules else {}
+            for p in picks:
+                p["proof"] = {r: tracks[r] for r in p.get("rules", []) if r in tracks}
 
         summary = (_llm_summary(picks, model, runner) if use_llm else None) \
             or _deterministic_summary(picks)

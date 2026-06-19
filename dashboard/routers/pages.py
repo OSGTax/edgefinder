@@ -58,6 +58,11 @@ async def lab_page(request: Request):
     return templates.TemplateResponse(request=request, name="lab.html")
 
 
+@router.get("/picks", response_class=HTMLResponse)
+async def picks_page(request: Request):
+    return templates.TemplateResponse(request=request, name="picks.html")
+
+
 @router.get("/backtest")
 async def backtest_redirect():
     """Old Backtest page -> Lab explorer (quick-backtest retired)."""

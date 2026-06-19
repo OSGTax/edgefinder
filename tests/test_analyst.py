@@ -249,3 +249,26 @@ class TestRunAnalystEndToEnd:
     def test_no_bars_returns_none(self, factory):
         assert run_analyst(factory, symbols=["NOPE"],
                            today=date(2026, 6, 12)) is None
+
+    def test_picks_carry_backtest_proof(self, factory):
+        s = factory()
+        _seed_bars(s, "UP1", date(2025, 1, 1), 260, lambda i: 50.0 + i * 0.4)
+        _seed_bars(s, "UP2", date(2025, 1, 1), 260, lambda i: 40.0 + i * 0.5)
+        # SPY benchmark so the rule backtest can compute excess vs SPY
+        _seed_bars(s, "SPY", date(2025, 1, 1), 260, lambda i: 400.0 + i * 0.1)
+        s.close()
+        sc = factory()
+        last = sc.query(DailyBar.date).order_by(DailyBar.date.desc()).first()[0]
+        sc.close()
+        rid = run_analyst(factory, symbols=["UP1", "UP2", "SPY"],
+                          today=last + timedelta(days=1), cap=5, with_proof=True)
+        assert rid is not None
+        s2 = factory()
+        row = s2.query(AgentDecision).filter_by(strategy_name="ai_analyst").one()
+        # every pick carries a proof dict for each firing rule with stats
+        assert row.picks
+        pick = next(p for p in row.picks if p["symbol"] in ("UP1", "UP2"))
+        assert pick["proof"], "pick should carry rule track records"
+        any_rule = next(iter(pick["proof"].values()))
+        assert "return_pct" in any_rule and "sharpe" in any_rule
+        s2.close()
