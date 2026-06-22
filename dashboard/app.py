@@ -1,6 +1,9 @@
-"""EdgeFinder v2 — FastAPI dashboard application.
+"""EdgeFinder — FastAPI app for the autonomous trading agent's desk.
 
-Central web app that serves the dashboard UI and all API endpoints.
+Greenfield rebuild: the app is now a thin read surface over the agent's
+``desk_*`` tables (the trading-desk page) plus the kept market-data chart
+endpoints. The old trading/research/strategy pages, routers, scheduler, and
+jobs were removed in the cutover (see REBUILD-PLAN.md / scripts/cutover.py).
 """
 
 from __future__ import annotations
@@ -13,33 +16,30 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from dashboard.routers import (
-    admin, benchmarks, desk, lab, market, ops, pages, picks, research,
-    strategies, symbols, trades,
-)
+from dashboard.routers import desk, pages, symbols
 from edgefinder.core.logging_config import configure_logging
 
 configure_logging()
 
 logger = logging.getLogger(__name__)
 
-__version__ = "6.0.0"
+__version__ = "6.0.1"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from dashboard.services import init_services, shutdown_services
 
-    logger.info("EdgeFinder v2 dashboard starting")
+    logger.info("EdgeFinder trading-desk starting")
     init_services()
     yield
     shutdown_services()
-    logger.info("EdgeFinder v2 dashboard shutting down")
+    logger.info("EdgeFinder trading-desk shutting down")
 
 
 app = FastAPI(
-    title="EdgeFinder v2",
-    description="Trading workbench for strategy research and paper trading",
+    title="EdgeFinder — Trading Desk",
+    description="Autonomous AI paper-trading agent + trading-desk page",
     version=__version__,
     lifespan=lifespan,
 )
@@ -52,37 +52,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Static files
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
-# Page routes (before API routers so / is handled by pages)
+# Pages first so "/" is handled by the pages router (redirects to /desk).
 app.include_router(pages.router, tags=["pages"])
-
-# Register API routers
-app.include_router(trades.router, prefix="/api/trades", tags=["trades"])
-app.include_router(strategies.router, prefix="/api/strategies", tags=["strategies"])
-app.include_router(research.router, prefix="/api/research", tags=["research"])
-app.include_router(benchmarks.router, prefix="/api/benchmarks", tags=["benchmarks"])
-app.include_router(market.router, prefix="/api/market", tags=["market"])
-app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
-app.include_router(ops.router, prefix="/api/ops", tags=["ops"])
-app.include_router(symbols.router, prefix="/api/symbols", tags=["symbols"])
-app.include_router(lab.router, prefix="/api/lab", tags=["lab"])
-app.include_router(picks.router, prefix="/api/picks", tags=["picks"])
 app.include_router(desk.router, prefix="/api/desk", tags=["desk"])
+app.include_router(symbols.router, prefix="/api/symbols", tags=["symbols"])
 
 
 @app.get("/api/health")
 def health_check():
-    from dashboard.services import get_plan_access
-    plan = get_plan_access()
-    available = sum(1 for v in plan.values() if v)
-    return {
-        "status": "ok",
-        "version": __version__,
-        "data_sources": {
-            "available": available,
-            "total": len(plan),
-            "details": plan,
-        },
-    }
+    return {"status": "ok", "version": __version__, "app": "trading-desk"}
