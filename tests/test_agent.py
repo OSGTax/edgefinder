@@ -7,8 +7,6 @@ exercised exactly as the Routine will call them.
 
 from __future__ import annotations
 
-import importlib
-from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -79,32 +77,34 @@ def test_backtest_tool(seeded):
 def test_ledger_cash_integrity(seeded):
     from agent import ledger
     from agent.models import STARTING_CAPITAL
+    from agent.store import get_store
+    store = get_store()
+    # buy
+    r = ledger.record_trade(store, symbol="NVDA", side="BUY", shares=100,
+                            price=ledger._latest_close("NVDA"),
+                            rationale="test buy", run_id="R1")
+    assert r["ok"], r
+    st = ledger.state(store)
+    assert st["positions"][0]["symbol"] == "NVDA"
+    assert abs(st["cash"] + st["positions_value"] - st["equity"]) < 0.01
+
+    # cash must equal starting - buy cost (ledger is source of truth)
+    buy_cost = r["dollars"]
+    assert abs(ledger.cash(store) - (STARTING_CAPITAL - buy_cost)) < 0.01
+
+    # partial sell
+    r2 = ledger.record_trade(store, symbol="NVDA", side="SELL", shares=40,
+                             price=ledger._latest_close("NVDA"), run_id="R1")
+    assert r2["ok"]
+    st2 = ledger.state(store)
+    assert st2["positions"][0]["shares"] == 60
+
+    # mark appends an equity snapshot
+    marked = ledger.mark(store)
+    assert marked["equity"] > 0
+    from agent.models import DeskEquity
     sess = seeded.session_factory()()
     try:
-        # buy
-        r = ledger.record_trade(sess, symbol="NVDA", side="BUY", shares=100,
-                                price=ledger._latest_close("NVDA"),
-                                rationale="test buy", run_id="R1")
-        assert r["ok"], r
-        st = ledger.state(sess)
-        assert st["positions"][0]["symbol"] == "NVDA"
-        assert abs(st["cash"] + st["positions_value"] - st["equity"]) < 0.01
-
-        # cash must equal starting - buy cost (ledger is source of truth)
-        buy_cost = r["dollars"]
-        assert abs(ledger.cash(sess) - (STARTING_CAPITAL - buy_cost)) < 0.01
-
-        # partial sell
-        r2 = ledger.record_trade(sess, symbol="NVDA", side="SELL", shares=40,
-                                 price=ledger._latest_close("NVDA"), run_id="R1")
-        assert r2["ok"]
-        st2 = ledger.state(sess)
-        assert st2["positions"][0]["shares"] == 60
-
-        # mark appends an equity snapshot
-        marked = ledger.mark(sess)
-        assert marked["equity"] > 0
-        from agent.models import DeskEquity
         assert sess.query(DeskEquity).count() == 1
     finally:
         sess.close()
@@ -112,50 +112,53 @@ def test_ledger_cash_integrity(seeded):
 
 def test_ledger_guards(seeded):
     from agent import ledger
-    sess = seeded.session_factory()()
-    try:
-        close = ledger._latest_close("AAPL")
-        # fill-sanity: a price far from the close is rejected
-        bad = ledger.record_trade(sess, symbol="AAPL", side="BUY", shares=10,
-                                  price=close * 5, run_id="R1")
-        assert not bad["ok"] and "sanity" in bad["error"]
-        # cannot sell what you don't hold
-        nosell = ledger.record_trade(sess, symbol="AAPL", side="SELL", shares=10,
-                                     price=close, run_id="R1")
-        assert not nosell["ok"]
-        # cannot overdraw cash
-        over = ledger.record_trade(sess, symbol="AAPL", side="BUY",
-                                   shares=10_000_000, price=close, run_id="R1")
-        assert not over["ok"]
-    finally:
-        sess.close()
+    from agent.store import get_store
+    store = get_store()
+    close = ledger._latest_close("AAPL")
+    # fill-sanity: a price far from the close is rejected
+    bad = ledger.record_trade(store, symbol="AAPL", side="BUY", shares=10,
+                              price=close * 5, run_id="R1")
+    assert not bad["ok"] and "sanity" in bad["error"]
+    # cannot sell what you don't hold
+    nosell = ledger.record_trade(store, symbol="AAPL", side="SELL", shares=10,
+                                 price=close, run_id="R1")
+    assert not nosell["ok"]
+    # cannot overdraw cash
+    over = ledger.record_trade(store, symbol="AAPL", side="BUY",
+                               shares=10_000_000, price=close, run_id="R1")
+    assert not over["ok"]
 
 
 def test_brain_state_journal_decision(seeded):
     from agent import brain
+    from agent.store import get_store
+    store = get_store()
+    assert brain.get_state(store)["version"] == 0
+    brain.set_state(store, name="trend-follow", thesis="ride winners",
+                    rules={"hold_above": "ema_200"}, params={"k": 5}, bump=True)
+    s = brain.get_state(store)
+    assert s["version"] == 1 and s["name"] == "trend-follow"
+
+    brain.set_state(store, name="trend-follow v2", thesis="ride winners, cut losers",
+                    rules={"hold_above": "ema_200"}, params={"k": 8}, bump=True)
+    assert brain.get_state(store)["version"] == 2
+
+    brain.add_journal(store, kind="pivot", title="raised K to 8",
+                      body="breadth widened", version_from=1, version_to=2)
+    brain.think(store, run_id="R1", phase="research", text="NVDA momentum strong")
+    d = brain.save_decision(store, run_id="R1", regime="risk_on",
+                            summary="add NVDA", target_weights={"NVDA": 0.5},
+                            picks=[{"symbol": "NVDA", "action": "buy",
+                                    "why_now": "breakout"}],
+                            watchlist=[{"symbol": "AAPL", "note": "near trigger"}],
+                            strategy_version=2)
+    assert d["ok"]
+    # idempotent: saving the same run again updates, not duplicates
+    brain.save_decision(store, run_id="R1", regime="risk_on", summary="add NVDA (v2)",
+                        strategy_version=2)
+    from agent.models import DeskDecision, DeskThinking, DeskJournal
     sess = seeded.session_factory()()
     try:
-        assert brain.get_state(sess)["version"] == 0
-        brain.set_state(sess, name="trend-follow", thesis="ride winners",
-                        rules={"hold_above": "ema_200"}, params={"k": 5}, bump=True)
-        s = brain.get_state(sess)
-        assert s["version"] == 1 and s["name"] == "trend-follow"
-
-        brain.set_state(sess, name="trend-follow v2", thesis="ride winners, cut losers",
-                        rules={"hold_above": "ema_200"}, params={"k": 8}, bump=True)
-        assert brain.get_state(sess)["version"] == 2
-
-        brain.add_journal(sess, kind="pivot", title="raised K to 8",
-                          body="breadth widened", version_from=1, version_to=2)
-        brain.think(sess, run_id="R1", phase="research", text="NVDA momentum strong")
-        d = brain.save_decision(sess, run_id="R1", regime="risk_on",
-                                summary="add NVDA", target_weights={"NVDA": 0.5},
-                                picks=[{"symbol": "NVDA", "action": "buy",
-                                        "why_now": "breakout"}],
-                                watchlist=[{"symbol": "AAPL", "note": "near trigger"}],
-                                strategy_version=2)
-        assert d["ok"]
-        from agent.models import DeskDecision, DeskThinking, DeskJournal
         assert sess.query(DeskDecision).count() == 1
         assert sess.query(DeskThinking).count() == 1
         assert sess.query(DeskJournal).count() == 1

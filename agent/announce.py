@@ -36,38 +36,29 @@ def announce(title: str, detail: str | None = None, *, kind: str = "feature",
     if kind not in VALID_KINDS:
         raise ValueError(f"announce: kind must be one of {VALID_KINDS}, got {kind!r}")
 
-    from agent.data import session_factory
-    from agent.models import ACCOUNT, DeskChangelog
+    from datetime import datetime, timezone
 
-    sess = session_factory()()
-    try:
-        row = DeskChangelog(account=ACCOUNT, kind=kind, title=title[:160],
-                            detail=(detail or "").strip() or None,
-                            version=(version or None), run_id=(run_id or None))
-        sess.add(row)
-        sess.commit()
-        return int(row.id)
-    finally:
-        sess.close()
+    from agent.models import ACCOUNT
+    from agent.store import get_store
+
+    rows = get_store().insert("desk_changelog", {
+        "account": ACCOUNT, "kind": kind, "title": title[:160],
+        "detail": (detail or "").strip() or None, "version": (version or None),
+        "run_id": (run_id or None),
+        "ts": datetime.now(timezone.utc).replace(tzinfo=None)})
+    return int(rows[0]["id"]) if rows else 0
 
 
 def recent(limit: int = 20) -> list[dict]:
     """Recent entries, newest first (for --list / sanity checks)."""
-    from sqlalchemy import desc
+    from agent.models import ACCOUNT
+    from agent.store import get_store
 
-    from agent.data import session_factory
-    from agent.models import ACCOUNT, DeskChangelog
-
-    sess = session_factory()()
-    try:
-        rows = (sess.query(DeskChangelog)
-                .filter(DeskChangelog.account == ACCOUNT)
-                .order_by(desc(DeskChangelog.ts)).limit(limit).all())
-        return [{"id": r.id, "ts": r.ts.isoformat() if r.ts else None,
-                 "kind": r.kind, "title": r.title, "detail": r.detail,
-                 "version": r.version, "run_id": r.run_id} for r in rows]
-    finally:
-        sess.close()
+    rows = get_store().select("desk_changelog", filters={"account": ACCOUNT},
+                              order=[("ts", "desc")], limit=limit)
+    return [{"id": r.get("id"), "ts": str(r["ts"]) if r.get("ts") else None,
+             "kind": r.get("kind"), "title": r.get("title"), "detail": r.get("detail"),
+             "version": r.get("version"), "run_id": r.get("run_id")} for r in rows]
 
 
 def main(argv: list[str] | None = None) -> int:

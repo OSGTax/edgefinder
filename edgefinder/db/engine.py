@@ -118,6 +118,10 @@ def get_engine(url: str | None = None, echo: bool | None = None):
             max_overflow=settings.db_max_overflow,
             pool_pre_ping=True,
             pool_recycle=settings.db_pool_recycle,
+            # Fail fast when the Postgres port is unreachable (e.g. a sandbox
+            # that blocks 6543/5432) instead of hanging on the ~2-min OS TCP
+            # timeout and re-incurring it on every pooled checkout.
+            connect_args={"connect_timeout": settings.db_connect_timeout},
         )
 
     logger.info("Database engine created: %s", "SQLite" if is_sqlite else "PostgreSQL")

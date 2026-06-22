@@ -18,8 +18,6 @@ from __future__ import annotations
 import json
 from datetime import date
 
-import pandas as pd
-
 from edgefinder.engine.backtest import run_backtest
 from edgefinder.engine.strategy import BuyAndHold, EqualWeight, RebalanceContext
 
@@ -83,9 +81,8 @@ def run(symbols: list[str], rule: str, *, schedule: str = "monthly",
         costed: bool = True, div_adjust: bool = True,
         source: str = "auto") -> dict:
     """Backtest ``rule`` over ``symbols`` and return an honest scorecard dict."""
-    from agent.data import load_bars, session_factory
+    from agent.data import load_bars, spy_series_df
     from edgefinder.backtest.costs import CostModel
-    from edgefinder.engine.data import spy_series
 
     bars = load_bars(symbols, start=None, end=end, div_adjust=div_adjust, source=source)
     bars = {s: df for s, df in bars.items() if df is not None and len(df) > 210}
@@ -94,11 +91,7 @@ def run(symbols: list[str], rule: str, *, schedule: str = "monthly",
 
     strategy = build_strategy(rule)
 
-    sess = session_factory()()
-    try:
-        bench = spy_series(sess)
-    finally:
-        sess.close()
+    bench = spy_series_df()
     if start is not None and bench is not None and len(bench):
         bench = bench[bench["date"] >= start]
 

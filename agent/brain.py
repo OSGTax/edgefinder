@@ -3,8 +3,7 @@
 These are the write-side tools the charter skill calls each cycle to (a)
 read/update its living strategy, (b) journal a pivot with its reasoning, (c)
 stream its thinking for the live feed, and (d) save the run's decision +
-watchlist. JSON payloads (rules, params, weights, picks, watchlist) are passed
-as files to avoid shell-escaping large blobs.
+watchlist. Persistence goes through ``agent.store`` (pg or rest transport).
 
 CLI:
   python -m agent.brain state-get
@@ -21,20 +20,15 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timezone
 
-from sqlalchemy import desc
-from sqlalchemy.orm import Session
-
-from agent.models import (
-    ACCOUNT,
-    DeskDecision,
-    DeskJournal,
-    DeskStrategyState,
-    DeskThinking,
-)
-
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _store():
+    from agent.store import get_store
+
+    return get_store()
 
 
 def _load_json(path: str | None):
@@ -47,102 +41,102 @@ def _load_json(path: str | None):
 # ── strategy state ──────────────────────────────────────
 
 
-def get_state(session: Session, account: str = ACCOUNT) -> dict:
-    row = (session.query(DeskStrategyState)
-           .filter(DeskStrategyState.account == account)
-           .order_by(desc(DeskStrategyState.version), desc(DeskStrategyState.id))
-           .first())
+def _latest_state_row(store, account: str):
+    rows = store.select("desk_strategy_state", filters={"account": account},
+                        order=[("version", "desc"), ("id", "desc")], limit=1)
+    return rows[0] if rows else None
+
+
+def get_state(store=None, account: str = "agent") -> dict:
+    store = store or _store()
+    row = _latest_state_row(store, account)
     if not row:
         return {"exists": False, "version": 0, "name": None, "thesis": None,
                 "rules": {}, "params": {}}
-    return {"exists": True, "version": row.version, "name": row.name,
-            "thesis": row.thesis, "rules": row.rules or {}, "params": row.params or {},
-            "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+    return {"exists": True, "version": row["version"], "name": row["name"],
+            "thesis": row.get("thesis"), "rules": row.get("rules") or {},
+            "params": row.get("params") or {},
+            "updated_at": str(row["updated_at"]) if row.get("updated_at") else None}
 
 
-def set_state(session: Session, *, name: str, thesis: str | None = None,
+def set_state(store=None, *, name: str, thesis: str | None = None,
               rules: dict | None = None, params: dict | None = None,
-              bump: bool = False, account: str = ACCOUNT) -> dict:
+              bump: bool = False, account: str = "agent") -> dict:
     """Update the living strategy. ``bump`` writes a NEW version row (a pivot);
     otherwise the latest row is updated in place (a tweak)."""
-    cur = get_state(session, account)
+    store = store or _store()
+    cur = get_state(store, account)
     if bump or not cur["exists"]:
         version = (cur["version"] or 0) + 1
-        row = DeskStrategyState(
-            account=account, version=version, name=name, thesis=thesis,
-            rules=rules or {}, params=params or {}, updated_at=_utcnow())
-        session.add(row)
+        store.insert("desk_strategy_state", {
+            "account": account, "version": version, "name": name, "thesis": thesis,
+            "rules": rules or {}, "params": params or {}, "updated_at": _utcnow()},
+            returning=False)
     else:
-        row = (session.query(DeskStrategyState)
-               .filter(DeskStrategyState.account == account)
-               .order_by(desc(DeskStrategyState.version), desc(DeskStrategyState.id))
-               .first())
-        row.name = name
+        row = _latest_state_row(store, account)
+        values: dict = {"name": name, "updated_at": _utcnow()}
         if thesis is not None:
-            row.thesis = thesis
+            values["thesis"] = thesis
         if rules is not None:
-            row.rules = rules
+            values["rules"] = rules
         if params is not None:
-            row.params = params
-        row.updated_at = _utcnow()
-        version = row.version
-    session.commit()
+            values["params"] = params
+        store.update("desk_strategy_state", {"id": row["id"]}, values, returning=False)
+        version = row["version"]
     return {"ok": True, "version": version, "name": name}
 
 
 # ── journal ─────────────────────────────────────────────
 
 
-def add_journal(session: Session, *, kind: str, title: str, body: str | None = None,
+def add_journal(store=None, *, kind: str, title: str, body: str | None = None,
                 version_from: int | None = None, version_to: int | None = None,
-                account: str = ACCOUNT) -> dict:
-    row = DeskJournal(account=account, kind=kind, title=title, body=body,
-                      version_from=version_from, version_to=version_to, ts=_utcnow())
-    session.add(row)
-    session.commit()
-    return {"ok": True, "id": row.id}
+                account: str = "agent") -> dict:
+    store = store or _store()
+    rows = store.insert("desk_journal", {
+        "account": account, "kind": kind, "title": title, "body": body,
+        "version_from": version_from, "version_to": version_to, "ts": _utcnow()})
+    return {"ok": True, "id": (rows[0]["id"] if rows else None)}
 
 
 # ── thinking feed ───────────────────────────────────────
 
 
-def think(session: Session, *, run_id: str, text: str, phase: str | None = None,
-          account: str = ACCOUNT) -> dict:
-    row = DeskThinking(account=account, run_id=run_id, phase=phase, text=text, ts=_utcnow())
-    session.add(row)
-    session.commit()
-    return {"ok": True, "id": row.id}
+def think(store=None, *, run_id: str, text: str, phase: str | None = None,
+          account: str = "agent") -> dict:
+    store = store or _store()
+    rows = store.insert("desk_thinking", {
+        "account": account, "run_id": run_id, "phase": phase, "text": text,
+        "ts": _utcnow()})
+    return {"ok": True, "id": (rows[0]["id"] if rows else None)}
 
 
 # ── decision ────────────────────────────────────────────
 
 
-def save_decision(session: Session, *, run_id: str, regime: str | None = None,
+def save_decision(store=None, *, run_id: str, regime: str | None = None,
                   summary: str | None = None, target_weights: dict | None = None,
                   picks: list | None = None, watchlist: list | None = None,
                   strategy_version: int | None = None,
-                  decision_date: date | None = None, account: str = ACCOUNT) -> dict:
-    existing = (session.query(DeskDecision)
-                .filter(DeskDecision.account == account, DeskDecision.run_id == run_id)
-                .one_or_none())
-    if existing is None:
-        existing = DeskDecision(account=account, run_id=run_id, ts=_utcnow())
-        session.add(existing)
-    existing.decision_date = decision_date or date.today()
-    existing.regime = regime
-    existing.summary = summary
-    existing.target_weights = target_weights
-    existing.picks = picks
-    existing.watchlist = watchlist
-    existing.strategy_version = strategy_version
-    session.commit()
-    return {"ok": True, "run_id": run_id, "id": existing.id}
+                  decision_date: date | None = None, account: str = "agent") -> dict:
+    store = store or _store()
+    values = {
+        "decision_date": decision_date or date.today(), "regime": regime,
+        "summary": summary, "target_weights": target_weights, "picks": picks,
+        "watchlist": watchlist, "strategy_version": strategy_version}
+    existing = store.select("desk_decisions",
+                            filters={"account": account, "run_id": run_id}, limit=1)
+    if existing:
+        store.update("desk_decisions", {"id": existing[0]["id"]}, values,
+                     returning=False)
+        return {"ok": True, "run_id": run_id, "id": existing[0]["id"]}
+    rows = store.insert("desk_decisions", {
+        "account": account, "run_id": run_id, "ts": _utcnow(), **values})
+    return {"ok": True, "run_id": run_id, "id": (rows[0]["id"] if rows else None)}
 
 
 def main(argv: list[str] | None = None) -> None:
     import argparse
-
-    from agent.data import session_factory
 
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -178,31 +172,28 @@ def main(argv: list[str] | None = None) -> None:
     de.add_argument("--strategy-version", type=int, default=None)
 
     args = p.parse_args(argv)
-    sess = session_factory()()
-    try:
-        if args.cmd == "state-get":
-            print(json.dumps(get_state(sess), indent=2))
-        elif args.cmd == "state-set":
-            print(json.dumps(set_state(
-                sess, name=args.name, thesis=args.thesis,
-                rules=_load_json(args.rules_file), params=_load_json(args.params_file),
-                bump=args.bump), indent=2))
-        elif args.cmd == "journal":
-            print(json.dumps(add_journal(
-                sess, kind=args.kind, title=args.title, body=args.body,
-                version_from=args.vfrom, version_to=args.vto), indent=2))
-        elif args.cmd == "think":
-            print(json.dumps(think(sess, run_id=args.run_id, phase=args.phase,
-                                   text=args.text), indent=2))
-        elif args.cmd == "decision":
-            print(json.dumps(save_decision(
-                sess, run_id=args.run_id, regime=args.regime, summary=args.summary,
-                target_weights=_load_json(args.weights_file),
-                picks=_load_json(args.picks_file),
-                watchlist=_load_json(args.watchlist_file),
-                strategy_version=args.strategy_version), indent=2))
-    finally:
-        sess.close()
+    store = _store()
+    if args.cmd == "state-get":
+        print(json.dumps(get_state(store), indent=2))
+    elif args.cmd == "state-set":
+        print(json.dumps(set_state(
+            store, name=args.name, thesis=args.thesis,
+            rules=_load_json(args.rules_file), params=_load_json(args.params_file),
+            bump=args.bump), indent=2))
+    elif args.cmd == "journal":
+        print(json.dumps(add_journal(
+            store, kind=args.kind, title=args.title, body=args.body,
+            version_from=args.vfrom, version_to=args.vto), indent=2))
+    elif args.cmd == "think":
+        print(json.dumps(think(store, run_id=args.run_id, phase=args.phase,
+                               text=args.text), indent=2))
+    elif args.cmd == "decision":
+        print(json.dumps(save_decision(
+            store, run_id=args.run_id, regime=args.regime, summary=args.summary,
+            target_weights=_load_json(args.weights_file),
+            picks=_load_json(args.picks_file),
+            watchlist=_load_json(args.watchlist_file),
+            strategy_version=args.strategy_version), indent=2))
 
 
 if __name__ == "__main__":

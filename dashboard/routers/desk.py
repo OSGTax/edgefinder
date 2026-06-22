@@ -46,11 +46,16 @@ def _iso(dt):
 @router.get("/portfolio")
 def portfolio(db: Session = Depends(get_db)):
     """Cash, positions (marked), equity, and P&L — the book right now."""
-    from agent.ledger import cash
+    from sqlalchemy import func as safunc
 
     positions = (db.query(DeskPosition)
                  .filter(DeskPosition.account == ACCOUNT).all())
-    c = cash(db)
+    # Cash = starting capital + Σ sell − Σ buy, computed from the trade ledger
+    # (source of truth) on this read-only session — same formula as agent.ledger.
+    by_side = {side: float(total) for side, total in (
+        db.query(DeskTrade.side, safunc.coalesce(safunc.sum(DeskTrade.dollars), 0.0))
+        .filter(DeskTrade.account == ACCOUNT).group_by(DeskTrade.side).all())}
+    c = round(STARTING_CAPITAL + by_side.get("SELL", 0.0) - by_side.get("BUY", 0.0), 2)
     rows, pos_value = [], 0.0
     for p in positions:
         mark = p.last_price or p.avg_price

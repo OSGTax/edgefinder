@@ -1,16 +1,18 @@
 """Thin, clean data-access for the agent — the one seam over the kept layer.
 
-Everything here delegates to the audited EdgeFinder data layer that the
-rebuild KEEPS: ``edgefinder.engine.data`` (DB + R2 bar loading, split and
-dividend adjustment), ``edgefinder.data.barstore`` (R2 archive), and
-``edgefinder.data.indicator_engine`` (indicator snapshots). The agent never
-touches raw SQL or S3 — it calls these typed helpers and gets back plain
-dicts / DataFrames.
+Reads delegate to the audited EdgeFinder data layer that the rebuild KEEPS:
+``edgefinder.engine.data`` (bar loading, split/dividend adjustment),
+``edgefinder.data.barstore`` (R2 archive), and
+``edgefinder.data.indicator_engine`` (indicator snapshots).
 
-Bar source: ``auto`` reads the deep history from R2 when the R2_* env vars
-are present (the 21-year archive), and falls back to the Postgres hot set
-otherwise. The two paths are proven bit-equivalent (see CLAUDE.md), so a
-backtest's numbers don't depend on which lane served the bars.
+Two transports (see ``agent.store``):
+- **pg**   — SQLAlchemy ``Session`` against DATABASE_URL (Render/CI/Codespaces).
+- **rest** — Supabase PostgREST over HTTPS for the web Routine, where the
+  Postgres port is blocked. On this lane the market tables (splits, dividends,
+  news, daily_bars, index_daily) are read via the Data API; **bars come from
+  the R2 archive** (S3/443) when configured. The pure adjustment transforms
+  (``adjust_for_splits`` / ``adjust_for_dividends``) are shared by both lanes,
+  so the numbers don't depend on which transport served the rows.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-from edgefinder.db.engine import get_engine, get_session_factory
+from agent.store import transport
 
 
 def r2_available() -> bool:
@@ -30,36 +32,120 @@ def r2_available() -> bool:
     )
 
 
+def _use_rest() -> bool:
+    return transport() == "rest"
+
+
+# ── pg-lane engine/session (unused on the rest lane) ────────
+
 _session_factory = None
 
 
 def session_factory():
     global _session_factory
     if _session_factory is None:
+        from edgefinder.db.engine import get_engine, get_session_factory
+
         _session_factory = get_session_factory(get_engine())
     return _session_factory
 
 
+# ── rest-lane reads of the kept market tables ───────────────
+
+
+def _rest_splits(symbols: list[str]) -> dict[str, list[tuple]]:
+    """{symbol: [(ex_date, factor=to/from), ...]} — mirrors engine.load_splits."""
+    from agent.store import get_store
+
+    if not symbols:
+        return {}
+    rows = get_store().select(
+        "ticker_splits", columns="symbol,execution_date,split_from,split_to",
+        filters={"symbol": ("in", symbols)}, limit=10000)
+    out: dict[str, list[tuple]] = {}
+    for r in rows:
+        f, t = r.get("split_from"), r.get("split_to")
+        if not f or not t or f <= 0 or t <= 0 or f == t:
+            continue
+        ex = date.fromisoformat(str(r["execution_date"])[:10])
+        out.setdefault(r["symbol"], []).append((ex, t / f))
+    for sym in out:
+        out[sym].sort()
+    return out
+
+
+def _rest_dividends(symbols: list[str]) -> dict[str, list[tuple]]:
+    """{symbol: [(ex_date, cash_amount), ...]} — mirrors engine.load_dividends."""
+    from agent.store import get_store
+
+    if not symbols:
+        return {}
+    rows = get_store().select(
+        "dividends", columns="symbol,ex_date,cash_amount",
+        filters={"symbol": ("in", symbols)},
+        order=[("symbol", "asc"), ("ex_date", "asc")], limit=100000)
+    out: dict[str, list[tuple]] = {}
+    for r in rows:
+        if r.get("cash_amount") is None:
+            continue
+        ex = date.fromisoformat(str(r["ex_date"])[:10])
+        out.setdefault(r["symbol"], []).append((ex, float(r["cash_amount"])))
+    return out
+
+
+def _rest_bars(symbols: list[str], start: date | None, end: date | None
+               ) -> dict[str, pd.DataFrame]:
+    """Raw daily bars from daily_bars over REST (fallback when R2 is absent)."""
+    from agent.store import get_store
+
+    filters: dict = {"symbol": ("in", symbols)}
+    if start is not None:
+        filters["date"] = ("gte", start)
+    rows = get_store().select(
+        "daily_bars", columns="symbol,date,open,high,low,close,volume",
+        filters=filters, order=[("symbol", "asc"), ("date", "asc")], limit=1000000)
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        d = date.fromisoformat(str(r["date"])[:10])
+        if end is not None and d > end:
+            continue
+        out.setdefault(r["symbol"], []).append({
+            "date": d, "open": r["open"], "high": r["high"],
+            "low": r["low"], "close": r["close"], "volume": r["volume"]})
+    return {s: pd.DataFrame(v) for s, v in out.items() if v}
+
+
+# ── bars (transport-aware) ──────────────────────────────────
+
+
 def load_bars(
-    symbols: list[str],
-    *,
-    start: date | None = None,
-    end: date | None = None,
-    div_adjust: bool = True,
-    source: str = "auto",
+    symbols: list[str], *, start: date | None = None, end: date | None = None,
+    div_adjust: bool = True, source: str = "auto",
 ) -> dict[str, pd.DataFrame]:
     """Split-adjusted (and optionally total-return) daily bars per symbol.
 
-    ``source``: ``auto`` (R2 when configured, else DB), ``r2``, or ``db``.
-    Returns ``{symbol: DataFrame[date, open, high, low, close, volume(, close_raw)]}``.
+    ``source``: ``auto`` (R2 when configured, else the active transport's DB),
+    ``r2``, or ``db``. Returns ``{symbol: DataFrame[date, OHLCV(, close_raw)]}``.
     """
     from edgefinder.engine import data as eng
 
     use_r2 = source == "r2" or (source == "auto" and r2_available())
+
+    if _use_rest():
+        if use_r2:
+            bars = eng.load_bars_from_store(symbols, start=start, end=end)
+        else:
+            bars = _rest_bars(symbols, start, end)
+        splits = _rest_splits(list(bars))
+        bars = eng.adjust_for_splits(bars, splits)
+        if div_adjust:
+            divs = eng.adjust_dividends_for_splits(_rest_dividends(list(bars)), splits)
+            bars = eng.adjust_for_dividends(bars, divs)
+        return bars
+
+    # pg lane (unchanged)
     if use_r2:
         bars = eng.load_bars_from_store(symbols, start=start, end=end)
-        # the store loader doesn't split-adjust (raw mirror) — apply it here
-        # using DB split history so R2 and DB lanes agree.
         sess = session_factory()()
         try:
             splits = eng.load_splits(sess, list(bars))
@@ -87,11 +173,7 @@ def load_bars(
 
 def latest_indicators(symbols: list[str], *, as_of: date | None = None,
                       source: str = "auto") -> dict[str, dict]:
-    """Latest close + computed indicators per symbol as of ``as_of`` (or today).
-
-    Pulls ~1.5y of bars so EMAs/RSI/MACD/BB are warm, then returns the last
-    snapshot dict (the IndicatorSnapshot the strategy interface uses).
-    """
+    """Latest close + computed indicators per symbol as of ``as_of`` (or today)."""
     from edgefinder.data.indicator_engine import compute_snapshot_series
 
     start = (as_of or date.today()) - timedelta(days=560)
@@ -145,6 +227,21 @@ def history(symbol: str, *, days: int = 120, source: str = "auto") -> list[dict]
 
 def news(symbol: str, *, limit: int = 8) -> list[dict]:
     """Recent stored news headlines for a symbol (from ticker_news)."""
+    if _use_rest():
+        from agent.store import get_store
+
+        rows = get_store().select(
+            "ticker_news",
+            columns="title,published_utc,publisher_name,article_url,description",
+            filters={"symbol": symbol.upper()},
+            order=[("published_utc", "desc")], limit=limit)
+        return [
+            {"title": r.get("title"), "published_utc": r.get("published_utc"),
+             "publisher": r.get("publisher_name"), "url": r.get("article_url"),
+             "description": (r.get("description") or "")[:400]}
+            for r in rows
+        ]
+
     from edgefinder.db.models import TickerNews
 
     sess = session_factory()()
@@ -164,11 +261,16 @@ def news(symbol: str, *, limit: int = 8) -> list[dict]:
 
 
 def universe(top_n: int = 200, *, as_of: date | None = None) -> list[str]:
-    """The top-N most liquid symbols by trailing dollar volume (PIT-safe).
+    """The top-N most liquid symbols by recent dollar volume (PIT-safe-ish).
 
-    Uses the DB ranking (the operational hot set already holds the live
-    top-1000/day), so this is fast and needs no R2 full-market scan.
+    pg lane uses the kept PIT ranking. rest lane ranks the latest stored
+    session's dollar volume from daily_bars (the hot set already holds the
+    live top-1000/day), which is fast over the Data API and good enough for
+    the agent's hunting universe.
     """
+    if _use_rest():
+        return _rest_universe(top_n, as_of)
+
     from edgefinder.engine.data import resolve_universe
 
     sess = session_factory()()
@@ -180,18 +282,55 @@ def universe(top_n: int = 200, *, as_of: date | None = None) -> list[str]:
         sess.close()
 
 
-def regime(*, as_of: date | None = None) -> dict:
-    """A compact market-regime read from the index series.
+def _rest_universe(top_n: int, as_of: date | None) -> list[str]:
+    from agent.store import get_store
 
-    SPY/QQQ/IWM levels + recent trend (last close vs its 50d and 200d SMA)
-    and 1m/3m returns. No external calls — pure DB/R2 history.
-    """
+    store = get_store()
+    latest = store.select("daily_bars", columns="date",
+                          order=[("date", "desc")], limit=1)
+    if not latest:
+        return []
+    day = str(latest[0]["date"])[:10]
+    rows = store.select("daily_bars", columns="symbol,close,volume",
+                        filters={"date": day}, limit=20000)
+    scored = []
+    for r in rows:
+        sym, c, v = r.get("symbol"), r.get("close"), r.get("volume")
+        if not sym or c is None or v is None:
+            continue
+        if any(ch in sym for ch in (".", "/", "=")):
+            continue
+        scored.append((float(c) * float(v), sym))
+    scored.sort(reverse=True)
+    return [s for _, s in scored[:top_n]]
+
+
+def spy_series_df() -> pd.DataFrame:
+    """Longest available SPY series for benchmarking (transport-aware)."""
+    if _use_rest():
+        bars = load_bars(["SPY"], div_adjust=False, source="auto")
+        df = bars.get("SPY")
+        if df is None or not len(df):
+            return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
+        return df.sort_values("date").reset_index(drop=True)
+
+    from edgefinder.engine.data import spy_series
+
+    sess = session_factory()()
+    try:
+        return spy_series(sess)
+    finally:
+        sess.close()
+
+
+def regime(*, as_of: date | None = None) -> dict:
+    """A compact market-regime read from the index series (pure DB/R2 history)."""
     out: dict = {"as_of": str(as_of or date.today()), "indices": {}}
     bars = latest_indicators(["SPY", "QQQ", "IWM"], as_of=as_of)
     for sym, info in bars.items():
         ind = info.get("indicators", {})
         close = info["close"]
-        sma50 = ind.get("ema_50")  # snapshot exposes EMAs; use as trend proxy
+        sma50 = ind.get("ema_50")
         sma200 = ind.get("ema_200")
         out["indices"][sym] = {
             "close": close,

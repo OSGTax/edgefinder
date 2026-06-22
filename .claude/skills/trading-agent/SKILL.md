@@ -41,6 +41,17 @@ trades, and backtests all tie together. Narrate as you go with
 `python -m agent.brain think --run-id <RID> --phase <phase> --text "..."` —
 short, candid lines; this is the live "thinking" panel the owner watches.
 
+### 0. Preflight (always first)
+Run `python -m agent.preflight`. It verifies — fast and loud — that the tools
+can reach the database on this environment's transport and that the data is
+fresh. **If it exits non-zero, STOP**: don't trade, and don't try to bypass the
+ledger with raw SQL. Report the failing check so the owner can fix the
+environment. (Transport: the tools talk to the DB over **Postgres** where the
+port is open, or the **Supabase Data API over HTTPS** on the web Routine sandbox
+where it isn't — set by `EDGEFINDER_DB_TRANSPORT`; `auto` picks REST when
+`SUPABASE_URL` + service-role key are present. You never write raw SQL either
+way — always go through the `agent.*` tools.)
+
 ### 1. Observe (phase: observe)
 - `python -m agent.ledger state` — your cash, positions, equity, P&L.
 - `python -m agent.brain state-get` — your current strategy (thesis/rules/params).

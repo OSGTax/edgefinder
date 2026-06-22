@@ -132,6 +132,11 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_recycle: int = 300  # seconds; Supabase Supavisor retires idle connections
+    db_connect_timeout: int = 8  # seconds; fail fast if the Postgres port is blocked
+    # Persistence transport for the agent tools: "pg" (SQLAlchemy/Postgres),
+    # "rest" (Supabase Data API over HTTPS — the web Routine sandbox blocks the
+    # Postgres port), or "auto" (rest iff SUPABASE_URL + service-role key set).
+    db_transport: str = "auto"
 
     # ── LOGGING ──────────────────────────────────────
     log_level: str = "INFO"

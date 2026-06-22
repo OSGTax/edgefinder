@@ -29,6 +29,26 @@ are correctness invariants, not permission gates:
 3. **Keep everything git-recoverable** — work on the branch, old code stays in
    history, no force-push / history rewrite.
 
+## Routine transport — DB over HTTPS (v6.2.0)
+The Claude-Code-on-the-web sandbox egress is an **HTTP/HTTPS proxy**: outbound
+to the Supabase Postgres pooler (ports 6543/5432) is blocked at every network
+level (None/Trusted/Full) — only 443 works. So the agent's `agent.*` tools reach
+the **same** database two ways, chosen by `EDGEFINDER_DB_TRANSPORT`
+(`agent/store.py`):
+- **rest** — Supabase Data API (PostgREST) over 443 for the web Routine. Bars
+  come from the **R2 archive** (S3/443); the kept market tables (splits,
+  dividends, news, daily_bars, index_daily) and all `desk_*` writes go over REST
+  with the project **service-role** key. `auto` selects this when `SUPABASE_URL`
+  + `SUPABASE_SERVICE_ROLE_KEY` are set.
+- **pg** — SQLAlchemy/Postgres for Render, Codespaces, and CI (unchanged).
+
+The integrity logic (cash recompute, position rebuild, fill guards) is
+single-sourced and transport-agnostic (unit-tested on SQLite). Required Routine
+env: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `R2_ACCESS_KEY_ID/…SECRET/…
+ENDPOINT/…BUCKET`, `EDGEFINDER_POLYGON_API_KEY`, `EDGEFINDER_DB_TRANSPORT=rest`.
+Run `python -m agent.preflight` first; `scripts/bootstrap.sh` (also a
+SessionStart hook) installs deps on a fresh container.
+
 ## The pivot (why everything changes)
 The owner concluded the prior build (a heavyweight strategy research platform —
 hunt/validation, a 12-strategy validated fleet, a fixed-rule "analyst", a
