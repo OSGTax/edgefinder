@@ -30,11 +30,38 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date, timedelta
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# DB connectivity probe — in remote/web Claude Code sessions outbound TCP to
+# Postgres ports (5432, 6543) is often blocked by the network policy.  When
+# that happens we fall back to the Supabase REST API (PostgREST, HTTPS/443)
+# for all DB reads/writes and call api.polygon.io directly via httpx.
+# ---------------------------------------------------------------------------
+
+def _db_reachable() -> bool:
+    """Return True if psycopg2 can reach the Supabase host (fast probe)."""
+    import socket
+    db_url = os.environ.get("DATABASE_URL", "")
+    # parse host:port from the URL
+    try:
+        after_at = db_url.split("@")[-1]
+        host_port = after_at.split("/")[0]
+        host, port_str = host_port.rsplit(":", 1)
+        port = int(port_str)
+    except Exception:
+        return True  # can't parse → let SQLAlchemy try
+    try:
+        s = socket.create_connection((host, port), timeout=5)
+        s.close()
+        return True
+    except Exception:
+        return False
 
 
 def _rest_client():
@@ -43,6 +70,68 @@ def _rest_client():
     except ImportError:  # pragma: no cover — legacy SDK name
         from polygon import RESTClient
     return RESTClient(settings.polygon_api_key)
+
+
+# ---------------------------------------------------------------------------
+# Supabase REST API helpers (used when TCP is blocked)
+# ---------------------------------------------------------------------------
+
+def _sb_headers() -> dict:
+    key = os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+
+
+def _sb_get(path: str, params: dict | None = None) -> list[dict]:
+    import httpx
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    r = httpx.get(f"{url}/rest/v1/{path}", headers=_sb_headers(), params=params, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+def _sb_upsert(table: str, rows: list[dict]) -> int:
+    import httpx
+    url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    n = 0
+    for i in range(0, len(rows), 500):
+        chunk = rows[i:i + 500]
+        r = httpx.post(
+            f"{url}/rest/v1/{table}",
+            headers=_sb_headers(),
+            content=json.dumps(chunk, default=str),
+            timeout=60,
+        )
+        r.raise_for_status()
+        n += len(chunk)
+    return n
+
+
+def _fetch_grouped_aggs_httpx(day: date) -> list:
+    """Fetch grouped daily aggs directly via httpx (no Polygon SDK, no SSL proxy)."""
+    import httpx
+
+    class _Bar:
+        def __init__(self, d: dict):
+            self.ticker = d.get("T")
+            self.open = d.get("o")
+            self.high = d.get("h")
+            self.low = d.get("l")
+            self.close = d.get("c")
+            self.volume = d.get("v")
+            self.transactions = d.get("n")
+
+    r = httpx.get(
+        "https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/" + day.isoformat(),
+        params={"apiKey": settings.polygon_api_key, "include_otc": "false"},
+        timeout=60,
+    )
+    r.raise_for_status()
+    return [_Bar(d) for d in r.json().get("results", [])]
 
 
 def aggs_to_rows(aggs, day: date, *, top_n: int, keep: set[str],
@@ -90,14 +179,17 @@ def aggs_to_rows(aggs, day: date, *, top_n: int, keep: set[str],
     return out
 
 
-def _missing_trading_days(engine, max_days: int) -> list[date]:
+def _missing_trading_days(engine, max_days: int, *, rest_mode: bool = False) -> list[date]:
     """Weekdays from the day after the latest daily_bars date through yesterday,
     capped at ``max_days`` (most recent first → ingested oldest first)."""
-    from sqlalchemy import func, select
-    from edgefinder.db.models import DailyBar
-
-    with engine.connect() as conn:
-        latest = conn.execute(select(func.max(DailyBar.date))).scalar()
+    if rest_mode:
+        rows = _sb_get("daily_bars", {"select": "date", "order": "date.desc", "limit": "1"})
+        latest = date.fromisoformat(rows[0]["date"]) if rows else None
+    else:
+        from sqlalchemy import func, select
+        from edgefinder.db.models import DailyBar
+        with engine.connect() as conn:
+            latest = conn.execute(select(func.max(DailyBar.date))).scalar()
     start = (latest + timedelta(days=1)) if latest else (date.today() - timedelta(days=max_days))
     end = date.today() - timedelta(days=1)  # yesterday (today's bar isn't final)
     days = []
@@ -109,18 +201,24 @@ def _missing_trading_days(engine, max_days: int) -> list[date]:
     return days[-max_days:]
 
 
-def _protected_symbols(engine) -> set[str]:
+def _protected_symbols(engine, *, rest_mode: bool = False) -> set[str]:
     """Benchmarks + the agent's open positions — never dropped from the top-N."""
     from edgefinder.data.barstore import DB_PROTECTED_ETFS
     from agent.models import ACCOUNT, DeskPosition
 
     keep = {s.upper() for s in DB_PROTECTED_ETFS}
     keep |= {s.strip().upper() for s in settings.index_symbols if s.strip()}
-    from sqlalchemy.orm import Session
-    with Session(engine) as sess:
-        for (sym,) in sess.query(DeskPosition.symbol).filter(
-                DeskPosition.account == ACCOUNT).all():
-            keep.add(str(sym).upper())
+    if rest_mode:
+        rows = _sb_get("desk_positions",
+                       {"select": "symbol", "account": f"eq.{ACCOUNT}", "shares": "gt.0"})
+        for r in rows:
+            keep.add(str(r["symbol"]).upper())
+    else:
+        from sqlalchemy.orm import Session
+        with Session(engine) as sess:
+            for (sym,) in sess.query(DeskPosition.symbol).filter(
+                    DeskPosition.account == ACCOUNT).all():
+                keep.add(str(sym).upper())
     return keep
 
 
@@ -128,21 +226,30 @@ def refresh(*, max_days: int = 7, top_n: int = 1000, min_price: float = 1.0,
             max_price: float = 100_000.0, with_corporate_actions: bool = False,
             with_news: bool = False, dry_run: bool = False) -> dict:
     """Run one data-refresh pass. Returns a summary dict."""
-    import os
-
-    from scripts.backfill_daily_bars import upsert_daily_bars
     from edgefinder.db.engine import get_engine
 
-    engine = get_engine()
-    client = _rest_client()
-    keep = _protected_symbols(engine)
-    days = _missing_trading_days(engine, max_days)
+    # Probe TCP connectivity first; fall back to HTTPS REST when blocked
+    # (common in remote/web Claude Code execution environments).
+    rest_mode = not _db_reachable()
+    if rest_mode:
+        logger.info("TCP to Postgres unreachable — using Supabase REST API (HTTPS)")
+        engine = None
+    else:
+        engine = get_engine()
+
+    keep = _protected_symbols(engine, rest_mode=rest_mode)
+    days = _missing_trading_days(engine, max_days, rest_mode=rest_mode)
     summary: dict = {"days_targeted": [str(d) for d in days], "bars_upserted": 0,
-                     "days_ingested": 0, "dry_run": dry_run}
+                     "days_ingested": 0, "dry_run": dry_run,
+                     "mode": "rest" if rest_mode else "sqlalchemy"}
 
     for d in days:
         try:
-            aggs = list(client.get_grouped_daily_aggs(d.isoformat()))
+            if rest_mode:
+                aggs = _fetch_grouped_aggs_httpx(d)
+            else:
+                client = _rest_client()
+                aggs = list(client.get_grouped_daily_aggs(d.isoformat()))
         except Exception as exc:  # noqa: BLE001 — one bad day can't abort the run
             logger.warning("grouped aggs failed for %s: %s", d, exc)
             continue
@@ -154,18 +261,25 @@ def refresh(*, max_days: int = 7, top_n: int = 1000, min_price: float = 1.0,
         if dry_run:
             logger.info("  %s: would upsert %d bars", d, len(rows))
         else:
-            n = upsert_daily_bars(engine, rows)
+            if rest_mode:
+                n = _sb_upsert("daily_bars", rows)
+            else:
+                from scripts.backfill_daily_bars import upsert_daily_bars
+                n = upsert_daily_bars(engine, rows)
             summary["bars_upserted"] += n
             logger.info("  %s: upserted %d bars", d, n)
         summary["days_ingested"] += 1
 
     if with_corporate_actions and not dry_run:
-        summary["corporate_actions"] = _accumulate(["dividends", "splits"])
+        summary["corporate_actions"] = _accumulate(
+            ["dividends", "splits"], rest_mode=rest_mode, keep=keep)
     if with_news and not dry_run:
-        summary["news"] = _accumulate(["news"])
+        summary["news"] = _accumulate(["news"], rest_mode=rest_mode, keep=keep)
 
     # mirror to the grow-only R2 archive + prune the DB back to the window
-    if not dry_run and all(os.getenv(k) for k in (
+    # R2 uses S3/HTTPS so it's reachable even in rest_mode, but the prune
+    # step needs a DB session — skip it when TCP is blocked.
+    if not dry_run and not rest_mode and all(os.getenv(k) for k in (
             "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_ENDPOINT", "R2_BUCKET")):
         try:
             from edgefinder.data.barstore import (
@@ -185,12 +299,16 @@ def refresh(*, max_days: int = 7, top_n: int = 1000, min_price: float = 1.0,
             logger.exception("R2 sync/prune failed")
             summary["r2_sync"] = "error"
     elif not dry_run:
-        summary["r2_sync"] = "skipped (no R2_* env)"
+        summary["r2_sync"] = "skipped (rest_mode)" if rest_mode else "skipped (no R2_* env)"
     return summary
 
 
-def _accumulate(kinds: list[str]) -> dict:
-    """Run the kept DataAccumulator for dividends/splits/news over active names."""
+def _accumulate(kinds: list[str], *, rest_mode: bool = False,
+                keep: set[str] | None = None) -> dict:
+    """Run the DataAccumulator.  In rest_mode uses Polygon + Supabase REST directly."""
+    if rest_mode:
+        return _accumulate_rest(kinds, symbols=keep or set())
+
     from edgefinder.data.accumulator import DataAccumulator
     from edgefinder.data.polygon import PolygonDataProvider
     from edgefinder.db.engine import get_engine, get_session_factory
@@ -203,6 +321,73 @@ def _accumulate(kinds: list[str]) -> dict:
         out["splits"] = acc.accumulate_splits()
     if "news" in kinds:
         out["news"] = acc.accumulate_news()
+    return out
+
+
+def _accumulate_rest(kinds: list[str], symbols: set[str]) -> dict:
+    """Polygon + Supabase REST fallback for corporate-actions/news accumulation."""
+    import httpx
+    since = (date.today() - timedelta(days=7)).isoformat()
+    out: dict = {}
+    divs_inserted = 0
+    splits_found = 0
+    news_fetched = 0
+
+    for sym in sorted(symbols):
+        if "dividends" in kinds:
+            try:
+                r = httpx.get(
+                    "https://api.polygon.io/v3/reference/dividends",
+                    params={"ticker": sym, "ex_dividend_date.gte": since,
+                            "apiKey": settings.polygon_api_key},
+                    timeout=15,
+                )
+                if r.is_success:
+                    for d in r.json().get("results", []):
+                        try:
+                            _sb_upsert("dividends?on_conflict=symbol,ex_date",
+                                       [{"symbol": d["ticker"],
+                                         "ex_date": d["ex_dividend_date"],
+                                         "cash_amount": d.get("cash_amount", 0)}])
+                            divs_inserted += 1
+                        except Exception as e:
+                            logger.warning("dividend upsert %s: %s", sym, e)
+            except Exception as e:
+                logger.warning("dividends fetch %s: %s", sym, e)
+
+        if "splits" in kinds:
+            try:
+                r = httpx.get(
+                    "https://api.polygon.io/v3/reference/splits",
+                    params={"ticker": sym, "execution_date.gte": since,
+                            "apiKey": settings.polygon_api_key},
+                    timeout=15,
+                )
+                if r.is_success:
+                    splits_found += len(r.json().get("results", []))
+            except Exception as e:
+                logger.warning("splits fetch %s: %s", sym, e)
+
+        if "news" in kinds:
+            try:
+                since_news = (date.today() - timedelta(days=5)).strftime("%Y-%m-%dT00:00:00Z")
+                r = httpx.get(
+                    "https://api.polygon.io/v2/reference/news",
+                    params={"ticker": sym, "published_utc.gte": since_news,
+                            "limit": 10, "apiKey": settings.polygon_api_key},
+                    timeout=15,
+                )
+                if r.is_success:
+                    news_fetched += len(r.json().get("results", []))
+            except Exception as e:
+                logger.warning("news fetch %s: %s", sym, e)
+
+    if "dividends" in kinds:
+        out["dividends"] = divs_inserted
+    if "splits" in kinds:
+        out["splits"] = splits_found
+    if "news" in kinds:
+        out["news"] = {"fetched": news_fetched, "note": "no news table in DB"}
     return out
 
 
