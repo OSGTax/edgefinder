@@ -158,9 +158,16 @@ tests pruned (212 non-integration pass). Old trading TABLES dropped via the
 Supabase MCP once the v6.0.1 deploy is confirmed healthy (data tables KEPT).
 Remaining owner-only step: **create the Routine** at claude.ai/code/routines
 (this repo, cron ~2h in market hours, runs the `trading-agent` skill) — there
-is no Routines API to do it from here. Also note: with the old scheduler gone,
-nothing auto-refreshes `daily_bars`/R2 anymore — add a data-ingest Routine if
-you want the bar history to keep growing (the agent works on current data).
+is no Routines API to do it from here.
+
+**Follow-ups done (session 2 cont.):**
+- **Data-refresh tool** `agent/refresh.py` (replaces the retired nightly crons):
+  one grouped-daily Polygon call per missing day → upsert top-N + benchmarks +
+  held names into `daily_bars`, then incremental R2 sync + DB prune (R2 creds
+  permitting); `--with-corporate-actions`/`--with-news` optional. Idempotent;
+  near-noop when current. The trading Routine runs it at the top of each cycle.
+- **RLS enabled** on all 18 tables (anon/authenticated locked out; the app's
+  `postgres`-owner connection bypasses RLS — verified the live app still reads).
 
 ## (build log) greenfield agent BUILT (branch `claude/rebuild-plan-review-a2g96z`)
 Build steps 1–4 are done and proven in-sandbox; the additive schema is live in
