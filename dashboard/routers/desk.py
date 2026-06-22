@@ -18,6 +18,7 @@ from agent.models import (
     ACCOUNT,
     STARTING_CAPITAL,
     DeskBacktest,
+    DeskChangelog,
     DeskDecision,
     DeskEquity,
     DeskJournal,
@@ -29,6 +30,9 @@ from agent.models import (
 from dashboard.dependencies import get_db
 
 router = APIRouter()
+
+# An entry is "new" (lights the badge) for this many days after it ships.
+WHATSNEW_SPOTLIGHT_DAYS = 14
 
 
 def _iso(dt):
@@ -162,6 +166,29 @@ def regime():
         return data.regime()
     except Exception as exc:  # noqa: BLE001 — header must degrade gracefully
         return {"tag": "neutral", "error": f"{type(exc).__name__}: {exc}", "indices": {}}
+
+
+@router.get("/whatsnew")
+def whatsnew(db: Session = Depends(get_db), limit: int = Query(25, le=100)):
+    """The "What's New" feed — dashboard improvements the agent shipped.
+
+    Each entry carries a plain-English explanation of the feature. ``new_count``
+    is how many landed inside the spotlight window (drives the header badge);
+    ``latest`` is the single newest entry (the attention banner reads it)."""
+    from datetime import datetime, timedelta
+
+    rows = (db.query(DeskChangelog)
+            .filter(DeskChangelog.account == ACCOUNT)
+            .order_by(desc(DeskChangelog.ts)).limit(limit).all())
+    entries = [{"id": r.id, "t": _iso(r.ts), "kind": r.kind, "title": r.title,
+                "detail": r.detail, "version": r.version} for r in rows]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=WHATSNEW_SPOTLIGHT_DAYS)
+    new_count = sum(
+        1 for r in rows
+        if r.ts and (r.ts if r.ts.tzinfo else r.ts.replace(tzinfo=timezone.utc)) >= cutoff)
+    return {"entries": entries, "new_count": new_count,
+            "spotlight_days": WHATSNEW_SPOTLIGHT_DAYS,
+            "latest": entries[0] if entries else None}
 
 
 @router.get("/trades")

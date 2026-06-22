@@ -209,6 +209,33 @@ class DeskBacktest(Base):
     result: Mapped[dict | None] = mapped_column(JSON)  # return/sharpe/dd/excess vs SPY
 
 
+# ── desk_changelog — what the app-evolution routine shipped ("What's New") ──
+
+
+class DeskChangelog(Base):
+    """One user-facing improvement the agent made to the dashboard itself.
+
+    The end-of-day app-evolution routine, when it ships a genuinely useful
+    change to what /desk shows, records a row here: a short ``title`` and a
+    plain-English ``detail`` explaining the feature and why it helps. The page
+    lights a "NEW" badge for entries inside the spotlight window and lists them
+    in the "What's New" panel — so users (and the owner) can see how the app is
+    growing and read what each addition does.
+    """
+
+    __tablename__ = "desk_changelog"
+    __table_args__ = (Index("idx_desk_changelog_ts", "ts"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="feature")  # feature|improvement|data|disclaimer|fix
+    title: Mapped[str] = mapped_column(String(160))
+    detail: Mapped[str | None] = mapped_column(Text)  # the explanation users read
+    version: Mapped[str | None] = mapped_column(String(20))  # app version at ship time
+    run_id: Mapped[str | None] = mapped_column(String(40))
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -303,4 +330,15 @@ DESK_TABLE_DDL: list[str] = [
         result JSON
     )""",
     "CREATE INDEX IF NOT EXISTS idx_desk_backtest_account_ts ON desk_backtests (account, ts)",
+    """CREATE TABLE IF NOT EXISTS desk_changelog (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        ts TIMESTAMP DEFAULT NOW(),
+        kind VARCHAR(20) DEFAULT 'feature',
+        title VARCHAR(160) NOT NULL,
+        detail TEXT,
+        version VARCHAR(20),
+        run_id VARCHAR(40)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_changelog_ts ON desk_changelog (ts)",
 ]

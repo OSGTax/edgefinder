@@ -80,3 +80,32 @@ def test_decision_and_thinking(client):
     assert t["run_id"] == "R1" and t["lines"]
     e = client.get("/api/desk/equity").json()
     assert e and e[-1]["equity"] == 101000.0
+
+
+def test_whatsnew_empty_then_announced(client):
+    # nothing shipped yet → empty feed, no spotlight badge
+    empty = client.get("/api/desk/whatsnew").json()
+    assert empty["entries"] == [] and empty["new_count"] == 0 and empty["latest"] is None
+
+    # the routine announces a shipped improvement via the agent tool
+    from agent.announce import announce, recent
+    new_id = announce("Drawdown band on the equity curve",
+                      "The equity chart now shades peak-to-trough drawdowns so "
+                      "you can see how deep the book's dips ran.",
+                      kind="feature", version="6.1.0")
+    assert isinstance(new_id, int)
+    assert recent()[0]["title"].startswith("Drawdown band")
+
+    body = client.get("/api/desk/whatsnew").json()
+    assert body["new_count"] == 1
+    assert body["latest"]["title"].startswith("Drawdown band")
+    assert body["latest"]["kind"] == "feature" and body["latest"]["version"] == "6.1.0"
+    assert "shades peak-to-trough" in body["entries"][0]["detail"]
+
+
+def test_announce_validates_kind(client):
+    from agent.announce import announce
+    with pytest.raises(ValueError):
+        announce("bad", kind="totally-not-valid")
+    with pytest.raises(ValueError):
+        announce("   ")  # blank title rejected

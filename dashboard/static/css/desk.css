@@ -47,3 +47,47 @@
 /* links inside tables/cards */
 .c-link { color: var(--t-accent); text-decoration: none; }
 .c-link:hover { text-decoration: underline; }
+
+/* what's new — header button, badge, attention banner, feed panel */
+.desk-wn-btn {
+  display: inline-flex; align-items: center; gap: var(--t-s2);
+  font: inherit; font-size: var(--t-fs-sm); color: var(--t-text-2);
+  background: var(--t-surface-2); border: 1px solid var(--t-border);
+  border-radius: var(--t-radius-sm); padding: var(--t-s1) var(--t-s3); cursor: pointer;
+}
+.desk-wn-btn:hover { color: var(--t-text); border-color: var(--t-border-strong); }
+.desk-wn-btn.has-new { color: var(--t-text); border-color: var(--t-accent); }
+.desk-wn-spark { color: var(--t-accent); }
+.desk-wn-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  font-size: var(--t-fs-xs); font-weight: 700; line-height: 1;
+  background: var(--t-accent); color: var(--t-bg);
+}
+
+.desk-wn-banner {
+  display: flex; align-items: center; gap: var(--t-s3); flex-wrap: wrap;
+  padding: var(--t-s2) var(--t-s3); margin-bottom: var(--t-s4);
+  background: var(--t-accent-dim); border: 1px solid var(--t-accent);
+  border-radius: var(--t-radius);
+}
+.desk-wn-banner-title { font-weight: 600; color: var(--t-text); }
+.desk-wn-banner-detail { font-size: var(--t-fs-sm); }
+.desk-wn-dismiss {
+  font: inherit; font-size: var(--t-fs-lg); line-height: 1; color: var(--t-text-3);
+  background: none; border: none; cursor: pointer; padding: 0 var(--t-s2);
+}
+.desk-wn-dismiss:hover { color: var(--t-text); }
+
+.desk-wn-panel { padding: var(--t-s4); }
+.desk-wn-panel-head {
+  display: flex; align-items: baseline; gap: var(--t-s3);
+  font-weight: 700; color: var(--t-text); margin-bottom: var(--t-s3);
+}
+.desk-wn-panel-head .t-dim { font-weight: 400; font-size: var(--t-fs-sm); }
+.desk-wn-list { display: flex; flex-direction: column; gap: var(--t-s3); }
+.desk-wn-entry { padding-bottom: var(--t-s3); border-bottom: 1px solid var(--t-border); }
+.desk-wn-entry:last-child { border-bottom: none; padding-bottom: 0; }
+.desk-wn-entry-head { display: flex; align-items: center; gap: var(--t-s3); flex-wrap: wrap; }
+.desk-wn-entry-title { font-weight: 600; color: var(--t-text); }
+.desk-wn-entry-detail { margin: var(--t-s2) 0 0; line-height: 1.5; font-size: var(--t-fs-sm); }

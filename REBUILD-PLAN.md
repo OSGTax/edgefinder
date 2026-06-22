@@ -168,6 +168,14 @@ is no Routines API to do it from here.
   near-noop when current. The trading Routine runs it at the top of each cycle.
 - **RLS enabled** on all 18 tables (anon/authenticated locked out; the app's
   `postgres`-owner connection bypasses RLS — verified the live app still reads).
+- **Self-evolving UI + "What's New" surface (v6.1.0):** the desk can grow itself.
+  New `desk_changelog` table (RLS on) + `agent.announce` tool + `/api/desk/whatsnew`
+  endpoint + a header **What's New** badge, dismissible attention banner, and
+  collapsible feed on `/desk`. The end-of-day Routine runs the new **`app-evolver`**
+  skill (`.claude/skills/app-evolver/SKILL.md`): one small, tested, additive,
+  desk-only improvement per run, then announces it with a plain-English note.
+  Guardrails: additive/desk-scoped only, never touches the book/data/schema/RLS,
+  tokens-only CSS, must pass the test gate or ship nothing.
 
 ## (build log) greenfield agent BUILT (branch `claude/rebuild-plan-review-a2g96z`)
 Build steps 1–4 are done and proven in-sandbox; the additive schema is live in

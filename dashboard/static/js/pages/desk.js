@@ -263,13 +263,95 @@ async function loadJournal() {
   } catch (err) { renderError(el, err, loadJournal); }
 }
 
+/* ── what's new: dashboard improvements the agent shipped ── */
+const WN_KIND_CLASS = { feature: 'info', improvement: 'info', data: 'neutral', disclaimer: 'warn', fix: 'up' };
+
+function wnEntry(e) {
+  return h('div', { class: 'desk-wn-entry' },
+    h('div', { class: 'desk-wn-entry-head' },
+      pill((e.kind || 'feature').toUpperCase(), WN_KIND_CLASS[e.kind] || 'info'),
+      h('span', { class: 'desk-wn-entry-title', text: e.title }),
+      e.version ? h('span', { class: 't-dim', text: 'v' + e.version }) : null,
+      h('span', { class: 'spacer' }),
+      h('span', { class: 't-dim', text: timeAgo(e.t) })),
+    e.detail ? h('p', { class: 'desk-wn-entry-detail t-dim', text: e.detail }) : null);
+}
+
+async function loadWhatsNew() {
+  const btn = document.getElementById('desk-whatsnew-btn');
+  const badge = document.getElementById('desk-whatsnew-badge');
+  const banner = document.getElementById('desk-whatsnew-banner');
+  const panel = document.getElementById('desk-whatsnew-panel');
+  try {
+    const data = await apiGet('/api/desk/whatsnew?limit=25');
+    const entries = data.entries || [];
+    if (!entries.length) { btn.hidden = true; banner.hidden = true; panel.hidden = true; return; }
+    btn.hidden = false;
+
+    // header badge: count of entries still inside the spotlight window
+    if (data.new_count > 0) {
+      badge.textContent = String(data.new_count);
+      badge.hidden = false;
+      btn.classList.add('has-new');
+    } else {
+      badge.hidden = true;
+      btn.classList.remove('has-new');
+    }
+
+    // full feed — stays collapsed until the header button is clicked
+    clear(panel);
+    panel.append(
+      h('div', { class: 'desk-wn-panel-head' },
+        h('span', { text: "What's New" }),
+        h('span', { class: 't-dim', text: 'how this dashboard is evolving' })),
+      h('div', { class: 'desk-wn-list' }, ...entries.map(wnEntry)));
+
+    // attention banner — the newest entry, while still "new" and not dismissed
+    const latest = data.latest;
+    const dismissed = localStorage.getItem('ef-wn-banner');
+    if (latest && data.new_count > 0 && dismissed !== String(latest.id)) {
+      clear(banner);
+      banner.append(
+        h('span', { class: 'desk-wn-spark', text: '◆' }),
+        pill('NEW', WN_KIND_CLASS[latest.kind] || 'info'),
+        h('span', { class: 'desk-wn-banner-title', text: latest.title }),
+        latest.detail ? h('span', { class: 'desk-wn-banner-detail t-dim', text: latest.detail }) : null,
+        h('span', { class: 'spacer' }),
+        h('button', {
+          class: 'desk-wn-dismiss', type: 'button', title: 'Dismiss', 'aria-label': 'Dismiss',
+          text: '×',
+          onclick: () => { localStorage.setItem('ef-wn-banner', String(latest.id)); banner.hidden = true; },
+        }));
+      banner.hidden = false;
+    } else {
+      banner.hidden = true;
+    }
+  } catch (err) {
+    // What's New is non-critical chrome — never break the page over it
+    btn.hidden = true; banner.hidden = true; panel.hidden = true;
+  }
+}
+
+// toggle the full panel from the header button (wired once)
+(function wireWhatsNewToggle() {
+  const btn = document.getElementById('desk-whatsnew-btn');
+  const panel = document.getElementById('desk-whatsnew-panel');
+  if (!btn || !panel) return;
+  btn.addEventListener('click', () => {
+    const show = panel.hidden;
+    panel.hidden = !show;
+    btn.setAttribute('aria-expanded', show ? 'true' : 'false');
+    if (show) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+})();
+
 async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
-    loadDecision(), loadBacktests(), loadJournal(),
+    loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
   ]);
 }
 
 loadAll();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); }, 60_000);

@@ -7,8 +7,16 @@
   <h2>Trading Desk</h2>
   <span id="desk-strategy" class="c-chips"></span>
   <span class="spacer"></span>
+  <button id="desk-whatsnew-btn" class="desk-wn-btn" type="button" aria-expanded="false" hidden>
+    <span class="desk-wn-spark">&#9670;</span> What's New<span id="desk-whatsnew-badge" class="desk-wn-badge" hidden></span>
+  </button>
   <span id="desk-regime" class="c-chips"></span>
 </div>
+
+<!-- attention banner: the single newest improvement, dismissible -->
+<div id="desk-whatsnew-banner" class="desk-wn-banner" hidden></div>
+<!-- full feed of recent improvements, toggled by the header button -->
+<div id="desk-whatsnew-panel" class="desk-wn-panel c-card mb-16" hidden></div>
 
 <div id="desk-stats" class="pf-grid mb-16"></div>
 
