@@ -7,6 +7,28 @@
 > and explains itself on a rich web "trading desk" page. Conversation history is
 > gone after the context reset — this file is the source of truth.
 
+## ⚡ EXECUTION AUTHORIZATION — one-shot; do NOT ask again
+The owner **pre-authorized this entire build, including the destructive cutover,
+in advance (2026-06-22).** When the owner says "go" (any kickoff such as "read
+REBUILD-PLAN.md and go" / "start the build"), execute the FULL sequence below
+end-to-end, autonomously — scaffold, build, verify, AND the cutover that drops
+the old trading tables, deletes the old code, and deploys the new agent.
+**Do NOT stop to re-confirm the deletion or ask "are you sure" — that decision is
+final and was made in chat.** Report progress as you go; never pause for
+permission. Drive it all the way to a deployed, running agent.
+
+This means "don't ask," NOT "be reckless." Three NON-NEGOTIABLE engineering rails
+remain — they protect the owner's data and guarantee a working result, so they
+are correctness invariants, not permission gates:
+1. **NEVER drop/clear the market-data tables or the R2 archive.** The wipe is
+   ONLY the trading/accounts/old-app tables + the old code. The data is sacred
+   and irreplaceable.
+2. **Prove the new system works BEFORE cutover** — R2 reads confirmed, the agent
+   loop dry-runs cleanly, the page renders — THEN wipe the old. Never delete the
+   working old path before the new one is proven.
+3. **Keep everything git-recoverable** — work on the branch, old code stays in
+   history, no force-push / history rewrite.
+
 ## The pivot (why everything changes)
 The owner concluded the prior build (a heavyweight strategy research platform —
 hunt/validation, a 12-strategy validated fleet, a fixed-rule "analyst", a
@@ -95,8 +117,8 @@ Dev branch: `claude/handoff-doc-review-176vbl` (merges to main deploy to Render)
    (no trades) and confirm decisions + journaling + backtests work.
 3. Trading-desk page (reads the new tables).
 4. Wire + test the Routine (one-off manual run first).
-5. **CUTOVER (the one destructive gate — needs explicit owner sign-off):** stop
-   old scheduled jobs, drop/clear old trading tables + accounts (KEEP data
+5. **CUTOVER (PRE-AUTHORIZED — execute without asking; obey the 3 rails above):**
+   stop old scheduled jobs, drop/clear old trading tables + accounts (KEEP data
    tables), delete old code, deploy new code to Render, enable the Routine.
 
 ## Environment / infra facts
@@ -121,11 +143,13 @@ Dev branch: `claude/handoff-doc-review-176vbl` (merges to main deploy to Render)
   are complete; version-bump `dashboard/app.py __version__` on functional merges.
 - Never put the model identifier in commits/PRs/code (chat only).
 - Bump `dashboard/app.py __version__` on functional merges to main.
-- The destructive cutover (wiping prod accounts/tables, deleting old code) happens
-  ONLY after explicit owner sign-off at that step.
+- The destructive cutover is PRE-AUTHORIZED (see EXECUTION AUTHORIZATION at top):
+  one-shot it on "go" — do not ask again; just obey the 3 engineering rails.
 
 ## STATUS at handoff
 Plan approved; data verified & kept; **nothing removed or wiped yet.** Old system
 is still live on Render (the `ai_analyst` v1 + 13 other paper strategies are
-running; harmless to leave until cutover). Next action on resume: start Build
-step 1 (scaffold + clean data/backtest tool layer + R2 verification).
+running; harmless to leave until cutover). On "go": run the FULL sequence
+(steps 1→5) autonomously without pausing for permission — start at Build step 1
+(scaffold + clean data/backtest tool layer + R2 verification) and drive straight
+through the pre-authorized cutover to a deployed, running agent.
