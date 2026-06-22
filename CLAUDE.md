@@ -1,6 +1,24 @@
-# EdgeFinder v2 — Trading Workbench
+# EdgeFinder — Autonomous Trading Agent (greenfield rebuild)
 
-## Project Overview
+> ## ⚠️ REBUILT 2026-06-22 — read `REBUILD-PLAN.md` first
+> The old "strategy workbench" below (hunt/validate/promote/live engine, the
+> 12-strategy fleet, the analyst, the per-strategy paper accounts) was
+> **retired and removed** in the v6.0 cutover. EdgeFinder is now a single
+> **autonomous AI paper-trading agent** that runs on Claude Code Routines,
+> builds & evolves its own strategy, trades one $100k long-only paper book
+> with full discretion, and explains itself on the `/desk` trading-desk page.
+> - The agent's tools live in `agent/` (`agent.market` observe, `agent.backtest_tool`
+>   ground, `agent.ledger` the book, `agent.brain` state/journal/thinking/decision).
+> - The agent's charter is `.claude/skills/trading-agent/SKILL.md` (the Routine runs it).
+> - Its tables are `desk_*`; the dashboard is desk-only (`dashboard/routers/desk.py`).
+> - KEPT from the old system: the market-data tables + R2 archive, and the thin
+>   data+backtest layer the agent reuses (`edgefinder/engine/{data,backtest,
+>   strategy}`, `backtest/costs`, `data/{barstore,indicator_engine,market_data,
+>   polygon,provider,cache}`, `core/`, `db/`).
+> The rest of this file describes the RETIRED system and is kept for history
+> only — do not treat it as current. `REBUILD-PLAN.md` is the source of truth.
+
+## Project Overview (RETIRED — historical)
 EdgeFinder is a general strategy workbench: drop in ANY portfolio strategy →
 honest walk-forward validation → promote the survivors to self-running paper
 trading → monitor everything on the dashboard. It runs on a permanent,

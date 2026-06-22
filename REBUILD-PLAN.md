@@ -146,7 +146,23 @@ Dev branch: `claude/handoff-doc-review-176vbl` (merges to main deploy to Render)
 - The destructive cutover is PRE-AUTHORIZED (see EXECUTION AUTHORIZATION at top):
   one-shot it on "go" — do not ask again; just obey the 3 engineering rails.
 
-## STATUS — greenfield agent BUILT (branch `claude/rebuild-plan-review-a2g96z`)
+## STATUS — CUTOVER IN PROGRESS (deployed to main)
+**2026-06-22 (session 2):** owner gave go-ahead to complete autonomously.
+Done since the build: merged to **main** (v6.0.0 additive deploy — proven live:
+`/desk` renders, `/api/desk/regime` returns real data through the R2 path on
+Render = rail-2 R2 proof); then the **code cutover** (v6.0.1): old app removed
+(routers/pages/engine/agents/scanner/signals/analytics/scheduler/trading/
+market/research/intraday + old Actions crons + dormant flag configs), app is
+desk-only, services gutted (no scheduler — the agent runs on Routines), old
+tests pruned (212 non-integration pass). Old trading TABLES dropped via the
+Supabase MCP once the v6.0.1 deploy is confirmed healthy (data tables KEPT).
+Remaining owner-only step: **create the Routine** at claude.ai/code/routines
+(this repo, cron ~2h in market hours, runs the `trading-agent` skill) — there
+is no Routines API to do it from here. Also note: with the old scheduler gone,
+nothing auto-refreshes `daily_bars`/R2 anymore — add a data-ingest Routine if
+you want the bar history to keep growing (the agent works on current data).
+
+## (build log) greenfield agent BUILT (branch `claude/rebuild-plan-review-a2g96z`)
 Build steps 1–4 are done and proven in-sandbox; the additive schema is live in
 Supabase. The old system is **untouched** on Render (rail 2: prove before wipe).
 
