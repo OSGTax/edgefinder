@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Trading Desk — EdgeFinder{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/desk.css">{% endblock %}
+
+{% block content %}
+<div class="flex items-center gap-12 mb-16 flex-wrap">
+  <h2>Trading Desk</h2>
+  <span id="desk-strategy" class="c-chips"></span>
+  <span class="spacer"></span>
+  <span id="desk-regime" class="c-chips"></span>
+</div>
+
+<div id="desk-stats" class="pf-grid mb-16"></div>
+
+<div class="c-card mb-16">
+  <div class="c-card-header">Equity curve
+    <span class="spacer"></span>
+    <span id="desk-equity-meta" class="t-dim"></span>
+  </div>
+  <div class="c-card-body tight">
+    <div class="ch-shell">
+      <div class="ch-pane tall" id="desk-equity-chart"></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid-2 mb-16">
+  <div class="c-card">
+    <div class="c-card-header">Holdings</div>
+    <div class="c-card-body" id="desk-positions"></div>
+  </div>
+  <div class="c-card">
+    <div class="c-card-header">Live thinking
+      <span class="spacer"></span>
+      <span id="desk-thinking-run" class="t-dim"></span>
+    </div>
+    <div class="c-card-body" id="desk-thinking"></div>
+  </div>
+</div>
+
+<div class="c-card mb-16">
+  <div class="c-card-header">Latest decision
+    <span class="spacer"></span>
+    <span id="desk-decision-when" class="t-dim"></span>
+  </div>
+  <div class="c-card-body">
+    <div id="desk-summary" class="mb-16"></div>
+    <div id="desk-picks"></div>
+    <div id="desk-watchlist" class="mt-16"></div>
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="c-card">
+    <div class="c-card-header">Backtest evidence</div>
+    <div class="c-card-body" id="desk-backtests"></div>
+  </div>
+  <div class="c-card">
+    <div class="c-card-header">Strategy journal</div>
+    <div class="c-card-body" id="desk-journal"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/pages/desk.js"></script>
+{% endblock %}

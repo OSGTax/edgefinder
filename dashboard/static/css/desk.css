@@ -1,0 +1,49 @@
+/* Trading Desk — page-specific styles (tokens only, no hard-coded colors). */
+
+/* live thinking feed */
+.desk-feed { display: flex; flex-direction: column; gap: var(--t-s2); max-height: 420px; overflow-y: auto; }
+.desk-feed-line {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  gap: var(--t-s3);
+  align-items: baseline;
+  padding: var(--t-s2) 0;
+  border-bottom: 1px solid var(--t-border);
+}
+.desk-feed-phase {
+  font-size: var(--t-fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--t-accent);
+  font-family: var(--t-font-mono);
+}
+.desk-feed-text { color: var(--t-text); line-height: 1.4; }
+.desk-feed-time { font-size: var(--t-fs-xs); white-space: nowrap; }
+
+/* decision summary */
+.desk-summary { color: var(--t-text); line-height: 1.5; margin: 0; }
+
+/* picks */
+.desk-pick { padding: var(--t-s3); margin-bottom: var(--t-s3); }
+.desk-pick-head { display: flex; align-items: center; gap: var(--t-s3); flex-wrap: wrap; }
+.desk-pick-sym { font-weight: 700; font-size: var(--t-fs-lg); color: var(--t-text); text-decoration: none; }
+.desk-pick-sym:hover { color: var(--t-accent); }
+.desk-pick-why { font-size: var(--t-fs-sm); }
+.desk-pick-rationale { color: var(--t-text-2); line-height: 1.5; margin: var(--t-s2) 0 0; }
+.desk-pick-evidence { margin-top: var(--t-s2); }
+.desk-pick-news { margin: var(--t-s2) 0 0; padding-left: var(--t-s4); color: var(--t-text-2); font-size: var(--t-fs-sm); }
+.desk-pick-news li { margin: 2px 0; }
+
+/* strategy journal */
+.desk-journal { display: flex; flex-direction: column; gap: var(--t-s3); }
+.desk-journal-entry { padding-bottom: var(--t-s3); border-bottom: 1px solid var(--t-border); }
+.desk-journal-head { display: flex; align-items: center; gap: var(--t-s3); flex-wrap: wrap; }
+.desk-journal-title { font-weight: 600; color: var(--t-text); }
+.desk-journal-body { margin: var(--t-s2) 0 0; line-height: 1.5; }
+
+/* backtest evidence */
+.desk-bt-when { font-size: var(--t-fs-xs); }
+
+/* links inside tables/cards */
+.c-link { color: var(--t-accent); text-decoration: none; }
+.c-link:hover { text-decoration: underline; }

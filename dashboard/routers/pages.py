@@ -63,6 +63,12 @@ async def picks_page(request: Request):
     return templates.TemplateResponse(request=request, name="picks.html")
 
 
+@router.get("/desk", response_class=HTMLResponse)
+async def desk_page(request: Request):
+    """The autonomous trading agent's desk — the new home page of the rebuild."""
+    return templates.TemplateResponse(request=request, name="desk.html")
+
+
 @router.get("/backtest")
 async def backtest_redirect():
     """Old Backtest page -> Lab explorer (quick-backtest retired)."""

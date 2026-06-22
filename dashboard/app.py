@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from dashboard.routers import (
-    admin, benchmarks, lab, market, ops, pages, picks, research,
+    admin, benchmarks, desk, lab, market, ops, pages, picks, research,
     strategies, symbols, trades,
 )
 from edgefinder.core.logging_config import configure_logging
@@ -23,7 +23,7 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 
-__version__ = "5.62.0"
+__version__ = "6.0.0"
 
 
 @asynccontextmanager
@@ -69,6 +69,7 @@ app.include_router(ops.router, prefix="/api/ops", tags=["ops"])
 app.include_router(symbols.router, prefix="/api/symbols", tags=["symbols"])
 app.include_router(lab.router, prefix="/api/lab", tags=["lab"])
 app.include_router(picks.router, prefix="/api/picks", tags=["picks"])
+app.include_router(desk.router, prefix="/api/desk", tags=["desk"])
 
 
 @app.get("/api/health")

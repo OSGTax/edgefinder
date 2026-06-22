@@ -146,10 +146,46 @@ Dev branch: `claude/handoff-doc-review-176vbl` (merges to main deploy to Render)
 - The destructive cutover is PRE-AUTHORIZED (see EXECUTION AUTHORIZATION at top):
   one-shot it on "go" — do not ask again; just obey the 3 engineering rails.
 
-## STATUS at handoff
-Plan approved; data verified & kept; **nothing removed or wiped yet.** Old system
-is still live on Render (the `ai_analyst` v1 + 13 other paper strategies are
-running; harmless to leave until cutover). On "go": run the FULL sequence
-(steps 1→5) autonomously without pausing for permission — start at Build step 1
-(scaffold + clean data/backtest tool layer + R2 verification) and drive straight
-through the pre-authorized cutover to a deployed, running agent.
+## STATUS — greenfield agent BUILT (branch `claude/rebuild-plan-review-a2g96z`)
+Build steps 1–4 are done and proven in-sandbox; the additive schema is live in
+Supabase. The old system is **untouched** on Render (rail 2: prove before wipe).
+
+**Done (committed on the branch):**
+- New `agent/` package — the tool layer the Routine calls via Bash (JSON I/O):
+  `agent.market` (regime/quote/history/news/universe), `agent.backtest_tool`
+  (buyhold/equal_weight/momentum:K/trend grounded in the KEPT `run_backtest` +
+  cost model + total-return bars vs SPY), `agent.ledger` ($100k paper book —
+  append-only `desk_trades` as source of truth, positions rebuilt from the
+  ledger, fill-sanity guard, long-only/no-overdraw), `agent.brain`
+  (strategy-state + journal + thinking-log + decision writers). All reuse the
+  audited `edgefinder.engine.{data,backtest,strategy}` + `data.barstore` (R2).
+- New clean schema `desk_*` (8 tables) — ORM in `agent/models.py`, idempotent
+  DDL wired into `scripts/render_start.py`, and **already applied to Supabase**
+  (additive; no existing table touched — verified).
+- Agent charter: `.claude/skills/trading-agent/SKILL.md` (the cycle + decision
+  contract + guardrails the Routine runs each run).
+- Trading-desk page `/desk` (+ `/api/desk/*` router) with all four panels
+  (book+equity curve, holdings, live thinking feed, decision picks w/ why-now +
+  rationale + news, backtest evidence, strategy journal). Reuses the vendored
+  charts + CSS tokens + `core/*` JS. Added to nav; `__version__` → 6.0.0.
+- Tests: `tests/test_agent.py` + `tests/test_desk_api.py` (8 passing) prove the
+  loop dry-runs cleanly and the page renders. Full suite still collects (811).
+- `scripts/cutover.py` — the guarded, pre-authorized DB wipe (drops retired
+  trading tables, asserts data tables KEPT, refuses to run until `BarStore.
+  verify()` proves R2 reads; dry-run by default).
+
+**Remaining to finish the cutover (the parts the sandbox physically can't do):**
+1. **Merge the branch → main** so Render deploys the new code (render_start
+   creates the desk tables there too; the `/desk` page goes live). Branch-only
+   per the session rules — owner triggers the merge.
+2. **Prove R2 on Render/Routine** (R2_* creds live there, not in the sandbox):
+   `python -m edgefinder.data.barstore verify`. This is rail 2's gate.
+3. **Run the cutover**: `python scripts/cutover.py --execute` (drops the old
+   trading tables once R2 is proven) + delete the old code per the checklist in
+   `scripts/cutover.py` + rewrite `dashboard/services.py` to drop the old jobs.
+4. **Create the Routine** at claude.ai/code/routines on this repo: cron ~every
+   2h during market hours, running the `trading-agent` skill, with the
+   Supabase + Polygon + R2 env available to the session.
+
+Nothing destructive has been done. The old `ai_analyst` v1 + paper strategies
+still run on Render and are harmless to leave until the cutover above.

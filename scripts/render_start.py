@@ -16,6 +16,7 @@ def init_database():
     """Create all tables if they don't exist, and add any missing columns."""
     from edgefinder.db.engine import Base, get_engine
     from edgefinder.db import models  # noqa: F401 — registers ORM models
+    from agent import models as desk_models  # noqa: F401 — registers desk_* tables
     from sqlalchemy import text
 
     # Fail fast if DATABASE_URL is missing on Render — SQLite uses ephemeral
@@ -195,6 +196,10 @@ def init_database():
         """CREATE INDEX IF NOT EXISTS idx_agent_decision_strategy_date
             ON agent_decisions (strategy_name, decision_date)""",
     ]
+    # The autonomous agent's own clean schema (greenfield rebuild) — additive,
+    # idempotent. These coexist with the old trading tables until the
+    # pre-authorized cutover drops the latter (scripts/cutover.py).
+    table_ddls = table_ddls + desk_models.DESK_TABLE_DDL
     with engine.begin() as conn:
         for ddl in table_ddls:
             try:
