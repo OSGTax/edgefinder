@@ -49,6 +49,10 @@ dev = [
     "pytest-cov>=4.1.0",
     "ruff>=0.2.0",
 ]
+live = [
+    # Live broker-backed paper trading + real-time quotes (Alpaca).
+    "alpaca-py>=0.30.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

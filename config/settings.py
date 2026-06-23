@@ -98,6 +98,17 @@ class Settings(BaseSettings):
     polygon_max_retries: int = 3
     polygon_retry_delay: float = 1.0
 
+    # ── LIVE BROKER (Alpaca paper + real-time data) ──
+    # The account of record for live paper trading and the real-time quote
+    # source. Keys are paper keys; data feed "sip" = full consolidated tape
+    # (paid), "iex" = free single-exchange. broker.py also accepts the SDK's
+    # native APCA_API_KEY_ID / APCA_API_SECRET_KEY env vars as a fallback.
+    alpaca_api_key: str = ""
+    alpaca_api_secret: str = ""
+    alpaca_paper: bool = True
+    alpaca_data_feed: str = "sip"
+    live_trading_enabled: bool = False  # master flag for the live engine (Phase 5 flip)
+
     # ── FLAT FILES (Massive/Polygon S3) ──────────────
     # Bulk historical aggregates served as gzipped CSV over an S3-compatible
     # API. Used for daily-bar backfill and minute-bar backtesting — NOT for
