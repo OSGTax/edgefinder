@@ -43,3 +43,21 @@ def test_dedup_when_kept_also_ranks_top():
 def test_module_imports():
     import agent.refresh as r
     assert callable(r.refresh) and callable(r.main)
+
+
+def test_today_bar_final_gate():
+    """Today's bar counts as settled only on a weekday after 16:15 ET — never
+    intraday (a partial bar) and never on weekends. This is the honesty gate:
+    fills only ever price off a final close."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from agent.refresh import _today_bar_is_final
+
+    et = ZoneInfo("America/New_York")
+    # Wednesday
+    assert _today_bar_is_final(datetime(2026, 6, 17, 16, 30, tzinfo=et)) is True   # after close
+    assert _today_bar_is_final(datetime(2026, 6, 17, 16, 14, tzinfo=et)) is False  # 1 min early
+    assert _today_bar_is_final(datetime(2026, 6, 17, 10, 0, tzinfo=et)) is False   # mid-session
+    # Saturday afternoon — no trading day
+    assert _today_bar_is_final(datetime(2026, 6, 20, 18, 0, tzinfo=et)) is False

@@ -90,16 +90,43 @@ def aggs_to_rows(aggs, day: date, *, top_n: int, keep: set[str],
     return out
 
 
+def _today_bar_is_final(now_et: datetime | None = None) -> bool:
+    """True once today's daily bar is settled — a weekday past the close plus
+    Polygon's publish lag (16:15 ET). Before that, today's grouped aggs would be
+    a *partial* intraday bar; ingesting it and filling on it would be dishonest
+    (a real market-on-close order can only fill at the final close), so we don't.
+    """
+    from datetime import time as _time
+
+    try:
+        from zoneinfo import ZoneInfo
+        now_et = now_et or datetime.now(ZoneInfo("America/New_York"))
+    except Exception:  # pragma: no cover — zoneinfo always present on 3.11
+        return False
+    return now_et.weekday() < 5 and now_et.time() >= _time(16, 15)
+
+
 def _missing_trading_days(engine, max_days: int) -> list[date]:
-    """Weekdays from the day after the latest daily_bars date through yesterday,
-    capped at ``max_days`` (most recent first → ingested oldest first)."""
+    """Weekdays from the day after the latest daily_bars date through the most
+    recent SETTLED bar, capped at ``max_days`` (ingested oldest first).
+
+    The end is *today* only once today's close is final (after 16:15 ET) — so an
+    after-close run picks up today's official close, while an intraday run stops
+    at yesterday and never ingests a half-formed bar.
+    """
     from sqlalchemy import func, select
     from edgefinder.db.models import DailyBar
 
+    try:
+        from zoneinfo import ZoneInfo
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+    except Exception:  # pragma: no cover
+        today = date.today()
+
     with engine.connect() as conn:
         latest = conn.execute(select(func.max(DailyBar.date))).scalar()
-    start = (latest + timedelta(days=1)) if latest else (date.today() - timedelta(days=max_days))
-    end = date.today() - timedelta(days=1)  # yesterday (today's bar isn't final)
+    start = (latest + timedelta(days=1)) if latest else (today - timedelta(days=max_days))
+    end = today if _today_bar_is_final() else today - timedelta(days=1)
     days = []
     d = start
     while d <= end:
