@@ -95,6 +95,15 @@ python -m agent.brain journal --kind pivot --title "..." --body "..." --to <newv
 
 ### 5. Execute (phase: execute)
 Turn target weights into trades against the **current** book and prices:
+- **Execution model = market-on-close (MOC), and this is the honesty rule:**
+  you fill at the latest **settled daily close** — the exact same `close` you
+  decided on and the same price the book marks at. Decision, fill, and mark are
+  one timestamp, so you never transact on information newer than your fill. This
+  is why the cycle is meant to run **once per trading day, after the close**, on
+  that day's final bar (the data refresh only ingests a bar once it's settled).
+  Do **not** invent an intraday/real-time price or fill at anything other than
+  the `close` from your `quote` — that would be trading on a price you couldn't
+  actually get, and it breaks the match with the backtest.
 - Get current prices from the `quote` you already pulled (use `close`).
 - For each name to change: compute target shares = `floor(weight * equity / price)`.
   Sell reductions/exits FIRST (raises cash), then buys.
