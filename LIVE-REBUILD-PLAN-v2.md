@@ -1,6 +1,42 @@
 # LIVE REBUILD PLAN v2 — research-grounded, adversarially reviewed
 > Produced by a multi-agent ralph-loop (6 grounded-research agents → synthesis → 3 adversarial critics × 4 rounds → finalize). Every cost/claim was web-verified against vendor pages or flagged UNVERIFIED. **Did NOT fully converge** — see status.
 
+## Locked decisions (owner, 2026-06-25) — supersede the relevant open questions
+
+**Decision A — Brain cadence: HOURLY Routine + live-streamed prices.** The Claude
+Code Routine is the brain (hourly, market hours, on the owner's CC Max plan);
+Render holds the Alpaca WebSocket and streams live quotes to `/desk`. No
+server-side Anthropic API, no per-cycle token bill beyond the Max pool. The
+product is titled honestly: **"hourly, owner-verifiable paper desk with
+live-streamed quotes."**
+
+**Decision B — Audience: PRIVATE owner desk** (logged-in / own marks; no public
+live ticks).
+
+**What these prune from the critical path / cost:**
+- ❌ **Public real-time-quote display license** ("contact sales", unpriced,
+  possibly unshippable) — **N/A for a private desk.** Removed as a blocker.
+- ❌ **Professional-classification exchange fees** (~+$50–100/mo) — a private,
+  personal, non-business desk stays **non-professional**, so SIP stays **$99**.
+- ❌ **Server-side brain / Anthropic API token cost** — not pursued.
+- ⤵️ **Custom domain becomes OPTIONAL** (a private desk can use the
+  `*.onrender.com` URL) — saves ~$0.87/mo + ~$10 one-time.
+- ⤵️ **Render public-SSE egress overage** → negligible (one/few viewers, well
+  under the 5 GB Hobby allowance).
+
+**Firmer cost picture (private + hourly):** the only *new* required spend over
+what the project already runs is **Alpaca SIP +$99/mo**; **Polygon downgrades
+$199→$79 (−$120/mo)**, so the net new burn is roughly **flat-to-slightly-cheaper**
+month over month (Render Starter $7 + Alpaca $99 − Polygon $120 ≈ **−$14/mo** vs
+today, assuming Max is already owned). The one remaining variable is the **Claude
+token-pool draw at hourly cadence** — still must be instrumented over a week of
+real runs before it's a final number (see Open Questions).
+
+**Still-open decision that now gates Phase 5 (next to settle):** *sub-hour
+reaction* — build the Render server-side guard loop (stop-loss between hourly
+runs) **or** accept an owner-signed "book is unmanaged between hourly runs" line.
+Unchanged by A/B; surfaced here as the next call.
+
 ## Convergence status (read first)
 
 The loop ran the full 4 rounds and **did not reach the bar** (all critics ≥90, zero blocking, zero guesses). Final critic scores:
