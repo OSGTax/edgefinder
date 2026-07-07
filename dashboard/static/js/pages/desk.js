@@ -337,6 +337,7 @@ function renderTape(snap) {
   }
 
   clear(el);
+  fillOptSelect(syms);
   const table = h('table', { class: 'c-table desk-tape-table' },
     h('thead', {}, h('tr', {},
       h('th', { text: 'Symbol' }), h('th', { class: 'num', text: 'Bid' }),
@@ -379,6 +380,103 @@ function startTape() {
       document.getElementById('desk-tape-live').hidden = true;
     }
   }, 3000);
+}
+
+/* ── options radar: live chain summary + the growing IV bank ── */
+let optSymbol = localStorage.getItem('ef-opt-symbol') || 'SPY';
+let optSelectFilled = false;
+
+function fillOptSelect(tapeSymbols) {
+  if (optSelectFilled || !tapeSymbols.length) return;
+  const sel = document.getElementById('desk-opt-symbol');
+  if (!sel) return;
+  clear(sel);
+  const syms = tapeSymbols.filter(s => !OCC_RE.test(s)).sort();
+  if (!syms.includes(optSymbol)) optSymbol = syms[0] || 'SPY';
+  for (const s of syms) {
+    const opt = h('option', { value: s, text: s });
+    if (s === optSymbol) opt.selected = true;
+    sel.append(opt);
+  }
+  sel.addEventListener('change', () => {
+    optSymbol = sel.value;
+    localStorage.setItem('ef-opt-symbol', optSymbol);
+    loadOptions();
+  });
+  optSelectFilled = true;
+}
+
+function chainRows(summary) {
+  // merge calls/puts by strike: Call bid/ask/IV/Δ | strike | Put bid/ask/IV/Δ
+  const byStrike = new Map();
+  for (const c of summary.calls_table || []) byStrike.set(c.strike, { c });
+  for (const p of summary.puts_table || []) {
+    byStrike.set(p.strike, { ...(byStrike.get(p.strike) || {}), p });
+  }
+  return [...byStrike.entries()].sort((a, b) => a[0] - b[0]);
+}
+
+function optStat(label, value, cls) {
+  return h('div', { class: 'c-stat' },
+    h('div', { class: 'label', text: label }),
+    h('div', { class: 'value ' + (cls || ''), text: value }));
+}
+
+async function loadOptions() {
+  const el = document.getElementById('desk-options');
+  const metaEl = document.getElementById('desk-opt-meta');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const [s, hist] = await Promise.all([
+      apiGet('/api/desk/options/' + optSymbol),
+      apiGet('/api/desk/options/' + optSymbol + '/history').catch(() => null),
+    ]);
+    clear(el);
+    if (!s.available) {
+      renderEmpty(el, 'Options data unavailable' + (s.error ? ` (${s.error})` : '') + '.');
+      metaEl.textContent = '';
+      return;
+    }
+    metaEl.textContent = `expiry ${s.expiry} · ${s.dte} DTE`;
+    const em = s.expected_move_pct != null
+      ? `±${fmtNum(s.expected_move_pct, 1)}% ($${fmtNum(s.expected_move_dollars, 2)})` : '—';
+    const stats = h('div', { class: 'pf-grid mb-16' },
+      optStat('Spot', fmtPrice(s.spot)),
+      optStat('ATM IV', s.atm_iv != null ? fmtNum(s.atm_iv * 100, 1) + '%' : '—'),
+      optStat('Expected move', em),
+      optStat('25Δ skew', s.skew_25d != null
+        ? (s.skew_25d >= 0 ? '+' : '') + fmtNum(s.skew_25d * 100, 1) + '%'
+        : '—', s.skew_25d > 0.02 ? 't-down' : ''),
+      optStat('IV bank', `${(hist && hist.series ? hist.series.length : 0)} day(s)`));
+    el.append(stats);
+
+    const rows = chainRows(s);
+    if (rows.length) {
+      el.append(h('div', { class: 'desk-opt-chainwrap' },
+        h('table', { class: 'c-table desk-opt-chain' },
+          h('thead', {}, h('tr', {},
+            h('th', { class: 'num', text: 'C bid' }), h('th', { class: 'num', text: 'C ask' }),
+            h('th', { class: 'num', text: 'C IV' }), h('th', { class: 'num', text: 'CΔ' }),
+            h('th', { class: 'num desk-opt-strike', text: 'Strike' }),
+            h('th', { class: 'num', text: 'PΔ' }), h('th', { class: 'num', text: 'P IV' }),
+            h('th', { class: 'num', text: 'P bid' }), h('th', { class: 'num', text: 'P ask' }))),
+          h('tbody', {}, ...rows.map(([strike, { c, p }]) => {
+            const atm = strike === s.atm_strike;
+            const f = (v, d = 2) => v != null ? fmtNum(v, d) : '—';
+            return h('tr', { class: atm ? 'desk-opt-atm' : '' },
+              h('td', { class: 'num', text: f(c && c.bid) }),
+              h('td', { class: 'num', text: f(c && c.ask) }),
+              h('td', { class: 'num', text: c && c.iv != null ? f(c.iv * 100, 1) + '%' : '—' }),
+              h('td', { class: 'num t-dim', text: f(c && c.delta) }),
+              h('td', { class: 'num desk-opt-strike', text: fmtNum(strike, strike % 1 ? 2 : 0) }),
+              h('td', { class: 'num t-dim', text: f(p && p.delta) }),
+              h('td', { class: 'num', text: p && p.iv != null ? f(p.iv * 100, 1) + '%' : '—' }),
+              h('td', { class: 'num', text: f(p && p.bid) }),
+              h('td', { class: 'num', text: f(p && p.ask) }));
+          })))));
+    }
+  } catch (err) { renderError(el, err, loadOptions); }
 }
 
 /* ── what's new: dashboard improvements the agent shipped ── */
@@ -467,10 +565,11 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
+    loadOptions(),
   ]);
 }
 
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); }, 60_000);

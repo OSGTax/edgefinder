@@ -293,6 +293,23 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
         except Exception as exc:  # noqa: BLE001 — one symbol can't abort the run
             logger.warning("bar top-up failed for %s: %s", sym, exc)
             summary["per_symbol"][sym] = f"error: {exc}"
+
+    # options IV data bank: one snapshot per underlying per day (first refresh
+    # of the day wins; reruns are no-ops). Failures never abort the bar work.
+    try:
+        from agent import occ, options_data
+
+        written = 0
+        for sym in symbols:
+            if occ.is_option(sym):
+                continue
+            s = options_data.get_summary(sym)
+            if options_data.persist_snapshot(store, s):
+                written += 1
+        summary["iv_snapshots"] = written
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("IV snapshot pass failed: %s", exc)
+        summary["iv_snapshots"] = f"error: {exc}"
     return summary
 
 

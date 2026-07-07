@@ -239,6 +239,32 @@ class DeskChangelog(Base):
     run_id: Mapped[str | None] = mapped_column(String(40))
 
 
+# ── desk_options_snap — the options IV data bank (one row per underlying/day) ──
+
+
+class DeskOptionsSnap(Base):
+    """Daily options snapshot per underlying: ATM IV, straddle-implied expected
+    move, 25-delta skew. Written once/day by the agent's refresh — accumulates
+    into the IV history the charts plot and the agent reasons over (IV rank
+    becomes computable as the bank grows)."""
+
+    __tablename__ = "desk_options_snap"
+    __table_args__ = (
+        UniqueConstraint("symbol", "snap_date", name="uq_desk_optsnap_sym_date"),
+        Index("idx_desk_optsnap_sym_date", "symbol", "snap_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    snap_date: Mapped[date] = mapped_column(Date)
+    spot: Mapped[float | None] = mapped_column(Float)
+    atm_iv: Mapped[float | None] = mapped_column(Float)
+    expected_move_pct: Mapped[float | None] = mapped_column(Float)
+    skew_25d: Mapped[float | None] = mapped_column(Float)
+    dte: Mapped[int | None] = mapped_column(Integer)
+    expiry: Mapped[str | None] = mapped_column(String(10))
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -345,4 +371,17 @@ DESK_TABLE_DDL: list[str] = [
         run_id VARCHAR(40)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_desk_changelog_ts ON desk_changelog (ts)",
+    """CREATE TABLE IF NOT EXISTS desk_options_snap (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(10) NOT NULL,
+        snap_date DATE NOT NULL,
+        spot FLOAT,
+        atm_iv FLOAT,
+        expected_move_pct FLOAT,
+        skew_25d FLOAT,
+        dte INTEGER,
+        expiry VARCHAR(10),
+        CONSTRAINT uq_desk_optsnap_sym_date UNIQUE (symbol, snap_date)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_optsnap_sym_date ON desk_options_snap (symbol, snap_date)",
 ]

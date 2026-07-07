@@ -146,3 +146,11 @@
   .sym-controls { margin-left: 0; width: 100%; }
   .sym-header { gap: 8px; }
 }
+
+/* symbol rail: options tab */
+.sym-opt-head { display: flex; justify-content: space-between; font-weight: 700;
+  color: var(--t-text); margin-bottom: var(--t-s3); }
+.sym-opt-kv { display: flex; justify-content: space-between; padding: 3px 0;
+  border-bottom: 1px solid var(--t-border); font-size: var(--t-fs-sm); }
+.sym-opt-chain td, .sym-opt-chain th { font-variant-numeric: tabular-nums; }
+.sym-opt-atm td { background: var(--t-accent-dim); }

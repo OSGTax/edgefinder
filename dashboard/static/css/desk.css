@@ -114,3 +114,14 @@
   font-weight: 700; color: var(--t-text);
   font-size: var(--t-fs-sm); text-transform: uppercase; letter-spacing: 0.06em;
 }
+
+/* options radar */
+.desk-opt-select {
+  font: inherit; font-size: var(--t-fs-sm); color: var(--t-text);
+  background: var(--t-surface-2); border: 1px solid var(--t-border);
+  border-radius: var(--t-radius-sm); padding: 2px var(--t-s2);
+}
+.desk-opt-chainwrap { overflow-x: auto; }
+.desk-opt-chain td, .desk-opt-chain th { font-variant-numeric: tabular-nums; }
+.desk-opt-strike { font-weight: 700; color: var(--t-text); }
+.desk-opt-atm td { background: var(--t-accent-dim); }

@@ -4,7 +4,7 @@
    history via range=max, URL-shareable state, trade-detail drawer. */
 
 import { apiGet } from '../core/net.js';
-import { toEpochSec, fmtPrice, fmtPct, fmtPnl, fmtCompact, fmtDate, upDownClass } from '../core/fmt.js';
+import { toEpochSec, fmtPrice, fmtPct, fmtPnl, fmtCompact, fmtDate, fmtNum, upDownClass } from '../core/fmt.js';
 import { h, clear, skeleton, renderError, renderEmpty, debounce } from '../core/dom.js';
 import { createChart, colors, syncPanes, rangeSwitcher, fullscreenButton, tradeMarkers, eventMarkers, mergeMarkers } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
@@ -304,8 +304,76 @@ function renderRail() {
   const body = document.getElementById('sym-rail-body');
   const active = document.querySelector('#sym-rail-tabs button.active')?.dataset.tab || 'profile';
   if (active === 'profile') renderProfile(body);
+  else if (active === 'options') renderRailOptions(body);
   else if (active === 'trades') renderRailTrades(body);
   else renderRailEvents(body);
+}
+
+/* ── options tab: live chain summary + the IV bank ── */
+async function renderRailOptions(body) {
+  skeleton(body);
+  try {
+    const [s, hist] = await Promise.all([
+      apiGet('/api/desk/options/' + state.symbol),
+      apiGet('/api/desk/options/' + state.symbol + '/history').catch(() => null),
+    ]);
+    clear(body);
+    if (!s.available) {
+      renderEmpty(body, 'No options data for ' + state.symbol +
+        (s.error ? ` (${s.error})` : '') + '.');
+      return;
+    }
+    const f = (v, d = 2) => v != null ? fmtNum(v, d) : '—';
+    const kv = (label, value, cls) => h('div', { class: 'sym-opt-kv' },
+      h('span', { class: 't-dim', text: label }),
+      h('span', { class: 'num ' + (cls || ''), text: value }));
+    body.append(
+      h('div', { class: 'sym-opt-head' },
+        h('span', { text: `Nearest expiry ${s.expiry}` }),
+        h('span', { class: 't-dim', text: `${s.dte} DTE` })),
+      kv('ATM IV', s.atm_iv != null ? f(s.atm_iv * 100, 1) + '%' : '—'),
+      kv('Expected move', s.expected_move_pct != null
+        ? `±${f(s.expected_move_pct, 1)}% ($${f(s.expected_move_dollars)})` : '—'),
+      kv('25Δ skew (put−call)', s.skew_25d != null
+        ? (s.skew_25d >= 0 ? '+' : '') + f(s.skew_25d * 100, 1) + '%' : '—',
+        s.skew_25d > 0.02 ? 't-down' : ''),
+      kv('Expiries ≤45d', String((s.expiries || []).length)));
+
+    const series = (hist && hist.series) || [];
+    body.append(kv('IV bank', `${series.length} day(s) collected`));
+    if (series.length >= 2) {
+      const prev = series[series.length - 2], cur = series[series.length - 1];
+      if (prev.atm_iv != null && cur.atm_iv != null) {
+        const d = (cur.atm_iv - prev.atm_iv) * 100;
+        body.append(kv('ATM IV vs prior day',
+          (d >= 0 ? '+' : '') + f(d, 1) + ' pts', d > 0 ? 't-down' : 't-up'));
+      }
+    }
+
+    // compact chain around the money: strike | call mid | put mid | IV
+    const mids = new Map();
+    for (const c of s.calls_table || []) mids.set(c.strike, { c });
+    for (const p of s.puts_table || []) mids.set(p.strike, { ...(mids.get(p.strike) || {}), p });
+    const mid = r => r && r.bid && r.ask ? (r.bid + r.ask) / 2 : null;
+    const rows = [...mids.entries()].sort((a, b) => a[0] - b[0]);
+    if (rows.length) {
+      body.append(h('h4', { class: 'mt-16', text: 'Chain (±10% of spot)' }),
+        h('table', { class: 'c-table sym-opt-chain' },
+          h('thead', {}, h('tr', {},
+            h('th', { class: 'num', text: 'Call' }),
+            h('th', { class: 'num', text: 'Strike' }),
+            h('th', { class: 'num', text: 'Put' }),
+            h('th', { class: 'num', text: 'IV' }))),
+          h('tbody', {}, ...rows.map(([strike, { c, p }]) => {
+            const iv = (c && c.iv) || (p && p.iv);
+            return h('tr', { class: strike === s.atm_strike ? 'sym-opt-atm' : '' },
+              h('td', { class: 'num', text: f(mid(c)) }),
+              h('td', { class: 'num', text: fmtNum(strike, strike % 1 ? 2 : 0) }),
+              h('td', { class: 'num', text: f(mid(p)) }),
+              h('td', { class: 'num t-dim', text: iv != null ? f(iv * 100, 1) + '%' : '—' }));
+          }))));
+    }
+  } catch (err) { renderError(body, err, () => renderRailOptions(body)); }
 }
 
 const PROFILE_FIELDS = [

@@ -209,6 +209,27 @@ async def stream():
                                       "X-Accel-Buffering": "no"})
 
 
+@router.get("/options/{symbol}")
+def options_summary(symbol: str):
+    """Live options intelligence for an underlying: spot, focus expiry, ATM IV,
+    straddle-implied expected move, 25-delta skew, and a strikes table around
+    the money. 60s-cached; degrades to {"available": false} without keys."""
+    from agent import options_data
+
+    return options_data.get_summary(symbol)
+
+
+@router.get("/options/{symbol}/history")
+def options_history(symbol: str, limit: int = Query(250, le=1000)):
+    """The IV data bank series (one snapshot/day, accumulated by the agent's
+    refresh) — powers the IV/expected-move history charts."""
+    from agent import options_data
+    from agent.store import get_store
+
+    return {"symbol": symbol.upper(),
+            "series": options_data.history(get_store(), symbol, limit=limit)}
+
+
 @router.get("/broker-health")
 def broker_health():
     """Preflight diagnostic: are the Alpaca keys on this host valid + SIP-entitled?
