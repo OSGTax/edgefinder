@@ -256,11 +256,24 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
         return {"error": "no Alpaca keys — cannot top up bars"}
     store = get_store()
     if symbols is None:
+        from agent import occ
+
         symbols = stream_symbols()
         for r in store.select("desk_positions", filters={"account": ACCOUNT}):
             s = str(r["symbol"]).upper()
-            if s not in symbols:
+            if not occ.is_option(s) and s not in symbols:
                 symbols.append(s)
+        # watchlist candidates need fresh bars too — the agent researches them
+        # before they're held/streamed
+        try:
+            dec = store.select("desk_decisions", filters={"account": ACCOUNT},
+                               order=[("ts", "desc")], limit=1)
+            for w in (dec[0].get("watchlist") or []) if dec else []:
+                s = str(w.get("symbol") if isinstance(w, dict) else w).upper()
+                if s and not occ.is_option(s) and s not in symbols:
+                    symbols.append(s)
+        except Exception:  # noqa: BLE001 — watchlist enrichments are best-effort
+            pass
 
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
@@ -310,7 +323,106 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
     except Exception as exc:  # noqa: BLE001
         logger.warning("IV snapshot pass failed: %s", exc)
         summary["iv_snapshots"] = f"error: {exc}"
+
+    # R2 archive merge-sync: grow the 21-year parquet archive with the fresh
+    # DB bars whenever this host can (needs direct Postgres + R2 creds — true
+    # on Render/sandbox, skipped on the Routine's REST-only lane). The archive
+    # is grow-only; the DB splice covers reads either way, so this is durable
+    # archival, not a correctness dependency.
+    summary["r2_sync"] = _r2_merge_sync(symbols)
     return summary
+
+
+def merge_bar_frames(r2_rows, db_rows):
+    """GROW-ONLY union of an R2 parquet frame and fresh DB rows (pure).
+
+    The DB wins on conflicting dates (corrections land there); dates the DB
+    no longer holds are PRESERVED from R2 — a merge can never shrink the
+    archive. Returns a date-sorted DataFrame with the archive schema."""
+    import pandas as pd
+
+    cols = ["date", "open", "high", "low", "close", "volume"]
+    frames = []
+    if r2_rows is not None and len(r2_rows):
+        frames.append(pd.DataFrame(r2_rows)[cols])
+    if db_rows:
+        db = pd.DataFrame([{c: r[c] for c in cols} for r in db_rows])
+        frames.append(db)
+    if not frames:
+        return pd.DataFrame(columns=cols)
+    out = pd.concat(frames, ignore_index=True)
+    out["date"] = out["date"].astype(str).str[:10]
+    for c in cols[1:]:
+        out[c] = out[c].astype(float)
+    # keep="last" → DB rows (appended last) win on duplicate dates
+    out = out.drop_duplicates(subset="date", keep="last").sort_values("date")
+    return out.reset_index(drop=True)
+
+
+def _r2_merge_sync(symbols: list[str]):
+    """Grow the R2 parquet archive from the DB — transport-agnostic.
+
+    Bars are read through ``agent.store`` (REST or pg — works on the Routine
+    sandbox AND Render) and parquet moves over S3/443, so this runs anywhere
+    the R2 creds exist. Change-detected per symbol via the manifest's db_max
+    fingerprint; unchanged symbols cost one tiny store query."""
+    import io
+    import json as _json
+    import os
+
+    if not all(os.getenv(k) for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+                                      "R2_ENDPOINT", "R2_BUCKET")):
+        return "skipped (no R2_* env)"
+    try:
+        import boto3
+        import pandas as pd
+
+        from agent.store import get_store
+
+        store = get_store()
+        s3 = boto3.client("s3", endpoint_url=os.environ["R2_ENDPOINT"],
+                          aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+                          aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"])
+        bucket = os.environ["R2_BUCKET"]
+        try:
+            manifest = _json.loads(s3.get_object(
+                Bucket=bucket, Key="manifest.json")["Body"].read())
+        except Exception:  # noqa: BLE001 — missing manifest = fresh entries
+            manifest = {}
+
+        synced, skipped = [], 0
+        for sym in symbols:
+            latest = store.select("daily_bars", filters={"symbol": sym},
+                                  order=[("date", "desc")], limit=1)
+            db_max = str(latest[0]["date"])[:10] if latest else None
+            entry = manifest.get(sym) or {}
+            if not db_max or db_max <= str(entry.get("db_max") or
+                                           entry.get("max_date") or ""):
+                skipped += 1
+                continue
+            db_rows = store.select("daily_bars", filters={"symbol": sym})
+            try:
+                body = s3.get_object(Bucket=bucket,
+                                     Key=f"bars/{sym}.parquet")["Body"].read()
+                r2_df = pd.read_parquet(io.BytesIO(body))
+            except Exception:  # noqa: BLE001 — new symbol, no parquet yet
+                r2_df = None
+            merged = merge_bar_frames(r2_df, db_rows)
+            buf = io.BytesIO()
+            merged.to_parquet(buf, index=False)
+            s3.put_object(Bucket=bucket, Key=f"bars/{sym}.parquet",
+                          Body=buf.getvalue())
+            manifest[sym] = {"rows": int(len(merged)),
+                             "max_date": str(merged["date"].iloc[-1]),
+                             "db_rows": len(db_rows), "db_max": db_max}
+            synced.append(f"{sym}→{db_max}")
+        if synced:
+            s3.put_object(Bucket=bucket, Key="manifest.json",
+                          Body=_json.dumps(manifest).encode())
+        return {"synced": synced, "unchanged": skipped}
+    except Exception as exc:  # noqa: BLE001 — archival is best-effort
+        logger.warning("R2 merge-sync failed: %s", exc)
+        return f"skipped ({type(exc).__name__}: {exc})"
 
 
 def main(argv: list[str] | None = None) -> None:

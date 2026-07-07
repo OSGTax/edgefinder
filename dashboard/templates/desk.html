@@ -32,7 +32,10 @@
 <!-- options intelligence: chain summary + growing IV bank -->
 <div class="c-card mb-16">
   <div class="c-card-header">Options radar
-    <select id="desk-opt-symbol" class="desk-opt-select"></select>
+    <input id="desk-opt-symbol" class="desk-opt-select" list="desk-opt-list"
+           maxlength="6" autocomplete="off" spellcheck="false"
+           placeholder="any symbol…">
+    <datalist id="desk-opt-list"></datalist>
     <span class="spacer"></span>
     <span id="desk-opt-meta" class="t-dim"></span>
   </div>

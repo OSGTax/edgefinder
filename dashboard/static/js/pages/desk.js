@@ -387,19 +387,22 @@ let optSymbol = localStorage.getItem('ef-opt-symbol') || 'SPY';
 let optSelectFilled = false;
 
 function fillOptSelect(tapeSymbols) {
+  // free-text picker: ANY optionable symbol works (the endpoint is on-demand
+  // REST); the tape just seeds the suggestion list
   if (optSelectFilled || !tapeSymbols.length) return;
-  const sel = document.getElementById('desk-opt-symbol');
-  if (!sel) return;
-  clear(sel);
-  const syms = tapeSymbols.filter(s => !OCC_RE.test(s)).sort();
-  if (!syms.includes(optSymbol)) optSymbol = syms[0] || 'SPY';
-  for (const s of syms) {
-    const opt = h('option', { value: s, text: s });
-    if (s === optSymbol) opt.selected = true;
-    sel.append(opt);
+  const input = document.getElementById('desk-opt-symbol');
+  const list = document.getElementById('desk-opt-list');
+  if (!input || !list) return;
+  clear(list);
+  for (const s of tapeSymbols.filter(s => !OCC_RE.test(s)).sort()) {
+    list.append(h('option', { value: s }));
   }
-  sel.addEventListener('change', () => {
-    optSymbol = sel.value;
+  input.value = optSymbol;
+  input.addEventListener('change', () => {
+    const sym = input.value.trim().toUpperCase();
+    if (!/^[A-Z]{1,6}$/.test(sym)) { input.value = optSymbol; return; }
+    input.value = sym;
+    optSymbol = sym;
     localStorage.setItem('ef-opt-symbol', optSymbol);
     loadOptions();
   });

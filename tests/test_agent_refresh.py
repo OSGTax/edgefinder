@@ -43,3 +43,23 @@ def test_dedup_when_kept_also_ranks_top():
 def test_module_imports():
     import agent.refresh as r
     assert callable(r.refresh) and callable(r.main)
+
+
+def test_merge_bar_frames_grow_only_db_wins():
+    import pandas as pd
+    from agent.refresh import merge_bar_frames
+
+    r2 = pd.DataFrame([
+        {"date": "2026-06-17", "open": 1.0, "high": 2, "low": 0.5, "close": 1.5, "volume": 10},
+        {"date": "2026-06-18", "open": 1.0, "high": 2, "low": 0.5, "close": 1.6, "volume": 11},
+    ])
+    db = [  # overlaps the 18th (correction: close 1.65 wins) + extends to the 19th
+        {"date": "2026-06-18", "open": 1.0, "high": 2, "low": 0.5, "close": 1.65, "volume": 11},
+        {"date": "2026-06-19", "open": 1.1, "high": 2, "low": 0.6, "close": 1.7, "volume": 12},
+    ]
+    m = merge_bar_frames(r2, db)
+    assert list(m["date"]) == ["2026-06-17", "2026-06-18", "2026-06-19"]  # grow-only
+    assert m[m["date"] == "2026-06-18"]["close"].iloc[0] == 1.65          # DB wins
+    # empty inputs behave
+    assert len(merge_bar_frames(None, db)) == 2
+    assert list(merge_bar_frames(r2, []) ["date"]) == ["2026-06-17", "2026-06-18"]
