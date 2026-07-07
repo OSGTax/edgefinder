@@ -36,27 +36,12 @@ def test_enabled_and_creds(monkeypatch):
     assert broker.resolve_creds()["key"] == "fromsettings"
 
 
-def test_build_order_market_and_limit():
-    m = broker.build_order("nvda", "BUY", notional=1000)
-    assert m == {"symbol": "NVDA", "side": "buy", "type": "market",
-                 "time_in_force": "day", "notional": 1000.0}
-    q = broker.build_order("AAPL", "sell", qty=10, type="limit", limit_price=210.5)
-    assert q["qty"] == 10.0 and q["limit_price"] == 210.5 and q["type"] == "limit"
-
-
-def test_build_order_validation():
-    with pytest.raises(ValueError):  # need exactly one of qty/notional
-        broker.build_order("NVDA", "buy")
-    with pytest.raises(ValueError):  # ...not both
-        broker.build_order("NVDA", "buy", qty=1, notional=100)
-    with pytest.raises(ValueError):  # bad side
-        broker.build_order("NVDA", "hodl", qty=1)
-    with pytest.raises(ValueError):  # limit needs a price
-        broker.build_order("NVDA", "buy", qty=1, type="limit")
-    with pytest.raises(ValueError):  # notional only for market
-        broker.build_order("NVDA", "buy", notional=100, type="limit", limit_price=5)
-    with pytest.raises(ValueError):  # positive sizes
-        broker.build_order("NVDA", "buy", qty=-1)
+def test_broker_is_read_only():
+    """The data-reader contract: no order-write surface exists, at all."""
+    assert not hasattr(broker, "build_order")
+    assert not hasattr(broker.Broker, "submit")
+    for name in dir(broker.Broker):
+        assert not any(w in name.lower() for w in ("submit", "cancel", "replace")), name
 
 
 def test_normalize_position():

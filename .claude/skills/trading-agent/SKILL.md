@@ -95,25 +95,21 @@ python -m agent.brain journal --kind pivot --title "..." --body "..." --to <newv
 
 ### 5. Execute (phase: execute)
 Turn target weights into trades against the **current** book and prices:
-- **Execution model = market-on-close (MOC), and this is the honesty rule:**
-  you fill at the latest **settled daily close** — the exact same `close` you
-  decided on and the same price the book marks at. Decision, fill, and mark are
-  one timestamp, so you never transact on information newer than your fill. This
-  is why the cycle is meant to run **once per trading day, after the close**, on
-  that day's final bar (the data refresh only ingests a bar once it's settled).
-  Do **not** invent an intraday/real-time price or fill at anything other than
-  the `close` from your `quote` — that would be trading on a price you couldn't
-  actually get, and it breaks the match with the backtest.
-- Get current prices from the `quote` you already pulled (use `close`).
-- For each name to change: compute target shares = `floor(weight * equity / price)`.
-  Sell reductions/exits FIRST (raises cash), then buys.
-- Book each fill:
+- **Execution model = LIVE QUOTES, and this is the honesty rule:** every fill
+  prices off the **live Alpaca SIP quote at the moment you book it** — buys at
+  the live ask, sells at the live bid — and the quote snapshot (bid/ask/time)
+  is stamped on the fill. You never fill off a daily close or any past price,
+  and you never invent a price the market isn't showing right now.
+- Sell reductions/exits FIRST (raises cash), then buys.
+- Book each fill through the ledger's live-fill command (it reads the live
+  quote itself, prices the correct side, and rejects if the market is closed
+  or the quote is stale):
 ```
-python -m agent.ledger record --symbol NVDA --side BUY --shares 120 \
-    --price 123.45 --rationale "momentum breakout, above 200EMA" --run-id <RID>
+python -m agent.ledger fill --symbol NVDA --side buy --shares 120 \
+    --rationale "momentum breakout, above 200EMA" --run-id <RID>
 ```
-- After all fills: `python -m agent.ledger mark` (re-marks positions, appends the
-  equity-curve point).
+- After all fills: `python -m agent.ledger mark` (re-marks positions at live
+  quotes, appends the equity-curve point).
 
 ### 6. Record the decision (phase: decide)
 Write the run's decision dossier so the desk page can render it. Build small

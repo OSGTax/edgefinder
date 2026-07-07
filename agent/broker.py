@@ -1,26 +1,22 @@
-"""Alpaca broker wrapper — the account of record for live paper trading.
+"""Alpaca DATA-READER — live SIP quotes + market clock for the agent's own book.
 
-This is the foundation of the live rebuild (see LIVE-REBUILD-PLAN.md). The
-agent no longer keeps its own authoritative ledger; instead it trades a real
-Alpaca **paper** account that fills against the live market, and we read the
-account/positions/fills back for display. Quotes come from Alpaca's real-time
-market-data API (SIP feed). Everything here is plain HTTPS/WebSocket, so it
-works both on Render (always-on streamer) and inside the hourly Routine
-(submits orders + reads state over REST).
+READ-ONLY by design (see REBUILD-V3.md). The agent trades its OWN paper ledger
+(``agent.ledger``); Alpaca supplies the live market data that prices those
+fills: real-time SIP quotes, the market clock, and account diagnostics for the
+key-health check. This wrapper NEVER submits, modifies, or cancels orders at
+Alpaca — there are no write methods, deliberately.
 
 Design:
 - The SDK (`alpaca-py`) is imported **lazily** so this module imports cleanly
-  without it installed (CI / unit tests use mocks); install with the `live`
-  extra. The pure helpers (`build_order`, `normalize_*`) have no SDK or network
-  dependency and carry the testable logic.
+  without it installed (CI / unit tests use mocks). The pure normalizers have
+  no SDK or network dependency and carry the testable logic.
 - Credentials resolve from settings (`EDGEFINDER_ALPACA_*`) first, then the
   SDK's native `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`, then `ALPACA_*`.
 
 CLI (once paper keys are set):
   python -m agent.broker account
   python -m agent.broker quote --symbols NVDA,AAPL
-  python -m agent.broker positions
-  python -m agent.broker buy --symbol NVDA --notional 1000   # paper order
+  python -m agent.broker clock
 """
 
 from __future__ import annotations
@@ -58,43 +54,6 @@ def enabled() -> bool:
 
 
 # ── pure helpers (SDK-free, network-free → unit-tested) ──────
-
-def build_order(symbol: str, side: str, *, qty: float | None = None,
-                notional: float | None = None, type: str = "market",
-                limit_price: float | None = None,
-                time_in_force: str = "day") -> dict:
-    """Validate + normalize an order into a plain spec dict (the SDK request is
-    built from this at submit time). Exactly one of qty / notional is required;
-    notional (fractional dollars) only makes sense for market orders."""
-    symbol = (symbol or "").strip().upper()
-    side = (side or "").strip().lower()
-    type = (type or "market").strip().lower()
-    if not symbol:
-        raise ValueError("order: symbol required")
-    if side not in ("buy", "sell"):
-        raise ValueError(f"order: side must be buy/sell, got {side!r}")
-    if (qty is None) == (notional is None):
-        raise ValueError("order: pass exactly one of qty or notional")
-    if type not in ("market", "limit"):
-        raise ValueError(f"order: type must be market/limit, got {type!r}")
-    if type == "limit" and not limit_price:
-        raise ValueError("order: limit order needs limit_price")
-    if notional is not None and type != "market":
-        raise ValueError("order: notional is only valid for market orders")
-    if qty is not None and qty <= 0:
-        raise ValueError("order: qty must be positive")
-    if notional is not None and notional <= 0:
-        raise ValueError("order: notional must be positive")
-    spec: dict = {"symbol": symbol, "side": side, "type": type,
-                  "time_in_force": time_in_force}
-    if qty is not None:
-        spec["qty"] = float(qty)
-    if notional is not None:
-        spec["notional"] = round(float(notional), 2)
-    if type == "limit":
-        spec["limit_price"] = float(limit_price)
-    return spec
-
 
 def _f(v):
     try:
@@ -213,25 +172,9 @@ class Broker:
         req = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=limit)
         return [normalize_order(o) for o in self.trading.get_orders(req)]
 
-    # -- writes --
-    def submit(self, spec: dict) -> dict:
-        """Submit an order from a build_order() spec. Returns the normalized
-        order (with fill price once filled)."""
-        from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
-
-        side = OrderSide.BUY if spec["side"] == "buy" else OrderSide.SELL
-        tif = TimeInForce(spec.get("time_in_force", "day"))
-        common = {"symbol": spec["symbol"], "side": side, "time_in_force": tif}
-        if "qty" in spec:
-            common["qty"] = spec["qty"]
-        else:
-            common["notional"] = spec["notional"]
-        if spec["type"] == "limit":
-            req = LimitOrderRequest(limit_price=spec["limit_price"], **common)
-        else:
-            req = MarketOrderRequest(**common)
-        return normalize_order(self.trading.submit_order(req))
+    # NO write methods, by design. This wrapper is DATA-READER ONLY: the agent
+    # trades its OWN paper ledger (agent.ledger) priced off these live quotes.
+    # It never submits, modifies, or cancels orders at Alpaca.
 
 
 # ── CLI ──────────────────────────────────────────────────────
@@ -248,12 +191,6 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("orders")
     sub.add_parser("clock")
     q = sub.add_parser("quote"); q.add_argument("--symbols", required=True)
-    for name in ("buy", "sell"):
-        o = sub.add_parser(name)
-        o.add_argument("--symbol", required=True)
-        o.add_argument("--qty", type=float)
-        o.add_argument("--notional", type=float)
-        o.add_argument("--limit", type=float, dest="limit_price")
     args = p.parse_args(argv)
 
     if not enabled():
@@ -271,11 +208,6 @@ def main(argv: list[str] | None = None) -> int:
         out = {"is_open": b.is_market_open()}
     elif args.cmd == "quote":
         out = b.quotes([s.strip().upper() for s in args.symbols.split(",") if s.strip()])
-    elif args.cmd in ("buy", "sell"):
-        spec = build_order(args.symbol, args.cmd, qty=args.qty, notional=args.notional,
-                           type="limit" if args.limit_price else "market",
-                           limit_price=args.limit_price)
-        out = b.submit(spec)
     else:  # pragma: no cover
         out = {"error": "unknown command"}
     print(json.dumps(out, indent=2, default=str))
