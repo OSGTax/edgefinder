@@ -20,10 +20,11 @@ All DB writes reuse the vetted ``scripts.backfill_daily_bars.upsert_daily_bars``
 never duplicates.
 
 CLI:
-  python -m agent.refresh                      # bars (+ R2 if configured)
-  python -m agent.refresh --max-days 10 --top 1000
-  python -m agent.refresh --with-corporate-actions --with-news
-  python -m agent.refresh --dry-run
+  python -m agent.refresh                      # alpaca (default): live-universe
+                                               #   bars + news + dividends/splits
+  python -m agent.refresh --source polygon --max-days 10 --top 1000
+  python -m agent.refresh --source polygon --with-corporate-actions --with-news
+  python -m agent.refresh --source polygon --dry-run
 """
 
 from __future__ import annotations
@@ -238,6 +239,22 @@ def alpaca_bars_to_rows(bars, symbol: str) -> list[dict]:
     return rows
 
 
+def _watch_symbols(store) -> list[str]:
+    """Streamed symbols + the agent's held EQUITY names (OCC options excluded
+    — the data APIs reject option symbols; a held option's underlying is
+    already in the streamed set)."""
+    from agent.models import ACCOUNT
+    from agent.occ import is_option
+    from agent.streamer import stream_symbols
+
+    symbols = stream_symbols()
+    for r in store.select("desk_positions", filters={"account": ACCOUNT}):
+        s = str(r["symbol"]).upper()
+        if s not in symbols and not is_option(s):
+            symbols.append(s)
+    return symbols
+
+
 def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict:
     """Top up ``daily_bars`` from Alpaca daily bars for the LIVE universe
     (streamed symbols + held positions). This replaced the Polygon full-market
@@ -250,19 +267,13 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
     from datetime import timedelta as _td
 
     from agent import broker
-    from agent.models import ACCOUNT
     from agent.store import get_store
-    from agent.streamer import stream_symbols
 
     if not broker.enabled():
         return {"error": "no Alpaca keys — cannot top up bars"}
     store = get_store()
     if symbols is None:
-        symbols = stream_symbols()
-        for r in store.select("desk_positions", filters={"account": ACCOUNT}):
-            s = str(r["symbol"]).upper()
-            if s not in symbols:
-                symbols.append(s)
+        symbols = _watch_symbols(store)
 
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
@@ -298,6 +309,171 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
     return summary
 
 
+# ── news + corporate actions via Alpaca ─────────────────────
+# The Polygon DataAccumulator path retired with the old scheduler (and can't
+# run on the REST transport at all), which silently froze ticker_news,
+# dividends and ticker_splits. These top-ups run on the default alpaca
+# refresh so the hourly Routine keeps all three current with the same keys
+# that already price the fills.
+
+
+def _pub_utc(ts) -> str | None:
+    """Alpaca datetime → the 'YYYY-MM-DDTHH:MM:SSZ' shape Polygon rows use,
+    so the (symbol, title, published_utc) dedupe key stays consistent."""
+    if ts is None:
+        return None
+    try:
+        from datetime import timezone
+        return ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:  # noqa: BLE001
+        return str(ts)[:30]
+
+
+def alpaca_news_to_rows(items, watch: set[str]) -> list[dict]:
+    """Alpaca news articles → ticker_news rows, one per WATCHED symbol
+    (pure; unit-tested). Articles without a headline/timestamp are skipped."""
+    rows, seen = [], set()
+    for n in items:
+        head = getattr(n, "headline", None)
+        pub = _pub_utc(getattr(n, "created_at", None))
+        if not head or not pub:
+            continue
+        for sym in (getattr(n, "symbols", None) or []):
+            s = str(sym).upper()
+            key = (s, head, pub)
+            if s not in watch or key in seen:
+                continue
+            seen.add(key)
+            rows.append({
+                "symbol": s, "title": head,
+                "author": (getattr(n, "author", None) or None),
+                "published_utc": pub,
+                "article_url": getattr(n, "url", None),
+                "description": getattr(n, "summary", None) or None,
+                "publisher_name": getattr(n, "source", None) or None,
+            })
+    return rows
+
+
+def refresh_alpaca_news(symbols: list[str], *, days: int = 3, limit: int = 50) -> dict:
+    """Fetch recent Alpaca news for the watch list and insert only rows not
+    already stored (dedupe on the uq_ticker_news key). Idempotent."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    from agent import broker
+    from agent.store import get_store
+
+    if not broker.enabled():
+        return {"error": "no Alpaca keys"}
+    from alpaca.data.historical.news import NewsClient
+    from alpaca.data.requests import NewsRequest
+
+    creds = broker.resolve_creds()
+    client = NewsClient(api_key=creds["key"], secret_key=creds["secret"])
+    start = _dt.now(_tz.utc) - _td(days=days)
+    res = client.get_news(NewsRequest(symbols=",".join(symbols), start=start,
+                                      limit=limit))
+    items = res.data.get("news", []) if hasattr(res, "data") else []
+    rows = alpaca_news_to_rows(items, {s.upper() for s in symbols})
+
+    store = get_store()
+    existing = {(r["symbol"], r["title"], r["published_utc"])
+                for r in store.select(
+                    "ticker_news", columns="symbol,title,published_utc",
+                    filters={"symbol": ("in", symbols),
+                             "published_utc": ("gte", start.strftime("%Y-%m-%dT%H:%M:%SZ"))},
+                    limit=10000)}
+    fresh = [r for r in rows
+             if (r["symbol"], r["title"], r["published_utc"]) not in existing]
+    if fresh:
+        store.insert("ticker_news", fresh, returning=False)
+    return {"fetched": len(items), "inserted": len(fresh)}
+
+
+def alpaca_corp_actions_to_rows(data: dict) -> tuple[list[dict], list[dict]]:
+    """Alpaca corporate-actions payload → (dividends rows, ticker_splits rows)
+    (pure; unit-tested). Split rates become an integer from/to ratio."""
+    from fractions import Fraction
+
+    divs: list[dict] = []
+    for item in (data.get("cash_dividends") or []):
+        sym = getattr(item, "symbol", None)
+        ex = getattr(item, "ex_date", None)
+        rate = getattr(item, "rate", None)
+        if not sym or ex is None or rate is None or float(rate) <= 0:
+            continue
+        divs.append({"symbol": str(sym).upper(), "ex_date": ex.isoformat(),
+                     "cash_amount": float(rate)})
+
+    splits: list[dict] = []
+    for key in ("forward_splits", "reverse_splits"):
+        for item in (data.get(key) or []):
+            sym = getattr(item, "symbol", None)
+            ex = getattr(item, "ex_date", None)
+            new = getattr(item, "new_rate", None)
+            old = getattr(item, "old_rate", None)
+            if not sym or ex is None or not new or not old:
+                continue
+            fr = Fraction(float(new) / float(old)).limit_denominator(1000)
+            if fr.numerator <= 0 or fr.denominator <= 0 or fr.numerator == fr.denominator:
+                continue
+            splits.append({"symbol": str(sym).upper(),
+                           "execution_date": ex.isoformat(),
+                           "split_from": fr.denominator, "split_to": fr.numerator})
+    return divs, splits
+
+
+def refresh_alpaca_corporate_actions(symbols: list[str], *, days: int = 45) -> dict:
+    """Top up ``dividends`` + ``ticker_splits`` from Alpaca corporate actions
+    over the trailing window, inserting only unseen (symbol, date) rows —
+    keeps total-return adjustment and split adjustment honest. Idempotent."""
+    from datetime import timedelta as _td
+
+    from agent import broker
+    from agent.store import get_store
+
+    if not broker.enabled():
+        return {"error": "no Alpaca keys"}
+    from alpaca.data.historical.corporate_actions import CorporateActionsClient
+    from alpaca.data.requests import CorporateActionsRequest
+
+    creds = broker.resolve_creds()
+    client = CorporateActionsClient(api_key=creds["key"], secret_key=creds["secret"])
+    start = date.today() - _td(days=days)
+    res = client.get_corporate_actions(CorporateActionsRequest(
+        symbols=list(symbols), start=start, end=date.today()))
+    data = res.data if hasattr(res, "data") else {}
+    div_rows, split_rows = alpaca_corp_actions_to_rows(data)
+
+    store = get_store()
+    fresh_div: list[dict] = []
+    if div_rows:
+        # Alpaca windows on process date, so returned ex_dates can precede
+        # ``start`` — bound the dedupe read by the rows actually returned.
+        min_ex = min(r["ex_date"] for r in div_rows)
+        have_div = {(r["symbol"], str(r["ex_date"])[:10])
+                    for r in store.select("dividends", columns="symbol,ex_date",
+                                          filters={"symbol": ("in", symbols),
+                                                   "ex_date": ("gte", min_ex)},
+                                          limit=10000)}
+        fresh_div = [r for r in div_rows
+                     if (r["symbol"], r["ex_date"]) not in have_div]
+    if fresh_div:
+        store.insert("dividends", fresh_div, returning=False)
+
+    have_split = {(r["symbol"], str(r["execution_date"])[:10])
+                  for r in store.select("ticker_splits",
+                                        columns="symbol,execution_date",
+                                        filters={"symbol": ("in", symbols)},
+                                        limit=10000)}
+    fresh_split = [r for r in split_rows
+                   if (r["symbol"], r["execution_date"]) not in have_split]
+    if fresh_split:
+        store.insert("ticker_splits", fresh_split, returning=False)
+    return {"dividends_inserted": len(fresh_div),
+            "splits_inserted": len(fresh_split)}
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -316,6 +492,17 @@ def main(argv: list[str] | None = None) -> None:
     args = p.parse_args(argv)
     if args.source == "alpaca":
         out = refresh_alpaca(max_days=args.max_days)
+        if "error" not in out:
+            from agent.store import get_store
+
+            watch = _watch_symbols(get_store())
+            for name, fn in (("news", refresh_alpaca_news),
+                             ("corporate_actions", refresh_alpaca_corporate_actions)):
+                try:
+                    out[name] = fn(watch)
+                except Exception as exc:  # noqa: BLE001 — feeds must not block bars
+                    logger.warning("%s top-up failed: %s", name, exc)
+                    out[name] = f"error: {exc}"
     else:
         out = refresh(max_days=args.max_days, top_n=args.top, min_price=args.min_price,
                       max_price=args.max_price,

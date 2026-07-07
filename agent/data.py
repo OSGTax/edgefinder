@@ -17,12 +17,15 @@ Two transports (see ``agent.store``):
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, timedelta
 
 import pandas as pd
 
 from agent.store import transport
+
+logger = logging.getLogger(__name__)
 
 
 def r2_available() -> bool:
@@ -118,14 +121,73 @@ def _rest_bars(symbols: list[str], start: date | None, end: date | None
 # ── bars (transport-aware) ──────────────────────────────────
 
 
+def merge_fresh_bars(bars: dict[str, pd.DataFrame],
+                     fresh: dict[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Append rows from ``fresh`` strictly newer than each frame in ``bars``.
+
+    Pure (no I/O). Symbols present only in ``fresh`` are added whole; ``fresh``
+    columns are aligned to the base frame so the merged shape never changes.
+    """
+    out = dict(bars)
+    for sym, fdf in fresh.items():
+        if fdf is None or not len(fdf):
+            continue
+        base = out.get(sym)
+        if base is None or not len(base):
+            out[sym] = fdf.reset_index(drop=True)
+            continue
+        newer = fdf[fdf["date"] > base["date"].max()]
+        if len(newer):
+            out[sym] = pd.concat([base, newer.reindex(columns=base.columns)],
+                                 ignore_index=True)
+    return out
+
+
+def _db_raw_bars(symbols: list[str], start: date | None, end: date | None
+                 ) -> dict[str, pd.DataFrame]:
+    """Raw (split-UNadjusted) daily_bars from the active transport's DB."""
+    if _use_rest():
+        return _rest_bars(symbols, start, end)
+    from edgefinder.engine import data as eng
+
+    sess = session_factory()()
+    try:
+        return eng.load_bars(sess, symbols, start=start, end=end, split_adjust=False)
+    finally:
+        sess.close()
+
+
+def _top_up_from_db(bars: dict[str, pd.DataFrame], symbols: list[str],
+                    end: date | None) -> dict[str, pd.DataFrame]:
+    """Overlay daily_bars rows newer than the R2 archive's frames.
+
+    The R2 archive only grows when a sync job runs; the hourly Alpaca top-up
+    lands in ``daily_bars``. Splicing the newer DB rows in BEFORE split/div
+    adjustment keeps ``source="auto"`` reads (regime, indicators, backtests)
+    as fresh as the DB without giving up R2 depth. Best-effort: a DB failure
+    falls back to the pure R2 read (regime's ``bars_stale`` stays honest).
+    """
+    try:
+        ends = [df["date"].max() for df in bars.values() if df is not None and len(df)]
+        start = (min(ends) + timedelta(days=1)) if ends else None
+        fresh = _db_raw_bars(symbols, start, end)
+        return merge_fresh_bars(bars, fresh)
+    except Exception:  # noqa: BLE001 — freshness top-up must never break reads
+        logger.warning("DB freshness top-up failed; using R2 bars as-is",
+                       exc_info=True)
+        return bars
+
+
 def load_bars(
     symbols: list[str], *, start: date | None = None, end: date | None = None,
     div_adjust: bool = True, source: str = "auto",
 ) -> dict[str, pd.DataFrame]:
     """Split-adjusted (and optionally total-return) daily bars per symbol.
 
-    ``source``: ``auto`` (R2 when configured, else the active transport's DB),
-    ``r2``, or ``db``. Returns ``{symbol: DataFrame[date, OHLCV(, close_raw)]}``.
+    ``source``: ``auto`` (R2 when configured — topped up with any newer
+    ``daily_bars`` rows so reads stay current between R2 syncs — else the
+    active transport's DB), ``r2`` (pure archive), or ``db``.
+    Returns ``{symbol: DataFrame[date, OHLCV(, close_raw)]}``.
     """
     from edgefinder.engine import data as eng
 
@@ -134,6 +196,8 @@ def load_bars(
     if _use_rest():
         if use_r2:
             bars = eng.load_bars_from_store(symbols, start=start, end=end)
+            if source == "auto":
+                bars = _top_up_from_db(bars, symbols, end)
         else:
             bars = _rest_bars(symbols, start, end)
         splits = _rest_splits(list(bars))
@@ -143,9 +207,11 @@ def load_bars(
             bars = eng.adjust_for_dividends(bars, divs)
         return bars
 
-    # pg lane (unchanged)
+    # pg lane
     if use_r2:
         bars = eng.load_bars_from_store(symbols, start=start, end=end)
+        if source == "auto":
+            bars = _top_up_from_db(bars, symbols, end)
         sess = session_factory()()
         try:
             splits = eng.load_splits(sess, list(bars))
