@@ -230,7 +230,11 @@ def alpaca_bars_to_rows(bars, symbol: str) -> list[dict]:
             "low": float(getattr(bar, "low", c) or c),
             "close": float(c),
             "volume": float(getattr(bar, "volume", 0) or 0),
-            "transactions": getattr(bar, "trade_count", None),
+            # Alpaca returns trade_count as a float; the column is INTEGER —
+            # the REST lane rejects an uncoerced float (caught live by the
+            # agent's first routine run)
+            "transactions": (int(tc) if (tc := getattr(bar, "trade_count", None))
+                             is not None else None),
             "source": "alpaca_daily",
         })
     return rows
@@ -292,8 +296,14 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
             summary["per_symbol"][sym] = 0
             continue
         try:
+            # end = TODAY-midnight-UTC: daily bars are stamped ~04:00 UTC OF
+            # their trading day, so an `end=yesterday` (midnight) cutoff sat
+            # BEFORE yesterday's own bar and silently excluded it — the
+            # refresh permanently lagged one trading day. Midnight today
+            # includes yesterday's final bar and still excludes today's
+            # partial one.
             req = StockBarsRequest(symbol_or_symbols=sym, timeframe=TimeFrame.Day,
-                                   start=start, end=yesterday)
+                                   start=start, end=date.today())
             res = b.data.get_stock_bars(req)
             bars = res.data.get(sym, []) if hasattr(res, "data") else []
             rows = alpaca_bars_to_rows(bars, sym)

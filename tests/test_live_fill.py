@@ -117,13 +117,16 @@ def test_alpaca_bars_to_rows():
     from agent.refresh import alpaca_bars_to_rows
     bars = [SimpleNamespace(timestamp=datetime(2026, 7, 3, 4, 0),
                             open=100.0, high=101.0, low=99.5, close=100.5,
-                            volume=1_000_000, trade_count=5000),
+                            volume=1_000_000, trade_count=5000.0),  # FLOAT, as Alpaca sends
             SimpleNamespace(timestamp=None, close=1.0)]  # bad row skipped
     rows = alpaca_bars_to_rows(bars, "SPY")
     assert len(rows) == 1
     r = rows[0]
     assert r["symbol"] == "SPY" and str(r["date"]) == "2026-07-03"
     assert r["close"] == 100.5 and r["source"] == "alpaca_daily"
+    # regression (agent's first routine run): trade_count floats must be
+    # coerced — the INTEGER column rejects them on the REST lane
+    assert r["transactions"] == 5000 and isinstance(r["transactions"], int)
 
 
 def test_no_alpaca_order_writes_anywhere():
