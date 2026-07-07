@@ -229,8 +229,10 @@ def alpaca_bars_to_rows(bars, symbol: str) -> list[dict]:
             "high": float(getattr(bar, "high", c) or c),
             "low": float(getattr(bar, "low", c) or c),
             "close": float(c),
-            "volume": float(getattr(bar, "volume", 0) or 0),
-            "transactions": getattr(bar, "trade_count", None),
+            "volume": int(round(float(getattr(bar, "volume", 0) or 0))),
+            "transactions": (int(round(float(tc)))
+                             if (tc := getattr(bar, "trade_count", None)) is not None
+                             else None),
             "source": "alpaca_daily",
         })
     return rows
