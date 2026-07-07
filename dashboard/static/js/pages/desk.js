@@ -106,7 +106,62 @@ async function loadEquity() {
   }
 }
 
-/* ── holdings ── */
+/* ── holdings (equities + an options book when present) ── */
+const OCC_RE = /^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
+
+function occParse(sym) {
+  const m = OCC_RE.exec(sym);
+  if (!m) return null;
+  const expiry = new Date(Date.UTC(2000 + +m[2], +m[3] - 1, +m[4]));
+  return {
+    underlying: m[1], type: m[5], strike: +m[6] / 1000, expiry,
+    dte: Math.ceil((expiry - Date.now()) / 86400000),
+    label: `${m[1]} $${+m[6] / 1000}${m[5]} ${expiry.toISOString().slice(0, 10)}`,
+  };
+}
+
+function equitiesTable(rows) {
+  return h('table', { class: 'c-table' },
+    h('thead', {}, h('tr', {},
+      h('th', { text: 'Symbol' }), h('th', { class: 'num', text: 'Shares' }),
+      h('th', { class: 'num', text: 'Avg' }), h('th', { class: 'num', text: 'Last' }),
+      h('th', { class: 'num', text: 'Value' }), h('th', { class: 'num', text: 'Wt' }),
+      h('th', { class: 'num', text: 'Unreal. P&L' }))),
+    h('tbody', {}, ...rows.map(p => h('tr', {},
+      h('td', {}, h('a', { href: '/symbol/' + p.symbol, class: 'c-link', text: p.symbol })),
+      h('td', { class: 'num', text: fmtNum(p.shares, 2) }),
+      h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
+      h('td', { class: 'num', text: fmtPrice(p.last_price) }),
+      h('td', { class: 'num', text: fmtDollar(p.market_value) }),
+      h('td', { class: 'num', text: fmtPct(p.weight) }),
+      h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
+        text: fmtPnl(p.unrealized_pnl) })))));
+}
+
+function optionsTable(rows) {
+  return h('table', { class: 'c-table' },
+    h('thead', {}, h('tr', {},
+      h('th', { text: 'Contract' }), h('th', { text: 'Side' }),
+      h('th', { class: 'num', text: 'Qty' }), h('th', { class: 'num', text: 'DTE' }),
+      h('th', { class: 'num', text: 'Avg' }), h('th', { class: 'num', text: 'Mark' }),
+      h('th', { class: 'num', text: 'Value' }),
+      h('th', { class: 'num', text: 'Unreal. P&L' }))),
+    h('tbody', {}, ...rows.map(p => {
+      const o = occParse(p.symbol);
+      const short = p.shares < 0;
+      return h('tr', {},
+        h('td', {}, h('a', { href: '/symbol/' + o.underlying, class: 'c-link', text: o.label })),
+        h('td', {}, pill(short ? 'SHORT' : 'LONG', short ? 'warn' : 'info')),
+        h('td', { class: 'num', text: fmtNum(Math.abs(p.shares), 0) }),
+        h('td', { class: 'num ' + (o.dte <= 5 ? 't-down' : ''), text: String(o.dte) }),
+        h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
+        h('td', { class: 'num', text: fmtPrice(p.last_price) }),
+        h('td', { class: 'num', text: fmtDollar(p.market_value) }),
+        h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
+          text: fmtPnl(p.unrealized_pnl) }));
+    })));
+}
+
 async function loadPositions() {
   const el = document.getElementById('desk-positions');
   skeleton(el);
@@ -114,22 +169,12 @@ async function loadPositions() {
     const pf = await apiGet('/api/desk/portfolio');
     if (!pf.positions.length) { renderEmpty(el, 'All cash — no open positions.'); return; }
     clear(el);
-    const table = h('table', { class: 'c-table' },
-      h('thead', {}, h('tr', {},
-        h('th', { text: 'Symbol' }), h('th', { class: 'num', text: 'Shares' }),
-        h('th', { class: 'num', text: 'Avg' }), h('th', { class: 'num', text: 'Last' }),
-        h('th', { class: 'num', text: 'Value' }), h('th', { class: 'num', text: 'Wt' }),
-        h('th', { class: 'num', text: 'Unreal. P&L' }))),
-      h('tbody', {}, ...pf.positions.map(p => h('tr', {},
-        h('td', {}, h('a', { href: '/symbol/' + p.symbol, class: 'c-link', text: p.symbol })),
-        h('td', { class: 'num', text: fmtNum(p.shares, 0) }),
-        h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
-        h('td', { class: 'num', text: fmtPrice(p.last_price) }),
-        h('td', { class: 'num', text: fmtDollar(p.market_value) }),
-        h('td', { class: 'num', text: fmtPct(p.weight) }),
-        h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
-          text: fmtPnl(p.unrealized_pnl) })))));
-    el.append(table);
+    const eqs = pf.positions.filter(p => !occParse(p.symbol));
+    const opts = pf.positions.filter(p => occParse(p.symbol));
+    if (eqs.length) el.append(equitiesTable(eqs));
+    if (opts.length) {
+      el.append(h('div', { class: 'desk-subhead', text: 'Options' }), optionsTable(opts));
+    }
   } catch (err) { renderError(el, err, loadPositions); }
 }
 

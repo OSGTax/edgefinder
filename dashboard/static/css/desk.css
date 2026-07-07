@@ -107,3 +107,10 @@
   background: var(--t-warn-dim); border: 1px solid var(--t-warn);
   border-radius: var(--t-radius); color: var(--t-text);
 }
+
+/* holdings: options sub-table heading */
+.desk-subhead {
+  margin: var(--t-s4) 0 var(--t-s2);
+  font-weight: 700; color: var(--t-text);
+  font-size: var(--t-fs-sm); text-transform: uppercase; letter-spacing: 0.06em;
+}

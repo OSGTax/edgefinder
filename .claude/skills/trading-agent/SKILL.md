@@ -19,8 +19,11 @@ against any quote screen. Everything goes through the `agent.*` CLI tools
 touch the market-data tables directly.
 
 ## Hard guardrails (non-negotiable)
-- **Paper only. Long only.** No shorting, no leverage, no derivatives. Target
-  weights are fractions of equity in [0, 1] summing to ≤ 1.0 (rest is cash).
+- **Paper only.** Equities are **long only**. Options are allowed but
+  **defined-risk only** (see the options doctrine below) — the ledger
+  enforces it: naked short calls are rejected outright, short puts must be
+  cash-secured or spread-covered, and selling shares that back a covered
+  call is refused. No leverage beyond covered option structures.
 - **Fills happen ONLY via `agent.ledger fill`** — it reads the live SIP quote
   itself, prices BUY at the ask / SELL at the bid (± 1 bp), stamps the quote
   snapshot on the fill, and **refuses** when the market is closed or the
@@ -50,6 +53,9 @@ short, candid lines; this is the live "thinking" panel the owner watches.
 - `python -m agent.broker clock` — if the market is **closed** (holiday,
   early close), record a brief no-op thinking line and stop: your fill tool
   would reject anyway, and deciding on a dead tape is noise.
+- `python -m agent.ledger settle` — settles any option positions past
+  expiry (exercise/assignment/worthless, booked honestly). ALWAYS run this
+  before reading your book; narrate anything it settled.
 - `python -m agent.refresh --source alpaca` — cheap idempotent top-up of
   daily bars for your universe (keeps indicators/backtests current).
 
@@ -122,6 +128,42 @@ python -m agent.brain decision --run-id <RID> --regime risk_on \
     --weights-file weights.json --picks-file picks.json \
     --watchlist-file watchlist.json --strategy-version <ver>
 ```
+
+## Options doctrine (defined-risk only — the ledger enforces this)
+
+You may trade options when they express a thesis better than shares. Tools:
+- `python -m agent.broker chain --symbol NVDA --dte-max 45` — the chain
+  around the money with live bid/ask, IV, delta, theta.
+- `python -m agent.broker quote --contracts <OCC,...>` — live contract quotes.
+- Fill exactly like equities, using the OCC symbol and whole contracts:
+  `python -m agent.ledger fill --symbol NVDA270116C00200000 --side buy --shares 2 ...`
+  (contract prices are per-share; the ledger books ×100 per contract.)
+
+**The permitted set** (anything else gets rejected):
+- **Long calls / long puts** — directional, max loss = premium paid.
+- **Covered calls** — short calls backed by 100 held shares per contract.
+- **Cash-secured puts** — the ledger reserves strike×100 of cash per
+  contract; that reservation is untouchable (buys spend FREE cash only).
+- **Vertical spreads** — debit or credit; a short leg is legal when a long
+  leg of the same type (expiry ≥ short's) covers it.
+
+**Discipline — respect these or the book will bleed:**
+- **Theta**: long premium decays every day; don't hold long options without
+  a catalyst/thesis on a clock. Short premium is a race you win slowly and
+  lose fast — size accordingly.
+- **IV crush**: buying options right before earnings pays peak IV that
+  evaporates after the print. Check the chain's IV before an event trade
+  and say in your rationale whether you're long or short vol ON PURPOSE.
+- **Expiry rule**: any position within **5 DTE** demands an explicit
+  decision that cycle — close, roll, or (only if you state why) let it
+  settle. `settle` handles expiry honestly, but drifting into assignment
+  without having said so is a discipline failure.
+- **Grounding honesty**: there is NO historical options data here — you
+  cannot backtest an options structure. Ground the UNDERLYING thesis with
+  `agent.backtest_tool`, use live IV/greeks for the structure, and say
+  exactly that in your evidence.
+- Options positions carry negative share counts when short — that's the
+  covered leg, not an error.
 
 ## Style
 - Thinking feed: conversational, concise, specific numbers. The owner reads

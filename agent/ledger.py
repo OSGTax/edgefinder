@@ -556,7 +556,7 @@ def mark(store=None, *, prices: dict[str, float] | None = None,
     for sym, p in positions.items():
         px = prices.get(sym) or p["avg_price"]
         px = round(float(px), 4)
-        pos_value += p["shares"] * px
+        pos_value += p["shares"] * px * _mult(sym)  # signed; options ×100
         store.update("desk_positions", {"account": account, "symbol": sym},
                      {"last_price": px, "marked_at": now}, returning=False)
     c = cash(store, account)
@@ -577,13 +577,15 @@ def state(store=None, account: str = ACCOUNT) -> dict:
     pos_list, pos_value = [], 0.0
     for p in positions:
         mark_px = p.get("last_price") or p["avg_price"]
-        mv = round(p["shares"] * mark_px, 2)
+        m = _mult(p["symbol"])
+        mv = round(p["shares"] * mark_px * m, 2)  # signed; short legs negative
         pos_value += mv
         pos_list.append({
             "symbol": p["symbol"], "shares": p["shares"],
             "avg_price": round(p["avg_price"], 4), "last_price": round(mark_px, 4),
-            "market_value": mv, "cost_basis": round(p["shares"] * p["avg_price"], 2),
-            "unrealized_pnl": round(p["shares"] * (mark_px - p["avg_price"]), 2),
+            "market_value": mv,
+            "cost_basis": round(p["shares"] * p["avg_price"] * m, 2),
+            "unrealized_pnl": round(p["shares"] * (mark_px - p["avg_price"]) * m, 2),
             "weight": None,
         })
     equity = round(c + pos_value, 2)

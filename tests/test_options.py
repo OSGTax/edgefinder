@@ -223,3 +223,27 @@ def test_settle_spread_covered_short_cash_settles(store, monkeypatch):
     assert "NVDA" not in pos                          # NO phantom share position
     # cash: +300 net credit at entry... (-300 +600) then long pays +1000, short costs -2000
     assert ledger.cash(store) == 100_000.0 + 300.0 + 1000.0 - 2000.0
+
+
+def test_state_and_mark_apply_multiplier(store, monkeypatch):
+    """Regression (caught pre-ship): equity math on options undervalued 100x."""
+    from agent import ledger
+    sym = C("NVDA", 200)
+    ledger.record_trade(store, symbol=sym, side="BUY", shares=2,
+                        price=5.0, fill_quote=q(4.9, 5.0))
+    st = ledger.mark(store, prices={sym: 6.0})
+    row = next(p for p in st["positions"] if p["symbol"] == sym)
+    assert row["market_value"] == 2 * 6.0 * 100 == 1200.0
+    assert row["unrealized_pnl"] == 2 * (6.0 - 5.0) * 100 == 200.0
+    # equity = cash (100k - 1000 premium) + option value (1200)
+    assert st["equity"] == 100_000.0 - 1000.0 + 1200.0
+    # a short leg marks negative
+    ledger.record_trade(store, symbol="NVDA", side="BUY", shares=100,
+                        price=195.0, fill_quote=q(194.9, 195.0))
+    cc = C("NVDA", 220)
+    ledger.record_trade(store, symbol=cc, side="SELL", shares=1,
+                        price=3.0, fill_quote=q(2.9, 3.0))
+    st2 = ledger.mark(store, prices={sym: 6.0, cc: 4.0, "NVDA": 195.0})
+    short_row = next(p for p in st2["positions"] if p["symbol"] == cc)
+    assert short_row["market_value"] == -400.0
+    assert short_row["unrealized_pnl"] == -100.0  # sold 3.0, now 4.0

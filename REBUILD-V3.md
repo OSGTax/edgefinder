@@ -27,8 +27,13 @@ An **autonomous AI paper-trading desk**, private to the owner:
    never a past price, never an invented price.
 2. **Verifiable in real time**: the owner can cross-check any quote on
    `/desk` and any fill price against Alpaca's own dashboard or any ticker.
-3. **Paper only. Long only. No leverage.** The ledger enforces no-overdraw
-   and fill-sanity; a rejection is final.
+3. **Paper only. Equities long-only. Options DEFINED-RISK only** (owner
+   decision 2026-07-07: full launch set — long calls/puts, covered calls,
+   cash-secured puts, vertical spreads; no book-level cap, agent's
+   discretion). The ledger enforces every rule: naked short calls rejected,
+   CSP cash reserved and untouchable, spread coverage checked, shares
+   backing covered calls unsellable, expiry settled honestly
+   (`agent.ledger settle`, run every cycle). A rejection is final.
 4. **Alpaca is DATA ONLY** — `agent/broker.py` has no write methods, by
    design. Orders are never submitted to Alpaca; the book is ours.
 
