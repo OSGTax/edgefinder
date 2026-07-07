@@ -107,18 +107,38 @@ class Rest:
         except urllib.error.HTTPError as exc:
             raise RestError(exc.code, exc.read().decode()) from None
 
+    # PostgREST caps a single response (Supabase default: 1000 rows). Reads
+    # page through with offset so a big select can never silently truncate —
+    # the pre-fix behavior returned the FIRST 1000 by sort order, which for
+    # date-ascending bar reads meant the oldest bars and quietly wrong data.
+    PAGE_SIZE = 1000
+
     # ── CRUD ────────────────────────────────────────────────
     def select(self, table: str, *, columns: str = "*", filters: dict | None = None,
                order: list[tuple[str, str]] | None = None,
                limit: int | None = None) -> list[dict]:
-        params = [("select", columns)]
-        params += self._filter_params(filters)
+        base_params = [("select", columns)]
+        base_params += self._filter_params(filters)
         if order:
-            params.append(("order", ",".join(f"{c}.{d}" for c, d in order)))
-        if limit is not None:
-            params.append(("limit", str(limit)))
-        _, body = self._do("GET", table, params=params)
-        return json.loads(body) if body else []
+            base_params.append(("order", ",".join(f"{c}.{d}" for c, d in order)))
+
+        out: list[dict] = []
+        offset = 0
+        while True:
+            page_limit = self.PAGE_SIZE
+            if limit is not None:
+                page_limit = min(page_limit, limit - len(out))
+                if page_limit <= 0:
+                    break
+            params = list(base_params) + [("limit", str(page_limit)),
+                                          ("offset", str(offset))]
+            _, body = self._do("GET", table, params=params)
+            rows = json.loads(body) if body else []
+            out.extend(rows)
+            if len(rows) < page_limit:
+                break  # server exhausted (or gave us its cap — loop continues only on full pages)
+            offset += len(rows)
+        return out
 
     def insert(self, table: str, rows: list[dict] | dict, *,
                returning: bool = True) -> list[dict]:

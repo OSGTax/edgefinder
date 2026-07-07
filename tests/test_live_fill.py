@@ -137,3 +137,12 @@ def test_no_alpaca_order_writes_anywhere():
             for bad in ("submit_order", "cancel_order", "replace_order",
                         "close_position", "close_all_positions"):
                 assert bad not in src, f"{f}: forbidden Alpaca write '{bad}'"
+
+
+def test_record_trade_rejects_incomplete_fill_quote(store):
+    """Regression (P2 verifier): a half-formed snapshot must reject outright,
+    never fall back to the loose close band."""
+    from agent import ledger
+    r = ledger.record_trade(store, symbol="NVDA", side="BUY", shares=1,
+                            price=130.0, fill_quote={"ask": 130.2})
+    assert not r["ok"] and "missing bid/ask" in r["error"]

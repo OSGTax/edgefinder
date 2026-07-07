@@ -152,3 +152,30 @@ def test_rest_filter_and_value_encoding():
     assert params["account"] == "eq.agent"
     assert params["symbol"] == "in.(NVDA,AMD)"
     assert params["date"] == "gte.2026-01-01"
+
+
+def test_rest_select_paginates_past_server_cap(monkeypatch):
+    """Regression (P2 verifier): PostgREST caps responses (Supabase: 1000);
+    select must page with offset instead of silently truncating."""
+    import json as _json
+
+    from agent.rest import Rest
+
+    client = Rest.__new__(Rest)  # skip __init__ (no env needed)
+    served = [{"id": i} for i in range(2500)]
+    calls = []
+
+    def fake_do(method, table, *, params=None, body=None, prefer=None):
+        p = dict(params)
+        limit, offset = int(p["limit"]), int(p["offset"])
+        limit = min(limit, 1000)  # the server-side cap
+        calls.append((limit, offset))
+        return 200, _json.dumps(served[offset:offset + limit])
+
+    client._do = fake_do
+    rows = client.select("daily_bars", filters={"symbol": "SPY"})
+    assert len(rows) == 2500 and rows[-1]["id"] == 2499
+    assert len(calls) >= 3  # paged, not one capped call
+    # explicit limit still honored
+    rows = client.select("daily_bars", limit=1500)
+    assert len(rows) == 1500

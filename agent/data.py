@@ -324,9 +324,19 @@ def spy_series_df() -> pd.DataFrame:
 
 
 def regime(*, as_of: date | None = None) -> dict:
-    """A compact market-regime read from the index series (pure DB/R2 history)."""
-    out: dict = {"as_of": str(as_of or date.today()), "indices": {}}
+    """A compact market-regime read from the index series (pure DB/R2 history).
+
+    Honesty: ``bars_through`` is the actual date of the newest bar this read
+    used — the indicators are only as current as that. ``bars_stale`` flags a
+    gap > 5 calendar days so old closes are never mistaken for today's."""
+    today = as_of or date.today()
+    out: dict = {"as_of": str(today), "indices": {}}
     bars = latest_indicators(["SPY", "QQQ", "IWM"], as_of=as_of)
+    bar_dates = [str(info.get("date"))[:10] for info in bars.values() if info.get("date")]
+    if bar_dates:
+        newest = max(bar_dates)
+        out["bars_through"] = newest
+        out["bars_stale"] = (today - date.fromisoformat(newest)).days > 5
     for sym, info in bars.items():
         ind = info.get("indicators", {})
         close = info["close"]

@@ -90,11 +90,17 @@ class QuoteCache:
         self.last_msg_at = time.time()
 
     def warm(self, quotes: dict[str, dict]) -> None:
-        """Seed from REST latest-quotes WITHOUT overwriting fresher WS data."""
+        """Seed/refresh from REST latest-quotes WITHOUT overwriting fresh WS
+        data. A warmed or stale entry is always refreshable (that's the point
+        of the re-warm-while-disconnected path); only a live WS tick younger
+        than the stale threshold is protected."""
         now = time.time()
+        stale_after = settings.stream_stale_secs
         for sym, q in quotes.items():
-            if sym in self._q and self._q[sym].get("recv"):
-                continue
+            e = self._q.get(sym)
+            if (e and e.get("recv") and not e.get("warmed")
+                    and now - e["recv"] <= stale_after):
+                continue  # fresh live data — keep it
             self._q[sym] = {"bid": q.get("bid"), "ask": q.get("ask"),
                             "mid": q.get("mid"), "bid_size": q.get("bid_size"),
                             "ask_size": q.get("ask_size"), "t": q.get("t"),
@@ -174,7 +180,7 @@ async def _pump(ws) -> None:
                 raise ConnectionError(f"alpaca stream error: {msg}")
             elif kind == "success" and msg.get("msg") == "authenticated":
                 cache.connected = True
-                logger.info("SIP stream authenticated; %d symbols", len(symbols))
+                logger.info("SIP stream authenticated")
 
 
 async def run_stream() -> None:

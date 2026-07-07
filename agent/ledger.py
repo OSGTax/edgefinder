@@ -150,7 +150,11 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
     if shares <= EPS_SHARES or price <= 0:
         return {"ok": False, "error": "shares and price must be positive"}
 
-    if fill_quote and fill_quote.get("bid") and fill_quote.get("ask"):
+    if fill_quote is not None:
+        # a live fill's snapshot must be complete — no falling back to the
+        # loose close band with a half-formed quote
+        if not (fill_quote.get("bid") and fill_quote.get("ask")):
+            return {"ok": False, "error": "fill rejected: fill_quote missing bid/ask"}
         bid, ask = float(fill_quote["bid"]), float(fill_quote["ask"])
         if not (bid * (1 - LIVE_BAND) <= price <= ask * (1 + LIVE_BAND)):
             return {"ok": False, "error": "fill rejected: price off the live quote",
