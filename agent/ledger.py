@@ -203,28 +203,36 @@ def free_cash(store, account: str = ACCOUNT) -> float:
     return round(cash(store, account) - _csp_reserved(_positions_map(store, account)), 2)
 
 
-def _check_short_coverage(positions: dict[str, float], symbol: str,
-                          opening_qty: float, cash_now: float) -> str | None:
-    """Return an error string if opening/extending this short leg would be
-    uncovered (else None). Simulates the post-fill book."""
+def _check_option_sell(positions: dict[str, float], symbol: str,
+                       sell_qty: float, cash_now: float) -> str | None:
+    """Validate ANY option SELL against the full POST-FILL book (None = ok).
+
+    One simulation covers every path — opening/extending a short, legging out
+    of a spread's LONG leg (which strands the short: the P2-options verifier's
+    bypass), and a cross-through sell that closes a long and opens a short in
+    one order. Calls: every short call on the underlying must stay covered by
+    shares/100 + surviving long calls. Puts: the post-fill CSP reservation
+    must still fit inside cash."""
     from agent import occ
 
     p = occ.parse(symbol)
-    sim = dict(positions)
-    sim[symbol] = sim.get(symbol, 0.0) - opening_qty
     und = p["underlying"]
+    sim = dict(positions)
+    sim[symbol] = sim.get(symbol, 0.0) - sell_qty  # the whole fill, signed
     if p["type"] == "C":
         short_q, long_q, _, _ = _option_legs(sim, und, "C")
+        if short_q <= 0:
+            return None
         shares_cover = max(0.0, sim.get(und, 0.0)) / MULTIPLIER
         if shares_cover + long_q + 1e-9 < short_q:
             return (f"uncovered short call forbidden: {short_q:g} short calls on {und} "
-                    f"vs coverage {shares_cover:g} (shares/100) + {long_q:g} long calls")
+                    f"vs coverage {shares_cover:g} (shares/100) + {long_q:g} long calls"
+                    " — close the short leg first")
         return None
-    # short put: covered by long puts or cash-secured
     reserved_after = _csp_reserved(sim)
     if reserved_after > cash_now + 1e-6:
         return (f"cash-secured put requires ${reserved_after:,.2f} reserved "
-                f"but cash is ${cash_now:,.2f}")
+                f"but cash is ${cash_now:,.2f} — close the short leg first")
     return None
 
 
@@ -302,11 +310,11 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
     if side == "SELL":
         held = positions.get(symbol, 0.0)
         if is_opt:
-            opening_short = max(0.0, shares - max(0.0, held))
-            if opening_short > EPS_SHARES:
-                err = _check_short_coverage(positions, symbol, opening_short, cash_now)
-                if err:
-                    return {"ok": False, "error": err}
+            # every option sell is validated against the full post-fill book —
+            # opening shorts AND selling a covering long leg both go through here
+            err = _check_option_sell(positions, symbol, shares, cash_now)
+            if err:
+                return {"ok": False, "error": err}
         else:
             if held <= EPS_SHARES:
                 return {"ok": False, "error": f"no open position in {symbol} to sell"}

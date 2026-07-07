@@ -247,3 +247,50 @@ def test_state_and_mark_apply_multiplier(store, monkeypatch):
     short_row = next(p for p in st2["positions"] if p["symbol"] == cc)
     assert short_row["market_value"] == -400.0
     assert short_row["unrealized_pnl"] == -100.0  # sold 3.0, now 4.0
+
+
+def test_legging_out_of_call_spread_rejected(store):
+    """Regression (options verifier F1): selling the LONG leg of a spread must
+    not strand the short leg naked."""
+    from agent import ledger
+    long_leg, short_leg = C("QQQ", 500), C("QQQ", 510)
+    ledger.record_trade(store, symbol=long_leg, side="BUY", shares=1,
+                        price=4.0, fill_quote=q(3.99, 4.01))
+    ledger.record_trade(store, symbol=short_leg, side="SELL", shares=1,
+                        price=2.0, fill_quote=q(1.99, 2.01))
+    r = ledger.record_trade(store, symbol=long_leg, side="SELL", shares=1,
+                            price=4.0, fill_quote=q(3.99, 4.01))
+    assert not r["ok"] and "uncovered short call" in r["error"]
+    # closing the SHORT first, then the long, is fine
+    ok1 = ledger.record_trade(store, symbol=short_leg, side="BUY", shares=1,
+                              price=2.0, fill_quote=q(1.99, 2.01))
+    ok2 = ledger.record_trade(store, symbol=long_leg, side="SELL", shares=1,
+                              price=4.0, fill_quote=q(3.99, 4.01))
+    assert ok1["ok"] and ok2["ok"]
+
+
+def test_legging_out_of_put_spread_rejected(store):
+    """Regression (options verifier F1, put variant): selling the covering
+    long put must not leave the short put under-secured."""
+    from agent import ledger
+    long_put, short_put = P("XYZ", 2100), P("XYZ", 2000)  # 200k to secure alone
+    ledger.record_trade(store, symbol=long_put, side="BUY", shares=1,
+                        price=8.0, fill_quote=q(7.99, 8.01))
+    ledger.record_trade(store, symbol=short_put, side="SELL", shares=1,
+                        price=12.0, fill_quote=q(11.99, 12.01))
+    r = ledger.record_trade(store, symbol=long_put, side="SELL", shares=1,
+                            price=8.0, fill_quote=q(7.99, 8.01))
+    assert not r["ok"] and "cash-secured put requires" in r["error"]
+    assert ledger.free_cash(store) > 0  # never driven negative
+
+
+def test_cross_through_sell_checks_full_book(store):
+    """A sell that closes a long AND opens a short in one order must be
+    coverage-checked on the full post-fill book (held 1, sell 2 → net -1)."""
+    from agent import ledger
+    sym = C("NVDA", 200)
+    ledger.record_trade(store, symbol=sym, side="BUY", shares=1,
+                        price=5.0, fill_quote=q(4.9, 5.0))
+    r = ledger.record_trade(store, symbol=sym, side="SELL", shares=2,
+                            price=5.0, fill_quote=q(4.9, 5.0))
+    assert not r["ok"] and "uncovered short call" in r["error"]
