@@ -215,12 +215,95 @@ def _accumulate(kinds: list[str]) -> dict:
     return out
 
 
+def alpaca_bars_to_rows(bars, symbol: str) -> list[dict]:
+    """Alpaca daily-bar objects → daily_bars rows (pure; unit-tested)."""
+    rows = []
+    for bar in bars:
+        ts = getattr(bar, "timestamp", None)
+        c = getattr(bar, "close", None)
+        if ts is None or c is None:
+            continue
+        rows.append({
+            "symbol": symbol, "date": ts.date() if hasattr(ts, "date") else ts,
+            "open": float(getattr(bar, "open", c) or c),
+            "high": float(getattr(bar, "high", c) or c),
+            "low": float(getattr(bar, "low", c) or c),
+            "close": float(c),
+            "volume": float(getattr(bar, "volume", 0) or 0),
+            "transactions": getattr(bar, "trade_count", None),
+            "source": "alpaca_daily",
+        })
+    return rows
+
+
+def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict:
+    """Top up ``daily_bars`` from Alpaca daily bars for the LIVE universe
+    (streamed symbols + held positions). This replaced the Polygon full-market
+    ingest when that subscription was disabled — the agent only needs fresh
+    bars for the names it actually watches/holds; the deep archive is R2.
+
+    Works on both store transports (pg + REST): per symbol, missing dates are
+    deleted-then-inserted, which is an upsert for our purposes. Idempotent.
+    """
+    from datetime import timedelta as _td
+
+    from agent import broker
+    from agent.models import ACCOUNT
+    from agent.store import get_store
+    from agent.streamer import stream_symbols
+
+    if not broker.enabled():
+        return {"error": "no Alpaca keys — cannot top up bars"}
+    store = get_store()
+    if symbols is None:
+        symbols = stream_symbols()
+        for r in store.select("desk_positions", filters={"account": ACCOUNT}):
+            s = str(r["symbol"]).upper()
+            if s not in symbols:
+                symbols.append(s)
+
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+
+    b = broker.Broker()
+    yesterday = date.today() - _td(days=1)
+    summary: dict = {"symbols": len(symbols), "bars_upserted": 0, "per_symbol": {}}
+    for sym in symbols:
+        latest_rows = store.select("daily_bars", filters={"symbol": sym},
+                                   order=[("date", "desc")], limit=1)
+        latest = latest_rows[0]["date"] if latest_rows else None
+        if latest is not None and not isinstance(latest, date):
+            latest = date.fromisoformat(str(latest)[:10])
+        start = (latest + _td(days=1)) if latest else yesterday - _td(days=max_days)
+        if start > yesterday:
+            summary["per_symbol"][sym] = 0
+            continue
+        try:
+            req = StockBarsRequest(symbol_or_symbols=sym, timeframe=TimeFrame.Day,
+                                   start=start, end=yesterday)
+            res = b.data.get_stock_bars(req)
+            bars = res.data.get(sym, []) if hasattr(res, "data") else []
+            rows = alpaca_bars_to_rows(bars, sym)
+            for r in rows:  # delete-then-insert = transport-agnostic upsert
+                store.delete("daily_bars", {"symbol": sym, "date": r["date"]})
+            if rows:
+                store.insert("daily_bars", rows, returning=False)
+            summary["per_symbol"][sym] = len(rows)
+            summary["bars_upserted"] += len(rows)
+        except Exception as exc:  # noqa: BLE001 — one symbol can't abort the run
+            logger.warning("bar top-up failed for %s: %s", sym, exc)
+            summary["per_symbol"][sym] = f"error: {exc}"
+    return summary
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--source", choices=["alpaca", "polygon"], default="alpaca",
+                   help="alpaca = live-universe top-up (default); polygon = legacy full-market")
     p.add_argument("--max-days", type=int, default=7)
     p.add_argument("--top", type=int, default=1000)
     p.add_argument("--min-price", type=float, default=1.0)
@@ -229,10 +312,13 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--with-news", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
-    out = refresh(max_days=args.max_days, top_n=args.top, min_price=args.min_price,
-                  max_price=args.max_price,
-                  with_corporate_actions=args.with_corporate_actions,
-                  with_news=args.with_news, dry_run=args.dry_run)
+    if args.source == "alpaca":
+        out = refresh_alpaca(max_days=args.max_days)
+    else:
+        out = refresh(max_days=args.max_days, top_n=args.top, min_price=args.min_price,
+                      max_price=args.max_price,
+                      with_corporate_actions=args.with_corporate_actions,
+                      with_news=args.with_news, dry_run=args.dry_run)
     print(json.dumps(out, indent=2, default=str))
 
 

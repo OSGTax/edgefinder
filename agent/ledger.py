@@ -1,10 +1,16 @@
-"""The paper book — record fills, rebuild positions, mark to market.
+"""The paper book — live-quote fills, rebuild positions, mark to market.
 
 The fill ledger (``desk_trades``) is the source of truth. Cash is always
 recomputed from it; ``desk_positions`` is a projection rebuilt from the same
 ledger, so the account can never silently drift. Long-only, paper only,
-whole shares, no leverage. A fill-sanity guard rejects a price that is wildly
-off the latest known close, so a bad quote can't book a wrong cost basis.
+fractional shares, no leverage.
+
+THE HONESTY CONTRACT (REBUILD-V3.md): a live fill prices off the real-time
+Alpaca SIP quote at the moment it books — BUY at the live ask, SELL at the
+live bid, ± slippage — and the quote snapshot {bid, ask, mid, t} is stamped
+on the fill row (``fill_quote``). ``fill`` refuses to book when the market
+is closed or the quote fails sanity. The legacy ``record`` path (explicit
+price) survives for tests/backfills and keeps its close-band guard.
 
 Persistence goes through ``agent.store`` (pg or rest transport) — the same
 integrity logic runs whether the book lives behind raw Postgres or the
@@ -12,8 +18,9 @@ Supabase Data API.
 
 CLI (the agent calls these via Bash; all output is JSON):
   python -m agent.ledger state
-  python -m agent.ledger record --symbol NVDA --side BUY --shares 100 \
-      --price 123.45 --rationale "momentum breakout" --run-id 2026-06-22T14:00
+  python -m agent.ledger fill --symbol NVDA --side buy --shares 12.5 \
+      --rationale "momentum breakout" --run-id 2026-07-07T14:30
+  python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 ...
   python -m agent.ledger mark
 """
 
@@ -24,9 +31,16 @@ from datetime import datetime, timezone
 
 from agent.models import ACCOUNT, STARTING_CAPITAL
 
-# Reject a fill whose price is more than this fraction away from the latest
-# known close — a stale/garbled quote, not a real move.
+# Legacy guard (record path): reject a price more than this fraction away
+# from the latest known close — a stale/garbled quote, not a real move.
 FILL_BAND = 0.25
+# Live guard (fill path): the booked price must sit essentially ON the quote —
+# within this fraction outside the [bid, ask] it priced from.
+LIVE_BAND = 0.005
+# Slippage applied to live fills, in basis points (buy pays up, sell gives up).
+SLIPPAGE_BP = 1.0
+# Ignore sub-satoshi share residue from fractional math.
+EPS_SHARES = 1e-9
 
 
 def _utcnow() -> datetime:
@@ -61,23 +75,24 @@ def cash(store, account: str = ACCOUNT) -> float:
 
 
 def _compute_book(trades: list[dict]) -> dict[str, dict]:
-    """Average-cost open lots from the trade ledger."""
+    """Average-cost open lots from the trade ledger (fractional shares)."""
     book: dict[str, dict] = {}
     for t in trades:
-        b = book.setdefault(t["symbol"], {"shares": 0, "cost": 0.0, "opened_at": t.get("ts")})
+        b = book.setdefault(t["symbol"], {"shares": 0.0, "cost": 0.0, "opened_at": t.get("ts")})
+        qty = float(t["shares"])
         if t["side"] == "BUY":
-            if b["shares"] == 0:
+            if b["shares"] <= EPS_SHARES:
                 b["opened_at"] = t.get("ts")
-            b["shares"] += int(t["shares"])
-            b["cost"] += int(t["shares"]) * float(t["price"])
+            b["shares"] += qty
+            b["cost"] += qty * float(t["price"])
         else:  # SELL — reduce average-cost basis proportionally
-            if b["shares"] > 0:
+            if b["shares"] > EPS_SHARES:
                 avg = b["cost"] / b["shares"]
-                sold = min(int(t["shares"]), b["shares"])
+                sold = min(qty, b["shares"])
                 b["shares"] -= sold
                 b["cost"] -= sold * avg
-                if b["shares"] <= 0:
-                    b["shares"] = 0
+                if b["shares"] <= EPS_SHARES:
+                    b["shares"] = 0.0
                     b["cost"] = 0.0
     return book
 
@@ -92,58 +107,67 @@ def rebuild_positions(store, account: str = ACCOUNT) -> dict[str, dict]:
     store.delete("desk_positions", {"account": account})
     rows, out = [], {}
     for sym, b in book.items():
-        if b["shares"] <= 0:
+        if b["shares"] <= EPS_SHARES:
             continue
+        shares = round(b["shares"], 6)
         avg = round(b["cost"] / b["shares"], 4)
-        rows.append({"account": account, "symbol": sym, "shares": int(b["shares"]),
+        rows.append({"account": account, "symbol": sym, "shares": shares,
                      "avg_price": avg, "last_price": None,
                      "opened_at": b["opened_at"], "marked_at": None})
-        out[sym] = {"shares": int(b["shares"]), "avg_price": avg,
+        out[sym] = {"shares": shares, "avg_price": avg,
                     "opened_at": b["opened_at"]}
     if rows:
         store.insert("desk_positions", rows, returning=False)
     return out
 
 
-def _held_shares(store, symbol: str, account: str = ACCOUNT) -> int:
+def _held_shares(store, symbol: str, account: str = ACCOUNT) -> float:
     rows = store.select("desk_positions", filters={"account": account, "symbol": symbol})
-    return int(rows[0]["shares"]) if rows else 0
+    return float(rows[0]["shares"]) if rows else 0.0
 
 
 # ── writes ──────────────────────────────────────────────────
 
 
-def record_trade(store=None, *, symbol: str, side: str, shares: int, price: float,
+def record_trade(store=None, *, symbol: str, side: str, shares: float, price: float,
                  rationale: str | None = None, run_id: str | None = None,
-                 latest_close: float | None = None, account: str = ACCOUNT) -> dict:
+                 latest_close: float | None = None, fill_quote: dict | None = None,
+                 account: str = ACCOUNT) -> dict:
     """Append one fill, then rebuild positions. Returns a result dict.
 
-    Guards: whole positive shares; long-only (a SELL is capped at the held
-    quantity); fill-sanity band vs ``latest_close``; a BUY is refused if it
-    would overdraw cash.
+    Guards: positive fractional shares; long-only (a SELL is capped at the
+    held quantity); a BUY is refused if it would overdraw cash. Price sanity:
+    with a ``fill_quote`` the price must sit essentially ON the quote
+    (LIVE_BAND outside [bid, ask]); without one, the legacy close-band applies.
     """
     store = store or _store()
     symbol = symbol.upper().strip()
     side = side.upper().strip()
     if side not in ("BUY", "SELL"):
         return {"ok": False, "error": f"bad side {side!r}"}
-    shares = int(shares)
+    shares = round(float(shares), 6)
     price = float(price)
-    if shares <= 0 or price <= 0:
+    if shares <= EPS_SHARES or price <= 0:
         return {"ok": False, "error": "shares and price must be positive"}
 
-    if latest_close is None:
-        latest_close = _latest_close(symbol)
-    if latest_close and latest_close > 0:
-        dev = abs(price - latest_close) / latest_close
-        if dev > FILL_BAND:
-            return {"ok": False, "error": "fill rejected by sanity guard",
-                    "price": price, "latest_close": round(latest_close, 4),
-                    "deviation": round(dev, 4), "band": FILL_BAND}
+    if fill_quote and fill_quote.get("bid") and fill_quote.get("ask"):
+        bid, ask = float(fill_quote["bid"]), float(fill_quote["ask"])
+        if not (bid * (1 - LIVE_BAND) <= price <= ask * (1 + LIVE_BAND)):
+            return {"ok": False, "error": "fill rejected: price off the live quote",
+                    "price": price, "bid": bid, "ask": ask, "band": LIVE_BAND}
+    else:
+        if latest_close is None:
+            latest_close = _latest_close(symbol)
+        if latest_close and latest_close > 0:
+            dev = abs(price - latest_close) / latest_close
+            if dev > FILL_BAND:
+                return {"ok": False, "error": "fill rejected by sanity guard",
+                        "price": price, "latest_close": round(latest_close, 4),
+                        "deviation": round(dev, 4), "band": FILL_BAND}
 
     if side == "SELL":
         held = _held_shares(store, symbol, account)
-        if held <= 0:
+        if held <= EPS_SHARES:
             return {"ok": False, "error": f"no open position in {symbol} to sell"}
         if shares > held:
             shares = held  # long-only: cap the sell at what's held
@@ -156,11 +180,68 @@ def record_trade(store=None, *, symbol: str, side: str, shares: int, price: floa
     store.insert("desk_trades", {
         "account": account, "run_id": run_id, "symbol": symbol, "side": side,
         "shares": shares, "price": round(price, 4), "dollars": gross,
-        "rationale": rationale, "ts": _utcnow()}, returning=False)
+        "rationale": rationale, "fill_quote": fill_quote,
+        "ts": _utcnow()}, returning=False)
     rebuild_positions(store, account)
     return {"ok": True, "symbol": symbol, "side": side, "shares": shares,
-            "price": round(price, 4), "dollars": gross,
+            "price": round(price, 4), "dollars": gross, "fill_quote": fill_quote,
             "cash_after": cash(store, account)}
+
+
+def _live_quote(symbol: str) -> dict:
+    """One live SIP quote via REST (the fill path's price source). Raises on
+    missing keys/quote — the caller turns that into a clean rejection."""
+    from agent import broker
+
+    q = broker.Broker().quotes([symbol]).get(symbol)
+    if not q or not q.get("bid") or not q.get("ask"):
+        raise ValueError(f"no live quote for {symbol}")
+    return q
+
+
+def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None,
+              notional: float | None = None, rationale: str | None = None,
+              run_id: str | None = None, slippage_bp: float = SLIPPAGE_BP,
+              account: str = ACCOUNT) -> dict:
+    """Book a fill AT THE LIVE QUOTE — the only execution path the agent uses.
+
+    Reads the real-time SIP quote, prices the correct side (BUY at ask,
+    SELL at bid, ± slippage), stamps the quote snapshot on the fill, and
+    refuses to book when the market is closed or the quote is degenerate.
+    Exactly one of ``shares`` / ``notional`` sizes the order (fractional ok).
+    """
+    from agent import broker
+
+    store = store or _store()
+    symbol = symbol.upper().strip()
+    side = side.upper().strip()
+    if (shares is None) == (notional is None):
+        return {"ok": False, "error": "pass exactly one of shares or notional"}
+
+    try:
+        b = broker.Broker()
+        if not b.is_market_open():
+            return {"ok": False, "error": "market closed — live fills only trade "
+                    "during regular hours (no stale/after-hours pricing)"}
+        q = _live_quote(symbol)
+    except Exception as exc:  # noqa: BLE001 — clean rejection, not a stacktrace
+        return {"ok": False, "error": f"live quote unavailable: {exc}"}
+
+    bid, ask = float(q["bid"]), float(q["ask"])
+    if bid <= 0 or ask <= 0 or ask < bid or (ask - bid) / ask > 0.05:
+        return {"ok": False, "error": "degenerate quote (crossed or >5% spread)",
+                "bid": bid, "ask": ask}
+
+    slip = slippage_bp / 10_000.0
+    price = round(ask * (1 + slip), 4) if side == "BUY" else round(bid * (1 - slip), 4)
+    if shares is None:
+        shares = round(float(notional) / price, 6)
+
+    snapshot = {"bid": bid, "ask": ask, "mid": q.get("mid"), "t": q.get("t"),
+                "src": "alpaca_sip_rest", "slippage_bp": slippage_bp}
+    return record_trade(store, symbol=symbol, side=side, shares=shares,
+                        price=price, rationale=rationale, run_id=run_id,
+                        fill_quote=snapshot, account=account)
 
 
 def _latest_close(symbol: str) -> float | None:
@@ -179,13 +260,32 @@ def _latest_closes(symbols: list[str]) -> dict[str, float]:
         return {}
 
 
+def _live_mids(symbols: list[str]) -> dict[str, float]:
+    """Live SIP mids for marking. Empty dict on any failure → close fallback."""
+    if not symbols:
+        return {}
+    try:
+        from agent import broker
+
+        qs = broker.Broker().quotes(symbols)
+        return {s: q["mid"] for s, q in qs.items() if q.get("mid")}
+    except Exception:
+        return {}
+
+
 def mark(store=None, *, prices: dict[str, float] | None = None,
          account: str = ACCOUNT) -> dict:
-    """Mark open positions to the latest close and append an equity snapshot."""
+    """Mark open positions and append an equity snapshot.
+
+    Prefers LIVE SIP mids (even after hours — the last quote is still the best
+    mark); falls back to the latest close per symbol only when live quotes are
+    unavailable."""
     store = store or _store()
     positions = rebuild_positions(store, account)
     if prices is None:
-        prices = _latest_closes(list(positions))
+        prices = _live_mids(list(positions))
+        for sym, px in _latest_closes([s for s in positions if s not in prices]).items():
+            prices.setdefault(sym, px)
     now = _utcnow()
     pos_value = 0.0
     for sym, p in positions.items():
@@ -253,10 +353,18 @@ def main(argv: list[str] | None = None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("state")
     sub.add_parser("mark")
-    rec = sub.add_parser("record")
+    fil = sub.add_parser("fill", help="book a fill AT THE LIVE QUOTE (the agent's path)")
+    fil.add_argument("--symbol", required=True)
+    fil.add_argument("--side", required=True, choices=["buy", "sell", "BUY", "SELL"])
+    fil.add_argument("--shares", default=None, type=float)
+    fil.add_argument("--notional", default=None, type=float)
+    fil.add_argument("--rationale", default=None)
+    fil.add_argument("--run-id", default=None)
+    fil.add_argument("--slippage-bp", default=SLIPPAGE_BP, type=float)
+    rec = sub.add_parser("record", help="legacy explicit-price fill (tests/backfills)")
     rec.add_argument("--symbol", required=True)
     rec.add_argument("--side", required=True, choices=["BUY", "SELL"])
-    rec.add_argument("--shares", required=True, type=int)
+    rec.add_argument("--shares", required=True, type=float)
     rec.add_argument("--price", required=True, type=float)
     rec.add_argument("--rationale", default=None)
     rec.add_argument("--run-id", default=None)
@@ -268,6 +376,11 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(state(store), indent=2))
     elif args.cmd == "mark":
         print(json.dumps(mark(store), indent=2))
+    elif args.cmd == "fill":
+        print(json.dumps(live_fill(
+            store, symbol=args.symbol, side=args.side, shares=args.shares,
+            notional=args.notional, rationale=args.rationale, run_id=args.run_id,
+            slippage_bp=args.slippage_bp), indent=2))
     elif args.cmd == "record":
         print(json.dumps(record_trade(
             store, symbol=args.symbol, side=args.side, shares=args.shares,

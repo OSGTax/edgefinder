@@ -56,10 +56,13 @@ class DeskTrade(Base):
     run_id: Mapped[str | None] = mapped_column(String(40), index=True)
     symbol: Mapped[str] = mapped_column(String(10), index=True)
     side: Mapped[str] = mapped_column(String(4))  # BUY | SELL
-    shares: Mapped[int] = mapped_column(Integer)
+    shares: Mapped[float] = mapped_column(Float)  # fractional shares (v7)
     price: Mapped[float] = mapped_column(Float)  # fill price after costs
     dollars: Mapped[float] = mapped_column(Float)  # signed-agnostic gross = shares*price
     rationale: Mapped[str | None] = mapped_column(Text)
+    # The live-quote snapshot the fill priced off: {bid, ask, mid, t, src}.
+    # The honesty contract's receipt — every live fill carries one.
+    fill_quote: Mapped[dict | None] = mapped_column(JSON)
 
 
 # ── desk_positions — open lots (projection, rebuilt from the ledger) ──
@@ -76,7 +79,7 @@ class DeskPosition(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
     symbol: Mapped[str] = mapped_column(String(10), index=True)
-    shares: Mapped[int] = mapped_column(Integer)
+    shares: Mapped[float] = mapped_column(Float)  # fractional shares (v7)
     avg_price: Mapped[float] = mapped_column(Float)  # cost basis per share
     last_price: Mapped[float | None] = mapped_column(Float)  # latest mark
     opened_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -246,10 +249,11 @@ DESK_TABLE_DDL: list[str] = [
         run_id VARCHAR(40),
         symbol VARCHAR(10) NOT NULL,
         side VARCHAR(4) NOT NULL,
-        shares INTEGER NOT NULL,
+        shares FLOAT NOT NULL,
         price FLOAT NOT NULL,
         dollars FLOAT NOT NULL,
-        rationale TEXT
+        rationale TEXT,
+        fill_quote JSON
     )""",
     "CREATE INDEX IF NOT EXISTS idx_desk_trades_account_ts ON desk_trades (account, ts)",
     "CREATE INDEX IF NOT EXISTS idx_desk_trades_run ON desk_trades (run_id)",
@@ -257,7 +261,7 @@ DESK_TABLE_DDL: list[str] = [
         id SERIAL PRIMARY KEY,
         account VARCHAR(30) DEFAULT 'agent',
         symbol VARCHAR(10) NOT NULL,
-        shares INTEGER NOT NULL,
+        shares FLOAT NOT NULL,
         avg_price FLOAT NOT NULL,
         last_price FLOAT,
         opened_at TIMESTAMP,
