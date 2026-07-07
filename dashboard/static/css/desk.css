@@ -91,3 +91,19 @@
 .desk-wn-entry-head { display: flex; align-items: center; gap: var(--t-s3); flex-wrap: wrap; }
 .desk-wn-entry-title { font-weight: 600; color: var(--t-text); }
 .desk-wn-entry-detail { margin: var(--t-s2) 0 0; line-height: 1.5; font-size: var(--t-fs-sm); }
+
+/* live tape — SSE-driven real-time quotes */
+.desk-live-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--t-up); display: inline-block;
+  animation: desk-pulse 1.6s ease-in-out infinite;
+}
+@keyframes desk-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.desk-tape-table td, .desk-tape-table th { font-variant-numeric: tabular-nums; }
+.desk-tape-stale td { opacity: 0.55; }
+.desk-tape-banner {
+  display: flex; align-items: center; gap: var(--t-s3);
+  padding: var(--t-s2) var(--t-s3); margin-bottom: var(--t-s4);
+  background: var(--t-warn-dim); border: 1px solid var(--t-warn);
+  border-radius: var(--t-radius); color: var(--t-text);
+}

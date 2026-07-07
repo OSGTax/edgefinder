@@ -8,6 +8,7 @@ jobs were removed in the cutover (see REBUILD-PLAN.md / scripts/cutover.py).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,16 +24,24 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 
-__version__ = "6.3.0"
+__version__ = "7.0.0"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from dashboard.services import init_services, shutdown_services
+    from agent import streamer
 
     logger.info("EdgeFinder trading-desk starting")
     init_services()
+    stream_task = streamer.start_in(app)  # None when no Alpaca keys (dev/CI)
     yield
+    if stream_task is not None:
+        stream_task.cancel()
+        try:
+            await stream_task
+        except (Exception, asyncio.CancelledError):  # noqa: BLE001
+            pass
     shutdown_services()
     logger.info("EdgeFinder trading-desk shutting down")
 

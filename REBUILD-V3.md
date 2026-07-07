@@ -52,7 +52,9 @@ An **autonomous AI paper-trading desk**, private to the owner:
 - **Alpaca Algo Trader Plus ($99/mo)** — live SIP quotes, market clock,
   historical daily bars (~2016+), Benzinga news, OPRA options (future phase).
 - **R2 archive** — 21 years of daily bars for backtests (static asset).
-- **Polygon/Massive — DISABLED.** No live dependency remains on it.
+- **Polygon/Massive — subscription DISABLED.** The only code still pointed at
+  it is `agent/refresh.py`'s bar ingest, which P2 repoints to Alpaca daily
+  bars; until then bar growth is dormant (fills never depended on it).
 
 ## Environment
 

@@ -108,6 +108,10 @@ class Settings(BaseSettings):
     alpaca_paper: bool = True
     alpaca_data_feed: str = "sip"
     live_trading_enabled: bool = False  # master flag for the live engine (Phase 5 flip)
+    # Live SIP quote stream (Render streamer -> /desk SSE). Held names are
+    # added to this seed universe automatically at stream start.
+    stream_symbols: str = "SPY,QQQ,IWM,NVDA,AAPL,MSFT,AMZN,GOOGL,META,TSLA"
+    stream_stale_secs: int = 15  # quote older than this (market open) = stale
 
     # ── FLAT FILES (Massive/Polygon S3) ──────────────
     # Bulk historical aggregates served as gzipped CSV over an S3-compatible

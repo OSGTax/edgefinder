@@ -173,6 +173,42 @@ def regime():
         return {"tag": "neutral", "error": f"{type(exc).__name__}: {exc}", "indices": {}}
 
 
+@router.get("/quotes")
+def live_quotes():
+    """Point-in-time snapshot of the live SIP quote cache (the tools read this).
+
+    Each entry: bid/ask/mid/last + age_secs + stale. ``connected`` tells you if
+    the WebSocket is currently up; a warmed-but-disconnected cache still serves
+    (clearly-aged) quotes."""
+    from agent.streamer import cache
+    return cache.snapshot()
+
+
+@router.get("/stream")
+async def stream():
+    """Server-Sent Events: the live tape for the /desk page.
+
+    Emits an ``event: quotes`` frame with the full cache snapshot every second
+    (the universe is small, so full snapshots beat diff bookkeeping). The
+    browser's EventSource auto-reconnects; frames double as heartbeats."""
+    import asyncio as _asyncio
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    from agent.streamer import cache
+
+    async def gen():
+        while True:
+            payload = _json.dumps(cache.snapshot(), default=str)
+            yield f"event: quotes\ndata: {payload}\n\n"
+            await _asyncio.sleep(1.0)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
 @router.get("/broker-health")
 def broker_health():
     """Preflight diagnostic: are the Alpaca keys on this host valid + SIP-entitled?

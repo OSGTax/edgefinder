@@ -263,6 +263,79 @@ async function loadJournal() {
   } catch (err) { renderError(el, err, loadJournal); }
 }
 
+/* ── live tape: real-time SIP quotes over SSE ── */
+let tapePrev = {};        // symbol -> last mid (for up/down tick coloring)
+let tapeLastEvent = 0;    // client-side staleness watchdog
+
+function renderTape(snap) {
+  const el = document.getElementById('desk-tape');
+  const statusEl = document.getElementById('desk-tape-status');
+  const liveDot = document.getElementById('desk-tape-live');
+  const banner = document.getElementById('desk-tape-banner');
+  const quotes = snap.quotes || {};
+  const syms = Object.keys(quotes).sort();
+  if (!syms.length) {
+    renderEmpty(el, 'No live quotes yet — streamer warming up.');
+    statusEl.textContent = snap.connected ? 'connected' : 'waiting for stream';
+    liveDot.hidden = true;
+    return;
+  }
+  const anyFresh = syms.some(s => !quotes[s].stale);
+  liveDot.hidden = !(snap.connected && anyFresh);
+  statusEl.textContent = snap.connected
+    ? `${syms.length} symbols · SIP live`
+    : 'stream reconnecting — quotes may be stale';
+  banner.hidden = snap.connected || anyFresh;
+  if (!banner.hidden) {
+    clear(banner);
+    banner.append(h('span', { text: '⚠ Live stream interrupted — prices below are stale and nothing will trade off them. Reconnecting…' }));
+  }
+
+  clear(el);
+  const table = h('table', { class: 'c-table desk-tape-table' },
+    h('thead', {}, h('tr', {},
+      h('th', { text: 'Symbol' }), h('th', { class: 'num', text: 'Bid' }),
+      h('th', { class: 'num', text: 'Ask' }), h('th', { class: 'num', text: 'Mid' }),
+      h('th', { class: 'num', text: 'Last' }), h('th', { class: 'num', text: 'Age' }))),
+    h('tbody', {}, ...syms.map(s => {
+      const q = quotes[s];
+      const dir = q.mid != null && tapePrev[s] != null
+        ? (q.mid > tapePrev[s] ? 'up' : q.mid < tapePrev[s] ? 'down' : '') : '';
+      if (q.mid != null) tapePrev[s] = q.mid;
+      const ageTxt = q.age_secs == null ? '—' : q.age_secs < 2 ? 'live' : `${Math.round(q.age_secs)}s`;
+      return h('tr', { class: q.stale ? 'desk-tape-stale' : '' },
+        h('td', {}, h('a', { href: '/symbol/' + s, class: 'c-link', text: s })),
+        h('td', { class: 'num', text: q.bid != null ? fmtPrice(q.bid) : '—' }),
+        h('td', { class: 'num', text: q.ask != null ? fmtPrice(q.ask) : '—' }),
+        h('td', { class: 'num ' + (dir === 'up' ? 't-up' : dir === 'down' ? 't-down' : ''),
+          text: q.mid != null ? fmtPrice(q.mid) : '—' }),
+        h('td', { class: 'num', text: q.last != null ? fmtPrice(q.last) : '—' }),
+        h('td', { class: 'num ' + (q.stale ? 't-down' : 't-dim'), text: q.stale ? `stale ${ageTxt}` : ageTxt }));
+    })));
+  el.append(table);
+}
+
+function startTape() {
+  const statusEl = document.getElementById('desk-tape-status');
+  let es;
+  const connect = () => {
+    es = new EventSource('/api/desk/stream');
+    es.addEventListener('quotes', ev => {
+      tapeLastEvent = Date.now();
+      try { renderTape(JSON.parse(ev.data)); } catch (e) { /* skip bad frame */ }
+    });
+    es.onerror = () => { statusEl.textContent = 'stream lost — reconnecting…'; };
+  };
+  connect();
+  // client-side watchdog: EventSource auto-reconnects, but surface the gap
+  setInterval(() => {
+    if (tapeLastEvent && Date.now() - tapeLastEvent > 6000) {
+      statusEl.textContent = 'stream lost — reconnecting…';
+      document.getElementById('desk-tape-live').hidden = true;
+    }
+  }, 3000);
+}
+
 /* ── what's new: dashboard improvements the agent shipped ── */
 const WN_KIND_CLASS = { feature: 'info', improvement: 'info', data: 'neutral', disclaimer: 'warn', fix: 'up' };
 
@@ -353,5 +426,6 @@ async function loadAll() {
 }
 
 loadAll();
+startTape();
 // refresh the live panels periodically (the agent updates several times/day)
 setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); }, 60_000);
