@@ -355,7 +355,11 @@ async function renderRailOptions(body) {
     for (const c of s.calls_table || []) mids.set(c.strike, { c });
     for (const p of s.puts_table || []) mids.set(p.strike, { ...(mids.get(p.strike) || {}), p });
     const mid = r => r && r.bid && r.ask ? (r.bid + r.ask) / 2 : null;
-    const rows = [...mids.entries()].sort((a, b) => a[0] - b[0]);
+    const atm = s.atm_strike ?? s.spot;
+    const rows = [...mids.entries()]
+      .sort((a, b) => Math.abs(a[0] - atm) - Math.abs(b[0] - atm))
+      .slice(0, 15)                       // rail is narrow — nearest 15 strikes
+      .sort((a, b) => a[0] - b[0]);
     if (rows.length) {
       body.append(h('h4', { class: 'mt-16', text: 'Chain (±10% of spot)' }),
         h('table', { class: 'c-table sym-opt-chain' },

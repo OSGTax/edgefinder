@@ -406,14 +406,19 @@ function fillOptSelect(tapeSymbols) {
   optSelectFilled = true;
 }
 
-function chainRows(summary) {
-  // merge calls/puts by strike: Call bid/ask/IV/Δ | strike | Put bid/ask/IV/Δ
+function chainRows(summary, maxRows = 21) {
+  // merge calls/puts by strike, then keep the strikes nearest ATM (dense
+  // chains like SPY have 130+ strikes in ±10% — a skyscraper, not a table)
   const byStrike = new Map();
   for (const c of summary.calls_table || []) byStrike.set(c.strike, { c });
   for (const p of summary.puts_table || []) {
     byStrike.set(p.strike, { ...(byStrike.get(p.strike) || {}), p });
   }
-  return [...byStrike.entries()].sort((a, b) => a[0] - b[0]);
+  const atm = summary.atm_strike ?? summary.spot;
+  return [...byStrike.entries()]
+    .sort((a, b) => Math.abs(a[0] - atm) - Math.abs(b[0] - atm))
+    .slice(0, maxRows)
+    .sort((a, b) => a[0] - b[0]);
 }
 
 function optStat(label, value, cls) {
