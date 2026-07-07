@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     # Data
     "massive>=2.4.0",
+    "alpaca-py>=0.30.0",  # live broker data/paper (also in the [live] extra)
     "pandas>=2.1.0",
     "numpy>=1.24.0",
     "pyarrow>=15.0.0",

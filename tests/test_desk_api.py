@@ -109,3 +109,13 @@ def test_announce_validates_kind(client):
         announce("bad", kind="totally-not-valid")
     with pytest.raises(ValueError):
         announce("   ")  # blank title rejected
+
+
+def test_broker_health_no_keys(client, monkeypatch):
+    for v in ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "ALPACA_API_KEY", "ALPACA_API_SECRET"):
+        monkeypatch.delenv(v, raising=False)
+    from agent import broker as _b
+    monkeypatch.setattr(_b.settings, "alpaca_api_key", "", raising=False)
+    monkeypatch.setattr(_b.settings, "alpaca_api_secret", "", raising=False)
+    body = client.get("/api/desk/broker-health").json()
+    assert body["keys_present"] is False and "keys" in body["error"]

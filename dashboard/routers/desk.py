@@ -173,6 +173,35 @@ def regime():
         return {"tag": "neutral", "error": f"{type(exc).__name__}: {exc}", "indices": {}}
 
 
+@router.get("/broker-health")
+def broker_health():
+    """Preflight diagnostic: are the Alpaca keys on this host valid + SIP-entitled?
+
+    Exposes NO secrets and no dollar amounts — just reachability, account
+    status, and one SPY quote timestamp proving the data entitlement works.
+    Safe to leave up; the streamer build replaces it as the health source.
+    """
+    from agent import broker
+
+    out: dict = {"keys_present": broker.enabled(), "paper": None,
+                 "account_status": None, "feed": None, "quote": None, "error": None}
+    if not out["keys_present"]:
+        out["error"] = "no EDGEFINDER_ALPACA_* keys in this environment"
+        return out
+    try:
+        b = broker.Broker()
+        acct = b.account()
+        out["paper"] = acct.get("paper")
+        out["account_status"] = str(acct.get("status"))
+        out["feed"] = broker.resolve_creds()["feed"]
+        q = b.quotes(["SPY"]).get("SPY") or {}
+        out["quote"] = {"symbol": "SPY", "bid": q.get("bid"), "ask": q.get("ask"),
+                        "t": q.get("t")}
+    except Exception as exc:  # noqa: BLE001 — diagnostic must report, not raise
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 @router.get("/whatsnew")
 def whatsnew(db: Session = Depends(get_db), limit: int = Query(25, le=100)):
     """The "What's New" feed — dashboard improvements the agent shipped.
