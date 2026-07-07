@@ -43,6 +43,27 @@ def stream_symbols() -> list[str]:
     return out
 
 
+def _held_symbols() -> list[str]:
+    """Symbols the agent currently holds — they always belong on the tape."""
+    try:
+        from agent.models import ACCOUNT
+        from agent.store import get_store
+
+        rows = get_store().select("desk_positions", filters={"account": ACCOUNT})
+        return sorted({str(r["symbol"]).upper() for r in rows})
+    except Exception:  # noqa: BLE001 — the tape must not die on a DB blip
+        return []
+
+
+def watch_symbols() -> list[str]:
+    """Seed universe + currently-held names (the full subscription set)."""
+    out = stream_symbols()
+    for s in _held_symbols():
+        if s not in out:
+            out.append(s)
+    return out
+
+
 class QuoteCache:
     """Latest quote/trade per symbol + connection status, with staleness."""
 
@@ -55,6 +76,7 @@ class QuoteCache:
     # -- writes (single asyncio loop only) --
     def update_quote(self, sym: str, bid, ask, bid_size, ask_size, t: str | None) -> None:
         e = self._q.setdefault(sym, {})
+        e.pop("warmed", None)  # live WS data supersedes the REST warm
         e.update(bid=bid, ask=ask, bid_size=bid_size, ask_size=ask_size,
                  t=t, recv=time.time())
         if bid and ask:
@@ -63,8 +85,8 @@ class QuoteCache:
 
     def update_trade(self, sym: str, price, t: str | None) -> None:
         e = self._q.setdefault(sym, {})
-        e.update(last=price, last_t=t)
-        e.setdefault("recv", time.time())
+        # recv = "last market data seen" — a trade is live data, so it counts
+        e.update(last=price, last_t=t, recv=time.time())
         self.last_msg_at = time.time()
 
     def warm(self, quotes: dict[str, dict]) -> None:
@@ -111,12 +133,34 @@ async def _warm(symbols: list[str]) -> None:
         logger.exception("Quote cache warm failed (stream will still populate)")
 
 
+async def _watch_new_holdings(ws, subscribed: set[str]) -> None:
+    """Every 5 min, subscribe to any newly-held names so a buy outside the
+    seed universe appears on the tape without a restart."""
+    while True:
+        await asyncio.sleep(300)
+        new = [s for s in await asyncio.to_thread(_held_symbols) if s not in subscribed]
+        if new:
+            await ws.send(json.dumps({"action": "subscribe",
+                                      "quotes": new, "trades": new}))
+            subscribed.update(new)
+            logger.info("Tape subscribed to newly-held: %s", new)
+
+
 async def _consume(ws, symbols: list[str], creds: dict) -> None:
     """Auth, subscribe, then pump messages into the cache until the socket dies."""
     await ws.send(json.dumps({"action": "auth", "key": creds["key"],
                               "secret": creds["secret"]}))
     await ws.send(json.dumps({"action": "subscribe",
                               "quotes": symbols, "trades": symbols}))
+    holdings_task = asyncio.get_running_loop().create_task(
+        _watch_new_holdings(ws, set(symbols)))
+    try:
+        await _pump(ws)
+    finally:
+        holdings_task.cancel()
+
+
+async def _pump(ws) -> None:
     async for raw in ws:
         for msg in json.loads(raw):
             kind = msg.get("T")
@@ -142,13 +186,14 @@ async def run_stream() -> None:
         return
     creds = broker.resolve_creds()
     url = STREAM_URL.format(feed=creds["feed"])
-    symbols = stream_symbols()
 
-    await _warm(symbols)
+    await _warm(watch_symbols())
     backoff = 1.0
     while True:
         try:
             import websockets
+            # re-resolve held names on every (re)connect
+            symbols = await asyncio.to_thread(watch_symbols)
             async with websockets.connect(url, ping_interval=15,
                                           ping_timeout=15, max_size=2 ** 22) as ws:
                 started = time.time()
@@ -166,11 +211,13 @@ async def run_stream() -> None:
             cache.connected = False
             logger.warning("SIP stream dropped (%s: %s) — retry in %.0fs",
                            type(exc).__name__, exc, backoff)
+            if backoff >= 8:
+                await _warm(watch_symbols())  # keep the tape usable while down
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60.0)
 
 
-def start_in(loop_owner_app) -> asyncio.Task | None:
+def start_in(_app=None) -> asyncio.Task | None:
     """Start the streamer as an asyncio task (called from the FastAPI lifespan).
     Returns the task, or None when keys are absent (dev/CI/tests)."""
     from agent import broker

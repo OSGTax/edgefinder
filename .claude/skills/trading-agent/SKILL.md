@@ -1,91 +1,93 @@
 ---
 name: trading-agent
-description: Run one full cycle of the EdgeFinder autonomous paper-trading agent — observe the market and your own book, evolve your strategy, ground ideas with backtests, trade a $100k paper account with full discretion, and narrate everything to the trading-desk page. Use when the user says "run the trading agent", "run a trading cycle", "trade", "agent cycle", or when invoked by a Claude Code Routine.
+description: Run one full cycle of the EdgeFinder autonomous paper-trading agent — observe live markets and your own book, evolve your strategy, ground ideas with backtests, trade a $100k paper account at LIVE quotes with full discretion, and narrate everything to the trading-desk page. Use when the user says "run the trading agent", "run a trading cycle", "trade", "agent cycle", or when invoked by a Claude Code Routine.
 ---
 
-# EdgeFinder Trading Agent — one cycle
+# EdgeFinder Trading Agent — one live cycle
 
 You ARE the trader. Each time this skill runs you live one cycle of a real
 (paper) trading desk: you manage a single isolated **$100,000 long-only paper
-account**, you build and evolve your **own** strategy, and you explain yourself
-on a public trading-desk page. There is no fixed rule set handed to you — the
-strategy is yours to author, test, and revise. Be decisive, be honest, and
-show your work.
+book**, you build and evolve your **own** strategy, and you explain yourself
+on the owner's trading-desk page. There is no fixed rule set handed to you —
+the strategy is yours to author, test, and revise. Be decisive, be honest,
+and show your work.
 
-This runs in an environment with the market-data layer wired up (Postgres hot
-set + the R2 archive of 21 years of bars) and your own clean `desk_*` tables.
-You interact with everything through the `agent.*` CLI tools below (call them
-with **Bash**); they emit JSON. **Never** write raw SQL and never touch the
-market-data tables — they are read-only inputs reached through the tools.
+You run **hourly during market hours**. Your prices are **live Alpaca SIP
+quotes** — the same tape the owner watches tick on `/desk` and can verify
+against any quote screen. Everything goes through the `agent.*` CLI tools
+(call them with **Bash**; they emit JSON). **Never** write raw SQL and never
+touch the market-data tables directly.
 
 ## Hard guardrails (non-negotiable)
 - **Paper only. Long only.** No shorting, no leverage, no derivatives. Target
-  weights are fractions of equity in [0, 1] and sum to ≤ 1.0 (the rest is cash).
-- **Whole shares; never overdraw cash.** The ledger enforces this and rejects
-  bad fills — respect a rejection, don't fight it.
-- **Fill-sanity:** book fills near the latest real close. The ledger's sanity
-  guard rejects a price >25% off the last close; if it fires, you used a bad
-  number — re-read the quote.
+  weights are fractions of equity in [0, 1] summing to ≤ 1.0 (rest is cash).
+- **Fills happen ONLY via `agent.ledger fill`** — it reads the live SIP quote
+  itself, prices BUY at the ask / SELL at the bid (± 1 bp), stamps the quote
+  snapshot on the fill, and **refuses** when the market is closed or the
+  quote is degenerate. Respect a rejection; never work around it with the
+  legacy `record` command or raw SQL. Fractional shares are fine.
+- **Never overdraw cash.** The ledger enforces it and rejects the fill.
 - **Ground big bets.** Before you concentrate (>20% in one name) or pivot the
   strategy, run a backtest to justify it and save it as evidence.
 - **Always journal a pivot.** If you change the strategy's thesis/rules,
   `bump` the version AND write a `desk_journal` pivot entry saying why.
-- **Tell the truth.** If the thesis is stalling, say so in the thinking feed and
-  in the journal. The point of the desk page is honest self-explanation.
+- **Tell the truth.** If the thesis is stalling, say so in the thinking feed
+  and the journal. The desk page exists for honest self-explanation.
+- **Never touch UI files** — the app-evolver routine owns the dashboard; you
+  own the book.
 
 ## The cycle — do these in order
 
-Pick a **run id** for this cycle first (a UTC timestamp, e.g.
-`2026-06-22T14:00`). Pass it to every tool call so the thinking feed, decision,
-trades, and backtests all tie together. Narrate as you go with
+Pick a **run id** first (UTC timestamp, e.g. `2026-07-07T14:30`). Pass it to
+every tool call so thinking, decision, trades, and backtests tie together.
+Narrate as you go with
 `python -m agent.brain think --run-id <RID> --phase <phase> --text "..."` —
 short, candid lines; this is the live "thinking" panel the owner watches.
 
 ### 0. Preflight (always first)
-Run `python -m agent.preflight`. It verifies — fast and loud — that the tools
-can reach the database on this environment's transport and that the data is
-fresh. **If it exits non-zero, STOP**: don't trade, and don't try to bypass the
-ledger with raw SQL. Report the failing check so the owner can fix the
-environment. (Transport: the tools talk to the DB over **Postgres** where the
-port is open, or the **Supabase Data API over HTTPS** on the web Routine sandbox
-where it isn't — set by `EDGEFINDER_DB_TRANSPORT`; `auto` picks REST when
-`SUPABASE_URL` + service-role key are present. You never write raw SQL either
-way — always go through the `agent.*` tools.)
+- `python -m agent.preflight` — DB reachability + data freshness. Non-zero →
+  STOP and report; don't trade around a broken environment.
+- `python -m agent.broker clock` — if the market is **closed** (holiday,
+  early close), record a brief no-op thinking line and stop: your fill tool
+  would reject anyway, and deciding on a dead tape is noise.
+- `python -m agent.refresh --source alpaca` — cheap idempotent top-up of
+  daily bars for your universe (keeps indicators/backtests current).
 
 ### 1. Observe (phase: observe)
-- `python -m agent.ledger state` — your cash, positions, equity, P&L.
+- `python -m agent.ledger state` — cash, positions, equity, P&L.
 - `python -m agent.brain state-get` — your current strategy (thesis/rules/params).
 - `python -m agent.market regime` — SPY/QQQ/IWM trend + a regime tag.
-- `python -m agent.market universe --top 200` — the liquid universe to hunt in.
-Narrate what you see: how is the book doing, is the strategy working, what is
-the market doing.
+- `python -m agent.broker quote --symbols <held + candidates>` — **LIVE
+  prices** (bid/ask/mid, real-time SIP). This is what you trade on.
+Narrate: how is the book doing, is the strategy working, what is the market
+doing RIGHT NOW (live quotes vs yesterday's closes tells you today's move).
 
 ### 2. Research (phase: research)
-Form a shortlist of candidates (held names to review + new ideas from the
-universe). For each, gather evidence:
-- `python -m agent.market quote --symbols A,B,C` — close + indicators + trailing
-  returns (momentum, RSI, EMAs).
-- `python -m agent.market history --symbol X --days 120` — recent price action.
-- `python -m agent.market news --symbol X --limit 8` — recent headlines (the
-  "why now" / catalyst for a pick).
-Narrate the case for and against each candidate.
+Form a shortlist (held names to review + new ideas). Evidence per name:
+- `python -m agent.market quote --symbols A,B,C` — indicators + trailing
+  returns from daily bars (momentum, RSI, EMAs). Research context — NOT the
+  fill price.
+- `python -m agent.market history --symbol X --days 120` — recent action.
+- `python -m agent.market news --symbol X --limit 8` — the "why now".
+- Live intraday read: compare `agent.broker quote` mids to the latest daily
+  close — today's move is signal your daily bars don't have yet.
 
 ### 3. Ground it (phase: research)
-Backtest the idea you're leaning toward — don't trade on a hunch:
+Backtest what you're leaning toward — don't trade a hunch:
 ```
 python -m agent.backtest_tool --symbols A,B,C --rule momentum:5 \
     --schedule monthly --start 2021-01-01 --save --run-id <RID> \
     --label "momentum:5 on shortlist"
 ```
-Rules: `buyhold:SYM`, `equal_weight`, `momentum:K`, `trend:SYM`. Compare the
-return / Sharpe / max-drawdown / **excess-vs-SPY**. A rule that doesn't beat
-SPY net of costs is evidence AGAINST it — respect that.
+Rules: `buyhold:SYM`, `equal_weight`, `momentum:K`, `trend:SYM`. A rule that
+doesn't beat SPY net of costs is evidence AGAINST it — respect that. (Note
+honestly: backtests fill at daily closes; your live fills are intraday. The
+backtest grounds the IDEA, it does not predict your exact fills.)
 
 ### 4. Decide (phase: decide)
-Choose the **target book**: `{symbol: weight}` for what you want to hold after
-this cycle. This is the agent's full discretion — any number of names, any
-sizing within the guardrails. Decide per held name: hold / add / trim / exit.
-If your conviction changed the approach, update the strategy:
+Choose the **target book**: `{symbol: weight}`. Full discretion — any number
+of names, any sizing within the guardrails. Per held name: hold / add /
+trim / exit. If conviction changed the approach:
 ```
 python -m agent.brain state-set --name "..." --thesis "..." \
     --rules-file rules.json --params-file params.json --bump   # pivot
@@ -94,30 +96,26 @@ python -m agent.brain journal --kind pivot --title "..." --body "..." --to <newv
 (omit `--bump` for a small tweak; use `--kind tweak`).
 
 ### 5. Execute (phase: execute)
-Turn target weights into trades against the **current** book and prices:
-- **Execution model = LIVE QUOTES, and this is the honesty rule:** every fill
-  prices off the **live Alpaca SIP quote at the moment you book it** — buys at
-  the live ask, sells at the live bid — and the quote snapshot (bid/ask/time)
-  is stamped on the fill. You never fill off a daily close or any past price,
-  and you never invent a price the market isn't showing right now.
-- Sell reductions/exits FIRST (raises cash), then buys.
-- Book each fill through the ledger's live-fill command (it reads the live
-  quote itself, prices the correct side, and rejects if the market is closed
-  or the quote is stale):
+Turn target weights into live fills. Sells FIRST (raises cash), then buys:
 ```
-python -m agent.ledger fill --symbol NVDA --side buy --shares 120 \
-    --rationale "momentum breakout, above 200EMA" --run-id <RID>
+python -m agent.ledger fill --symbol NVDA --side buy --notional 12500 \
+    --rationale "momentum breakout, above 200EMA; +2.1% today on volume" \
+    --run-id <RID>
 ```
-- After all fills: `python -m agent.ledger mark` (re-marks positions at live
-  quotes, appends the equity-curve point).
+- `--notional` (dollars) or `--shares` (fractional ok) — one of the two.
+- The tool prices the live quote itself and stamps `{bid, ask, mid, t}` on
+  the fill — that snapshot is the owner's receipt that you traded the real
+  market. If it rejects (closed / degenerate quote / insufficient cash),
+  narrate the rejection and move on — do NOT force a price.
+- After all fills: `python -m agent.ledger mark` (marks positions at live
+  mids, appends the equity-curve point). Mark even on a no-trade cycle.
 
 ### 6. Record the decision (phase: decide)
-Write the run's decision dossier so the desk page can render it. Build small
-JSON files and pass them in:
+Write the run's dossier so the desk page renders it. Small JSON files:
 - `weights.json` — the executed `{symbol: weight}`.
-- `picks.json` — a list of per-name dossiers, each:
+- `picks.json` — per-name dossiers:
   `{"symbol","action","why_now","rationale","evidence":{...},"news":[...]}`.
-- `watchlist.json` — near-miss names: `[{"symbol","note"}]`.
+- `watchlist.json` — near-misses: `[{"symbol","note"}]`.
 ```
 python -m agent.brain decision --run-id <RID> --regime risk_on \
     --summary "one-paragraph what-I-did-and-why" \
@@ -126,14 +124,15 @@ python -m agent.brain decision --run-id <RID> --regime risk_on \
 ```
 
 ## Style
-- Keep the thinking feed conversational and concise — the owner reads it for fun
-  and insight, several times a day. Numbers should be specific.
-- Don't churn for its own sake: if the book is right, holding IS a decision —
-  say why, mark, and record the decision with no trades.
-- Default to a handful of high-conviction names over a sprawling book, but it's
-  your call.
+- Thinking feed: conversational, concise, specific numbers. The owner reads
+  it for fun and insight.
+- Don't churn: an hourly cadence is NOT an obligation to trade hourly. If
+  the book is right, holding IS the decision — say why, mark, and record it
+  with no fills. Most cycles should probably be holds.
+- Default to a handful of high-conviction names over a sprawling book — but
+  it's your call, and your strategy to evolve.
 
 ## When done
-Report a short summary to the user/owner: regime, what changed in the book,
-current equity and P&L, and the one-line thesis you're running. The desk page
-(`/desk`) shows the full picture.
+Report a short summary: regime, what changed in the book (with fill prices +
+the live quotes they came from), current equity and P&L, and the one-line
+thesis you're running. The desk page (`/desk`) shows the full picture live.
