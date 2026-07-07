@@ -54,7 +54,7 @@ class DeskTrade(Base):
     account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
     ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
     run_id: Mapped[str | None] = mapped_column(String(40), index=True)
-    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
     side: Mapped[str] = mapped_column(String(4))  # BUY | SELL
     shares: Mapped[float] = mapped_column(Float)  # fractional shares (v7)
     price: Mapped[float] = mapped_column(Float)  # fill price after costs
@@ -78,7 +78,7 @@ class DeskPosition(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
-    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
     shares: Mapped[float] = mapped_column(Float)  # fractional shares (v7)
     avg_price: Mapped[float] = mapped_column(Float)  # cost basis per share
     last_price: Mapped[float | None] = mapped_column(Float)  # latest mark
@@ -247,7 +247,7 @@ DESK_TABLE_DDL: list[str] = [
         account VARCHAR(30) DEFAULT 'agent',
         ts TIMESTAMP DEFAULT NOW(),
         run_id VARCHAR(40),
-        symbol VARCHAR(10) NOT NULL,
+        symbol VARCHAR(24) NOT NULL,
         side VARCHAR(4) NOT NULL,
         shares FLOAT NOT NULL,
         price FLOAT NOT NULL,
@@ -260,7 +260,7 @@ DESK_TABLE_DDL: list[str] = [
     """CREATE TABLE IF NOT EXISTS desk_positions (
         id SERIAL PRIMARY KEY,
         account VARCHAR(30) DEFAULT 'agent',
-        symbol VARCHAR(10) NOT NULL,
+        symbol VARCHAR(24) NOT NULL,
         shares FLOAT NOT NULL,
         avg_price FLOAT NOT NULL,
         last_price FLOAT,

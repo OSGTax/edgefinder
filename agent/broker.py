@@ -139,6 +139,14 @@ class Broker:
             self._data = StockHistoricalDataClient(self._c["key"], self._c["secret"])
         return self._data
 
+    @property
+    def option_data(self):
+        if getattr(self, "_option_data", None) is None:
+            from alpaca.data.historical.option import OptionHistoricalDataClient
+            self._option_data = OptionHistoricalDataClient(self._c["key"],
+                                                           self._c["secret"])
+        return self._option_data
+
     # -- reads --
     def account(self) -> dict:
         a = self.trading.get_account()
@@ -172,6 +180,58 @@ class Broker:
         req = GetOrdersRequest(status=QueryOrderStatus.ALL, limit=limit)
         return [normalize_order(o) for o in self.trading.get_orders(req)]
 
+    # -- options (OPRA, included in Algo Trader Plus) --
+    def option_chain(self, underlying: str, *, dte_max: int = 60,
+                     moneyness: float = 0.20) -> list[dict]:
+        """The option chain around the money: contracts within ±moneyness of
+        the live underlying price, expiring within dte_max days. Each row:
+        occ symbol, type, strike, expiry, dte, bid/ask/mid, IV, delta/theta.
+        Sorted by (expiry, strike)."""
+        from datetime import date as _date, timedelta as _td
+
+        from alpaca.data.requests import OptionChainRequest
+
+        underlying = underlying.upper().strip()
+        uq = self.quotes([underlying]).get(underlying) or {}
+        px = uq.get("mid") or uq.get("ask") or uq.get("bid")
+        req_kwargs = {"underlying_symbol": underlying,
+                      "expiration_date_lte": _date.today() + _td(days=dte_max)}
+        if px:
+            req_kwargs["strike_price_gte"] = round(px * (1 - moneyness), 2)
+            req_kwargs["strike_price_lte"] = round(px * (1 + moneyness), 2)
+        snaps = self.option_data.get_option_chain(OptionChainRequest(**req_kwargs))
+        from agent import occ
+        out = []
+        for sym, snap in snaps.items():
+            try:
+                p = occ.parse(sym)
+            except ValueError:
+                continue
+            q = getattr(snap, "latest_quote", None)
+            g = getattr(snap, "greeks", None)
+            bid = _f(getattr(q, "bid_price", None)) if q else None
+            ask = _f(getattr(q, "ask_price", None)) if q else None
+            out.append({
+                "symbol": sym, "type": p["type"], "strike": p["strike"],
+                "expiry": p["expiry"].isoformat(),
+                "dte": (p["expiry"] - _date.today()).days,
+                "bid": bid, "ask": ask,
+                "mid": round((bid + ask) / 2, 4) if (bid and ask) else None,
+                "iv": _f(getattr(snap, "implied_volatility", None)),
+                "delta": _f(getattr(g, "delta", None)) if g else None,
+                "theta": _f(getattr(g, "theta", None)) if g else None,
+            })
+        out.sort(key=lambda r: (r["expiry"], r["strike"], r["type"]))
+        return out
+
+    def option_quotes(self, occ_symbols: list[str]) -> dict[str, dict]:
+        """Live bid/ask for specific option contracts (OPRA)."""
+        from alpaca.data.requests import OptionLatestQuoteRequest
+
+        req = OptionLatestQuoteRequest(symbol_or_symbols=occ_symbols)
+        res = self.option_data.get_option_latest_quote(req)
+        return {sym: normalize_quote(sym, q) for sym, q in res.items()}
+
     # NO write methods, by design. This wrapper is DATA-READER ONLY: the agent
     # trades its OWN paper ledger (agent.ledger) priced off these live quotes.
     # It never submits, modifies, or cancels orders at Alpaca.
@@ -190,7 +250,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("positions")
     sub.add_parser("orders")
     sub.add_parser("clock")
-    q = sub.add_parser("quote"); q.add_argument("--symbols", required=True)
+    q = sub.add_parser("quote")
+    q.add_argument("--symbols", default=None, help="equity symbols, comma-separated")
+    q.add_argument("--contracts", default=None, help="OCC option symbols, comma-separated")
+    ch = sub.add_parser("chain", help="option chain around the money (OPRA)")
+    ch.add_argument("--symbol", required=True)
+    ch.add_argument("--dte-max", type=int, default=60)
+    ch.add_argument("--moneyness", type=float, default=0.20)
     args = p.parse_args(argv)
 
     if not enabled():
@@ -207,7 +273,16 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "clock":
         out = {"is_open": b.is_market_open()}
     elif args.cmd == "quote":
-        out = b.quotes([s.strip().upper() for s in args.symbols.split(",") if s.strip()])
+        out = {}
+        if args.symbols:
+            out.update(b.quotes([s.strip().upper() for s in args.symbols.split(",") if s.strip()]))
+        if args.contracts:
+            out.update(b.option_quotes([s.strip().upper() for s in args.contracts.split(",") if s.strip()]))
+        if not out:
+            out = {"error": "pass --symbols and/or --contracts"}
+    elif args.cmd == "chain":
+        out = b.option_chain(args.symbol, dte_max=args.dte_max,
+                             moneyness=args.moneyness)
     else:  # pragma: no cover
         out = {"error": "unknown command"}
     print(json.dumps(out, indent=2, default=str))

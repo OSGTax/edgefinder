@@ -41,6 +41,14 @@ LIVE_BAND = 0.005
 SLIPPAGE_BP = 1.0
 # Ignore sub-satoshi share residue from fractional math.
 EPS_SHARES = 1e-9
+# Options: one contract controls 100 shares of the underlying.
+MULTIPLIER = 100
+
+
+def _mult(symbol: str) -> int:
+    from agent import occ
+
+    return MULTIPLIER if occ.is_option(symbol) else 1
 
 
 def _utcnow() -> datetime:
@@ -75,25 +83,44 @@ def cash(store, account: str = ACCOUNT) -> float:
 
 
 def _compute_book(trades: list[dict]) -> dict[str, dict]:
-    """Average-cost open lots from the trade ledger (fractional shares)."""
+    """Average-cost open lots from the trade ledger.
+
+    Equities are long-only fractional lots (record_trade guarantees sells never
+    exceed holdings). Option contracts are SIGNED: a SELL beyond the long lot
+    opens a short leg (negative shares) — record_trade only permits that when
+    the short is covered, so here we just do honest signed arithmetic. ``cost``
+    tracks |basis|; crossing through zero re-opens the lot at the fill price.
+    """
+    from agent import occ
+
     book: dict[str, dict] = {}
     for t in trades:
-        b = book.setdefault(t["symbol"], {"shares": 0.0, "cost": 0.0, "opened_at": t.get("ts")})
+        sym = t["symbol"]
+        b = book.setdefault(sym, {"shares": 0.0, "cost": 0.0, "opened_at": t.get("ts")})
         qty = float(t["shares"])
-        if t["side"] == "BUY":
-            if b["shares"] <= EPS_SHARES:
-                b["opened_at"] = t.get("ts")
-            b["shares"] += qty
-            b["cost"] += qty * float(t["price"])
-        else:  # SELL — reduce average-cost basis proportionally
-            if b["shares"] > EPS_SHARES:
-                avg = b["cost"] / b["shares"]
-                sold = min(qty, b["shares"])
-                b["shares"] -= sold
-                b["cost"] -= sold * avg
-                if b["shares"] <= EPS_SHARES:
-                    b["shares"] = 0.0
-                    b["cost"] = 0.0
+        signed = qty if t["side"] == "BUY" else -qty
+        cur = b["shares"]
+        if abs(cur) <= EPS_SHARES:
+            b.update(shares=signed, cost=abs(signed) * float(t["price"]),
+                     opened_at=t.get("ts"))
+            continue
+        if (cur > 0) == (signed > 0):  # extending the same direction
+            b["shares"] = cur + signed
+            b["cost"] += abs(signed) * float(t["price"])
+            continue
+        # reducing / crossing
+        closing = min(abs(signed), abs(cur))
+        avg = b["cost"] / abs(cur)
+        b["cost"] -= closing * avg
+        b["shares"] = cur + signed
+        if abs(b["shares"]) <= EPS_SHARES:
+            b["shares"], b["cost"] = 0.0, 0.0
+        elif (b["shares"] > 0) != (cur > 0):  # crossed zero → new lot at fill px
+            b["cost"] = abs(b["shares"]) * float(t["price"])
+            b["opened_at"] = t.get("ts")
+        # equities can never actually go short (guarded upstream); clamp residue
+        if not occ.is_option(sym) and b["shares"] < 0:
+            b["shares"], b["cost"] = 0.0, 0.0
     return book
 
 
@@ -107,10 +134,10 @@ def rebuild_positions(store, account: str = ACCOUNT) -> dict[str, dict]:
     store.delete("desk_positions", {"account": account})
     rows, out = [], {}
     for sym, b in book.items():
-        if b["shares"] <= EPS_SHARES:
+        if abs(b["shares"]) <= EPS_SHARES:
             continue
-        shares = round(b["shares"], 6)
-        avg = round(b["cost"] / b["shares"], 4)
+        shares = round(b["shares"], 6)  # negative = covered short option leg
+        avg = round(b["cost"] / abs(b["shares"]), 4)
         rows.append({"account": account, "symbol": sym, "shares": shares,
                      "avg_price": avg, "last_price": None,
                      "opened_at": b["opened_at"], "marked_at": None})
@@ -124,6 +151,96 @@ def rebuild_positions(store, account: str = ACCOUNT) -> dict[str, dict]:
 def _held_shares(store, symbol: str, account: str = ACCOUNT) -> float:
     rows = store.select("desk_positions", filters={"account": account, "symbol": symbol})
     return float(rows[0]["shares"]) if rows else 0.0
+
+
+# ── options risk math (defined-risk only — REBUILD-V3 charter) ──
+
+
+def _positions_map(store, account: str = ACCOUNT) -> dict[str, float]:
+    rows = store.select("desk_positions", filters={"account": account})
+    return {r["symbol"]: float(r["shares"]) for r in rows}
+
+
+def _option_legs(positions: dict[str, float], underlying: str, type_: str):
+    """(short_qty, long_qty, latest_short_expiry, max_short_strike) for one
+    underlying+type across all contracts. Long legs only count as coverage
+    when they expire ON/AFTER the latest short expiry (they must outlive it)."""
+    from agent import occ
+
+    shorts, longs = [], []
+    for sym, sh in positions.items():
+        if not occ.is_option(sym) or abs(sh) <= EPS_SHARES:
+            continue
+        p = occ.parse(sym)
+        if p["underlying"] != underlying or p["type"] != type_:
+            continue
+        (shorts if sh < 0 else longs).append((p, abs(sh)))
+    short_qty = sum(q for _, q in shorts)
+    latest_short_exp = max((p["expiry"] for p, _ in shorts), default=None)
+    max_short_strike = max((p["strike"] for p, _ in shorts), default=0.0)
+    long_qty = sum(q for p, q in longs
+                   if latest_short_exp is None or p["expiry"] >= latest_short_exp)
+    return short_qty, long_qty, latest_short_exp, max_short_strike
+
+
+def _csp_reserved(positions: dict[str, float]) -> float:
+    """Cash reserved to secure uncovered short puts, per underlying:
+    max(0, short_puts − covering long puts) × max short strike × 100.
+    Conservative on purpose — the reservation may overstate, never understate."""
+    from agent import occ
+
+    reserved = 0.0
+    for und in {occ.parse(s)["underlying"] for s, sh in positions.items()
+                if occ.is_option(s) and sh < -EPS_SHARES}:
+        short_q, long_q, _, max_k = _option_legs(positions, und, "P")
+        uncovered = max(0.0, short_q - long_q)
+        reserved += uncovered * max_k * MULTIPLIER
+    return reserved
+
+
+def free_cash(store, account: str = ACCOUNT) -> float:
+    """Spendable cash = ledger cash − CSP reservations."""
+    return round(cash(store, account) - _csp_reserved(_positions_map(store, account)), 2)
+
+
+def _check_short_coverage(positions: dict[str, float], symbol: str,
+                          opening_qty: float, cash_now: float) -> str | None:
+    """Return an error string if opening/extending this short leg would be
+    uncovered (else None). Simulates the post-fill book."""
+    from agent import occ
+
+    p = occ.parse(symbol)
+    sim = dict(positions)
+    sim[symbol] = sim.get(symbol, 0.0) - opening_qty
+    und = p["underlying"]
+    if p["type"] == "C":
+        short_q, long_q, _, _ = _option_legs(sim, und, "C")
+        shares_cover = max(0.0, sim.get(und, 0.0)) / MULTIPLIER
+        if shares_cover + long_q + 1e-9 < short_q:
+            return (f"uncovered short call forbidden: {short_q:g} short calls on {und} "
+                    f"vs coverage {shares_cover:g} (shares/100) + {long_q:g} long calls")
+        return None
+    # short put: covered by long puts or cash-secured
+    reserved_after = _csp_reserved(sim)
+    if reserved_after > cash_now + 1e-6:
+        return (f"cash-secured put requires ${reserved_after:,.2f} reserved "
+                f"but cash is ${cash_now:,.2f}")
+    return None
+
+
+def _check_equity_sell_keeps_calls_covered(positions: dict[str, float],
+                                           symbol: str, sell_qty: float) -> str | None:
+    """Selling shares must not strand short calls uncovered."""
+    sim = dict(positions)
+    sim[symbol] = sim.get(symbol, 0.0) - sell_qty
+    short_q, long_q, _, _ = _option_legs(sim, symbol, "C")
+    if short_q <= 0:
+        return None
+    shares_cover = max(0.0, sim.get(symbol, 0.0)) / MULTIPLIER
+    if shares_cover + long_q + 1e-9 < short_q:
+        return (f"sell would strand {short_q:g} short {symbol} calls uncovered "
+                f"— close/roll the calls first")
+    return None
 
 
 # ── writes ──────────────────────────────────────────────────
@@ -140,15 +257,22 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
     with a ``fill_quote`` the price must sit essentially ON the quote
     (LIVE_BAND outside [bid, ask]); without one, the legacy close-band applies.
     """
+    from agent import occ
+
     store = store or _store()
     symbol = symbol.upper().strip()
     side = side.upper().strip()
+    is_opt = occ.is_option(symbol)
     if side not in ("BUY", "SELL"):
         return {"ok": False, "error": f"bad side {side!r}"}
     shares = round(float(shares), 6)
     price = float(price)
     if shares <= EPS_SHARES or price <= 0:
         return {"ok": False, "error": "shares and price must be positive"}
+    if is_opt and abs(shares - round(shares)) > EPS_SHARES:
+        return {"ok": False, "error": "options trade in whole contracts"}
+    if is_opt and occ.parse(symbol)["expiry"] < _utcnow().date():
+        return {"ok": False, "error": f"{symbol} is expired — run `settle`"}
 
     if fill_quote is not None:
         # a live fill's snapshot must be complete — no falling back to the
@@ -159,6 +283,8 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
         if not (bid * (1 - LIVE_BAND) <= price <= ask * (1 + LIVE_BAND)):
             return {"ok": False, "error": "fill rejected: price off the live quote",
                     "price": price, "bid": bid, "ask": ask, "band": LIVE_BAND}
+    elif is_opt:
+        return {"ok": False, "error": "option fills require a live fill_quote"}
     else:
         if latest_close is None:
             latest_close = _latest_close(symbol)
@@ -169,17 +295,33 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
                         "price": price, "latest_close": round(latest_close, 4),
                         "deviation": round(dev, 4), "band": FILL_BAND}
 
-    if side == "SELL":
-        held = _held_shares(store, symbol, account)
-        if held <= EPS_SHARES:
-            return {"ok": False, "error": f"no open position in {symbol} to sell"}
-        if shares > held:
-            shares = held  # long-only: cap the sell at what's held
+    positions = _positions_map(store, account)
+    cash_now = cash(store, account)
+    mult = MULTIPLIER if is_opt else 1
 
-    gross = round(shares * price, 2)
-    if side == "BUY" and gross > cash(store, account) + 1e-6:
-        return {"ok": False, "error": "insufficient cash for buy",
-                "needed": gross, "cash": cash(store, account)}
+    if side == "SELL":
+        held = positions.get(symbol, 0.0)
+        if is_opt:
+            opening_short = max(0.0, shares - max(0.0, held))
+            if opening_short > EPS_SHARES:
+                err = _check_short_coverage(positions, symbol, opening_short, cash_now)
+                if err:
+                    return {"ok": False, "error": err}
+        else:
+            if held <= EPS_SHARES:
+                return {"ok": False, "error": f"no open position in {symbol} to sell"}
+            if shares > held:
+                shares = held  # long-only equities: cap at holdings
+            err = _check_equity_sell_keeps_calls_covered(positions, symbol, shares)
+            if err:
+                return {"ok": False, "error": err}
+
+    gross = round(shares * price * mult, 2)
+    if side == "BUY":
+        spendable = round(cash_now - _csp_reserved(positions), 2)
+        if gross > spendable + 1e-6:
+            return {"ok": False, "error": "insufficient free cash for buy",
+                    "needed": gross, "cash": cash_now, "free_cash": spendable}
 
     store.insert("desk_trades", {
         "account": account, "run_id": run_id, "symbol": symbol, "side": side,
@@ -188,16 +330,20 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
         "ts": _utcnow()}, returning=False)
     rebuild_positions(store, account)
     return {"ok": True, "symbol": symbol, "side": side, "shares": shares,
-            "price": round(price, 4), "dollars": gross, "fill_quote": fill_quote,
-            "cash_after": cash(store, account)}
+            "price": round(price, 4), "dollars": gross, "multiplier": mult,
+            "fill_quote": fill_quote, "cash_after": cash(store, account)}
 
 
 def _live_quote(symbol: str) -> dict:
-    """One live SIP quote via REST (the fill path's price source). Raises on
-    missing keys/quote — the caller turns that into a clean rejection."""
-    from agent import broker
+    """One live quote via REST — SIP for equities, OPRA for option contracts.
+    Raises on missing keys/quote — the caller turns that into a rejection."""
+    from agent import broker, occ
 
-    q = broker.Broker().quotes([symbol]).get(symbol)
+    b = broker.Broker()
+    if occ.is_option(symbol):
+        q = b.option_quotes([symbol]).get(symbol)
+    else:
+        q = b.quotes([symbol]).get(symbol)
     if not q or not q.get("bid") or not q.get("ask"):
         raise ValueError(f"no live quote for {symbol}")
     return q
@@ -231,18 +377,29 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     except Exception as exc:  # noqa: BLE001 — clean rejection, not a stacktrace
         return {"ok": False, "error": f"live quote unavailable: {exc}"}
 
+    from agent import occ
+
+    is_opt = occ.is_option(symbol)
     bid, ask = float(q["bid"]), float(q["ask"])
-    if bid <= 0 or ask <= 0 or ask < bid or (ask - bid) / ask > 0.05:
-        return {"ok": False, "error": "degenerate quote (crossed or >5% spread)",
+    # options quote in wide relative spreads routinely; cap looser (25%) there
+    max_spread = 0.25 if is_opt else 0.05
+    if bid <= 0 or ask <= 0 or ask < bid or (ask - bid) / ask > max_spread:
+        return {"ok": False, "error":
+                f"degenerate quote (crossed or >{max_spread:.0%} spread)",
                 "bid": bid, "ask": ask}
 
     slip = slippage_bp / 10_000.0
     price = round(ask * (1 + slip), 4) if side == "BUY" else round(bid * (1 - slip), 4)
     if shares is None:
-        shares = round(float(notional) / price, 6)
+        per_unit = price * (MULTIPLIER if is_opt else 1)
+        shares = (float(notional) // per_unit) if is_opt else round(float(notional) / price, 6)
+        if shares <= 0:
+            return {"ok": False, "error": "notional too small for one contract",
+                    "contract_cost": per_unit}
 
     snapshot = {"bid": bid, "ask": ask, "mid": q.get("mid"), "t": q.get("t"),
-                "src": "alpaca_sip_rest", "slippage_bp": slippage_bp}
+                "src": "alpaca_opra_rest" if is_opt else "alpaca_sip_rest",
+                "slippage_bp": slippage_bp}
     return record_trade(store, symbol=symbol, side=side, shares=shares,
                         price=price, rationale=rationale, run_id=run_id,
                         fill_quote=snapshot, account=account)
@@ -265,16 +422,120 @@ def _latest_closes(symbols: list[str]) -> dict[str, float]:
 
 
 def _live_mids(symbols: list[str]) -> dict[str, float]:
-    """Live SIP mids for marking. Empty dict on any failure → close fallback."""
+    """Live mids for marking (SIP for equities, OPRA for contracts).
+    Empty dict on any failure → close/basis fallback."""
     if not symbols:
         return {}
+    from agent import occ
+
+    opts = [s for s in symbols if occ.is_option(s)]
+    eqs = [s for s in symbols if not occ.is_option(s)]
+    out: dict[str, float] = {}
     try:
         from agent import broker
 
-        qs = broker.Broker().quotes(symbols)
-        return {s: q["mid"] for s, q in qs.items() if q.get("mid")}
+        b = broker.Broker()
+        if eqs:
+            out.update({s: q["mid"] for s, q in b.quotes(eqs).items() if q.get("mid")})
+        if opts:
+            out.update({s: q["mid"] for s, q in b.option_quotes(opts).items()
+                        if q.get("mid")})
     except Exception:
-        return {}
+        pass
+    return out
+
+
+def _book_settlement(store, *, symbol: str, side: str, qty: float, price: float,
+                     rationale: str, underlying_px: float,
+                     account: str = ACCOUNT) -> None:
+    """Directly book a settlement row (bypasses the live-quote guards — expiry
+    settles at intrinsic value, which may legitimately be 0)."""
+    store.insert("desk_trades", {
+        "account": account, "run_id": "settlement", "symbol": symbol,
+        "side": side, "shares": qty, "price": round(price, 4),
+        "dollars": round(qty * price * _mult(symbol), 2),
+        "rationale": rationale,
+        "fill_quote": {"src": "expiry_settlement",
+                       "underlying_px": round(underlying_px, 4)},
+        "ts": _utcnow()}, returning=False)
+
+
+def settle(store=None, *, account: str = ACCOUNT) -> dict:
+    """Settle expired option positions honestly — run at the top of every cycle.
+
+    For each open contract past expiry, using the underlying's price:
+    - long ITM  → cash-settled exercise: SELL at intrinsic value.
+    - long OTM  → expires worthless: SELL at 0.
+    - short call ITM (covered by shares) → assignment: shares called away —
+      book an equity SELL of 100/contract at the strike, close the call at 0.
+    - short put ITM → assignment: book an equity BUY of 100/contract at the
+      strike (the CSP reservation funds it), close the put at 0.
+    - short OTM → expires worthless: BUY back at 0 (premium kept).
+    Every action is an append-only ledger row with src=expiry_settlement.
+    """
+    from agent import occ
+
+    store = store or _store()
+    today = _utcnow().date()
+    positions = _positions_map(store, account)
+    actions: list[dict] = []
+    for sym, sh in sorted(positions.items()):
+        if not occ.is_option(sym) or abs(sh) <= EPS_SHARES:
+            continue
+        p = occ.parse(sym)
+        if p["expiry"] >= today:
+            continue
+        und = p["underlying"]
+        und_px = (_live_mids([und]).get(und) or _latest_close(und) or 0.0)
+        if und_px <= 0:
+            actions.append({"symbol": sym, "action": "SKIPPED",
+                            "error": f"no price for underlying {und}"})
+            continue
+        iv = occ.intrinsic(sym, und_px)
+        qty = abs(sh)
+        desc = occ.describe(sym)
+        if sh > 0:  # long leg
+            _book_settlement(store, symbol=sym, side="SELL", qty=qty, price=iv,
+                             rationale=f"expiry settlement: {desc} "
+                                       f"{'exercised (cash-settled intrinsic)' if iv > 0 else 'expired worthless'}",
+                             underlying_px=und_px, account=account)
+            actions.append({"symbol": sym, "action": "long settled",
+                            "intrinsic": round(iv, 4), "qty": qty})
+        else:  # short leg
+            # Share assignment only when shares/cash actually back the short;
+            # a SPREAD-covered short cash-settles at intrinsic (its long leg
+            # settles on its own row), never creating a phantom share position.
+            shares_backed = (p["type"] == "C"
+                             and max(0.0, positions.get(und, 0.0)) >= qty * MULTIPLIER)
+            cash_backed = False
+            if p["type"] == "P":
+                short_q, long_q, _, _ = _option_legs(positions, und, "P")
+                cash_backed = long_q + 1e-9 < short_q  # not fully spread-covered
+            if iv > 0 and p["type"] == "C" and shares_backed:
+                _book_settlement(store, symbol=und, side="SELL",
+                                 qty=qty * MULTIPLIER, price=p["strike"],
+                                 rationale=f"assignment: shares called away at "
+                                           f"${p['strike']:g} ({desc})",
+                                 underlying_px=und_px, account=account)
+                close_px = 0.0
+            elif iv > 0 and p["type"] == "P" and cash_backed:
+                _book_settlement(store, symbol=und, side="BUY",
+                                 qty=qty * MULTIPLIER, price=p["strike"],
+                                 rationale=f"assignment: shares put to us at "
+                                           f"${p['strike']:g} ({desc})",
+                                 underlying_px=und_px, account=account)
+                close_px = 0.0
+            else:
+                close_px = iv  # cash-settle (spread-covered, or OTM → 0)
+            _book_settlement(store, symbol=sym, side="BUY", qty=qty, price=close_px,
+                             rationale=f"expiry settlement: {desc} short leg "
+                                       f"{'assigned' if (iv > 0 and close_px == 0.0) else ('cash-settled' if iv > 0 else 'expired worthless')}",
+                             underlying_px=und_px, account=account)
+            actions.append({"symbol": sym, "action": "short settled",
+                            "itm": iv > 0, "qty": qty})
+    if actions:
+        rebuild_positions(store, account)
+    return {"settled": actions, "as_of": str(today)}
 
 
 def mark(store=None, *, prices: dict[str, float] | None = None,
@@ -357,6 +618,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("state")
     sub.add_parser("mark")
+    sub.add_parser("settle", help="settle expired option positions (run each cycle)")
     fil = sub.add_parser("fill", help="book a fill AT THE LIVE QUOTE (the agent's path)")
     fil.add_argument("--symbol", required=True)
     fil.add_argument("--side", required=True, choices=["buy", "sell", "BUY", "SELL"])
@@ -380,6 +642,8 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(state(store), indent=2))
     elif args.cmd == "mark":
         print(json.dumps(mark(store), indent=2))
+    elif args.cmd == "settle":
+        print(json.dumps(settle(store), indent=2))
     elif args.cmd == "fill":
         print(json.dumps(live_fill(
             store, symbol=args.symbol, side=args.side, shares=args.shares,
