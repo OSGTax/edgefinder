@@ -21,11 +21,12 @@
 <!-- live SIP tape (SSE) -->
 <div id="desk-tape-banner" class="desk-tape-banner" hidden></div>
 <div class="c-card mb-16">
-  <div class="c-card-header">Live tape
+  <div class="c-card-header">Live prices
     <span id="desk-tape-live" class="desk-live-dot" hidden></span>
     <span class="spacer"></span>
     <span id="desk-tape-status" class="t-dim"></span>
   </div>
+  <div class="c-card-sub">Real-time prices straight from the exchanges — the same numbers the AI trades on. "Bid" is what buyers offer, "ask" is what sellers want.</div>
   <div class="c-card-body" id="desk-tape"></div>
 </div>
 
@@ -39,16 +40,18 @@
     <span class="spacer"></span>
     <span id="desk-opt-meta" class="t-dim"></span>
   </div>
+  <div class="c-card-sub">What the options market expects for a stock — how big a move traders are bracing for, and what protection costs. Type any symbol. Hover any term for a plain-English explanation.</div>
   <div class="c-card-body" id="desk-options"></div>
 </div>
 
 <div id="desk-stats" class="pf-grid mb-16"></div>
 
 <div class="c-card mb-16">
-  <div class="c-card-header">Equity curve
+  <div class="c-card-header">Account value over time
     <span class="spacer"></span>
     <span id="desk-equity-meta" class="t-dim"></span>
   </div>
+  <div class="c-card-sub">The whole account (cash + investments), recorded every trading cycle. Started at $100,000.</div>
   <div class="c-card-body tight">
     <div class="ch-shell">
       <div class="ch-pane tall" id="desk-equity-chart"></div>
@@ -58,23 +61,26 @@
 
 <div class="grid-2 mb-16">
   <div class="c-card">
-    <div class="c-card-header">Holdings</div>
+    <div class="c-card-header">What the AI owns right now</div>
+    <div class="c-card-sub">Every investment currently held, what it cost, what it's worth now, and the gain or loss so far.</div>
     <div class="c-card-body" id="desk-positions"></div>
   </div>
   <div class="c-card">
-    <div class="c-card-header">Live thinking
+    <div class="c-card-header">The AI thinking out loud
       <span class="spacer"></span>
       <span id="desk-thinking-run" class="t-dim"></span>
     </div>
+    <div class="c-card-sub">Its live reasoning, in its own words, as each trading cycle runs.</div>
     <div class="c-card-body" id="desk-thinking"></div>
   </div>
 </div>
 
 <div class="c-card mb-16">
-  <div class="c-card-header">Latest decision
+  <div class="c-card-header">The latest decision
     <span class="spacer"></span>
     <span id="desk-decision-when" class="t-dim"></span>
   </div>
+  <div class="c-card-sub">What the AI decided on its most recent cycle — what it bought, held, or sold, and the reasoning behind each pick.</div>
   <div class="c-card-body">
     <div id="desk-summary" class="mb-16"></div>
     <div id="desk-picks"></div>
@@ -84,11 +90,13 @@
 
 <div class="grid-2">
   <div class="c-card">
-    <div class="c-card-header">Backtest evidence</div>
+    <div class="c-card-header">Homework: history tests</div>
+    <div class="c-card-sub">Before betting (paper) money on an idea, the AI tests how it would have performed in past markets versus simply buying the S&amp;P 500.</div>
     <div class="c-card-body" id="desk-backtests"></div>
   </div>
   <div class="c-card">
-    <div class="c-card-header">Strategy journal</div>
+    <div class="c-card-header">Strategy diary</div>
+    <div class="c-card-sub">Every time the AI changes its approach, it writes down what changed and why.</div>
     <div class="c-card-body" id="desk-journal"></div>
   </div>
 </div>

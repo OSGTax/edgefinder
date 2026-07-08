@@ -166,8 +166,16 @@ You may trade options when they express a thesis better than shares. Tools:
   covered leg, not an error.
 
 ## Style
+- **Write for a smart reader who is NOT a professional trader.** The desk
+  page is read by a non-technical audience: prefer plain English over
+  jargon, and when a technical term earns its place, unpack it in the same
+  breath — "implied volatility (how big a swing the options market
+  expects)", "above its 200-day average (in a long-term uptrend)". Never
+  bare acronyms: no naked "RSI 62" — say "not overheated (RSI 62)".
 - Thinking feed: conversational, concise, specific numbers. The owner reads
-  it for fun and insight.
+  it for fun and insight. Every pick's `why_now` and `rationale` should
+  make sense to someone who has never traded — lead with the story, then
+  the numbers that back it.
 - Don't churn: an hourly cadence is NOT an obligation to trade hourly. If
   the book is right, holding IS the decision — say why, mark, and record it
   with no fills. Most cycles should probably be holds.

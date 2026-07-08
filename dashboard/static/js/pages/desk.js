@@ -43,23 +43,34 @@ async function loadHeader() {
     clear(statsEl);
     const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
     statsEl.append(
-      statCard('Equity', fmtDollar(pf.equity)),
-      statCard('Total P&L', fmtPnl(pf.total_pnl), pnlCls),
+      statCard('Account value', fmtDollar(pf.equity)),
+      statCard('Profit / loss', fmtPnl(pf.total_pnl), pnlCls),
       statCard('Return', fmtPct(pf.total_return_pct / 100, { signed: true }), pnlCls),
-      statCard('Cash', fmtDollar(pf.cash)),
-      statCard('Positions', String((pf.positions || []).length)),
+      statCard('Cash on hand', fmtDollar(pf.cash)),
+      statCard('Investments', String((pf.positions || []).length)),
     );
 
     clear(stratEl);
     if (strat.current) {
-      stratEl.append(
-        pill('v' + strat.current.version + ' · ' + strat.current.name, 'info'));
+      stratEl.append(h('span', {
+        class: 'c-pill info',
+        title: strat.current.thesis || 'The strategy the AI is currently running.',
+        text: 'Strategy v' + strat.current.version + ' · ' + strat.current.name,
+      }));
     }
 
     clear(regimeEl);
     if (regime && regime.tag) {
-      const cls = regime.tag === 'risk_on' ? 'up' : regime.tag === 'risk_off' ? 'down' : 'neutral';
-      regimeEl.append(pill('Regime: ' + regime.tag.replace('_', ' '), cls));
+      const MOOD = {
+        risk_on: ['Market mood: favorable', 'up',
+          'The major indexes are in uptrends — conditions that historically reward being invested.'],
+        risk_off: ['Market mood: defensive', 'down',
+          'The market is below its long-term trend — the AI leans toward caution and cash.'],
+        neutral: ['Market mood: mixed', 'neutral',
+          'Trend signals are conflicting — neither clearly favorable nor defensive.'],
+      };
+      const [label, cls, tip] = MOOD[regime.tag] || MOOD.neutral;
+      regimeEl.append(h('span', { class: 'c-pill ' + cls, title: tip, text: label }));
     }
   } catch (err) {
     renderError(statsEl, err, loadHeader);
@@ -123,10 +134,12 @@ function occParse(sym) {
 function equitiesTable(rows) {
   return h('table', { class: 'c-table' },
     h('thead', {}, h('tr', {},
-      h('th', { text: 'Symbol' }), h('th', { class: 'num', text: 'Shares' }),
-      h('th', { class: 'num', text: 'Avg' }), h('th', { class: 'num', text: 'Last' }),
-      h('th', { class: 'num', text: 'Value' }), h('th', { class: 'num', text: 'Wt' }),
-      h('th', { class: 'num', text: 'Unreal. P&L' }))),
+      h('th', { text: 'Stock' }), h('th', { class: 'num', text: 'Shares' }),
+      h('th', { class: 'num', text: 'Paid', title: 'Average price paid per share' }),
+      h('th', { class: 'num', text: 'Now', title: 'Most recent market price' }),
+      h('th', { class: 'num', text: 'Worth' }),
+      h('th', { class: 'num', text: '% of account', title: 'How much of the whole account this holding represents' }),
+      h('th', { class: 'num', text: 'Gain / loss', title: 'Profit or loss if sold at the current price' }))),
     h('tbody', {}, ...rows.map(p => h('tr', {},
       h('td', {}, h('a', { href: '/symbol/' + p.symbol, class: 'c-link', text: p.symbol })),
       h('td', { class: 'num', text: fmtNum(p.shares, 2) }),
@@ -141,11 +154,13 @@ function equitiesTable(rows) {
 function optionsTable(rows) {
   return h('table', { class: 'c-table' },
     h('thead', {}, h('tr', {},
-      h('th', { text: 'Contract' }), h('th', { text: 'Side' }),
-      h('th', { class: 'num', text: 'Qty' }), h('th', { class: 'num', text: 'DTE' }),
-      h('th', { class: 'num', text: 'Avg' }), h('th', { class: 'num', text: 'Mark' }),
-      h('th', { class: 'num', text: 'Value' }),
-      h('th', { class: 'num', text: 'Unreal. P&L' }))),
+      h('th', { text: 'Option contract', title: 'e.g. "NVDA $200C 2027-01-16" = the right to buy NVDA at $200 until Jan 16 2027' }),
+      h('th', { text: 'Side', title: 'LONG = the AI bought it. SHORT = the AI sold it (always backed by shares, cash, or another option — never naked)' }),
+      h('th', { class: 'num', text: 'Qty', title: 'Contracts held; each contract covers 100 shares' }),
+      h('th', { class: 'num', text: 'Days left', title: 'Days until the contract expires' }),
+      h('th', { class: 'num', text: 'Paid' }), h('th', { class: 'num', text: 'Now' }),
+      h('th', { class: 'num', text: 'Worth' }),
+      h('th', { class: 'num', text: 'Gain / loss' }))),
     h('tbody', {}, ...rows.map(p => {
       const o = occParse(p.symbol);
       const short = p.shares < 0;
@@ -269,9 +284,11 @@ async function loadBacktests() {
     clear(el);
     const table = h('table', { class: 'c-table' },
       h('thead', {}, h('tr', {},
-        h('th', { text: 'Idea' }), h('th', { class: 'num', text: 'Return' }),
-        h('th', { class: 'num', text: 'vs SPY' }), h('th', { class: 'num', text: 'Sharpe' }),
-        h('th', { class: 'num', text: 'MaxDD' }))),
+        h('th', { text: 'Idea tested' }),
+        h('th', { class: 'num', text: 'Return', title: 'What the idea would have made over the test period' }),
+        h('th', { class: 'num', text: 'vs the market', title: 'How much better (+) or worse (−) than simply buying the S&P 500' }),
+        h('th', { class: 'num', text: 'Smoothness', title: 'Sharpe ratio: return relative to how bumpy the ride was — higher is better' }),
+        h('th', { class: 'num', text: 'Worst dip', title: 'The deepest peak-to-bottom drop along the way' }))),
       h('tbody', {}, ...rows.map(r => {
         const res = r.result || {};
         const ex = res.excess_return_pct;
@@ -424,9 +441,9 @@ function chainRows(summary, maxRows = 21) {
     .sort((a, b) => a[0] - b[0]);
 }
 
-function optStat(label, value, cls) {
-  return h('div', { class: 'c-stat' },
-    h('div', { class: 'label', text: label }),
+function optStat(label, value, cls, tip) {
+  return h('div', { class: 'c-stat', title: tip || null },
+    h('div', { class: 'label' + (tip ? ' desk-hint' : ''), text: label }),
     h('div', { class: 'value ' + (cls || ''), text: value }));
 }
 
@@ -450,13 +467,18 @@ async function loadOptions() {
     const em = s.expected_move_pct != null
       ? `±${fmtNum(s.expected_move_pct, 1)}% ($${fmtNum(s.expected_move_dollars, 2)})` : '—';
     const stats = h('div', { class: 'pf-grid mb-16' },
-      optStat('Spot', fmtPrice(s.spot)),
-      optStat('ATM IV', s.atm_iv != null ? fmtNum(s.atm_iv * 100, 1) + '%' : '—'),
-      optStat('Expected move', em),
-      optStat('25Δ skew', s.skew_25d != null
+      optStat('Stock price', fmtPrice(s.spot),
+        '', 'The current market price of the stock itself'),
+      optStat('Implied volatility', s.atm_iv != null ? fmtNum(s.atm_iv * 100, 1) + '%' : '—',
+        '', 'How jumpy the options market expects this stock to be — higher = bigger expected swings (and pricier options)'),
+      optStat('Expected move', em,
+        '', `The size of the price swing (up OR down) that options traders are pricing in between now and ${s.expiry}`),
+      optStat('Fear gauge', s.skew_25d != null
         ? (s.skew_25d >= 0 ? '+' : '') + fmtNum(s.skew_25d * 100, 1) + '%'
-        : '—', s.skew_25d > 0.02 ? 't-down' : ''),
-      optStat('IV bank', `${(hist && hist.series ? hist.series.length : 0)} day(s)`));
+        : '—', s.skew_25d > 0.02 ? 't-down' : '',
+        'Put/call skew: positive = traders paying extra for downside protection (nervous); near zero = relaxed'),
+      optStat('History collected', `${(hist && hist.series ? hist.series.length : 0)} day(s)`,
+        '', 'Days of volatility history saved so far — charts get richer as this grows'));
     el.append(stats);
 
     const rows = chainRows(s);

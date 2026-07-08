@@ -125,3 +125,14 @@
 .desk-opt-chain td, .desk-opt-chain th { font-variant-numeric: tabular-nums; }
 .desk-opt-strike { font-weight: 700; color: var(--t-text); }
 .desk-opt-atm td { background: var(--t-accent-dim); }
+
+/* plain-english layer: card subtitles + hoverable term hints */
+.c-card-sub {
+  padding: 0 var(--t-s4) var(--t-s2);
+  margin-top: calc(-1 * var(--t-s1));
+  color: var(--t-text-3);
+  font-size: var(--t-fs-sm);
+  line-height: 1.45;
+}
+.desk-hint { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
+th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
