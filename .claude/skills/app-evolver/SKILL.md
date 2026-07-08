@@ -16,6 +16,13 @@ The desk is a no-build vanilla front-end (FastAPI + Jinja templates + ES modules
 `/api/desk/*` endpoints in `dashboard/routers/desk.py`.
 
 ## What "useful" means (pick ONE per run)
+**The owner's standing priority: intuitive and legible for a smart reader who
+is NOT a professional trader.** The desk already follows this standard — every
+card carries a plain-English subtitle, technical terms translate on hover
+(dotted underline = hoverable), and labels favor "Account value / Gain-loss /
+Market mood" over jargon. Anything you add must match it, and improvements
+that ADVANCE it (clearer explanations, friendlier flows, better empty states,
+gentler onboarding for a first-time visitor) rank above new data density.
 - Surface something already in the data that isn't shown yet (e.g. a stat,
   a sparkline, a derived metric, a sort/filter, a clearer empty state).
 - Make an existing panel easier to read or act on (labels, formatting,
@@ -77,8 +84,9 @@ endpoint, it must read existing `desk_*` / market-data tables only.
    what you shipped, the new version, the test result, and the What's New blurb.
 
 ## Deployment
-Commit message format: `[vX.Y.Z] desk: <what changed>`. Push to the branch the
-Routine is configured for. The change goes live on the next Render deploy of the
+Commit message format: `[vX.Y.Z] desk: <what changed>`. Fetch/rebase onto
+origin/main first (other sessions ship to this repo), then push directly to
+main. The change goes live on the next Render deploy of the
 default branch — so it reaches real users. That is exactly why the test gate and
 the "additive, desk-only, ship-nothing-if-unsure" rules above are non-negotiable.
 If you are unsure whether a change is safe to auto-ship, prefer the smaller
