@@ -7,7 +7,7 @@
 import { apiGet } from '../core/net.js';
 import { toEpochSec, fmtDollar, fmtPnl, fmtPct, fmtPrice, fmtNum, timeAgo, fmtDateTimeET }
   from '../core/fmt.js';
-import { h, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
+import { h, svg, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
 import { createChart, colors } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
 
@@ -131,12 +131,43 @@ function occParse(sym) {
   };
 }
 
-function equitiesTable(rows) {
+function sparkline(series, up) {
+  const W = 68, H = 20, n = series ? series.length : 0;
+  if (n < 2) return h('span', { class: 't-dim', text: '—' });
+  const min = Math.min(...series), max = Math.max(...series), rng = (max - min) || 1;
+  const pts = series.map((v, i) =>
+    `${(i / (n - 1) * W).toFixed(1)},${(H - (v - min) / rng * H).toFixed(1)}`).join(' ');
+  return svg('svg', {
+    class: 'desk-spark ' + (up ? 't-up' : 't-down'),
+    viewBox: `0 0 ${W} ${H}`, width: W, height: H, preserveAspectRatio: 'none',
+    'aria-hidden': 'true',
+  }, svg('polyline', { points: pts, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linejoin': 'round' }));
+}
+
+function dayChangeCell(st) {
+  if (!st || st.day_change_pct == null) return h('td', { class: 'num t-dim', text: '—' });
+  const c = st.day_change_pct;
+  return h('td', { class: 'num ' + (c >= 0 ? 't-up' : 't-down'),
+    text: (c >= 0 ? '+' : '') + fmtNum(c, 2) + '%' });
+}
+
+function trendCell(st) {
+  if (!st || !(st.spark && st.spark.length > 1)) return h('td', { class: 'num t-dim', text: '—' });
+  const up = st.spark[st.spark.length - 1] >= st.spark[0];
+  const range = (st.wk52_low != null && st.wk52_high != null)
+    ? ` · 52-wk range ${fmtPrice(st.wk52_low)}–${fmtPrice(st.wk52_high)}` : '';
+  return h('td', { class: 'num', title: '30-day price trend' + range }, sparkline(st.spark, up));
+}
+
+function equitiesTable(rows, stats) {
+  stats = stats || {};
   return h('table', { class: 'c-table' },
     h('thead', {}, h('tr', {},
       h('th', { text: 'Stock' }), h('th', { class: 'num', text: 'Shares' }),
       h('th', { class: 'num', text: 'Paid', title: 'Average price paid per share' }),
       h('th', { class: 'num', text: 'Now', title: 'Most recent market price' }),
+      h('th', { class: 'num', text: 'Today', title: "The stock's move on the last completed trading session" }),
+      h('th', { class: 'num', text: '30-day trend', title: 'The shape of the last 30 days; hover for the 52-week range' }),
       h('th', { class: 'num', text: 'Worth' }),
       h('th', { class: 'num', text: '% of account', title: 'How much of the whole account this holding represents' }),
       h('th', { class: 'num', text: 'Gain / loss', title: 'Profit or loss if sold at the current price' }))),
@@ -145,6 +176,8 @@ function equitiesTable(rows) {
       h('td', { class: 'num', text: fmtNum(p.shares, 2) }),
       h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
       h('td', { class: 'num', text: fmtPrice(p.last_price) }),
+      dayChangeCell(stats[p.symbol]),
+      trendCell(stats[p.symbol]),
       h('td', { class: 'num', text: fmtDollar(p.market_value) }),
       h('td', { class: 'num', text: fmtPct(p.weight) }),
       h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
@@ -181,12 +214,16 @@ async function loadPositions() {
   const el = document.getElementById('desk-positions');
   skeleton(el);
   try {
-    const pf = await apiGet('/api/desk/portfolio');
+    const [pf, hs] = await Promise.all([
+      apiGet('/api/desk/portfolio'),
+      apiGet('/api/desk/holding-stats').catch(() => null),
+    ]);
     if (!pf.positions.length) { renderEmpty(el, 'All cash — no open positions.'); return; }
     clear(el);
+    const stats = (hs && hs.symbols) || {};
     const eqs = pf.positions.filter(p => !occParse(p.symbol));
     const opts = pf.positions.filter(p => occParse(p.symbol));
-    if (eqs.length) el.append(equitiesTable(eqs));
+    if (eqs.length) el.append(equitiesTable(eqs, stats));
     if (opts.length) {
       el.append(h('div', { class: 'desk-subhead', text: 'Options' }), optionsTable(opts));
     }

@@ -215,6 +215,50 @@ def movers(db: Session = Depends(get_db), top: int = Query(5, ge=1, le=15)):
     }
 
 
+@router.get("/holding-stats")
+def holding_stats(db: Session = Depends(get_db),
+                  spark_days: int = Query(30, ge=5, le=120)):
+    """Per-held-name enrichment from the daily-bar hot set: last-session day
+    change, 52-week high/low, and a short close series for a sparkline. Read-only
+    (no external calls); options legs are skipped (not in daily_bars)."""
+    from datetime import timedelta
+
+    from sqlalchemy import func as safunc
+
+    from agent import occ
+    from edgefinder.db.models import DailyBar
+
+    held = [s for (s,) in db.query(DeskPosition.symbol)
+            .filter(DeskPosition.account == ACCOUNT).all() if not occ.is_option(s)]
+    if not held:
+        return {"as_of": None, "symbols": {}}
+    latest = (db.query(safunc.max(DailyBar.date))
+              .filter(DailyBar.symbol.in_(held)).scalar())
+    if latest is None:
+        return {"as_of": None, "symbols": {}}
+    lo = latest - timedelta(days=400)  # ~252 trading days of headroom
+    rows = (db.query(DailyBar.symbol, DailyBar.close)
+            .filter(DailyBar.symbol.in_(held), DailyBar.date >= lo)
+            .order_by(DailyBar.symbol, DailyBar.date).all())
+    series: dict[str, list[float]] = {}
+    for sym, close in rows:
+        if close is not None:
+            series.setdefault(sym, []).append(float(close))
+    out = {}
+    for sym, closes in series.items():
+        if len(closes) < 2:
+            continue
+        last, prev = closes[-1], closes[-2]
+        wk = closes[-252:]
+        out[sym] = {
+            "last": round(last, 2), "prev": round(prev, 2),
+            "day_change_pct": round((last - prev) / prev * 100, 2) if prev else None,
+            "wk52_high": round(max(wk), 2), "wk52_low": round(min(wk), 2),
+            "spark": [round(c, 2) for c in closes[-spark_days:]],
+        }
+    return {"as_of": str(latest), "symbols": out}
+
+
 @router.get("/quotes")
 def live_quotes():
     """Point-in-time snapshot of the live SIP quote cache (the tools read this).

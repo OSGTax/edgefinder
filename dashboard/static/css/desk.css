@@ -159,3 +159,6 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 @media (max-width: 640px) {
   .desk-mv-grid { grid-template-columns: 1fr; gap: var(--t-s3); }
 }
+
+/* ── holdings: sparkline trend ── */
+.desk-spark { display: inline-block; vertical-align: middle; width: 68px; height: 20px; }

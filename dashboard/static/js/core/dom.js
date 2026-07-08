@@ -20,6 +20,21 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+/* SVG element builder (namespace-aware sibling of h()). SVG uses attribute
+   geometry + token colors (class / currentColor), so it stays theme-safe with
+   zero inline styles. */
+export function svg(tag, attrs = {}, ...children) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v == null) continue;
+    el.setAttribute(k, v);
+  }
+  for (const c of children.flat()) {
+    if (c != null) el.append(c);
+  }
+  return el;
+}
+
 export function clear(el) {
   while (el.firstChild) el.removeChild(el.firstChild);
   return el;

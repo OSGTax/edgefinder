@@ -154,3 +154,32 @@ def test_desk_movers(client):
     assert "PENNY" not in gain and "PENNY" not in lose   # sub-$1 filtered out
     assert d["most_active"][0]["symbol"] == "BBB"        # 80 * 9000 = biggest $ volume
     assert next(x for x in d["gainers"] if x["symbol"] == "AAA")["change_pct"] == 20.0
+
+
+def test_desk_holding_stats(client):
+    """Holding-stats returns day change, 52-week range, and a spark series."""
+    from datetime import date, datetime, timedelta, timezone
+
+    import agent.data as agent_data
+    from edgefinder.db.models import DailyBar
+
+    now = datetime.now(timezone.utc)
+    sess = agent_data.session_factory()()
+    try:
+        # NVDA is the seeded holding; give it 10 rising sessions
+        base = date(2026, 6, 24)
+        for i in range(10):
+            px = 100.0 + i  # 100 → 109, last-session change 108→109
+            sess.add(DailyBar(symbol="NVDA", date=base + timedelta(days=i),
+                              open=px, high=px, low=px, close=px, volume=1000.0,
+                              source="test", created_at=now))
+        sess.commit()
+    finally:
+        sess.close()
+
+    d = client.get("/api/desk/holding-stats?spark_days=30").json()
+    assert "NVDA" in d["symbols"]
+    s = d["symbols"]["NVDA"]
+    assert s["wk52_high"] == 109.0 and s["wk52_low"] == 100.0
+    assert s["day_change_pct"] == round((109 - 108) / 108 * 100, 2)
+    assert s["spark"][0] == 100.0 and s["spark"][-1] == 109.0
