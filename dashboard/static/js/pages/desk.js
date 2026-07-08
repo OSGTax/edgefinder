@@ -509,6 +509,43 @@ async function loadOptions() {
   } catch (err) { renderError(el, err, loadOptions); }
 }
 
+/* ── market movers: gainers / losers / most-active (last close) ── */
+function moverColumn(title, rows) {
+  const col = h('div', { class: 'desk-mv-col' },
+    h('div', { class: 'desk-mv-col-head', text: title }));
+  if (!rows || !rows.length) {
+    col.append(h('div', { class: 't-dim desk-mv-empty', text: '—' }));
+    return col;
+  }
+  for (const r of rows) {
+    const chg = r.change_pct;
+    const cls = chg == null ? 't-dim' : chg >= 0 ? 't-up' : 't-down';
+    const chgTxt = chg == null ? '—' : (chg >= 0 ? '+' : '') + fmtNum(chg, 2) + '%';
+    col.append(h('div', { class: 'desk-mv-row' },
+      h('a', { href: '/symbol/' + r.symbol, class: 'c-link desk-mv-sym', text: r.symbol }),
+      h('span', { class: 'desk-mv-price t-dim', text: fmtPrice(r.close) }),
+      h('span', { class: 'desk-mv-chg ' + cls, text: chgTxt })));
+  }
+  return col;
+}
+
+async function loadMovers() {
+  const el = document.getElementById('desk-movers');
+  const metaEl = document.getElementById('desk-movers-meta');
+  skeleton(el);
+  try {
+    const d = await apiGet('/api/desk/movers?top=5');
+    const empty = !d.as_of || (!(d.gainers || []).length && !(d.losers || []).length && !(d.most_active || []).length);
+    if (empty) { renderEmpty(el, 'No market data yet.'); if (metaEl) metaEl.textContent = ''; return; }
+    if (metaEl) metaEl.textContent = 'as of ' + d.as_of + ' close';
+    clear(el);
+    el.append(h('div', { class: 'desk-mv-grid' },
+      moverColumn('Top gainers', d.gainers),
+      moverColumn('Top losers', d.losers),
+      moverColumn('Most active', d.most_active)));
+  } catch (err) { renderError(el, err, loadMovers); }
+}
+
 /* ── what's new: dashboard improvements the agent shipped ── */
 const WN_KIND_CLASS = { feature: 'info', improvement: 'info', data: 'neutral', disclaimer: 'warn', fix: 'up' };
 
@@ -595,7 +632,7 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
-    loadOptions(),
+    loadOptions(), loadMovers(),
   ]);
 }
 

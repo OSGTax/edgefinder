@@ -136,3 +136,26 @@
 }
 .desk-hint { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
+
+/* ── market movers ── */
+.desk-mv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--t-s4); }
+.desk-mv-col { display: flex; flex-direction: column; gap: var(--t-s1); }
+.desk-mv-col-head {
+  font-size: var(--t-fs-xs); text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--t-text-3); padding-bottom: var(--t-s2);
+  border-bottom: 1px solid var(--t-border); margin-bottom: var(--t-s1);
+}
+.desk-mv-row {
+  display: grid; grid-template-columns: 1fr auto auto; align-items: baseline;
+  gap: var(--t-s3); padding: var(--t-s1) 0;
+}
+.desk-mv-sym { font-weight: 600; }
+.desk-mv-price { font-size: var(--t-fs-sm); font-family: var(--t-font-mono); }
+.desk-mv-chg {
+  font-size: var(--t-fs-sm); font-family: var(--t-font-mono);
+  text-align: right; min-width: 4.5em;
+}
+.desk-mv-empty { padding: var(--t-s2) 0; }
+@media (max-width: 640px) {
+  .desk-mv-grid { grid-template-columns: 1fr; gap: var(--t-s3); }
+}

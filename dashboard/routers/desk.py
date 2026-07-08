@@ -173,6 +173,48 @@ def regime():
         return {"tag": "neutral", "error": f"{type(exc).__name__}: {exc}", "indices": {}}
 
 
+@router.get("/movers")
+def movers(db: Session = Depends(get_db), top: int = Query(5, ge=1, le=15)):
+    """Top gainers / losers / most-active as of the last completed session.
+
+    Computed read-only from the fresh daily-bar hot set (the ~500-name universe
+    the refresh keeps current) — biggest close-to-close moves and largest dollar
+    volume. No external calls; this is last-close data, not a live intraday tape
+    (the live tape is the SSE ``/stream``).
+    """
+    from sqlalchemy import func as safunc
+
+    from edgefinder.db.models import DailyBar
+
+    latest = db.query(safunc.max(DailyBar.date)).scalar()
+    if latest is None:
+        return {"as_of": None, "prior": None,
+                "gainers": [], "losers": [], "most_active": []}
+    prior = (db.query(safunc.max(DailyBar.date))
+             .filter(DailyBar.date < latest).scalar())
+    cur = (db.query(DailyBar.symbol, DailyBar.close, DailyBar.volume)
+           .filter(DailyBar.date == latest).all())
+    prev = {} if prior is None else {
+        s: c for s, c in db.query(DailyBar.symbol, DailyBar.close)
+        .filter(DailyBar.date == prior).all()}
+    rows = []
+    for sym, close, vol in cur:
+        if close is None or close < 1.0 or any(ch in sym for ch in (".", "/", "=")):
+            continue
+        pc = prev.get(sym)
+        chg = ((close - pc) / pc * 100.0) if pc else None
+        rows.append({"symbol": sym, "close": round(close, 2),
+                     "change_pct": round(chg, 2) if chg is not None else None,
+                     "dollar_volume": round(close * (vol or 0.0))})
+    with_chg = [r for r in rows if r["change_pct"] is not None]
+    return {
+        "as_of": str(latest), "prior": (str(prior) if prior else None),
+        "gainers": sorted(with_chg, key=lambda r: -r["change_pct"])[:top],
+        "losers": sorted(with_chg, key=lambda r: r["change_pct"])[:top],
+        "most_active": sorted(rows, key=lambda r: -r["dollar_volume"])[:top],
+    }
+
+
 @router.get("/quotes")
 def live_quotes():
     """Point-in-time snapshot of the live SIP quote cache (the tools read this).

@@ -119,3 +119,38 @@ def test_broker_health_no_keys(client, monkeypatch):
     monkeypatch.setattr(_b.settings, "alpaca_api_secret", "", raising=False)
     body = client.get("/api/desk/broker-health").json()
     assert body["keys_present"] is False and "keys" in body["error"]
+
+
+def test_desk_movers(client):
+    """Movers endpoint ranks gainers/losers/most-active from daily_bars."""
+    from datetime import date, datetime, timezone
+
+    import agent.data as agent_data
+    from edgefinder.db.models import DailyBar
+
+    now = datetime.now(timezone.utc)
+    d0, d1 = date(2026, 7, 6), date(2026, 7, 7)
+    seed = [
+        ("AAA", d0, 100.0, 1_000), ("AAA", d1, 120.0, 2_000),   # +20% gainer
+        ("BBB", d0, 100.0, 5_000), ("BBB", d1, 80.0, 9_000),    # -20% loser, biggest $vol
+        ("CCC", d0, 50.0, 100), ("CCC", d1, 50.0, 100),         # flat
+        ("PENNY", d0, 0.9, 1), ("PENNY", d1, 0.5, 1),           # sub-$1 → filtered
+    ]
+    sess = agent_data.session_factory()()
+    try:
+        for sym, dd, close, vol in seed:
+            sess.add(DailyBar(symbol=sym, date=dd, open=close, high=close, low=close,
+                              close=close, volume=float(vol), source="test", created_at=now))
+        sess.commit()
+    finally:
+        sess.close()
+
+    d = client.get("/api/desk/movers?top=3").json()
+    assert d["as_of"] == "2026-07-07" and d["prior"] == "2026-07-06"
+    gain = [x["symbol"] for x in d["gainers"]]
+    lose = [x["symbol"] for x in d["losers"]]
+    assert gain[0] == "AAA"                      # +20% is the top gainer
+    assert lose[0] == "BBB"                       # -20% is the top loser
+    assert "PENNY" not in gain and "PENNY" not in lose   # sub-$1 filtered out
+    assert d["most_active"][0]["symbol"] == "BBB"        # 80 * 9000 = biggest $ volume
+    assert next(x for x in d["gainers"] if x["symbol"] == "AAA")["change_pct"] == 20.0
