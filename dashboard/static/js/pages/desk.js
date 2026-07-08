@@ -618,6 +618,39 @@ async function loadMovers() {
   } catch (err) { renderError(el, err, loadMovers); }
 }
 
+/* ── dividend calendar: per-holding ex-dates + amounts ── */
+async function loadDividends() {
+  const el = document.getElementById('desk-dividends');
+  const metaEl = document.getElementById('desk-dividends-meta');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const d = await apiGet('/api/desk/dividends');
+    const payers = (d.holdings || []).filter(x => x.has_dividend);
+    if (!payers.length) {
+      renderEmpty(el, 'None of the current holdings pay a dividend.');
+      if (metaEl) metaEl.textContent = '';
+      return;
+    }
+    if (metaEl) metaEl.textContent = payers.length + ' of ' + (d.holdings || []).length + ' holdings pay';
+    clear(el);
+    const table = h('table', { class: 'c-table' },
+      h('thead', {}, h('tr', {},
+        h('th', { text: 'Stock' }),
+        h('th', { class: 'num', text: 'Last paid', title: 'The most recent ex-dividend date — the cutoff to own the stock and receive that payment' }),
+        h('th', { class: 'num', text: 'Amount', title: 'Cash per share of the most recent dividend' }),
+        h('th', { class: 'num', text: 'Next', title: 'The next scheduled ex-dividend date, if one has been announced' }),
+        h('th', { class: 'num', text: 'Est. yearly', title: 'Estimated payout per share over a year (sum of the last four dividends)' }))),
+      h('tbody', {}, ...payers.map(x => h('tr', {},
+        h('td', {}, h('a', { href: '/symbol/' + x.symbol, class: 'c-link', text: x.symbol })),
+        h('td', { class: 'num', text: x.last_ex_date || '—' }),
+        h('td', { class: 'num', text: x.last_amount != null ? fmtPrice(x.last_amount) : '—' }),
+        h('td', { class: 'num ' + (x.next_ex_date ? 't-up' : 't-dim'), text: x.next_ex_date || '—' }),
+        h('td', { class: 'num', text: x.ttm_amount ? fmtPrice(x.ttm_amount) : '—' })))));
+    el.append(table);
+  } catch (err) { renderError(el, err, loadDividends); }
+}
+
 /* ── what's new: dashboard improvements the agent shipped ── */
 const WN_KIND_CLASS = { feature: 'info', improvement: 'info', data: 'neutral', disclaimer: 'warn', fix: 'up' };
 
@@ -704,7 +737,7 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
-    loadOptions(), loadMovers(),
+    loadOptions(), loadMovers(), loadDividends(),
   ]);
 }
 

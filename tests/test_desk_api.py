@@ -183,3 +183,27 @@ def test_desk_holding_stats(client):
     assert s["wk52_high"] == 109.0 and s["wk52_low"] == 100.0
     assert s["day_change_pct"] == round((109 - 108) / 108 * 100, 2)
     assert s["spark"][0] == 100.0 and s["spark"][-1] == 109.0
+
+
+def test_desk_dividends(client):
+    """Dividend calendar returns last/next ex-dates for dividend-paying holdings."""
+    from datetime import date
+
+    import agent.data as agent_data
+    from edgefinder.db.models import DividendRecord
+
+    sess = agent_data.session_factory()()
+    try:  # NVDA is the seeded holding; 2099 is unambiguously "upcoming"
+        for ex, amt in [(date(2026, 3, 5), 0.10), (date(2026, 6, 5), 0.10),
+                        (date(2099, 9, 5), 0.12)]:
+            sess.add(DividendRecord(symbol="NVDA", ex_date=ex, cash_amount=amt))
+        sess.commit()
+    finally:
+        sess.close()
+
+    d = client.get("/api/desk/dividends").json()
+    nvda = next(x for x in d["holdings"] if x["symbol"] == "NVDA")
+    assert nvda["has_dividend"] is True
+    assert nvda["next_ex_date"] == "2099-09-05"          # the only future ex-date
+    assert nvda["last_ex_date"] == "2026-06-05"          # most recent past
+    assert nvda["ttm_amount"] == round(0.10 + 0.10 + 0.12, 4)

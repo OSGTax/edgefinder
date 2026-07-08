@@ -103,3 +103,21 @@ def test_normalize_news_maps_alpaca_to_ticker_news_shape():
     assert out["url"] == "https://x/y"
     assert out["published_utc"] == "2026-07-08T16:00:00+00:00"
     assert out["symbols"] == ["LLY", "NVO"]       # upper-cased
+
+
+def test_normalize_corp_action_dividend_and_split():
+    div = SimpleNamespace(ca_type=SimpleNamespace(value="dividend"),
+                          initiating_symbol="lly", target_symbol=None,
+                          ex_date=SimpleNamespace(isoformat=lambda: "2026-08-15"),
+                          payable_date=None, record_date=None,
+                          cash=1.73, old_rate=None, new_rate=None)
+    out = broker.normalize_corp_action(div)
+    assert out["ca_type"] == "dividend" and out["symbol"] == "LLY"
+    assert out["ex_date"] == "2026-08-15" and out["cash"] == 1.73
+
+    split = SimpleNamespace(ca_type="split", initiating_symbol="NVDA", target_symbol=None,
+                            ex_date=SimpleNamespace(isoformat=lambda: "2026-06-10"),
+                            payable_date=None, record_date=None,
+                            cash=None, old_rate=1.0, new_rate=10.0)
+    o2 = broker.normalize_corp_action(split)
+    assert o2["ca_type"] == "split" and o2["old_rate"] == 1.0 and o2["new_rate"] == 10.0

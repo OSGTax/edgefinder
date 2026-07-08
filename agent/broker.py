@@ -134,6 +134,29 @@ def normalize_news(n) -> dict:
     }
 
 
+def normalize_corp_action(a) -> dict:
+    """Alpaca corporate-announcement object → a flat dict (pure). Covers the
+    types the desk cares about: cash dividends and stock splits."""
+    g = a.get if isinstance(a, dict) else lambda k, d=None: getattr(a, k, d)
+    ca_type = g("ca_type")
+    ca_type = (ca_type.value if hasattr(ca_type, "value")
+               else (str(ca_type) if ca_type else None))
+
+    def _d(x):
+        return x.isoformat() if hasattr(x, "isoformat") else (str(x) if x else None)
+
+    return {
+        "ca_type": ca_type,
+        "symbol": ((g("initiating_symbol") or g("target_symbol") or "")).upper(),
+        "ex_date": _d(g("ex_date")),
+        "payable_date": _d(g("payable_date")),
+        "record_date": _d(g("record_date")),
+        "cash": _f(g("cash")),
+        "old_rate": _f(g("old_rate")),
+        "new_rate": _f(g("new_rate")),
+    }
+
+
 def normalize_quote(symbol: str, q) -> dict:
     """Alpaca latest-quote object → {symbol, bid, ask, mid, ...}."""
     g = q.get if isinstance(q, dict) else lambda k, d=None: getattr(q, k, d)
@@ -249,6 +272,24 @@ class Broker:
         res = self._news_client.get_news(req)
         items = res.data.get("news", []) if hasattr(res, "data") else (res or [])
         return [normalize_news(n) for n in items]
+
+    def corporate_announcements(self, *, since=None, until=None,
+                                symbol: str | None = None) -> list[dict]:
+        """Cash dividends + stock splits from Alpaca (the retired Polygon
+        corporate-actions replacement). Alpaca caps the window at 90 days, so
+        callers pass a ≤90-day (since, until). Read-only."""
+        from datetime import date, timedelta
+
+        from alpaca.trading.enums import CorporateActionType
+        from alpaca.trading.requests import GetCorporateAnnouncementsRequest
+
+        since = since or (date.today() - timedelta(days=45))
+        until = until or (date.today() + timedelta(days=45))
+        req = GetCorporateAnnouncementsRequest(
+            ca_types=[CorporateActionType.DIVIDEND, CorporateActionType.SPLIT],
+            since=since, until=until, symbol=symbol)
+        return [normalize_corp_action(a)
+                for a in self.trading.get_corporate_announcements(req)]
 
     def is_market_open(self) -> bool:
         return bool(getattr(self.trading.get_clock(), "is_open", False))

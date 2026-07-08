@@ -259,6 +259,43 @@ def holding_stats(db: Session = Depends(get_db),
     return {"as_of": str(latest), "symbols": out}
 
 
+@router.get("/dividends")
+def holdings_dividends(db: Session = Depends(get_db)):
+    """Per-holding dividend calendar from the ``dividends`` table (fed by the
+    refresh's Alpaca corporate-actions ingest): the most recent ex-dividend and
+    the next upcoming one, plus a trailing-4 annual estimate. Read-only."""
+    from datetime import date
+
+    from agent import occ
+    from edgefinder.db.models import DividendRecord
+
+    held = [s for (s,) in db.query(DeskPosition.symbol)
+            .filter(DeskPosition.account == ACCOUNT).all() if not occ.is_option(s)]
+    today = str(date.today())
+    out = []
+    for sym in held:
+        rows = (db.query(DividendRecord).filter(DividendRecord.symbol == sym)
+                .order_by(desc(DividendRecord.ex_date)).limit(8).all())
+        if not rows:
+            out.append({"symbol": sym, "has_dividend": False})
+            continue
+        past = [r for r in rows if str(r.ex_date) <= today]
+        upcoming = sorted((r for r in rows if str(r.ex_date) > today),
+                          key=lambda r: str(r.ex_date))
+        last = past[0] if past else None
+        nxt = upcoming[0] if upcoming else None
+        ttm = round(sum(r.cash_amount or 0 for r in rows[:4]), 4)
+        out.append({
+            "symbol": sym, "has_dividend": True,
+            "last_ex_date": str(last.ex_date) if last else None,
+            "last_amount": round(last.cash_amount, 4) if last and last.cash_amount else None,
+            "next_ex_date": str(nxt.ex_date) if nxt else None,
+            "next_amount": round(nxt.cash_amount, 4) if nxt and nxt.cash_amount else None,
+            "ttm_amount": ttm,
+        })
+    return {"as_of": today, "holdings": out}
+
+
 @router.get("/quotes")
 def live_quotes():
     """Point-in-time snapshot of the live SIP quote cache (the tools read this).

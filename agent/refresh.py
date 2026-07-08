@@ -161,6 +161,17 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
         logger.warning("news pass failed: %s", exc)
         summary["news"] = f"error: {exc}"
 
+    # corporate actions: dividends + splits into the existing tables (keeps
+    # total-return backtests honest + feeds the catalysts panel). Best-effort.
+    try:
+        from agent import occ
+
+        equities = [s for s in symbols if not occ.is_option(s)]
+        summary["corp_actions"] = _corp_actions_alpaca(store, equities)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("corp actions pass failed: %s", exc)
+        summary["corp_actions"] = f"error: {exc}"
+
     # R2 archive merge-sync: grow the 21-year parquet archive with the fresh
     # DB bars whenever this host can (needs direct Postgres + R2 creds — true
     # on Render/sandbox, skipped on the Routine's REST-only lane). The archive
@@ -211,6 +222,59 @@ def _news_alpaca(store, symbols: list[str], *, limit: int = 15) -> dict:
             store.insert("ticker_news", rows, returning=False)
             inserted += len(rows)
     return {"fetched": fetched, "inserted": inserted}
+
+
+def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
+                         fwd_days: int = 45) -> dict:
+    """Ingest cash dividends + stock splits for ``symbols`` from Alpaca into the
+    existing ``dividends`` / ``ticker_splits`` tables — the Polygon corporate-
+    actions replacement. Deduped by (symbol, date). Keeping the ``dividends``
+    table fed is what keeps total-return backtests honest; the same rows drive
+    the desk's upcoming-catalysts panel. Best-effort; one 90-day CA call."""
+    from datetime import date as _date
+
+    from agent import broker, occ
+
+    wanted = {s.upper() for s in symbols if not occ.is_option(s)}
+    if not broker.enabled() or not wanted:
+        return {"dividends": 0, "splits": 0}
+    today = _date.today()
+    try:
+        cas = broker.Broker().corporate_announcements(
+            since=today - timedelta(days=back_days),
+            until=today + timedelta(days=fwd_days))
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.warning("corp actions fetch failed: %s", exc)
+        return {"error": str(exc)}
+    ex_div = {(r["symbol"], str(r["ex_date"])[:10]) for r in store.select(
+        "dividends", columns="symbol,ex_date",
+        filters={"symbol": ("in", sorted(wanted))}, limit=100000)}
+    ex_split = {(r["symbol"], str(r["execution_date"])[:10]) for r in store.select(
+        "ticker_splits", columns="symbol,execution_date",
+        filters={"symbol": ("in", sorted(wanted))}, limit=100000)}
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    div_rows, split_rows, seen = [], [], set()
+    for a in cas:
+        sym, ex = a["symbol"], (a["ex_date"] or "")[:10]
+        if sym not in wanted or not ex or (a["ca_type"], sym, ex) in seen:
+            continue
+        seen.add((a["ca_type"], sym, ex))
+        try:  # Date columns want a real date object (works on pg AND REST)
+            ex_d = _date.fromisoformat(ex)
+        except ValueError:
+            continue
+        if a["ca_type"] == "dividend" and a["cash"] is not None and (sym, ex) not in ex_div:
+            div_rows.append({"symbol": sym, "ex_date": ex_d, "cash_amount": a["cash"]})
+        elif (a["ca_type"] == "split" and a["old_rate"] and a["new_rate"]
+              and (sym, ex) not in ex_split):
+            split_rows.append({"symbol": sym, "execution_date": ex_d,
+                               "split_from": a["old_rate"], "split_to": a["new_rate"],
+                               "created_at": now})
+    if div_rows:
+        store.insert("dividends", div_rows, returning=False)
+    if split_rows:
+        store.insert("ticker_splits", split_rows, returning=False)
+    return {"dividends": len(div_rows), "splits": len(split_rows)}
 
 
 def select_universe_symbols(day_rows, *, top_n: int, keep: set[str],
