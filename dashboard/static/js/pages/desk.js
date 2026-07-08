@@ -131,6 +131,39 @@ function occParse(sym) {
   };
 }
 
+/* allocation donut — how the account is split across holdings + cash.
+   SVG arcs (circumference normalized to 100), colored by the token series
+   palette via classes — theme-safe, zero inline styles. */
+function allocation(pf) {
+  const segs = [];
+  (pf.positions || []).forEach((p, i) => {
+    if (p.weight > 0) segs.push({ label: p.symbol, pct: p.weight * 100, cls: 's' + (i % 8) });
+  });
+  const cashPct = pf.equity ? Math.max(0, pf.cash / pf.equity * 100) : 0;
+  if (cashPct > 0.05) segs.push({ label: 'Cash', pct: cashPct, cls: 'cash' });
+  if (!segs.length) return null;
+  const R = 15.915494;  // circumference ≈ 100 → dasharray reads as percent
+  const ring = svg('svg', {
+    class: 'desk-alloc-ring', viewBox: '0 0 42 42', width: '132', height: '132',
+    role: 'img', 'aria-label': 'Allocation by holding',
+  }, svg('circle', { class: 'desk-alloc-bg', cx: '21', cy: '21', r: R, fill: 'none', 'stroke-width': '5' }));
+  let start = 0;
+  for (const s of segs) {
+    ring.append(svg('circle', {
+      class: 'desk-alloc-seg ' + s.cls, cx: '21', cy: '21', r: R, fill: 'none', 'stroke-width': '5',
+      'stroke-dasharray': `${s.pct.toFixed(2)} ${(100 - s.pct).toFixed(2)}`,
+      'stroke-dashoffset': ((25 - start % 100 + 100) % 100).toFixed(2),
+    }));
+    start += s.pct;
+  }
+  const legend = h('div', { class: 'desk-alloc-legend' },
+    ...segs.map(s => h('div', { class: 'desk-alloc-item' },
+      h('span', { class: 'desk-alloc-swatch ' + s.cls }),
+      h('span', { class: 'desk-alloc-label', text: s.label }),
+      h('span', { class: 'desk-alloc-pct t-dim', text: fmtNum(s.pct, 1) + '%' }))));
+  return h('div', { class: 'desk-alloc' }, ring, legend);
+}
+
 function sparkline(series, up) {
   const W = 68, H = 20, n = series ? series.length : 0;
   if (n < 2) return h('span', { class: 't-dim', text: '—' });
@@ -223,6 +256,8 @@ async function loadPositions() {
     const stats = (hs && hs.symbols) || {};
     const eqs = pf.positions.filter(p => !occParse(p.symbol));
     const opts = pf.positions.filter(p => occParse(p.symbol));
+    const donut = allocation(pf);
+    if (donut) el.append(donut);
     if (eqs.length) el.append(equitiesTable(eqs, stats));
     if (opts.length) {
       el.append(h('div', { class: 'desk-subhead', text: 'Options' }), optionsTable(opts));

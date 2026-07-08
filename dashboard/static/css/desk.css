@@ -162,3 +162,22 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 
 /* ── holdings: sparkline trend ── */
 .desk-spark { display: inline-block; vertical-align: middle; width: 68px; height: 20px; }
+
+/* ── allocation donut ── */
+.desk-alloc { display: flex; align-items: center; gap: var(--t-s4); flex-wrap: wrap; margin-bottom: var(--t-s4); }
+.desk-alloc-ring { flex: none; transform: rotate(0deg); }
+.desk-alloc-bg { stroke: var(--t-border); }
+.desk-alloc-legend { display: flex; flex-direction: column; gap: var(--t-s1); min-width: 160px; }
+.desk-alloc-item { display: flex; align-items: center; gap: var(--t-s2); font-size: var(--t-fs-sm); }
+.desk-alloc-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; display: inline-block; }
+.desk-alloc-label { color: var(--t-text); font-weight: 600; }
+.desk-alloc-pct { margin-left: auto; font-family: var(--t-font-mono); }
+.desk-alloc-seg.s0, .desk-alloc-swatch.s0 { stroke: var(--t-s0); background: var(--t-s0); }
+.desk-alloc-seg.s1, .desk-alloc-swatch.s1 { stroke: var(--t-s1); background: var(--t-s1); }
+.desk-alloc-seg.s2, .desk-alloc-swatch.s2 { stroke: var(--t-s2); background: var(--t-s2); }
+.desk-alloc-seg.s3, .desk-alloc-swatch.s3 { stroke: var(--t-s3); background: var(--t-s3); }
+.desk-alloc-seg.s4, .desk-alloc-swatch.s4 { stroke: var(--t-s4); background: var(--t-s4); }
+.desk-alloc-seg.s5, .desk-alloc-swatch.s5 { stroke: var(--t-s5); background: var(--t-s5); }
+.desk-alloc-seg.s6, .desk-alloc-swatch.s6 { stroke: var(--t-s6); background: var(--t-s6); }
+.desk-alloc-seg.s7, .desk-alloc-swatch.s7 { stroke: var(--t-s7); background: var(--t-s7); }
+.desk-alloc-seg.cash, .desk-alloc-swatch.cash { stroke: var(--t-benchmark); background: var(--t-benchmark); }
