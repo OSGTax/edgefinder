@@ -237,6 +237,15 @@ Supabase. The old system is **untouched** on Render (rail 2: prove before wipe).
 4. **Create the Routine** at claude.ai/code/routines on this repo: cron ~every
    2h during market hours, running the `trading-agent` skill, with the
    Supabase + Polygon + R2 env available to the session.
+5. **Create the nightly data Routine** at claude.ai/code/routines: cron
+   `~7 6 * * *` (after the U.S. close), prompt `Run the data-refresh skill`
+   (`.claude/skills/data-refresh/SKILL.md`), same env as the trading Routine.
+   This is the standing-fresh-set maintainer — the hourly cycle only tops up
+   ~15 names, so without this the long tail decays (CPB/SUNE went weeks stale
+   in July 2026 when this ingest was hanging). Can share the end-of-day Routine
+   that runs `app-evolver` (refresh data first, then evolve the desk). The
+   Routine itself cannot be created from a sandbox (no Routines API) — owner
+   step only.
 
 Nothing destructive has been done. The old `ai_analyst` v1 + paper strategies
 still run on Render and are harmless to leave until the cutover above.
