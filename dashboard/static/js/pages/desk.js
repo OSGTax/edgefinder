@@ -618,6 +618,46 @@ async function loadMovers() {
   } catch (err) { renderError(el, err, loadMovers); }
 }
 
+/* ── recent fills: each trade + the live bid/ask it priced off ── */
+const OCC_RE_F = /^[A-Z]{1,6}\d{6}[CP]\d{8}$/;
+
+async function loadFills() {
+  const el = document.getElementById('desk-fills');
+  const metaEl = document.getElementById('desk-fills-meta');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const rows = await apiGet('/api/desk/trades?limit=20');
+    if (!rows.length) { renderEmpty(el, 'No trades yet.'); if (metaEl) metaEl.textContent = ''; return; }
+    if (metaEl) metaEl.textContent = rows.length + ' most recent';
+    clear(el);
+    const table = h('table', { class: 'c-table' },
+      h('thead', {}, h('tr', {},
+        h('th', { text: 'When' }), h('th', { text: 'Stock' }),
+        h('th', { text: 'Side' }), h('th', { class: 'num', text: 'Shares' }),
+        h('th', { class: 'num', text: 'Fill price' }),
+        h('th', { class: 'num', text: 'Live bid / ask', title: 'The real-time bid and ask the fill priced against at that moment' }),
+        h('th', { class: 'num', text: 'Value' }))),
+      h('tbody', {}, ...rows.map(r => {
+        const q = r.fill_quote || {};
+        const isOpt = OCC_RE_F.test(r.symbol);
+        const buy = (r.side || '').toUpperCase() === 'BUY';
+        const quote = (q.bid != null && q.ask != null)
+          ? h('span', { class: 't-dim', text: fmtPrice(q.bid) + ' / ' + fmtPrice(q.ask) })
+          : h('span', { class: 't-dim', text: '—' });
+        return h('tr', {},
+          h('td', { class: 't-dim', text: timeAgo(r.t) }),
+          h('td', {}, h('a', { href: '/symbol/' + (isOpt ? r.symbol.match(/^[A-Z]+/)[0] : r.symbol), class: 'c-link', text: r.symbol })),
+          h('td', {}, pill((r.side || '').toUpperCase() || '—', buy ? 'up' : 'down')),
+          h('td', { class: 'num', text: fmtNum(Math.abs(r.shares), isOpt ? 0 : 2) }),
+          h('td', { class: 'num', text: fmtPrice(r.price) }),
+          h('td', { class: 'num' }, quote),
+          h('td', { class: 'num', text: fmtDollar(Math.abs(r.dollars)) }));
+      })));
+    el.append(table);
+  } catch (err) { renderError(el, err, loadFills); }
+}
+
 /* ── dividend calendar: per-holding ex-dates + amounts ── */
 async function loadDividends() {
   const el = document.getElementById('desk-dividends');
@@ -737,7 +777,7 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
-    loadOptions(), loadMovers(), loadDividends(),
+    loadOptions(), loadMovers(), loadDividends(), loadFills(),
   ]);
 }
 

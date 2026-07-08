@@ -207,3 +207,25 @@ def test_desk_dividends(client):
     assert nvda["next_ex_date"] == "2099-09-05"          # the only future ex-date
     assert nvda["last_ex_date"] == "2026-06-05"          # most recent past
     assert nvda["ttm_amount"] == round(0.10 + 0.10 + 0.12, 4)
+
+
+def test_desk_trades_include_fill_quote(client):
+    """The trades endpoint surfaces the stamped live bid/ask receipt."""
+    from datetime import datetime, timezone
+
+    import agent.data as agent_data
+    from agent.models import ACCOUNT, DeskTrade
+
+    sess = agent_data.session_factory()()
+    try:
+        sess.add(DeskTrade(account=ACCOUNT, run_id="R2", symbol="LLY", side="BUY",
+                           shares=2.0, price=1226.46, dollars=2452.92,
+                           ts=datetime.now(timezone.utc),
+                           fill_quote={"bid": 1224.96, "ask": 1226.34, "mid": 1225.65}))
+        sess.commit()
+    finally:
+        sess.close()
+
+    rows = client.get("/api/desk/trades?limit=20").json()
+    lly = next(r for r in rows if r["symbol"] == "LLY")
+    assert lly["fill_quote"]["bid"] == 1224.96 and lly["fill_quote"]["ask"] == 1226.34

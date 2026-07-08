@@ -413,4 +413,5 @@ def trades(db: Session = Depends(get_db), limit: int = Query(100, le=1000)):
             .order_by(desc(DeskTrade.ts)).limit(limit).all())
     return [{"t": _iso(r.ts), "symbol": r.symbol, "side": r.side,
              "shares": r.shares, "price": r.price, "dollars": r.dollars,
-             "rationale": r.rationale, "run_id": r.run_id} for r in rows]
+             "rationale": r.rationale, "run_id": r.run_id,
+             "fill_quote": r.fill_quote or None} for r in rows]
