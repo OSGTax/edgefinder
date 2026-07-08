@@ -24,11 +24,28 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 from datetime import date, datetime, timedelta, timezone
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Bound every outbound Alpaca call. The alpaca-py SDK builds its HTTP clients
+# with no socket timeout, so a hung TLS handshake through the agent proxy blocks
+# on the OS default (minutes) and takes the whole refresh down — the
+# `_ssl.c:999: The handshake operation timed out` seen on the Routine lane. A
+# short default socket timeout makes a stalled connection fail in seconds, where
+# the per-symbol / per-pass `except` guards already catch it and the run
+# continues instead of hanging.
+NET_TIMEOUT_S = 20.0
+
+
+def _bound_network(timeout: float = NET_TIMEOUT_S) -> None:
+    """Set a process-wide socket timeout so no single Alpaca call can hang the
+    refresh. Safe here: refresh is a CLI / Routine data tool, never imported
+    into the dashboard's request path."""
+    socket.setdefaulttimeout(timeout)
 
 
 def alpaca_bars_to_rows(bars, symbol: str) -> list[dict]:
@@ -65,8 +82,6 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
     Works on both store transports (pg + REST): per symbol, missing dates are
     deleted-then-inserted, which is an upsert for our purposes. Idempotent.
     """
-    from datetime import timedelta as _td
-
     from agent import broker
     from agent.models import ACCOUNT
     from agent.store import get_store
@@ -74,6 +89,7 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
 
     if not broker.enabled():
         return {"error": "no Alpaca keys — cannot top up bars"}
+    _bound_network()
     store = get_store()
     if symbols is None:
         from agent import occ
@@ -95,57 +111,47 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
         except Exception:  # noqa: BLE001 — watchlist enrichments are best-effort
             pass
 
-    from alpaca.data.requests import StockBarsRequest
-    from alpaca.data.timeframe import TimeFrame
-
     b = broker.Broker()
-    yesterday = date.today() - _td(days=1)
-    summary: dict = {"symbols": len(symbols), "bars_upserted": 0, "per_symbol": {}}
-    for sym in symbols:
-        latest_rows = store.select("daily_bars", filters={"symbol": sym},
-                                   order=[("date", "desc")], limit=1)
-        latest = latest_rows[0]["date"] if latest_rows else None
-        if latest is not None and not isinstance(latest, date):
-            latest = date.fromisoformat(str(latest)[:10])
-        start = (latest + _td(days=1)) if latest else yesterday - _td(days=max_days)
-        if start > yesterday:
-            summary["per_symbol"][sym] = 0
-            continue
-        try:
-            # end = TODAY-midnight-UTC: daily bars are stamped ~04:00 UTC OF
-            # their trading day, so an `end=yesterday` (midnight) cutoff sat
-            # BEFORE yesterday's own bar and silently excluded it — the
-            # refresh permanently lagged one trading day. Midnight today
-            # includes yesterday's final bar and still excludes today's
-            # partial one.
-            req = StockBarsRequest(symbol_or_symbols=sym, timeframe=TimeFrame.Day,
-                                   start=start, end=date.today())
-            res = b.data.get_stock_bars(req)
-            bars = res.data.get(sym, []) if hasattr(res, "data") else []
-            rows = alpaca_bars_to_rows(bars, sym)
-            for r in rows:  # delete-then-insert = transport-agnostic upsert
-                store.delete("daily_bars", {"symbol": sym, "date": r["date"]})
-            if rows:
-                store.insert("daily_bars", rows, returning=False)
-            summary["per_symbol"][sym] = len(rows)
-            summary["bars_upserted"] += len(rows)
-        except Exception as exc:  # noqa: BLE001 — one symbol can't abort the run
-            logger.warning("bar top-up failed for %s: %s", sym, exc)
-            summary["per_symbol"][sym] = f"error: {exc}"
+    # Batched bar top-up: ONE multi-symbol Data-API call for the whole live
+    # universe instead of one call per name (~15 round-trips → 1). Fewer
+    # round-trips = far less exposure to a flaky handshake, and each per-symbol
+    # write keeps its idempotent range-delete-then-insert + transient-error
+    # retry via `_ingest_history_batched` (the same helper the nightly
+    # full-market ingest uses). A short trailing window re-covers the 1-day gap
+    # plus a weekend/holiday buffer; re-inserting a few identical days is
+    # harmless (the delete-then-insert makes it an upsert).
+    bar_stats = _ingest_history_batched(store, b, symbols,
+                                        max_days=max(max_days, 5))
+    summary: dict = {"symbols": len(symbols),
+                     "bars_upserted": bar_stats.get("bars_upserted", 0),
+                     "bar_batches": bar_stats.get("batches", 0),
+                     "bar_errors": bar_stats.get("errors", 0)}
 
     # options IV data bank: one snapshot per underlying per day (first refresh
     # of the day wins; reruns are no-ops). Failures never abort the bar work.
     try:
         from agent import occ, options_data
 
-        written = 0
-        for sym in symbols:
-            if occ.is_option(sym):
+        today = date.today()
+        iv_names = [s for s in symbols if not occ.is_option(s)]
+        # The IV data bank is one snapshot per underlying per DAY
+        # (`persist_snapshot` dedupes at write time). Re-fetching a full option
+        # chain every hour just to discover it's a no-op is the refresh's single
+        # biggest cost (~2s/name) — so skip the FETCH outright for any name
+        # already snapshotted today. Hourly runs after the first pay nothing.
+        have_today = {str(r["symbol"]).upper() for r in store.select(
+            "desk_options_snap", columns="symbol",
+            filters={"symbol": ("in", sorted(iv_names)), "snap_date": today},
+            limit=100000)} if iv_names else set()
+        written = skipped = 0
+        for sym in iv_names:
+            if sym.upper() in have_today:
+                skipped += 1
                 continue
             s = options_data.get_summary(sym)
-            if options_data.persist_snapshot(store, s):
+            if options_data.persist_snapshot(store, s, snap_date=today):
                 written += 1
-        summary["iv_snapshots"] = written
+        summary["iv_snapshots"] = {"written": written, "skipped_have_today": skipped}
     except Exception as exc:  # noqa: BLE001
         logger.warning("IV snapshot pass failed: %s", exc)
         summary["iv_snapshots"] = f"error: {exc}"
@@ -462,6 +468,7 @@ def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
 
     if not broker.enabled():
         return {"error": "no Alpaca keys — cannot enumerate the market"}
+    _bound_network()
     b = broker.Broker()
     catalog = [a["symbol"] for a in b.list_assets(optionable=optionable_only)]
     ranked = _alpaca_latest_daily(b, catalog, lookback_days=lookback_days)

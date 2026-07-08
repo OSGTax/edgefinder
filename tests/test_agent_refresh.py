@@ -9,6 +9,24 @@ def test_module_imports():
     assert callable(r.main)
 
 
+def test_bound_network_sets_socket_timeout():
+    """A hung TLS handshake must fail fast, not block the whole refresh: the
+    guard installs a finite process-wide socket timeout."""
+    import socket
+
+    import agent.refresh as r
+
+    prev = socket.getdefaulttimeout()
+    try:
+        r._bound_network(7.5)
+        assert socket.getdefaulttimeout() == 7.5
+        r._bound_network()  # default uses the module constant
+        assert socket.getdefaulttimeout() == r.NET_TIMEOUT_S
+        assert 0 < r.NET_TIMEOUT_S < 120  # finite + snappy, not the OS default
+    finally:
+        socket.setdefaulttimeout(prev)
+
+
 def test_merge_bar_frames_grow_only_db_wins():
     import pandas as pd
     from agent.refresh import merge_bar_frames
