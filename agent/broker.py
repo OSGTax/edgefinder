@@ -96,6 +96,25 @@ def normalize_order(o) -> dict:
     }
 
 
+def normalize_asset(a) -> dict:
+    """Alpaca asset object → {symbol, name, exchange, tradable, ...} (pure).
+
+    ``has_options`` reads the asset's ``attributes`` list (Alpaca flags an
+    optionable name with the string ``"has_options"``), so the same normalizer
+    powers the optionable-underlying enumerator with no extra call."""
+    g = a.get if isinstance(a, dict) else lambda k, d=None: getattr(a, k, d)
+    attrs = list(g("attributes") or [])
+    return {
+        "symbol": (g("symbol") or "").upper(),
+        "name": g("name"),
+        "exchange": str(g("exchange") or ""),
+        "tradable": bool(g("tradable")),
+        "fractionable": bool(g("fractionable")),
+        "shortable": bool(g("shortable")),
+        "has_options": "has_options" in attrs,
+    }
+
+
 def normalize_quote(symbol: str, q) -> dict:
     """Alpaca latest-quote object → {symbol, bid, ask, mid, ...}."""
     g = q.get if isinstance(q, dict) else lambda k, d=None: getattr(q, k, d)
@@ -170,6 +189,30 @@ class Broker:
         req = StockLatestQuoteRequest(symbol_or_symbols=symbols, feed=feed)
         res = self.data.get_stock_latest_quote(req)
         return {sym: normalize_quote(sym, q) for sym, q in res.items()}
+
+    def list_assets(self, *, optionable: bool = False,
+                    fractionable_only: bool = False) -> list[dict]:
+        """Every ACTIVE, TRADABLE US equity/ETF — the whole investable catalog
+        Alpaca offers (~13k names), the direct replacement for Polygon's
+        grouped-daily universe. ``optionable`` keeps only names with listed
+        options (~6k); ``fractionable_only`` keeps names that fill in dollar
+        notional cleanly. Read-only; one paginated Trading-API call."""
+        from alpaca.trading.requests import GetAssetsRequest
+        from alpaca.trading.enums import AssetStatus, AssetClass
+
+        req = GetAssetsRequest(status=AssetStatus.ACTIVE,
+                               asset_class=AssetClass.US_EQUITY)
+        out = []
+        for raw in self.trading.get_all_assets(req):
+            a = normalize_asset(raw)
+            if not a["tradable"]:
+                continue
+            if optionable and not a["has_options"]:
+                continue
+            if fractionable_only and not a["fractionable"]:
+                continue
+            out.append(a)
+        return out
 
     def is_market_open(self) -> bool:
         return bool(getattr(self.trading.get_clock(), "is_open", False))
@@ -257,6 +300,13 @@ def main(argv: list[str] | None = None) -> int:
     ch.add_argument("--symbol", required=True)
     ch.add_argument("--dte-max", type=int, default=60)
     ch.add_argument("--moneyness", type=float, default=0.20)
+    asrt = sub.add_parser("assets", help="enumerate the tradable universe")
+    asrt.add_argument("--optionable", action="store_true",
+                      help="only names with listed options")
+    asrt.add_argument("--fractionable", action="store_true",
+                      help="only names that fill in dollar notional")
+    asrt.add_argument("--limit", type=int, default=None,
+                      help="cap the returned list (symbols only when set)")
     args = p.parse_args(argv)
 
     if not enabled():
@@ -283,6 +333,14 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "chain":
         out = b.option_chain(args.symbol, dte_max=args.dte_max,
                              moneyness=args.moneyness)
+    elif args.cmd == "assets":
+        assets = b.list_assets(optionable=args.optionable,
+                               fractionable_only=args.fractionable)
+        if args.limit is not None:
+            out = {"count": len(assets),
+                   "symbols": [a["symbol"] for a in assets[:args.limit]]}
+        else:
+            out = {"count": len(assets), "assets": assets}
     else:  # pragma: no cover
         out = {"error": "unknown command"}
     print(json.dumps(out, indent=2, default=str))

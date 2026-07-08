@@ -69,3 +69,24 @@ def test_normalize_quote_mid():
                         timestamp="2026-06-23T14:30:00Z")
     n = broker.normalize_quote("NVDA", q)
     assert n["bid"] == 130.0 and n["ask"] == 130.4 and n["mid"] == 130.2
+
+
+def test_normalize_asset_optionable_and_flags():
+    a = SimpleNamespace(symbol="aapl", name="Apple Inc.",
+                        exchange="NASDAQ", tradable=True, fractionable=True,
+                        shortable=True, attributes=["has_options", "overnight_tradable"])
+    out = broker.normalize_asset(a)
+    assert out["symbol"] == "AAPL"           # upper-cased
+    assert out["exchange"] == "NASDAQ"
+    assert out["tradable"] is True and out["fractionable"] is True
+    assert out["has_options"] is True         # read from attributes list
+
+
+def test_normalize_asset_non_optionable_defaults():
+    a = SimpleNamespace(symbol="XYZ", name=None, exchange="NYSE",
+                        tradable=False, fractionable=False, shortable=False,
+                        attributes=None)
+    out = broker.normalize_asset(a)
+    assert out["has_options"] is False        # empty attributes → not optionable
+    assert out["tradable"] is False
+    assert out["symbol"] == "XYZ"

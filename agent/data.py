@@ -283,24 +283,37 @@ def universe(top_n: int = 200, *, as_of: date | None = None) -> list[str]:
 
 
 def _rest_universe(top_n: int, as_of: date | None) -> list[str]:
+    """Rank the hot set by dollar volume over a short TRAILING window, not a
+    single latest day.
+
+    A single-day rank collapses whenever coverage is uneven: the cheap hourly
+    top-up writes ~10 held/watchlist names for the newest date, so "rank the
+    latest day" saw only those 10 even after a full-market ingest wrote 1000+
+    names for the prior session. Ranking each symbol's most-recent bar within a
+    trailing window instead lets the broad ingest's names rank in regardless of
+    which day the last thin top-up happened to land on.
+    """
     from agent.store import get_store
 
     store = get_store()
-    latest = store.select("daily_bars", columns="date",
-                          order=[("date", "desc")], limit=1)
-    if not latest:
-        return []
-    day = str(latest[0]["date"])[:10]
-    rows = store.select("daily_bars", columns="symbol,close,volume",
-                        filters={"date": day}, limit=20000)
-    scored = []
+    anchor = as_of or date.today()
+    lo = (anchor - timedelta(days=10)).isoformat()
+    hi = anchor.isoformat()
+    rows = store.select("daily_bars", columns="symbol,close,volume,date",
+                        filters={"date": ("gte", lo)}, limit=200000)
+    latest_per_sym: dict[str, tuple[str, float, float]] = {}
     for r in rows:
-        sym, c, v = r.get("symbol"), r.get("close"), r.get("volume")
-        if not sym or c is None or v is None:
+        sym, c, v, d = r.get("symbol"), r.get("close"), r.get("volume"), str(r.get("date"))[:10]
+        if not sym or c is None or v is None or d > hi:
             continue
+        prev = latest_per_sym.get(sym)
+        if prev is None or d > prev[0]:
+            latest_per_sym[sym] = (d, float(c), float(v))
+    scored = []
+    for sym, (_d, c, v) in latest_per_sym.items():
         if any(ch in sym for ch in (".", "/", "=")):
             continue
-        scored.append((float(c) * float(v), sym))
+        scored.append((c * v, sym))
     scored.sort(reverse=True)
     return [s for _, s in scored[:top_n]]
 

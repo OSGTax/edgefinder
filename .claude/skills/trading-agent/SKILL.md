@@ -69,7 +69,21 @@ Narrate: how is the book doing, is the strategy working, what is the market
 doing RIGHT NOW (live quotes vs yesterday's closes tells you today's move).
 
 ### 2. Research (phase: research)
-Form a shortlist (held names to review + new ideas). Evidence per name:
+**Scan the whole market first, then form a shortlist.** Your investable
+universe is the entire Alpaca catalog (~13k equities/ETFs, ~6k of them
+optionable) — not a fixed watchlist. Surface today's real candidates instead
+of trading from memory:
+- `python -m agent.market universe --top 40` — the most liquid names by dollar
+  volume from the fresh hot set (the nightly `--source alpaca-market` ingest
+  keeps ~1000+ names current). These are the market's leaders right now; scan
+  them for uptrends + momentum that fit your thesis.
+- `python -m agent.broker assets --optionable --limit 40` — enumerate optionable
+  underlyings when you want an options structure on a name you don't hold.
+- Any name you name is quote-and-fillable live even if it's outside the fresh
+  set; if you want indicators/backtests on it, it gets its bars topped up on
+  the next refresh (put it on the watchlist).
+
+Then form a shortlist (held names to review + new ideas). Evidence per name:
 - `python -m agent.market quote --symbols A,B,C` — indicators + trailing
   returns from daily bars (momentum, RSI, EMAs). Research context — NOT the
   fill price.
