@@ -6,7 +6,7 @@
     "ghcr.io/devcontainers/features/node:1": { "version": "20" },
     "ghcr.io/devcontainers/features/git-lfs:1": {}
   },
-  "postCreateCommand": "pip install -e '.[dev]' && npm install -g @anthropic-ai/claude-code",
+  "postCreateCommand": "bash scripts/bootstrap.sh; npm install -g @anthropic-ai/claude-code || true",
   "secrets": {
     "DATABASE_URL": {
       "description": "Supabase pooler URL (same value used in Render and GitHub Actions)."
