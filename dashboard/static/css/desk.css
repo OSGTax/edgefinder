@@ -181,3 +181,12 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-alloc-seg.s6, .desk-alloc-swatch.s6 { stroke: var(--t-s6); background: var(--t-s6); }
 .desk-alloc-seg.s7, .desk-alloc-swatch.s7 { stroke: var(--t-s7); background: var(--t-s7); }
 .desk-alloc-seg.cash, .desk-alloc-swatch.cash { stroke: var(--t-benchmark); background: var(--t-benchmark); }
+
+/* lessons wiki — the AI's curated notebook */
+.desk-wiki-page { padding-bottom: var(--t-s3); border-bottom: 1px solid var(--t-border); margin-bottom: var(--t-s3); }
+.desk-wiki-page:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.desk-wiki-head { display: flex; align-items: center; gap: var(--t-s3); flex-wrap: wrap; margin-bottom: var(--t-s2); }
+.desk-wiki-title { font-weight: 700; color: var(--t-text); }
+.desk-wiki-p { color: var(--t-text-2); line-height: 1.55; margin: 0 0 var(--t-s2); }
+.desk-wiki-list { margin: 0 0 var(--t-s2); padding-left: var(--t-s4); color: var(--t-text-2); line-height: 1.55; }
+.desk-wiki-list li { margin: 2px 0; }

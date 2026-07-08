@@ -376,6 +376,56 @@ async function loadBacktests() {
 }
 
 /* ── strategy journal ── */
+/* ── lessons wiki: what the AI has learned (curated, size-capped) ── */
+const WIKI_TITLES = {
+  playbook: 'Playbook', lessons: 'Lessons', mistakes: 'Mistakes',
+  'market-notes': 'Market notes',
+};
+
+function wikiBlocks(body) {
+  // markdown-lite: blank-line-separated blocks; "- " blocks → bullet lists,
+  // everything else → paragraphs. All text nodes — zero innerHTML.
+  const out = [];
+  for (const block of String(body || '').split(/\n\s*\n/)) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) continue;
+    if (lines.every(l => l.startsWith('- '))) {
+      out.push(h('ul', { class: 'desk-wiki-list' },
+        ...lines.map(l => h('li', { text: l.slice(2) }))));
+    } else {
+      out.push(h('p', { class: 'desk-wiki-p', text: lines.join(' ') }));
+    }
+  }
+  return out;
+}
+
+async function loadWiki() {
+  const el = document.getElementById('desk-wiki');
+  const metaEl = document.getElementById('desk-wiki-meta');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const data = await apiGet('/api/desk/wiki');
+    const pages = data.pages || [];
+    if (!pages.length) {
+      renderEmpty(el, 'The notebook is empty — lessons appear once real results come in.');
+      metaEl.textContent = '';
+      return;
+    }
+    metaEl.textContent = pages.length + ' page(s)';
+    clear(el);
+    for (const p of pages) {
+      el.append(h('div', { class: 'desk-wiki-page' },
+        h('div', { class: 'desk-wiki-head' },
+          h('span', { class: 'desk-wiki-title',
+            text: p.title || WIKI_TITLES[p.slug] || p.slug }),
+          pill('rev ' + p.revision, 'info'),
+          h('span', { class: 't-dim', text: timeAgo(p.updated_at) })),
+        ...wikiBlocks(p.body)));
+    }
+  } catch (err) { renderError(el, err, loadWiki); }
+}
+
 async function loadJournal() {
   const el = document.getElementById('desk-journal');
   skeleton(el);
@@ -777,11 +827,11 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
-    loadOptions(), loadMovers(), loadDividends(), loadFills(),
+    loadOptions(), loadMovers(), loadDividends(), loadFills(), loadWiki(),
   ]);
 }
 
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); loadWiki(); }, 60_000);

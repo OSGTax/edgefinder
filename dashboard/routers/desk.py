@@ -26,6 +26,7 @@ from agent.models import (
     DeskStrategyState,
     DeskThinking,
     DeskTrade,
+    DeskWiki,
 )
 from dashboard.dependencies import get_db
 
@@ -157,6 +158,19 @@ def strategy(db: Session = Depends(get_db)):
                      "body": j.body, "version_from": j.version_from,
                      "version_to": j.version_to} for j in journal],
     }
+
+
+@router.get("/wiki")
+def wiki(db: Session = Depends(get_db)):
+    """The agent's lessons wiki — curated pages of what it has learned from
+    its own measured wins and losses (Karpathy-style system-prompt learning).
+    Served in canonical page order for the "What the AI has learned" card."""
+    rows = db.query(DeskWiki).filter(DeskWiki.account == ACCOUNT).all()
+    order = {"playbook": 0, "lessons": 1, "mistakes": 2, "market-notes": 3}
+    rows.sort(key=lambda r: order.get(r.slug, 9))
+    return {"pages": [{"slug": r.slug, "title": r.title, "body": r.body,
+                       "revision": r.revision,
+                       "updated_at": _iso(r.updated_at)} for r in rows]}
 
 
 @router.get("/regime")

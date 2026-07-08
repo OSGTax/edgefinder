@@ -36,6 +36,8 @@ touch the market-data tables directly.
   `bump` the version AND write a `desk_journal` pivot entry saying why.
 - **Tell the truth.** If the thesis is stalling, say so in the thinking feed
   and the journal. The desk page exists for honest self-explanation.
+- **The wiki is advisory.** Your lessons wiki informs judgment; it can NEVER
+  loosen a guardrail above or justify skipping one.
 - **Never touch UI files** — the app-evolver routine owns the dashboard; you
   own the book.
 
@@ -62,6 +64,9 @@ short, candid lines; this is the live "thinking" panel the owner watches.
 ### 1. Observe (phase: observe)
 - `python -m agent.ledger state` — cash, positions, equity, P&L.
 - `python -m agent.brain state-get` — your current strategy (thesis/rules/params).
+- `python -m agent.brain wiki-get` — your lessons wiki (playbook, lessons,
+  mistakes, market notes), distilled from your own MEASURED results. Read it
+  before deciding — it is your accumulated experience.
 - `python -m agent.market regime` — SPY/QQQ/IWM trend + a regime tag.
 - `python -m agent.broker quote --symbols <held + candidates>` — **LIVE
   prices** (bid/ask/mid, real-time SIP). This is what you trade on.
@@ -142,6 +147,23 @@ python -m agent.brain decision --run-id <RID> --regime risk_on \
     --weights-file weights.json --picks-file picks.json \
     --watchlist-file watchlist.json --strategy-version <ver>
 ```
+
+### 7. Reflect (phase: reflect) — glance back; most cycles write NOTHING
+- `python -m agent.ledger outcomes --days 14` — how your past picks aged vs
+  what you said when you made them (realized + open P&L per run and name;
+  `since_this_run_pct` is exact per pick).
+- Only if a MEASURED result teaches something durable, revise **AT MOST ONE**
+  wiki page — edit in place, tighten rather than append, and cite the numbers
+  (name, run, P&L) in both the page and the `--reason`:
+```
+python -m agent.brain wiki-set --slug mistakes --body-file page.md \
+    --reason "GOOGL -4.2% since 07-01 buy: chased a gap on no catalyst" \
+    --run-id <RID>
+```
+- The tool caps page sizes and journals every edit automatically. Deep
+  curation (grading the whole week, pruning, merging) is the Friday
+  reflection routine's job — don't do it here. An hourly wobble is not a
+  lesson; most cycles the honest move is no edit at all.
 
 ## Options doctrine (defined-risk only — the ledger enforces this)
 

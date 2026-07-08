@@ -229,3 +229,18 @@ def test_desk_trades_include_fill_quote(client):
     rows = client.get("/api/desk/trades?limit=20").json()
     lly = next(r for r in rows if r["symbol"] == "LLY")
     assert lly["fill_quote"]["bid"] == 1224.96 and lly["fill_quote"]["ask"] == 1226.34
+
+
+def test_wiki_endpoint_empty_and_seeded(client):
+    body = client.get("/api/desk/wiki").json()
+    assert body["pages"] == []          # empty case, no 500
+
+    from agent.brain import set_wiki
+    set_wiki(slug="lessons", body="Momentum works in risk-on.\n\n- cite numbers",
+             title="Lessons", reason="seed")
+    set_wiki(slug="playbook", body="Trend first.", reason="seed")
+    body = client.get("/api/desk/wiki").json()
+    assert [p["slug"] for p in body["pages"]] == ["playbook", "lessons"]  # canonical order
+    assert body["pages"][1]["revision"] == 1
+    assert "Momentum works" in body["pages"][1]["body"]
+    assert body["pages"][0]["updated_at"]  # ISO timestamp present

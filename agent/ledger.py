@@ -124,6 +124,140 @@ def _compute_book(trades: list[dict]) -> dict[str, dict]:
     return book
 
 
+def _realized_pnl(trades: list[dict]):
+    """Replay the avg-cost stream and ACCUMULATE realized P&L on reductions
+    (``_compute_book`` discards it — this is the read-only twin that keeps it).
+
+    Returns ``(by_run_symbol, by_symbol)`` where a reduction of ``closing``
+    units books ``closing * (px - avg) * sign * mult`` — sign +1 closing a
+    long, -1 closing a short (buying back cheaper than you sold = profit).
+    Realized P&L is attributed to the run that booked the CLOSING fill,
+    priced against the global average cost at that moment — approximate when
+    several runs built the lot; the per-symbol totals are exact.
+    """
+    from agent import occ  # noqa: F401 — via _mult
+
+    by_run_symbol: dict[tuple[str | None, str], float] = {}
+    by_symbol: dict[str, float] = {}
+    book: dict[str, dict] = {}
+    for t in trades:
+        sym = t["symbol"]
+        b = book.setdefault(sym, {"shares": 0.0, "cost": 0.0})
+        qty = float(t["shares"])
+        signed = qty if t["side"] == "BUY" else -qty
+        cur = b["shares"]
+        if abs(cur) <= EPS_SHARES or (cur > 0) == (signed > 0):
+            b["shares"] = cur + signed
+            b["cost"] += abs(signed) * float(t["price"])
+            continue
+        closing = min(abs(signed), abs(cur))
+        avg = b["cost"] / abs(cur)
+        sign = 1.0 if cur > 0 else -1.0
+        pnl = closing * (float(t["price"]) - avg) * sign * _mult(sym)
+        key = (t.get("run_id"), sym)
+        by_run_symbol[key] = by_run_symbol.get(key, 0.0) + pnl
+        by_symbol[sym] = by_symbol.get(sym, 0.0) + pnl
+        b["cost"] -= closing * avg
+        b["shares"] = cur + signed
+        if abs(b["shares"]) <= EPS_SHARES:
+            b["shares"], b["cost"] = 0.0, 0.0
+        elif (b["shares"] > 0) != (cur > 0):
+            b["cost"] = abs(b["shares"]) * float(t["price"])
+    return by_run_symbol, by_symbol
+
+
+def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
+             account: str = ACCOUNT) -> dict:
+    """How past decisions actually aged — the grounding for wiki lessons.
+
+    Joins each decision's picks to its fills (run_id + symbol) and reports
+    realized P&L (closing-run attribution, see ``_realized_pnl``), current
+    open exposure, and ``since_this_run_pct`` — the current mark vs THAT
+    run's own average fill price (exact per pick, the primary reflection
+    signal). Settlement rows (run_id='settlement') are bucketed separately;
+    trades with no run_id are counted, never silently dropped. No network:
+    marks come from desk_positions.last_price, same as ``state()``."""
+    from agent import occ
+
+    store = store or _store()
+    trades = _trades(store, account)
+    by_run_symbol, by_symbol = _realized_pnl(trades)
+    positions = {r["symbol"]: r for r in
+                 store.select("desk_positions", filters={"account": account})}
+
+    cutoff = _utcnow() - __import__("datetime").timedelta(days=days)
+    decisions = store.select("desk_decisions", filters={"account": account},
+                             order=[("ts", "desc")], limit=200)
+    decisions = [d for d in decisions
+                 if (run_id and d["run_id"] == run_id)
+                 or (not run_id and str(d.get("ts") or "") >= str(cutoff))]
+
+    fills_by_run: dict[tuple[str | None, str], list[dict]] = {}
+    for t in trades:
+        fills_by_run.setdefault((t.get("run_id"), t["symbol"]), []).append(t)
+
+    runs = []
+    for d in decisions:
+        rid = d["run_id"]
+        picks_out = []
+        for p in (d.get("picks") or []):
+            sym = str(p.get("symbol") or "").upper()
+            fills = [{"side": f["side"], "shares": f["shares"], "price": f["price"]}
+                     for f in fills_by_run.get((rid, sym), [])]
+            buys = [f for f in fills if f["side"] == "BUY"]
+            entry_avg = (sum(f["shares"] * f["price"] for f in buys)
+                         / sum(f["shares"] for f in buys)) if buys else None
+            pos = positions.get(sym)
+            mark = (pos.get("last_price") or pos.get("avg_price")) if pos else None
+            open_now = None
+            if pos and abs(float(pos["shares"])) > EPS_SHARES:
+                m = _mult(sym)
+                open_now = {"shares": float(pos["shares"]),
+                            "avg_price": pos["avg_price"], "last_price": mark,
+                            "unrealized_pnl": round(float(pos["shares"])
+                                                    * ((mark or pos["avg_price"])
+                                                       - pos["avg_price"]) * m, 2)}
+            since_pct = (round((mark - entry_avg) / entry_avg * 100, 2)
+                         if (entry_avg and mark) else None)
+            picks_out.append({
+                "symbol": sym, "action": p.get("action"),
+                "why_now": p.get("why_now"), "rationale": p.get("rationale"),
+                "fills": fills, "entry_avg_px": round(entry_avg, 4) if entry_avg else None,
+                "realized_pnl": round(by_run_symbol.get((rid, sym), 0.0), 2),
+                "open_now": open_now, "since_this_run_pct": since_pct})
+        runs.append({"run_id": rid, "ts": str(d.get("ts") or ""),
+                     "regime": d.get("regime"), "summary": d.get("summary"),
+                     "picks": picks_out,
+                     "run_realized_pnl": round(sum(
+                         v for (r, _), v in by_run_symbol.items() if r == rid), 2)})
+
+    settlement_pnl = round(sum(v for (r, _), v in by_run_symbol.items()
+                               if r == "settlement"), 2)
+    unattributed = sum(1 for t in trades if not t.get("run_id"))
+    symbols_out = []
+    for sym in sorted(set(by_symbol) | set(positions)):
+        pos = positions.get(sym)
+        m = _mult(sym)
+        mark = (pos.get("last_price") or pos.get("avg_price")) if pos else None
+        symbols_out.append({
+            "symbol": sym, "realized_pnl": round(by_symbol.get(sym, 0.0), 2),
+            "unrealized_pnl": (round(float(pos["shares"])
+                                     * ((mark or pos["avg_price"]) - pos["avg_price"])
+                                     * m, 2) if pos else 0.0),
+            "open_shares": float(pos["shares"]) if pos else 0.0,
+            "is_option": occ.is_option(sym)})
+    return {"as_of": str(_utcnow()), "days": days,
+            "convention": "realized P&L is attributed to the run that booked "
+                          "the CLOSING fill, priced against the global average "
+                          "cost at that moment — approximate when several runs "
+                          "built the lot; per-symbol totals are exact. "
+                          "since_this_run_pct compares the current mark to that "
+                          "run's own average fill and is exact per pick.",
+            "runs": runs, "symbols": symbols_out,
+            "settlement": {"realized_pnl": settlement_pnl},
+            "unattributed_trades": unattributed}
+
+
 def rebuild_positions(store, account: str = ACCOUNT) -> dict[str, dict]:
     """Recompute open lots from the ledger and rewrite desk_positions.
 
@@ -629,6 +763,10 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("state")
     sub.add_parser("mark")
     sub.add_parser("settle", help="settle expired option positions (run each cycle)")
+    oc = sub.add_parser("outcomes",
+                        help="how past picks aged vs what was said (reflection input)")
+    oc.add_argument("--days", type=int, default=30)
+    oc.add_argument("--run-id", default=None)
     fil = sub.add_parser("fill", help="book a fill AT THE LIVE QUOTE (the agent's path)")
     fil.add_argument("--symbol", required=True)
     fil.add_argument("--side", required=True, choices=["buy", "sell", "BUY", "SELL"])
@@ -654,6 +792,9 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(mark(store), indent=2))
     elif args.cmd == "settle":
         print(json.dumps(settle(store), indent=2))
+    elif args.cmd == "outcomes":
+        print(json.dumps(outcomes(store, days=args.days, run_id=args.run_id),
+                         indent=2))
     elif args.cmd == "fill":
         print(json.dumps(live_fill(
             store, symbol=args.symbol, side=args.side, shares=args.shares,

@@ -265,6 +265,37 @@ class DeskOptionsSnap(Base):
     expiry: Mapped[str | None] = mapped_column(String(10))
 
 
+# ── desk_wiki — the agent's self-curated lessons wiki (system-prompt learning) ──
+
+
+class DeskWiki(Base):
+    """One curated page of the agent's lessons wiki.
+
+    Karpathy-style "system prompt learning": a small, size-capped set of pages
+    (playbook / lessons / mistakes / market-notes) the agent READS at the start
+    of every cycle and REVISES from measured outcomes — knowledge accumulating
+    in curated context, not weights. Pages are edited IN PLACE (fixed slugs are
+    the curation constraint; no append-only sprawl); every edit writes a
+    desk_journal note (kind="wiki"), which is the audit trail — prior body text
+    is deliberately not retained. Caps enforced by agent.brain (the only writer).
+    """
+
+    __tablename__ = "desk_wiki"
+    __table_args__ = (
+        UniqueConstraint("account", "slug", name="uq_desk_wiki_account_slug"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    slug: Mapped[str] = mapped_column(String(40), index=True)  # playbook|lessons|mistakes|market-notes
+    title: Mapped[str | None] = mapped_column(String(80))
+    body: Mapped[str] = mapped_column(Text)  # markdown-lite, hard-capped by the tool
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now())
+    updated_run_id: Mapped[str | None] = mapped_column(String(40))
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -384,4 +415,15 @@ DESK_TABLE_DDL: list[str] = [
         CONSTRAINT uq_desk_optsnap_sym_date UNIQUE (symbol, snap_date)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_desk_optsnap_sym_date ON desk_options_snap (symbol, snap_date)",
+    """CREATE TABLE IF NOT EXISTS desk_wiki (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        slug VARCHAR(40) NOT NULL,
+        title VARCHAR(80),
+        body TEXT NOT NULL,
+        revision INTEGER DEFAULT 1,
+        updated_at TIMESTAMP DEFAULT NOW(),
+        updated_run_id VARCHAR(40),
+        CONSTRAINT uq_desk_wiki_account_slug UNIQUE (account, slug)
+    )""",
 ]

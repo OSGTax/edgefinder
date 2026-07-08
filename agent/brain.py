@@ -38,6 +38,13 @@ def _load_json(path: str | None):
         return json.load(fh)
 
 
+def _load_text(path: str | None):
+    if not path:
+        return None
+    with open(path) as fh:
+        return fh.read()
+
+
 # ── strategy state ──────────────────────────────────────
 
 
@@ -135,6 +142,87 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
     return {"ok": True, "run_id": run_id, "id": (rows[0]["id"] if rows else None)}
 
 
+# ── lessons wiki (Karpathy-style system-prompt learning) ────
+#
+# A small, size-capped set of curated pages the agent reads at the start of
+# every cycle and revises from MEASURED outcomes (see `agent.ledger outcomes`).
+# Fixed slugs are the curation constraint; pages are edited in place; every
+# edit writes a journal note (kind="wiki") so the audit trail can't be skipped.
+# The wiki is ADVISORY context only — it can never loosen a charter guardrail.
+
+WIKI_SLUGS = ("playbook", "lessons", "mistakes", "market-notes")
+WIKI_PAGE_MAX_CHARS = 4000    # ~1k tokens per page
+WIKI_TOTAL_MAX_CHARS = 12000  # ~3k tokens total — bounded prompt growth, forever
+
+
+def get_wiki(store=None, *, slug: str | None = None, account: str = "agent") -> dict:
+    """The wiki pages (all, or one slug), in canonical order, plus size usage."""
+    store = store or _store()
+    filters: dict = {"account": account}
+    if slug:
+        filters["slug"] = slug
+    rows = store.select("desk_wiki", filters=filters)
+    rows.sort(key=lambda r: (WIKI_SLUGS.index(r["slug"])
+                             if r["slug"] in WIKI_SLUGS else len(WIKI_SLUGS)))
+    pages = [{"slug": r["slug"], "title": r.get("title"), "body": r["body"],
+              "revision": r.get("revision") or 1,
+              "updated_at": str(r["updated_at"]) if r.get("updated_at") else None}
+             for r in rows]
+    return {"pages": pages,
+            "total_chars": sum(len(p["body"] or "") for p in pages),
+            "caps": {"page": WIKI_PAGE_MAX_CHARS, "total": WIKI_TOTAL_MAX_CHARS},
+            "slugs": list(WIKI_SLUGS)}
+
+
+def set_wiki(store=None, *, slug: str, body: str, title: str | None = None,
+             reason: str | None = None, run_id: str | None = None,
+             account: str = "agent") -> dict:
+    """Create or rewrite one wiki page IN PLACE (curation, not accumulation).
+
+    Rejects unknown slugs and cap breaches before any write. On success the
+    page's revision increments and a desk_journal note (kind="wiki") records
+    that + why — the audit trail; prior body text is deliberately not kept.
+    """
+    store = store or _store()
+    slug = (slug or "").strip().lower()
+    body = body or ""
+    if slug not in WIKI_SLUGS:
+        return {"ok": False, "error": f"unknown wiki slug {slug!r} — "
+                f"the wiki has exactly these pages: {', '.join(WIKI_SLUGS)}"}
+    if len(body) > WIKI_PAGE_MAX_CHARS:
+        return {"ok": False, "error": "page over the size cap — curate, don't hoard",
+                "chars": len(body), "max": WIKI_PAGE_MAX_CHARS}
+    others = sum(len(r["body"] or "") for r in
+                 store.select("desk_wiki", filters={"account": account})
+                 if r["slug"] != slug)
+    if others + len(body) > WIKI_TOTAL_MAX_CHARS:
+        return {"ok": False, "error": "total wiki over the size cap — prune "
+                "another page first", "total_chars": others + len(body),
+                "max": WIKI_TOTAL_MAX_CHARS}
+
+    existing = store.select("desk_wiki",
+                            filters={"account": account, "slug": slug}, limit=1)
+    if existing:
+        revision = (existing[0].get("revision") or 1) + 1
+        values: dict = {"body": body, "revision": revision,
+                        "updated_at": _utcnow(), "updated_run_id": run_id}
+        if title is not None:
+            values["title"] = title
+        store.update("desk_wiki", {"id": existing[0]["id"]}, values, returning=False)
+    else:
+        revision = 1
+        store.insert("desk_wiki", {
+            "account": account, "slug": slug, "title": title, "body": body,
+            "revision": revision, "updated_at": _utcnow(),
+            "updated_run_id": run_id}, returning=False)
+    add_journal(store, kind="wiki",
+                title=f"wiki/{slug} r{revision}: {reason or 'edited'}"[:200],
+                account=account)
+    total = others + len(body)
+    return {"ok": True, "slug": slug, "revision": revision,
+            "chars": len(body), "total_chars": total}
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -162,6 +250,18 @@ def main(argv: list[str] | None = None) -> None:
     th.add_argument("--phase", default=None)
     th.add_argument("--text", required=True)
 
+    wg = sub.add_parser("wiki-get")
+    wg.add_argument("--slug", default=None, choices=list(WIKI_SLUGS))
+
+    ws = sub.add_parser("wiki-set")
+    ws.add_argument("--slug", required=True, choices=list(WIKI_SLUGS))
+    ws.add_argument("--body-file", default=None, help="plain-text/markdown file")
+    ws.add_argument("--body", default=None, help="inline body (small edits)")
+    ws.add_argument("--title", default=None)
+    ws.add_argument("--reason", default=None,
+                    help="why this edit — cite the measured result")
+    ws.add_argument("--run-id", default=None)
+
     de = sub.add_parser("decision")
     de.add_argument("--run-id", required=True)
     de.add_argument("--regime", default=None)
@@ -187,6 +287,17 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "think":
         print(json.dumps(think(store, run_id=args.run_id, phase=args.phase,
                                text=args.text), indent=2))
+    elif args.cmd == "wiki-get":
+        print(json.dumps(get_wiki(store, slug=args.slug), indent=2))
+    elif args.cmd == "wiki-set":
+        body = _load_text(args.body_file) if args.body_file else args.body
+        if body is None:
+            print(json.dumps({"ok": False,
+                              "error": "pass --body-file or --body"}, indent=2))
+            return
+        print(json.dumps(set_wiki(
+            store, slug=args.slug, body=body, title=args.title,
+            reason=args.reason, run_id=args.run_id), indent=2))
     elif args.cmd == "decision":
         print(json.dumps(save_decision(
             store, run_id=args.run_id, regime=args.regime, summary=args.summary,
