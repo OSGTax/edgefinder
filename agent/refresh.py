@@ -529,11 +529,13 @@ def _r2_merge_sync(symbols: list[str]):
     import io
     import json as _json
     import os
+    import time
 
     if not all(os.getenv(k) for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
                                       "R2_ENDPOINT", "R2_BUCKET")):
         return "skipped (no R2_* env)"
-    try:
+    _bound_network()
+    try:  # setup only — a failure here really is fatal to the whole sync
         import boto3
         import pandas as pd
 
@@ -544,45 +546,78 @@ def _r2_merge_sync(symbols: list[str]):
                           aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
                           aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"])
         bucket = os.environ["R2_BUCKET"]
-        try:
-            manifest = _json.loads(s3.get_object(
-                Bucket=bucket, Key="manifest.json")["Body"].read())
-        except Exception:  # noqa: BLE001 — missing manifest = fresh entries
-            manifest = {}
+    except Exception as exc:  # noqa: BLE001 — archival is best-effort
+        logger.warning("R2 merge-sync setup failed: %s", exc)
+        return f"skipped ({type(exc).__name__}: {exc})"
 
-        synced, skipped = [], 0
-        for sym in symbols:
-            latest = store.select("daily_bars", filters={"symbol": sym},
-                                  order=[("date", "desc")], limit=1)
-            db_max = str(latest[0]["date"])[:10] if latest else None
-            entry = manifest.get(sym) or {}
-            if not db_max or db_max <= str(entry.get("db_max") or
-                                           entry.get("max_date") or ""):
-                skipped += 1
-                continue
-            db_rows = store.select("daily_bars", filters={"symbol": sym})
-            try:
-                body = s3.get_object(Bucket=bucket,
-                                     Key=f"bars/{sym}.parquet")["Body"].read()
-                r2_df = pd.read_parquet(io.BytesIO(body))
-            except Exception:  # noqa: BLE001 — new symbol, no parquet yet
-                r2_df = None
-            merged = merge_bar_frames(r2_df, db_rows)
-            buf = io.BytesIO()
-            merged.to_parquet(buf, index=False)
-            s3.put_object(Bucket=bucket, Key=f"bars/{sym}.parquet",
-                          Body=buf.getvalue())
-            manifest[sym] = {"rows": int(len(merged)),
-                             "max_date": str(merged["date"].iloc[-1]),
-                             "db_rows": len(db_rows), "db_max": db_max}
-            synced.append(f"{sym}→{db_max}")
-        if synced:
+    try:
+        manifest = _json.loads(s3.get_object(
+            Bucket=bucket, Key="manifest.json")["Body"].read())
+    except Exception:  # noqa: BLE001 — missing manifest = fresh entries
+        manifest = {}
+
+    def _flush_manifest() -> bool:
+        try:
             s3.put_object(Bucket=bucket, Key="manifest.json",
                           Body=_json.dumps(manifest).encode())
-        return {"synced": synced, "unchanged": skipped}
-    except Exception as exc:  # noqa: BLE001 — archival is best-effort
-        logger.warning("R2 merge-sync failed: %s", exc)
-        return f"skipped ({type(exc).__name__}: {exc})"
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("R2 manifest flush failed: %s", exc)
+            return False
+
+    def _sync_one(sym: str):
+        """Sync one symbol; returns "synced" | "unchanged". Raises on failure so
+        the caller can retry — a symbol that keeps failing is counted, not fatal."""
+        latest = store.select("daily_bars", filters={"symbol": sym},
+                              order=[("date", "desc")], limit=1)
+        db_max = str(latest[0]["date"])[:10] if latest else None
+        entry = manifest.get(sym) or {}
+        if not db_max or db_max <= str(entry.get("db_max") or
+                                       entry.get("max_date") or ""):
+            return "unchanged"
+        db_rows = store.select("daily_bars", filters={"symbol": sym})
+        try:
+            body = s3.get_object(Bucket=bucket,
+                                 Key=f"bars/{sym}.parquet")["Body"].read()
+            r2_df = pd.read_parquet(io.BytesIO(body))
+        except Exception:  # noqa: BLE001 — new symbol, no parquet yet
+            r2_df = None
+        merged = merge_bar_frames(r2_df, db_rows)
+        buf = io.BytesIO()
+        merged.to_parquet(buf, index=False)
+        s3.put_object(Bucket=bucket, Key=f"bars/{sym}.parquet", Body=buf.getvalue())
+        manifest[sym] = {"rows": int(len(merged)),
+                         "max_date": str(merged["date"].iloc[-1]),
+                         "db_rows": len(db_rows), "db_max": db_max}
+        return "synced"
+
+    # Per-symbol try/retry: a transient reset over 443 (seen live at scale as
+    # "connection reset by peer") must skip/retry ONE name, never abort a
+    # 2000-symbol archive sync. Flush the manifest periodically so a late failure
+    # can't discard progress already written to parquet.
+    synced = skipped = errors = dirty = 0
+    for sym in symbols:
+        for attempt in range(3):
+            try:
+                res = _sync_one(sym)
+                if res == "synced":
+                    synced += 1
+                    dirty += 1
+                    if dirty >= 200:
+                        _flush_manifest()
+                        dirty = 0
+                else:
+                    skipped += 1
+                break
+            except Exception as exc:  # noqa: BLE001 — transient network/proxy error
+                if attempt == 2:
+                    logger.warning("R2 sync failed for %s: %s", sym, exc)
+                    errors += 1
+                else:
+                    time.sleep(0.5 * (attempt + 1))
+    if dirty:
+        _flush_manifest()
+    return {"synced": synced, "unchanged": skipped, "errors": errors}
 
 
 def main(argv: list[str] | None = None) -> None:
