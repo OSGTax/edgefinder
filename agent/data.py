@@ -118,14 +118,39 @@ def _rest_bars(symbols: list[str], start: date | None, end: date | None
 # ── bars (transport-aware) ──────────────────────────────────
 
 
+def _splice_db_tail(r2_bars: dict, db_bars: dict) -> dict:
+    """Union the deep R2 frames with the fresh DB frames, the DB winning on any
+    shared or newer date. Pure.
+
+    The R2 archive is grow-only but only as fresh as its last sync: a name the
+    full-market ingest just wrote to the DB but hasn't R2-synced yet reads
+    weeks-stale bars from R2 alone — which silently wrecks momentum/indicators.
+    Splicing the DB's fresh tail on top (raw, pre-adjustment) gives R2's depth
+    AND the DB's currency, so ``auto`` always sees the freshest close.
+    """
+    out = dict(r2_bars or {})
+    for sym, dbf in (db_bars or {}).items():
+        if dbf is None or not len(dbf):
+            continue
+        r2f = out.get(sym)
+        if r2f is None or not len(r2f):
+            out[sym] = dbf.sort_values("date").reset_index(drop=True)
+            continue
+        merged = pd.concat([r2f, dbf], ignore_index=True)
+        out[sym] = (merged.drop_duplicates(subset="date", keep="last")
+                    .sort_values("date").reset_index(drop=True))
+    return out
+
+
 def load_bars(
     symbols: list[str], *, start: date | None = None, end: date | None = None,
     div_adjust: bool = True, source: str = "auto",
 ) -> dict[str, pd.DataFrame]:
     """Split-adjusted (and optionally total-return) daily bars per symbol.
 
-    ``source``: ``auto`` (R2 when configured, else the active transport's DB),
-    ``r2``, or ``db``. Returns ``{symbol: DataFrame[date, OHLCV(, close_raw)]}``.
+    ``source``: ``auto`` (R2 for depth, spliced with the DB's fresh tail),
+    ``r2`` (archive only — the pure equivalence path), or ``db`` (hot set only).
+    Returns ``{symbol: DataFrame[date, OHLCV(, close_raw)]}``.
     """
     from edgefinder.engine import data as eng
 
@@ -134,6 +159,8 @@ def load_bars(
     if _use_rest():
         if use_r2:
             bars = eng.load_bars_from_store(symbols, start=start, end=end)
+            if source == "auto":  # fresh DB tail beats a stale archive
+                bars = _splice_db_tail(bars, _rest_bars(symbols, start, end))
         else:
             bars = _rest_bars(symbols, start, end)
         splits = _rest_splits(list(bars))
@@ -143,11 +170,15 @@ def load_bars(
             bars = eng.adjust_for_dividends(bars, divs)
         return bars
 
-    # pg lane (unchanged)
+    # pg lane
     if use_r2:
         bars = eng.load_bars_from_store(symbols, start=start, end=end)
         sess = session_factory()()
         try:
+            if source == "auto":  # splice the fresh DB tail (raw, pre-adjust)
+                db_raw = eng.load_bars(sess, symbols, start=start, end=end,
+                                       split_adjust=False)
+                bars = _splice_db_tail(bars, db_raw)
             splits = eng.load_splits(sess, list(bars))
             bars = eng.adjust_for_splits(bars, splits)
             if div_adjust:
