@@ -483,6 +483,13 @@ def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
         return summary
     summary["ingest"] = _ingest_history_batched(get_store(), b, universe,
                                                  max_days=max_days)
+    # Grow the R2 archive for the WHOLE ingested universe — not just the ~15
+    # live names the hourly path syncs. Charts read R2 for long ranges (1y+) on
+    # non-protected symbols, so an ingest that freshens the DB but leaves R2
+    # behind still renders a stale right edge at the default range. Change-
+    # detected per symbol (unchanged names cost one tiny query), so this is
+    # cheap when already current.
+    summary["r2_sync"] = _r2_merge_sync(universe)
     return summary
 
 
