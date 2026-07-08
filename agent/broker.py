@@ -115,6 +115,25 @@ def normalize_asset(a) -> dict:
     }
 
 
+def normalize_news(n) -> dict:
+    """Alpaca news object → the desk's ticker_news shape (pure). ``symbols`` is
+    the article's tagged tickers, fanned out one row per symbol on write."""
+    g = n.get if isinstance(n, dict) else lambda k, d=None: getattr(n, k, d)
+    ca = g("created_at")
+    published = (ca.isoformat() if hasattr(ca, "isoformat")
+                 else (str(ca) if ca else None))
+    return {
+        "id": g("id"),
+        "title": g("headline"),
+        "author": g("author"),
+        "publisher": g("source"),
+        "url": g("url"),
+        "description": (g("summary") or "")[:1000],
+        "published_utc": published,
+        "symbols": [str(s).upper() for s in (g("symbols") or [])],
+    }
+
+
 def normalize_quote(symbol: str, q) -> dict:
     """Alpaca latest-quote object → {symbol, bid, ask, mid, ...}."""
     g = q.get if isinstance(q, dict) else lambda k, d=None: getattr(q, k, d)
@@ -213,6 +232,23 @@ class Broker:
                 continue
             out.append(a)
         return out
+
+    def news(self, symbols, *, limit: int = 50) -> list[dict]:
+        """Recent headlines for ``symbols`` (Alpaca's news API — Benzinga feed),
+        each normalized to the desk's ticker_news shape. One batched call; the
+        Alpaca replacement for the retired Polygon news source."""
+        from alpaca.data.historical.news import NewsClient
+        from alpaca.data.requests import NewsRequest
+
+        if getattr(self, "_news_client", None) is None:
+            self._news_client = NewsClient(self._c["key"], self._c["secret"])
+        syms = (",".join(symbols) if isinstance(symbols, (list, tuple))
+                else str(symbols))
+        req = NewsRequest(symbols=syms, limit=limit, exclude_contentless=True,
+                          include_content=False)
+        res = self._news_client.get_news(req)
+        items = res.data.get("news", []) if hasattr(res, "data") else (res or [])
+        return [normalize_news(n) for n in items]
 
     def is_market_open(self) -> bool:
         return bool(getattr(self.trading.get_clock(), "is_open", False))

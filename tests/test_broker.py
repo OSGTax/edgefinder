@@ -90,3 +90,16 @@ def test_normalize_asset_non_optionable_defaults():
     assert out["has_options"] is False        # empty attributes → not optionable
     assert out["tradable"] is False
     assert out["symbol"] == "XYZ"
+
+
+def test_normalize_news_maps_alpaca_to_ticker_news_shape():
+    n = SimpleNamespace(id=42, headline="Lilly pops on trial data", author="J. Doe",
+                        source="benzinga", summary="Phase 3 win.",
+                        url="https://x/y", symbols=["lly", "nvo"],
+                        created_at=SimpleNamespace(isoformat=lambda: "2026-07-08T16:00:00+00:00"))
+    out = broker.normalize_news(n)
+    assert out["title"] == "Lilly pops on trial data"
+    assert out["publisher"] == "benzinga"        # source → publisher
+    assert out["url"] == "https://x/y"
+    assert out["published_utc"] == "2026-07-08T16:00:00+00:00"
+    assert out["symbols"] == ["LLY", "NVO"]       # upper-cased
