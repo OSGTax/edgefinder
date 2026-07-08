@@ -145,8 +145,15 @@ def load_bars(
         by_symbol.setdefault(sym, []).append((dt, o, h, lo, c, v))
 
     cols = ["date", "open", "high", "low", "close", "volume"]
+    # Sort each frame by date HERE. The query has no ORDER BY, so rows come back
+    # in arbitrary physical order (a trailing-window delete-then-insert top-up
+    # reshuffles the recent days), and downstream consumers — chart rendering,
+    # indicator/return series — assume ascending dates. `adjust_for_splits`
+    # sorts internally, but ONLY for symbols that have splits: a split-free name
+    # (SPY/QQQ/IWM and most ETFs) would otherwise escape every sort and render
+    # with a garbled right edge. Sort unconditionally at the source.
     bars = {
-        sym: pd.DataFrame(data, columns=cols)
+        sym: pd.DataFrame(data, columns=cols).sort_values("date").reset_index(drop=True)
         for sym, data in by_symbol.items()
     }
     if split_adjust and bars:

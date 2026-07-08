@@ -109,6 +109,31 @@ class TestLoadBarsIntegration:
         assert raw["TSLA"]["close"].iloc[0] == 900.0  # opt-out works
         session.close()
 
+    def test_load_bars_sorts_split_free_symbol_by_date(self):
+        """A split-free name (SPY/QQQ/IWM) inserted out of date order must come
+        back ascending. `adjust_for_splits` only sorts symbols WITH splits, so
+        without an unconditional sort in load_bars the frame renders scrambled —
+        the chart's right edge showed a two-week-old bar (June 26/30) even though
+        the newest bar was present, just mis-positioned."""
+        engine = get_engine(url="sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        session = get_session_factory(engine)()
+        # Insert the RECENT bars first, then older ones — mimicking a
+        # trailing-window delete-then-insert top-up reshuffling physical order.
+        recent = [date(2026, 7, 7), date(2026, 7, 6), date(2026, 7, 2)]
+        older = [date(2026, 6, 30), date(2026, 6, 29), date(2026, 6, 26)]
+        for d in recent + older:
+            session.add(DailyBar(symbol="SPY", date=d, open=1, high=1, low=1,
+                                 close=1, volume=1e6, source="test"))
+        session.commit()
+
+        frame = load_bars(session, ["SPY"])["SPY"]   # SPY has no splits
+        dates = list(frame["date"])
+        assert dates == sorted(dates)                # ascending
+        assert dates[-1] == date(2026, 7, 7)         # newest bar is the RIGHT edge
+        assert dates[0] == date(2026, 6, 26)
+        session.close()
+
 
 class TestBackfillRatio:
     def test_int_ratio_handling(self):
