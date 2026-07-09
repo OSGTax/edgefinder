@@ -35,14 +35,28 @@ from agent.models import ACCOUNT, STARTING_CAPITAL
 # from the latest known close — a stale/garbled quote, not a real move.
 FILL_BAND = 0.25
 # Live guard (fill path): the booked price must sit essentially ON the quote —
-# within this fraction outside the [bid, ask] it priced from.
+# within this fraction outside the [bid, ask] it priced from. OPRA books quote
+# in cents so the equity 0.5% band rejects legitimate fills on cheap contracts;
+# options get a wider fraction OR an absolute-cents floor, whichever is looser.
 LIVE_BAND = 0.005
+LIVE_BAND_OPT = 0.02
+LIVE_BAND_OPT_CENTS = 0.05
 # Slippage applied to live fills, in basis points (buy pays up, sell gives up).
 SLIPPAGE_BP = 1.0
 # Ignore sub-satoshi share residue from fractional math.
 EPS_SHARES = 1e-9
 # Options: one contract controls 100 shares of the underlying.
 MULTIPLIER = 100
+# Extended-hours fills are allowed for equities, off entirely for options.
+# The equity spread cap tightens outside RTH — thinner tape, wider quotes.
+MAX_SPREAD_EQ = 0.05
+MAX_SPREAD_EQ_EXT = 0.02
+MAX_SPREAD_OPT = 0.50
+# Quote-freshness at fill time — reject if the quote timestamp is older than
+# this many seconds. OPRA quotes update less often than SIP; the option cap is
+# looser to match reality (thin contracts genuinely quote once per minute).
+MAX_QUOTE_AGE_SEC_EQ = 30.0
+MAX_QUOTE_AGE_SEC_OPT = 120.0
 
 
 def _mult(symbol: str) -> int:
@@ -422,9 +436,20 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
         if not (fill_quote.get("bid") and fill_quote.get("ask")):
             return {"ok": False, "error": "fill rejected: fill_quote missing bid/ask"}
         bid, ask = float(fill_quote["bid"]), float(fill_quote["ask"])
-        if not (bid * (1 - LIVE_BAND) <= price <= ask * (1 + LIVE_BAND)):
+        # Options: a wider fractional band OR an absolute-cents floor —
+        # whichever puts the price farther from the mid. OPRA's minimum tick
+        # is $0.01/$0.05, so 0.5% of a $0.35 contract is <1 cent and rejects
+        # legitimate one-tick-through fills.
+        if is_opt:
+            slack = max(bid * LIVE_BAND_OPT, LIVE_BAND_OPT_CENTS)
+            lo, hi = bid - slack, ask + slack
+            band_repr = f"max({LIVE_BAND_OPT:.0%}, ${LIVE_BAND_OPT_CENTS:.2f})"
+        else:
+            lo, hi = bid * (1 - LIVE_BAND), ask * (1 + LIVE_BAND)
+            band_repr = f"{LIVE_BAND:.1%}"
+        if not (lo <= price <= hi):
             return {"ok": False, "error": "fill rejected: price off the live quote",
-                    "price": price, "bid": bid, "ask": ask, "band": LIVE_BAND}
+                    "price": price, "bid": bid, "ask": ask, "band": band_repr}
     elif is_opt:
         return {"ok": False, "error": "option fills require a live fill_quote"}
     else:
@@ -491,6 +516,38 @@ def _live_quote(symbol: str) -> dict:
     return q
 
 
+def _quote_age_sec(t) -> float | None:
+    """Seconds since a quote's timestamp (any of: ISO string, datetime,
+    ns/µs/s epoch). None when unparseable — caller handles missing gracefully.
+    """
+    if t is None:
+        return None
+    from datetime import datetime, timezone
+    dt = None
+    if hasattr(t, "isoformat"):
+        dt = t
+    elif isinstance(t, str):
+        try:
+            dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    elif isinstance(t, (int, float)):
+        # heuristic: sec vs ms vs µs vs ns by magnitude
+        n = float(t)
+        if n > 1e17:
+            n /= 1e9
+        elif n > 1e14:
+            n /= 1e6
+        elif n > 1e11:
+            n /= 1e3
+        dt = datetime.fromtimestamp(n, tz=timezone.utc)
+    if dt is None:
+        return None
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - dt).total_seconds()
+
+
 def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None,
               notional: float | None = None, rationale: str | None = None,
               run_id: str | None = None, slippage_bp: float = SLIPPAGE_BP,
@@ -499,36 +556,58 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
 
     Reads the real-time SIP quote, prices the correct side (BUY at ask,
     SELL at bid, ± slippage), stamps the quote snapshot on the fill, and
-    refuses to book when the market is closed or the quote is degenerate.
-    Exactly one of ``shares`` / ``notional`` sizes the order (fractional ok).
+    refuses to book when the market is closed, the quote is degenerate, or
+    the quote is stale. Extended hours are allowed for equities with tighter
+    spread guards; options are refused outside RTH (OPRA book is genuinely
+    bad pre-open/post-close). Exactly one of ``shares`` / ``notional`` sizes
+    the order (fractional ok).
     """
-    from agent import broker
+    from agent import broker, occ
 
     store = store or _store()
     symbol = symbol.upper().strip()
     side = side.upper().strip()
+    is_opt = occ.is_option(symbol)
     if (shares is None) == (notional is None):
         return {"ok": False, "error": "pass exactly one of shares or notional"}
 
     try:
         b = broker.Broker()
-        if not b.is_market_open():
-            return {"ok": False, "error": "market closed — live fills only trade "
-                    "during regular hours (no stale/after-hours pricing)"}
+        sess = b.session() if hasattr(b, "session") else (
+            "regular" if b.is_market_open() else "closed")
+        if sess == "closed":
+            return {"ok": False, "error":
+                    "market closed — live fills only trade in RTH or extended hours"}
+        if sess == "extended" and is_opt:
+            return {"ok": False, "error":
+                    "options fills are RTH-only — OPRA book is too thin outside "
+                    "regular hours"}
+        # Late-day discipline: don't open a new position we can't sell today.
+        if sess == "regular" and side == "BUY" and hasattr(b, "is_close_soon") \
+                and b.is_close_soon(minutes=15):
+            return {"ok": False, "error":
+                    "close in <15m — refusing to open a position we can't exit today"}
         q = _live_quote(symbol)
     except Exception as exc:  # noqa: BLE001 — clean rejection, not a stacktrace
         return {"ok": False, "error": f"live quote unavailable: {exc}"}
 
-    from agent import occ
-
-    is_opt = occ.is_option(symbol)
     bid, ask = float(q["bid"]), float(q["ask"])
-    # options quote in wide relative spreads routinely; cap looser (25%) there
-    max_spread = 0.25 if is_opt else 0.05
+    max_spread = (MAX_SPREAD_OPT if is_opt
+                  else (MAX_SPREAD_EQ_EXT if sess == "extended" else MAX_SPREAD_EQ))
     if bid <= 0 or ask <= 0 or ask < bid or (ask - bid) / ask > max_spread:
         return {"ok": False, "error":
                 f"degenerate quote (crossed or >{max_spread:.0%} spread)",
-                "bid": bid, "ask": ask}
+                "bid": bid, "ask": ask, "session": sess}
+
+    # Quote-freshness — the missing defense against a feed stuck open on an
+    # old print. Only rejects when we can actually measure it; a quote without
+    # a timestamp is unusual (SDK always sets one) but not an outright reject.
+    age = _quote_age_sec(q.get("t"))
+    max_age = MAX_QUOTE_AGE_SEC_OPT if is_opt else MAX_QUOTE_AGE_SEC_EQ
+    if age is not None and age > max_age:
+        return {"ok": False, "error":
+                f"stale quote ({age:.0f}s old, cap {max_age:.0f}s) — feed hiccup?",
+                "bid": bid, "ask": ask, "session": sess}
 
     slip = slippage_bp / 10_000.0
     price = round(ask * (1 + slip), 4) if side == "BUY" else round(bid * (1 - slip), 4)
@@ -541,7 +620,7 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
 
     snapshot = {"bid": bid, "ask": ask, "mid": q.get("mid"), "t": q.get("t"),
                 "src": "alpaca_opra_rest" if is_opt else "alpaca_sip_rest",
-                "slippage_bp": slippage_bp}
+                "slippage_bp": slippage_bp, "session": sess}
     return record_trade(store, symbol=symbol, side=side, shares=shares,
                         price=price, rationale=rationale, run_id=run_id,
                         fill_quote=snapshot, account=account)

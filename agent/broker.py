@@ -33,6 +33,30 @@ PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 LIVE_BASE_URL = "https://api.alpaca.markets"
 
 
+def _et_utc_offset(utc_dt):
+    """UTC offset for US Eastern time at ``utc_dt`` (DST-aware, dependency-free).
+    DST runs from the 2nd Sunday of March through the 1st Sunday of November;
+    ET is UTC−4 during DST, UTC−5 otherwise.
+    """
+    from datetime import date, timedelta
+    y = utc_dt.year
+
+    def _nth_sunday(month, n):
+        d = date(y, month, 1)
+        d += timedelta(days=(6 - d.weekday()) % 7)  # first Sunday
+        return d + timedelta(days=7 * (n - 1))
+
+    dst_start = _nth_sunday(3, 2)  # 2nd Sunday of March, 02:00 local
+    dst_end = _nth_sunday(11, 1)   # 1st Sunday of November, 02:00 local
+    # crude: switch at 07:00 UTC on those days (02:00 ET) — good enough for the
+    # ~2h ambiguity window nobody trades in anyway
+    from datetime import datetime as _dt
+    dst_on = (_dt(y, dst_start.month, dst_start.day, 7)
+              <= utc_dt.replace(tzinfo=None)
+              < _dt(y, dst_end.month, dst_end.day, 7))
+    return timedelta(hours=-4 if dst_on else -5)
+
+
 # ── credentials ──────────────────────────────────────────────
 
 def resolve_creds() -> dict:
@@ -294,6 +318,65 @@ class Broker:
     def is_market_open(self) -> bool:
         return bool(getattr(self.trading.get_clock(), "is_open", False))
 
+    def session(self) -> str:
+        """Which session are we in RIGHT NOW: 'regular' | 'extended' | 'closed'.
+
+        Regular = Alpaca's clock says is_open (09:30–16:00 ET on a trading day).
+        Extended = 04:00–20:00 ET on a trading day but outside RTH — Alpaca
+        supports these hours for equities. Closed = weekends, holidays, or
+        overnight. Options fills are blocked outside 'regular' (OPRA book is
+        genuinely bad outside RTH — enforced in ledger.live_fill).
+        """
+        clk = self.trading.get_clock()
+        if bool(getattr(clk, "is_open", False)):
+            return "regular"
+        # `next_open` is a tz-aware UTC datetime; when it's today's ET-date's
+        # session, we are pre-market on a trading day. When `next_close` is
+        # today's ET-date, we are post-market on a trading day. Anything else
+        # (weekend, holiday, overnight-past-8pm) is closed.
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        et_offset = _et_utc_offset(now)  # respects DST
+        now_et = (now + et_offset).replace(tzinfo=None)
+        nxt_open = getattr(clk, "next_open", None)
+        nxt_close = getattr(clk, "next_close", None)
+
+        def _to_et(dt):
+            if dt is None:
+                return None
+            if getattr(dt, "tzinfo", None) is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return (dt.astimezone(timezone.utc) + et_offset).replace(tzinfo=None)
+
+        no_ = _to_et(nxt_open)
+        nc_ = _to_et(nxt_close)
+        # Pre-market: today (ET) matches next_open's ET date AND we're past 04:00.
+        if no_ and now_et.date() == no_.date() and now_et.hour >= 4 and now_et < no_:
+            return "extended"
+        # Post-market: next_close is later than next_open (we're between RTH and
+        # 20:00 ET on a trading day). Alpaca reports next_close AFTER next_open
+        # while the market is closed and about to open. When both refer to
+        # today's date and now > next_close, we're in the after-hours window.
+        if nc_ and now_et.date() == nc_.date() and now_et >= nc_ and now_et.hour < 20:
+            return "extended"
+        return "closed"
+
+    def is_close_soon(self, minutes: int = 15) -> bool:
+        """True when the RTH close is within ``minutes`` — refuse to open new
+        positions this close to the bell, since we can't sell them until
+        tomorrow (or next Monday on a Friday). Uses Alpaca's clock as truth.
+        """
+        clk = self.trading.get_clock()
+        if not bool(getattr(clk, "is_open", False)):
+            return False
+        from datetime import datetime, timezone, timedelta
+        nc = getattr(clk, "next_close", None)
+        if nc is None:
+            return False
+        if getattr(nc, "tzinfo", None) is None:
+            nc = nc.replace(tzinfo=timezone.utc)
+        return (nc - datetime.now(timezone.utc)) <= timedelta(minutes=minutes)
+
     def recent_orders(self, limit: int = 50) -> list[dict]:
         from alpaca.trading.requests import GetOrdersRequest
         from alpaca.trading.enums import QueryOrderStatus
@@ -370,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("positions")
     sub.add_parser("orders")
     sub.add_parser("clock")
+    sub.add_parser("session", help="regular | extended | closed (per Alpaca clock + ET wall)")
     q = sub.add_parser("quote")
     q.add_argument("--symbols", default=None, help="equity symbols, comma-separated")
     q.add_argument("--contracts", default=None, help="OCC option symbols, comma-separated")
@@ -399,6 +483,9 @@ def main(argv: list[str] | None = None) -> int:
         out = b.recent_orders()
     elif args.cmd == "clock":
         out = {"is_open": b.is_market_open()}
+    elif args.cmd == "session":
+        out = {"session": b.session(),
+               "close_soon": b.is_close_soon() if b.is_market_open() else False}
     elif args.cmd == "quote":
         out = {}
         if args.symbols:
