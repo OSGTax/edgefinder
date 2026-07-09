@@ -45,3 +45,6 @@ config/secrets.env
 .DS_Store
 Thumbs.db
 .superpowers/
+
+# Agent scratchpad (per-cycle working files, not source)
+scratchpad/
