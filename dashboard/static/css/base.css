@@ -39,8 +39,12 @@ a:hover { text-decoration: underline; }
   display: flex;
   align-items: center;
   gap: 18px;
-  height: var(--t-nav-h);
-  padding: 0 14px;
+  /* Consume the top safe-area inset — status-bar / camera-cutout on Pixel
+     and iPhone — so the sticky nav never slides under the notch under
+     viewport-fit=cover. Height + top-padding both track the inset so the
+     nav's visible content stays 48px tall. */
+  height: calc(var(--t-nav-h) + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) 14px 0;
   background: var(--t-surface);
   border-bottom: 1px solid var(--t-border);
 }
@@ -263,6 +267,34 @@ a:hover { text-decoration: underline; }
 @media (max-width: 480px) {
   .grid-2, .grid-4 { grid-template-columns: repeat(2, 1fr); }
   :root { --t-fs-hero: 22px; }
+}
+
+/* ── Mobile readability floor (Pixel-portrait pass) ──
+   Push the base type up 1px so labels / chips / cells sit above the mobile
+   comfort floor, and give interactive controls the 44×44 minimum every
+   touch guidelines call for. Desktop is untouched. */
+@media (max-width: 640px) {
+  :root {
+    --t-fs-xs: 12px;
+    --t-fs-sm: 13px;
+    --t-fs-base: 14px;
+  }
+  .desk-anchor,
+  .desk-collapse,
+  .c-chip,
+  .c-seg button,
+  .c-btn,
+  .desk-wn-btn,
+  .desk-wn-dismiss,
+  .desk-opt-select {
+    min-height: 44px;
+  }
+  /* The inline-row controls (chip, seg, btn) also need width headroom so
+     a single-char × / arrow isn't a 20px hit target. */
+  .desk-wn-dismiss,
+  .desk-collapse {
+    min-width: 44px;
+  }
 }
 
 /* width utility steps (progress/fraction fills — no inline styles) */

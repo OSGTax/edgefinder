@@ -67,6 +67,17 @@
   --t-nav-h: 48px;
   --t-tabbar-h: 56px;
 
+  /* ── spacing scale ──
+     Distinct from the series palette (--t-s0..s7 above) which are colors.
+     Use these for gap / padding / margin. Renaming the palette would touch
+     every chart series call site; keeping palette + adding real spacing
+     tokens under their own prefix is the small, unambiguous fix. */
+  --t-space-1: 4px;
+  --t-space-2: 8px;
+  --t-space-3: 12px;
+  --t-space-4: 16px;
+  --t-space-5: 20px;
+
   /* ── legacy aliases (transition only; removed in cleanup phase) ──
      Old pages + theme.css read these; pointing them at the new dark
      palette re-tints everything consistently. Their light mode is
