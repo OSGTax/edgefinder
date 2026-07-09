@@ -113,20 +113,25 @@ def symbol_events(
     db: Session = Depends(get_db),
 ):
     """Chart event markers: dividends, splits, news (sparse)."""
-    from edgefinder.db.models import TickerDividend, TickerNews, TickerSplit
+    # Post-Alpaca cutover: cash dividends live in the `dividends` table
+    # (DividendRecord) written by agent.refresh from Alpaca corporate
+    # announcements. The old TickerDividend/`ticker_dividends` table is stale
+    # (Polygon-era, no live writes), so reading from it left the desk's
+    # dividend markers silently empty. Splits + news writers are unchanged.
+    from edgefinder.db.models import DividendRecord, TickerNews, TickerSplit
 
     sym = symbol.upper()
     cutoff = date.today() - timedelta(days=days)
 
     dividends = []
-    for r in (db.query(TickerDividend)
-              .filter(TickerDividend.symbol == sym,
-                      TickerDividend.ex_dividend_date >= str(cutoff))
-              .order_by(TickerDividend.ex_dividend_date).all()):
-        d = _parse_date(r.ex_dividend_date)
-        if d:
-            dividends.append({"time": _epoch(d), "cash_amount": r.cash_amount,
-                              "pay_date": r.pay_date})
+    for r in (db.query(DividendRecord)
+              .filter(DividendRecord.symbol == sym,
+                      DividendRecord.ex_date >= cutoff)
+              .order_by(DividendRecord.ex_date).all()):
+        if r.ex_date:
+            dividends.append({"time": _epoch(r.ex_date),
+                              "cash_amount": r.cash_amount,
+                              "pay_date": None})
 
     splits = []
     for r in (db.query(TickerSplit)
