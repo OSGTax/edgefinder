@@ -47,6 +47,34 @@
 }
 .desk-hero-today .empty { color: var(--t-text-3); font-weight: 400; }
 
+/* LIVE indicator on the hero — a small pulsing dot + "LIVE" label + age.
+   Shown when the tape fold is running so a small $$ change isn't
+   ambiguously frozen. */
+.desk-hero-live {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--t-fs-xs);
+  color: var(--t-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 6px;
+  cursor: help;
+}
+.desk-hero-live-label { font-weight: 700; color: var(--t-up); letter-spacing: 0.12em; }
+.desk-hero-live-age { font-family: var(--t-font-mono); text-transform: none; letter-spacing: 0; }
+
+/* Brief highlight on the account-value cell every tick — a soft flash so
+   even a small dollar change reads as "the number moved". Green when it
+   ticks up, red when it ticks down, no color when equal. 400ms fade. */
+@keyframes desk-tick-up   { 0% { color: var(--t-up); }   100% { color: inherit; } }
+@keyframes desk-tick-down { 0% { color: var(--t-down); } 100% { color: inherit; } }
+.desk-hero-value.desk-tick-up   { animation: desk-tick-up   0.4s ease-out; }
+.desk-hero-value.desk-tick-down { animation: desk-tick-down 0.4s ease-out; }
+
+/* Top-of-page cards (chart + holdings) — sit under the hero at full width
+   with the same spacing the desk-zone-grid gives its .desk-span-2 children. */
+.desk-topcard { display: block; margin-bottom: 14px; min-width: 0; }
+@media (max-width: 900px) { .desk-topcard { margin-bottom: 12px; } }
+
 .desk-hero-stats {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 12px 24px;

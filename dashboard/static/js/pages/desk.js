@@ -20,7 +20,23 @@ let lastEquityData = [];
    SSE tape. `applyLiveMarks` folds these two into a fresh, tick-fresh view
    of hero cards + positions rows, so the desk stops looking frozen between
    trading routines. */
-const deskLive = { book: null, marks: {}, stats: {}, todayChip: null };
+const deskLive = {
+  book: null,
+  marks: {},
+  stats: {},
+  todayChip: null,
+  lastEquity: null,   // for tick-direction (up/down) coloring
+  lastTickTs: 0,      // for the "updated Xs ago" age chip
+};
+
+// Rolling "updated Xs ago" tick under the LIVE chip. Runs once per second
+// once the first fold has landed, so a stalled stream reads visibly stale.
+setInterval(() => {
+  const el = document.getElementById('desk-hero-live-age');
+  if (!el || !deskLive.lastTickTs) return;
+  const age = Math.round((Date.now() - deskLive.lastTickTs) / 1000);
+  el.textContent = age <= 1 ? 'just now' : `${age}s ago`;
+}, 1000);
 
 const ACTION_CLASS = { buy: 'up', add: 'up', hold: 'neutral', trim: 'warn', exit: 'down', sell: 'down' };
 
@@ -74,8 +90,11 @@ async function loadHeader() {
     setText('desk-hero-count', String((pf.positions || []).length));
 
     // Cache the reference book so live tape ticks can fold in and refresh
-    // the hero + positions rows between routine runs.
+    // the hero + positions rows between routine runs. Seed lastEquity so the
+    // FIRST live tick (frozen → live) also flashes green/red — otherwise the
+    // biggest visible jump on load would happen silently.
     deskLive.book = pf;
+    if (deskLive.lastEquity == null) deskLive.lastEquity = pf.equity;
 
     // Today's move — the change since the last completed session
     const todayEl = $('desk-hero-today');
@@ -348,11 +367,33 @@ function applyLiveMarks() {
     el.classList.remove('t-up', 't-down');
     if (cls) el.classList.add(cls);
   };
-  setText('desk-hero-account', fmtDollar(equity));
+
+  // Account value with a tick-direction flash — makes tiny $$ changes read
+  // visibly. Force reflow so the class replay actually re-triggers the CSS
+  // animation on consecutive ticks in the same direction.
+  const acctEl = document.getElementById('desk-hero-account');
+  if (acctEl) {
+    const prevEq = deskLive.lastEquity;
+    acctEl.textContent = fmtDollar(equity);
+    acctEl.classList.remove('desk-tick-up', 'desk-tick-down');
+    if (prevEq != null && equity !== prevEq) {
+      void acctEl.offsetWidth;
+      acctEl.classList.add(equity > prevEq ? 'desk-tick-up' : 'desk-tick-down');
+    }
+  }
+  deskLive.lastEquity = equity;
+
   const pnlCls = totalPnl >= 0 ? 't-up' : 't-down';
   setText('desk-hero-pnl', fmtPnl(totalPnl), pnlCls);
   setText('desk-hero-return', fmtPct(returnPct / 100, { signed: true }), pnlCls);
   // cash and count don't change from live marks — leave them alone.
+
+  // LIVE indicator: reveal the pulsing dot + freshness age.
+  const liveEl = document.getElementById('desk-hero-live');
+  if (liveEl) liveEl.hidden = false;
+  deskLive.lastTickTs = Date.now();
+  const ageEl = document.getElementById('desk-hero-live-age');
+  if (ageEl) ageEl.textContent = 'just now';
 
   // Positions tables: repaint only if the container already has content
   // (first load hasn't finished yet → skeleton lives; leave it).
