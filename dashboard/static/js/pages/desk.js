@@ -15,6 +15,13 @@ let equityChart = null;
 let equitySeries = null;
 let lastEquityData = [];
 
+/* Live-marked book state — the source-of-truth "reference" portfolio (cash +
+   position shares/avg + starting) and the running dict of live mids from the
+   SSE tape. `applyLiveMarks` folds these two into a fresh, tick-fresh view
+   of hero cards + positions rows, so the desk stops looking frozen between
+   trading routines. */
+const deskLive = { book: null, marks: {}, stats: {}, todayChip: null };
+
 const ACTION_CLASS = { buy: 'up', add: 'up', hold: 'neutral', trim: 'warn', exit: 'down', sell: 'down' };
 
 function pill(text, cls) {
@@ -65,6 +72,10 @@ async function loadHeader() {
     setText('desk-hero-return', fmtPct(pf.total_return_pct / 100, { signed: true }), pnlCls);
     setText('desk-hero-cash', fmtDollar(pf.cash));
     setText('desk-hero-count', String((pf.positions || []).length));
+
+    // Cache the reference book so live tape ticks can fold in and refresh
+    // the hero + positions rows between routine runs.
+    deskLive.book = pf;
 
     // Today's move — the change since the last completed session
     const todayEl = $('desk-hero-today');
@@ -284,6 +295,76 @@ function optionsTable(rows) {
     })));
 }
 
+function renderPositions(el, pf, stats) {
+  const eqs = pf.positions.filter(p => !occParse(p.symbol));
+  const opts = pf.positions.filter(p => occParse(p.symbol));
+  clear(el);
+  const donut = allocation(pf);
+  if (donut) el.append(donut);
+  if (eqs.length) el.append(equitiesTable(eqs, stats));
+  if (opts.length) {
+    el.append(h('div', { class: 'desk-subhead', text: 'Options' }), optionsTable(opts));
+  }
+}
+
+/* Fold the running live-mid dict (`deskLive.marks`) onto the cached
+   reference book (`deskLive.book`) and repaint the hero + positions rows.
+   Called on every SSE tick — options fall back to their last mark (OPRA
+   isn't on the equity SIP stream), so an all-options book is still frozen
+   between routine runs; the improvement is for the ~90% of the account
+   that's equities. */
+function applyLiveMarks() {
+  const ref = deskLive.book;
+  if (!ref || !ref.positions) return;
+  const marks = deskLive.marks;
+  const positions = [];
+  let posValue = 0;
+  for (const p of ref.positions) {
+    const isOpt = !!occParse(p.symbol);
+    const live = !isOpt ? marks[p.symbol] : null;
+    const price = (live != null && Number.isFinite(live)) ? live : p.last_price;
+    const mult = isOpt ? 100 : 1;
+    const mv = Math.round(p.shares * price * mult * 100) / 100;
+    posValue += mv;
+    positions.push({
+      ...p,
+      last_price: Math.round(price * 10000) / 10000,
+      market_value: mv,
+      unrealized_pnl: Math.round(p.shares * (price - p.avg_price) * mult * 100) / 100,
+    });
+  }
+  const equity = Math.round((ref.cash + posValue) * 100) / 100;
+  const start = ref.starting_capital || 100000;
+  const totalPnl = Math.round((equity - start) * 100) / 100;
+  const returnPct = Math.round(((equity - start) / start) * 10000) / 100;
+  for (const r of positions) r.weight = equity ? Math.round((r.market_value / equity) * 10000) / 10000 : 0;
+  positions.sort((a, b) => b.market_value - a.market_value);
+
+  // Hero cards
+  const setText = (id, txt, cls) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = txt;
+    el.classList.remove('t-up', 't-down');
+    if (cls) el.classList.add(cls);
+  };
+  setText('desk-hero-account', fmtDollar(equity));
+  const pnlCls = totalPnl >= 0 ? 't-up' : 't-down';
+  setText('desk-hero-pnl', fmtPnl(totalPnl), pnlCls);
+  setText('desk-hero-return', fmtPct(returnPct / 100, { signed: true }), pnlCls);
+  // cash and count don't change from live marks — leave them alone.
+
+  // Positions tables: repaint only if the container already has content
+  // (first load hasn't finished yet → skeleton lives; leave it).
+  const posEl = document.getElementById('desk-positions');
+  if (posEl && !posEl.querySelector('.c-skel') && !posEl.querySelector('.c-empty')) {
+    renderPositions(posEl, {
+      ...ref, positions, positions_value: posValue,
+      equity, total_pnl: totalPnl, total_return_pct: returnPct,
+    }, deskLive.stats);
+  }
+}
+
 async function loadPositions() {
   const el = document.getElementById('desk-positions');
   skeleton(el);
@@ -293,16 +374,11 @@ async function loadPositions() {
       apiGet('/api/desk/holding-stats').catch(() => null),
     ]);
     if (!pf.positions.length) { renderEmpty(el, 'All cash — no open positions.'); return; }
-    clear(el);
-    const stats = (hs && hs.symbols) || {};
-    const eqs = pf.positions.filter(p => !occParse(p.symbol));
-    const opts = pf.positions.filter(p => occParse(p.symbol));
-    const donut = allocation(pf);
-    if (donut) el.append(donut);
-    if (eqs.length) el.append(equitiesTable(eqs, stats));
-    if (opts.length) {
-      el.append(h('div', { class: 'desk-subhead', text: 'Options' }), optionsTable(opts));
-    }
+    // Cache stats + book so tape ticks can repaint with the same holding-stats
+    // shape (day-change chip, 30-day trend) without another network round trip.
+    deskLive.stats = (hs && hs.symbols) || {};
+    deskLive.book = pf;
+    renderPositions(el, pf, deskLive.stats);
   } catch (err) { renderError(el, err, loadPositions); }
 }
 
@@ -528,6 +604,10 @@ function renderTape(snap) {
       const dir = q.mid != null && tapePrev[s] != null
         ? (q.mid > tapePrev[s] ? 'up' : q.mid < tapePrev[s] ? 'down' : '') : '';
       if (q.mid != null) tapePrev[s] = q.mid;
+      // Feed the live-marks fold: fresh quote → update mark; stale → drop so
+      // applyLiveMarks falls back to the last recorded price for that symbol.
+      if (q.mid != null && !q.stale) deskLive.marks[s] = q.mid;
+      else if (q.stale) delete deskLive.marks[s];
       const ageTxt = q.age_secs == null ? '—' : q.age_secs < 2 ? 'live' : `${Math.round(q.age_secs)}s`;
       return h('tr', { class: q.stale ? 'desk-tape-stale' : '' },
         h('td', {}, h('a', { href: '/symbol/' + s, class: 'c-link', text: s })),
@@ -539,6 +619,8 @@ function renderTape(snap) {
         h('td', { class: 'num ' + (q.stale ? 't-down' : 't-dim'), text: q.stale ? `stale ${ageTxt}` : ageTxt }));
     })));
   el.append(table);
+  // Fold the live mids we just captured into hero + positions rows.
+  applyLiveMarks();
 }
 
 function startTape() {
