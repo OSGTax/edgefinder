@@ -15,6 +15,14 @@ let equityChart = null;
 let equitySeries = null;
 let lastEquityData = [];
 
+/* Live tip on the equity chart — extends the curve past the last real
+   mark using the same live-fold equity as the hero card. Throttled: we
+   advance a fresh point every N seconds and just update it in place
+   between advances, so a page open for hours yields ~240 points/hour of
+   tip, not 3600. */
+let liveTipTime = null;
+const LIVE_TIP_ADVANCE_SEC = 15;
+
 /* Live-marked book state — the source-of-truth "reference" portfolio (cash +
    position shares/avg + starting) and the running dict of live mids from the
    SSE tape. `applyLiveMarks` folds these two into a fresh, tick-fresh view
@@ -180,12 +188,33 @@ async function loadEquity() {
     const data = [];
     for (const p of lastEquityData) { if (!seen.has(p.time)) { seen.add(p.time); data.push(p); } }
     equitySeries.setData(data);
+    // Reset the live tip so a page refresh starts extending from the new
+    // (possibly newer) last historical mark, not from the previous session.
+    liveTipTime = null;
     equityChart.timeScale().fitContent();
     const last = series[series.length - 1];
-    metaEl.textContent = `${fmtDollar(last.equity)} · ${series.length} marks`;
+    metaEl.textContent = `${fmtDollar(last.equity)} · ${series.length} marks · extending live`;
   } catch (err) {
     metaEl.textContent = 'error loading curve';
   }
+}
+
+/* Extend the chart's rightmost point with the current live equity. Called
+   from applyLiveMarks on every SSE fold. Skipped if the chart hasn't
+   loaded yet (fresh account with no historical marks) or the tape is
+   dead. Guards against overwriting an existing historical point by
+   starting the tip at least 1 second after the last real mark. */
+function extendEquityChart(liveEquity) {
+  if (!equitySeries || liveEquity == null || !Number.isFinite(liveEquity)) return;
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (liveTipTime == null || nowSec >= liveTipTime + LIVE_TIP_ADVANCE_SEC) {
+    const lastHist = lastEquityData.length
+      ? lastEquityData[lastEquityData.length - 1].time : 0;
+    liveTipTime = Math.max(nowSec, lastHist + 1);
+  }
+  try {
+    equitySeries.update({time: liveTipTime, value: Math.round(liveEquity * 100) / 100});
+  } catch (e) { /* chart not mounted or time collision — skip this fold */ }
 }
 
 /* ── holdings (equities + an options book when present) ── */
@@ -394,6 +423,11 @@ function applyLiveMarks() {
   deskLive.lastTickTs = Date.now();
   const ageEl = document.getElementById('desk-hero-live-age');
   if (ageEl) ageEl.textContent = 'just now';
+
+  // Extend the equity chart's rightmost point with the live equity so the
+  // curve keeps growing between routine marks. Cheap: at most one throttled
+  // series.update per fold.
+  extendEquityChart(equity);
 
   // Positions tables: repaint only if the container already has content
   // (first load hasn't finished yet → skeleton lives; leave it).
