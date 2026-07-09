@@ -58,23 +58,6 @@ _BATCH = 40           # symbols per DB pull — small enough that one
 MANIFEST_KEY = "manifest.json"
 
 
-def db_protected_symbols(session) -> set[str]:
-    """Symbols never pruned from the DB: deep ETFs + benchmark indices +
-    promoted-strategy universes + anything with an open trade."""
-    from config.settings import settings
-    from edgefinder.db.models import PromotedStrategy, TradeRecord
-
-    out = {s.upper() for s in DB_PROTECTED_ETFS}
-    out |= {s.strip().upper() for s in settings.index_symbols if s.strip()}
-    for promo in session.query(PromotedStrategy).filter(
-            PromotedStrategy.active.is_(True)).all():
-        out |= {str(s).upper() for s in (promo.symbols or [])}
-    for (sym,) in (session.query(TradeRecord.symbol)
-                   .filter(TradeRecord.status == "OPEN").distinct().all()):
-        out.add(str(sym).upper())
-    return out
-
-
 def _bar_key(symbol: str) -> str:
     return f"bars/{symbol}.parquet"
 
@@ -284,57 +267,6 @@ class BarStore:
         return {"changed": len(targets), "uploaded": uploaded,
                 "failed": len(failed), "migrated": migrated,
                 "bytes": bytes_up, "symbols_total": len(db_state)}
-
-    def prune_db(self, session, *, keep_days: int = 365,
-                 protected: set[str] | None = None) -> dict:
-        """Steady-state retention: drop DB rows older than ``keep_days`` for
-        symbols that are manifest-current in R2 (the nightly counterpart of
-        scripts/slim_daily_bars.py — keeps the free-tier DB from creeping
-        back over its cap as the nightly ingest appends ~1000 rows/day).
-
-        Per-symbol manifest guard: a symbol whose DB state differs from the
-        manifest is NOT pruned (its newest rows haven't mirrored yet — the
-        next successful sync makes it eligible). Protected symbols are never
-        touched. Plain DELETEs; freed space is reused by future inserts, so
-        table size stays flat without VACUUM FULL.
-        """
-        from datetime import date as _date
-        from datetime import timedelta as _timedelta
-
-        protected = {s.upper() for s in (protected or set())}
-        cutoff = _date.today() - _timedelta(days=keep_days)
-        manifest = self.read_manifest()
-
-        candidates = []
-        rows = (session.query(DailyBar.symbol,
-                              func.count(DailyBar.id),
-                              func.max(DailyBar.date),
-                              func.min(DailyBar.date))
-                .group_by(DailyBar.symbol).all())
-        for sym, n, mx, mn in rows:
-            if sym in protected or mn >= cutoff:
-                continue
-            m = manifest.get(sym) or {}
-            fp = (m.get("db_rows", m.get("rows")),
-                  m.get("db_max", m.get("max_date")))
-            if fp == (n, str(mx)):
-                candidates.append(sym)
-
-        deleted = 0
-        chunk = 200
-        for i in range(0, len(candidates), chunk):
-            batch = candidates[i:i + chunk]
-            deleted += (session.query(DailyBar)
-                        .filter(DailyBar.symbol.in_(batch),
-                                DailyBar.date < cutoff)
-                        .delete(synchronize_session=False))
-            session.commit()
-        if deleted:
-            logger.info("prune: deleted %d rows older than %s "
-                        "(%d symbols, all R2-current)",
-                        deleted, cutoff, len(candidates))
-        return {"deleted": deleted, "symbols": len(candidates),
-                "cutoff": str(cutoff)}
 
     def verify(self, session, sample: int = 25) -> dict:
         """Prove DB ⊆ R2 for a deterministic sample of synced symbols.

@@ -161,22 +161,3 @@ class TestGrowOnlyStore:
         assert out["migrated"] == 2 and out["uploaded"] == 0
         assert store.read_manifest()["AAA"]["db_rows"] == 30
 
-    def test_prune_respects_fingerprint_and_protection(self, store, session):
-        store.sync(session)
-        from datetime import timedelta as _td
-        old_cutoff_days = (date.today() - date(2024, 1, 20)).days
-        # BBB's fingerprint is stale (new row not yet synced) -> not pruned
-        session.add(DailyBar(symbol="BBB", date=date(2024, 3, 1), open=1,
-                             high=1, low=1, close=1, volume=1, source="test"))
-        session.commit()
-        out = store.prune_db(session, keep_days=old_cutoff_days,
-                             protected={"AAA"})
-        assert out["deleted"] == 0                     # AAA protected, BBB stale
-        store.sync(session)                            # BBB now current
-        out = store.prune_db(session, keep_days=old_cutoff_days,
-                             protected={"AAA"})
-        assert out["deleted"] == 19                    # BBB rows before 01-20
-        assert (session.query(DailyBar)
-                .filter(DailyBar.symbol == "AAA").count()) == 30
-        # the asset still holds everything
-        assert len(store.load(["BBB"])["BBB"]) == 31
