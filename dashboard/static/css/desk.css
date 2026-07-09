@@ -135,6 +135,16 @@
 }
 .desk-span-2 { grid-column: 1 / -1; }
 
+/* Grid tracks are `1fr`, but grid items default to `min-width: min-content` —
+   so a card containing a wide table (live tape, options chain, positions)
+   grows to fit the table, inflating the whole grid past the viewport. That
+   is what makes mobile browsers "zoom out to fit" the entire page.
+   Overriding to min-width: 0 lets the child shrink to the track width, and
+   the existing `overflow-x: auto` on `.c-card-body` becomes the actual
+   scroll surface for the wide table — as it was always meant to be. */
+.desk-zone-grid > * { min-width: 0; }
+.desk-tape-banner { min-width: 0; }
+
 @media (max-width: 900px) {
   .desk-zone-grid { grid-template-columns: 1fr; gap: 12px; }
   .desk-span-2 { grid-column: auto; }

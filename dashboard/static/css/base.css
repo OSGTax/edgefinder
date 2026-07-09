@@ -14,6 +14,12 @@ body {
   font-size: var(--t-fs-base);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  /* Belt-and-suspenders: any element that accidentally overflows past the
+     viewport gets clipped here instead of inflating the layout viewport
+     (which is what makes mobile browsers zoom-out the whole page). Cards
+     that legitimately need horizontal scroll do it inside their own
+     .c-card-body { overflow-x: auto }, not by pushing body wider. */
+  overflow-x: hidden;
 }
 h1, h2, h3, h4 { margin: 0 0 6px; font-weight: 650; }
 h2 { font-size: var(--t-fs-xl); }
