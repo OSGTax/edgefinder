@@ -17,7 +17,7 @@ def test_defaults_load():
     assert s.starting_capital == 100_000.00
     assert s.alpaca_paper is True
     assert s.alpaca_data_feed == "sip"
-    assert s.stream_stale_secs == 15
+    assert s.stream_stale_secs == 5
 
 
 def test_env_override(monkeypatch):

@@ -33,7 +33,9 @@ from dashboard.dependencies import get_db
 router = APIRouter()
 
 # An entry is "new" (lights the badge) for this many days after it ships.
-WHATSNEW_SPOTLIGHT_DAYS = 14
+# 7 aligns with the weekly UI-evolution routine's cadence — Monday visitors
+# still see Friday's changes badged, Fridays are always clean of last week's.
+WHATSNEW_SPOTLIGHT_DAYS = 7
 
 
 def _iso(dt):

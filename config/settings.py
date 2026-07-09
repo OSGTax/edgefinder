@@ -41,7 +41,11 @@ class Settings(BaseSettings):
     # ── LIVE QUOTE STREAM (Render → /desk SSE) ───────
     # Held names are added to this seed universe automatically at stream start.
     stream_symbols: str = "SPY,QQQ,IWM,NVDA,AAPL,MSFT,AMZN,GOOGL,META,TSLA"
-    stream_stale_secs: int = 15  # quote older than this (market open) = stale
+    # A single live-quote consumer (the /desk header pill, SSE stream, WS
+    # cache) reads this. 5 s means "a healthy tape refreshes at least once
+    # every 5 seconds" — anything longer is a genuine feed hiccup, not
+    # normal quiet-period pacing.
+    stream_stale_secs: int = 5
 
     # ── DATABASE ─────────────────────────────────────
     database_url: str = "sqlite:///data/edgefinder.db"
