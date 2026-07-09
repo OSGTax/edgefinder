@@ -42,7 +42,11 @@ class FakeBroker:
     def is_market_open(self):
         return self._open
 
-    def session(self):
+    def session(self, symbol=None):
+        # Match the real broker: crypto symbols report 'crypto'; anything else
+        # returns the fixtured session.
+        if symbol and "/" in symbol:
+            return "crypto"
         return self._session
 
     def is_close_soon(self, minutes=15):
@@ -274,6 +278,43 @@ def test_broker_session_helper_states(monkeypatch):
                           datetime(2099, 1, 1, 14, 30, tzinfo=timezone.utc),
                           datetime(2099, 1, 1, 21, 0, tzinfo=timezone.utc))
     assert b.session() == "closed"
+
+
+def test_live_fill_crypto_ignores_market_closed(store, monkeypatch):
+    """Crypto is 24/7 — the "market closed" gate on the equity clock must
+    not apply. The fill goes through and stamps session='crypto' on the row."""
+    from agent import ledger
+    # is_market_open()=False is what a weekend/overnight equity clock returns;
+    # session()="closed" would be returned for an EQUITY symbol under this
+    # FakeBroker, but the crypto short-circuit inside session() flips it.
+    _patch_broker(monkeypatch, FakeBroker(open_=False, session_="closed",
+                                          bid=60_000.0, ask=60_050.0))
+    r = ledger.live_fill(store, symbol="btc/usd", side="buy", notional=1000)
+    assert r["ok"], r
+    assert r["fill_quote"]["session"] == "crypto"
+    assert r["fill_quote"]["src"] == "alpaca_crypto_rest"
+    # fractional shares: $1000 / (60050 * 1.0001) ≈ 0.0166 BTC
+    assert 0 < r["shares"] < 0.02
+
+
+def test_live_fill_crypto_spread_cap(store, monkeypatch):
+    """Crypto gets its own 3% spread cap — tighter than options, looser than
+    equities. A 5% spread that would be fine for equity RTH is refused here."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker(open_=False, session_="closed",
+                                          bid=60_000.0, ask=63_500.0))  # ~5.5%
+    r = ledger.live_fill(store, symbol="BTC/USD", side="buy", shares=0.01)
+    assert not r["ok"] and "degenerate" in r["error"]
+
+
+def test_is_crypto_helper():
+    from agent import broker
+    assert broker.is_crypto("BTC/USD")
+    assert broker.is_crypto("ETH/USD")
+    assert not broker.is_crypto("NVDA")
+    assert not broker.is_crypto("NVDA270116C00200000")  # OCC option, no slash
+    assert not broker.is_crypto("")
+    assert not broker.is_crypto(None)
 
 
 def test_broker_is_close_soon(monkeypatch):

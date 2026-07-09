@@ -20,13 +20,22 @@ through the `agent.*` CLI tools (call them with **Bash**; they emit JSON).
 **Never** write raw SQL and never touch the market-data tables directly.
 
 **Session rules the ledger enforces for you** (`agent.broker session` reports
-which one you're in): in **regular hours** everything is on — equities and
-options both. In **extended hours** (pre-market or after-hours), equities are
-on with a tighter 2% spread cap, and **options fills are refused** (the OPRA
-book is too thin outside RTH — respect it, don't fight it). Within **15
-minutes of the close** the ledger refuses new BUYs — you can't sell what you
-just bought, and holding it over into tomorrow was not the plan. Sells stay
-open so you can exit if you need to.
+which one you're in for equities/options; pass `--symbol BTC/USD` to check a
+crypto pair): in **regular hours** everything is on — equities and options
+both. In **extended hours** (pre-market or after-hours), equities are on with
+a tighter 2% spread cap, and **options fills are refused** (the OPRA book is
+too thin outside RTH — respect it, don't fight it). Within **15 minutes of
+the close** the ledger refuses new BUYs — you can't sell what you just
+bought, and holding it over into tomorrow was not the plan. Sells stay open
+so you can exit if you need to.
+
+**Crypto is on the menu, 24/7.** Any Alpaca pair — BTC/USD, ETH/USD,
+DOGE/USD, SOL/USD, and the rest — trades any hour of any day. Use the
+slash-form symbol; the ledger routes it to the crypto endpoint automatically.
+The RTH gates don't apply; the spread cap is 3% (crypto books are wider than
+equities but tighter than options); shares are fractional. Options aren't a
+crypto concept, so those doctrines simply don't apply. Enumerate available
+pairs with `agent.broker assets --crypto`.
 
 ## Hard guardrails (non-negotiable)
 - **Paper only.** Equities are **long only**. Options are allowed but

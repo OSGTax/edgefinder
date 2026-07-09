@@ -33,6 +33,13 @@ PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 LIVE_BASE_URL = "https://api.alpaca.markets"
 
 
+def is_crypto(symbol: str) -> bool:
+    """Alpaca crypto pairs carry a slash (BTC/USD, ETH/USD, DOGE/USD).
+    Equities and OCC option symbols never do — the slash is the tell,
+    same test the SDK uses to route quote requests."""
+    return "/" in (symbol or "")
+
+
 def _et_utc_offset(utc_dt):
     """UTC offset for US Eastern time at ``utc_dt`` (DST-aware, dependency-free).
     DST runs from the 2nd Sunday of March through the 1st Sunday of November;
@@ -232,6 +239,16 @@ class Broker:
                                                            self._c["secret"])
         return self._option_data
 
+    @property
+    def crypto_data(self):
+        if getattr(self, "_crypto_data", None) is None:
+            from alpaca.data.historical.crypto import CryptoHistoricalDataClient
+            # Crypto data endpoint doesn't require creds for reads but pass
+            # them so the same rate-limit bucket is used across product lines.
+            self._crypto_data = CryptoHistoricalDataClient(self._c["key"],
+                                                           self._c["secret"])
+        return self._crypto_data
+
     # -- reads --
     def account(self) -> dict:
         a = self.trading.get_account()
@@ -247,27 +264,44 @@ class Broker:
         return [normalize_position(p) for p in self.trading.get_all_positions()]
 
     def quotes(self, symbols: list[str]) -> dict[str, dict]:
-        """Latest real-time quotes for symbols (SIP/IEX per settings)."""
-        from alpaca.data.requests import StockLatestQuoteRequest
-        from alpaca.data.enums import DataFeed
-
-        feed = DataFeed.SIP if self._c["feed"] == "sip" else DataFeed.IEX
-        req = StockLatestQuoteRequest(symbol_or_symbols=symbols, feed=feed)
-        res = self.data.get_stock_latest_quote(req)
-        return {sym: normalize_quote(sym, q) for sym, q in res.items()}
+        """Latest real-time quotes. Automatically routes crypto pairs
+        (BTC/USD, ETH/USD, …) to the crypto data endpoint and equities to
+        SIP/IEX per settings. Each caller can pass a mixed list — the
+        result dict keys are the input symbols."""
+        eq = [s for s in symbols if not is_crypto(s)]
+        cx = [s for s in symbols if is_crypto(s)]
+        out: dict[str, dict] = {}
+        if eq:
+            from alpaca.data.requests import StockLatestQuoteRequest
+            from alpaca.data.enums import DataFeed
+            feed = DataFeed.SIP if self._c["feed"] == "sip" else DataFeed.IEX
+            req = StockLatestQuoteRequest(symbol_or_symbols=eq, feed=feed)
+            res = self.data.get_stock_latest_quote(req)
+            out.update({sym: normalize_quote(sym, q) for sym, q in res.items()})
+        if cx:
+            from alpaca.data.requests import CryptoLatestQuoteRequest
+            req = CryptoLatestQuoteRequest(symbol_or_symbols=cx)
+            res = self.crypto_data.get_crypto_latest_quote(req)
+            out.update({sym: normalize_quote(sym, q) for sym, q in res.items()})
+        return out
 
     def list_assets(self, *, optionable: bool = False,
-                    fractionable_only: bool = False) -> list[dict]:
-        """Every ACTIVE, TRADABLE US equity/ETF — the whole investable catalog
-        Alpaca offers (~13k names), the direct replacement for Polygon's
-        grouped-daily universe. ``optionable`` keeps only names with listed
-        options (~6k); ``fractionable_only`` keeps names that fill in dollar
-        notional cleanly. Read-only; one paginated Trading-API call."""
+                    fractionable_only: bool = False,
+                    asset_class: str = "us_equity") -> list[dict]:
+        """Every ACTIVE, TRADABLE asset in ``asset_class``. Defaults to US
+        equities/ETFs (~13k names) — the direct replacement for Polygon's
+        grouped-daily universe. Pass ``asset_class="crypto"`` for the ~30
+        crypto pairs Alpaca supports on the paper account (BTC/USD,
+        ETH/USD, …). ``optionable`` keeps only names with listed options
+        (equities only); ``fractionable_only`` keeps names that fill in
+        dollar notional cleanly (all crypto is fractionable). Read-only;
+        one paginated Trading-API call."""
         from alpaca.trading.requests import GetAssetsRequest
         from alpaca.trading.enums import AssetStatus, AssetClass
 
-        req = GetAssetsRequest(status=AssetStatus.ACTIVE,
-                               asset_class=AssetClass.US_EQUITY)
+        cls = (AssetClass.CRYPTO if str(asset_class).lower() == "crypto"
+               else AssetClass.US_EQUITY)
+        req = GetAssetsRequest(status=AssetStatus.ACTIVE, asset_class=cls)
         out = []
         for raw in self.trading.get_all_assets(req):
             a = normalize_asset(raw)
@@ -318,15 +352,23 @@ class Broker:
     def is_market_open(self) -> bool:
         return bool(getattr(self.trading.get_clock(), "is_open", False))
 
-    def session(self) -> str:
-        """Which session are we in RIGHT NOW: 'regular' | 'extended' | 'closed'.
+    def session(self, symbol: str | None = None) -> str:
+        """Which session are we in RIGHT NOW: 'regular' | 'extended' |
+        'closed' | 'crypto'.
 
-        Regular = Alpaca's clock says is_open (09:30–16:00 ET on a trading day).
-        Extended = 04:00–20:00 ET on a trading day but outside RTH — Alpaca
-        supports these hours for equities. Closed = weekends, holidays, or
-        overnight. Options fills are blocked outside 'regular' (OPRA book is
-        genuinely bad outside RTH — enforced in ledger.live_fill).
+        Crypto pairs (BTC/USD, ETH/USD, …) trade 24/7 with no equity
+        clock — pass the symbol to get 'crypto' instead of the equity
+        session. Without a symbol the answer is for equity/options.
+
+        Regular = Alpaca's clock says is_open (09:30–16:00 ET on a trading
+        day). Extended = 04:00–20:00 ET on a trading day but outside RTH —
+        Alpaca supports these hours for equities. Closed = weekends,
+        holidays, or overnight. Options fills are blocked outside 'regular'
+        (OPRA book is genuinely bad outside RTH — enforced in
+        ledger.live_fill).
         """
+        if symbol is not None and is_crypto(symbol):
+            return "crypto"
         clk = self.trading.get_clock()
         if bool(getattr(clk, "is_open", False)):
             return "regular"
@@ -453,9 +495,13 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("positions")
     sub.add_parser("orders")
     sub.add_parser("clock")
-    sub.add_parser("session", help="regular | extended | closed (per Alpaca clock + ET wall)")
+    ss = sub.add_parser("session",
+                         help="regular | extended | closed | crypto (per Alpaca clock)")
+    ss.add_argument("--symbol", default=None,
+                    help="pass a crypto pair (e.g. BTC/USD) to get 'crypto' instead of equity session")
     q = sub.add_parser("quote")
-    q.add_argument("--symbols", default=None, help="equity symbols, comma-separated")
+    q.add_argument("--symbols", default=None,
+                   help="equity or crypto symbols, comma-separated (crypto uses a slash: BTC/USD)")
     q.add_argument("--contracts", default=None, help="OCC option symbols, comma-separated")
     ch = sub.add_parser("chain", help="option chain around the money (OPRA)")
     ch.add_argument("--symbol", required=True)
@@ -463,9 +509,11 @@ def main(argv: list[str] | None = None) -> int:
     ch.add_argument("--moneyness", type=float, default=0.20)
     asrt = sub.add_parser("assets", help="enumerate the tradable universe")
     asrt.add_argument("--optionable", action="store_true",
-                      help="only names with listed options")
+                      help="only names with listed options (equities only)")
     asrt.add_argument("--fractionable", action="store_true",
                       help="only names that fill in dollar notional")
+    asrt.add_argument("--crypto", action="store_true",
+                      help="list crypto pairs instead of US equities")
     asrt.add_argument("--limit", type=int, default=None,
                       help="cap the returned list (symbols only when set)")
     args = p.parse_args(argv)
@@ -484,8 +532,12 @@ def main(argv: list[str] | None = None) -> int:
     elif args.cmd == "clock":
         out = {"is_open": b.is_market_open()}
     elif args.cmd == "session":
-        out = {"session": b.session(),
-               "close_soon": b.is_close_soon() if b.is_market_open() else False}
+        sym = (args.symbol or "").strip().upper() or None
+        out = {"symbol": sym,
+               "session": b.session(sym),
+               "close_soon": (b.is_close_soon()
+                              if (sym is None or not is_crypto(sym))
+                              and b.is_market_open() else False)}
     elif args.cmd == "quote":
         out = {}
         if args.symbols:
@@ -498,8 +550,11 @@ def main(argv: list[str] | None = None) -> int:
         out = b.option_chain(args.symbol, dte_max=args.dte_max,
                              moneyness=args.moneyness)
     elif args.cmd == "assets":
-        assets = b.list_assets(optionable=args.optionable,
-                               fractionable_only=args.fractionable)
+        assets = b.list_assets(
+            optionable=args.optionable,
+            fractionable_only=args.fractionable,
+            asset_class=("crypto" if args.crypto else "us_equity"),
+        )
         if args.limit is not None:
             out = {"count": len(assets),
                    "symbols": [a["symbol"] for a in assets[:args.limit]]}

@@ -52,11 +52,18 @@ MULTIPLIER = 100
 MAX_SPREAD_EQ = 0.05
 MAX_SPREAD_EQ_EXT = 0.02
 MAX_SPREAD_OPT = 0.50
+# Crypto: 24/7, no options, fractional (lot size ≪ 1 unit). Alpaca crypto
+# spreads on the top pairs (BTC/USD, ETH/USD) hover well under 1%; low-volume
+# pairs can reach 2-3%. 3% cap catches genuine dislocation without over-
+# rejecting.
+MAX_SPREAD_CRYPTO = 0.03
 # Quote-freshness at fill time — reject if the quote timestamp is older than
 # this many seconds. OPRA quotes update less often than SIP; the option cap is
 # looser to match reality (thin contracts genuinely quote once per minute).
+# Crypto quotes tick continuously, so the equity cap fits.
 MAX_QUOTE_AGE_SEC_EQ = 30.0
 MAX_QUOTE_AGE_SEC_OPT = 120.0
+MAX_QUOTE_AGE_SEC_CRYPTO = 30.0
 
 
 def _mult(symbol: str) -> int:
@@ -502,7 +509,8 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
 
 
 def _live_quote(symbol: str) -> dict:
-    """One live quote via REST — SIP for equities, OPRA for option contracts.
+    """One live quote via REST — SIP for equities, OPRA for option contracts,
+    Alpaca crypto endpoint for pairs with a slash (BTC/USD, ETH/USD, …).
     Raises on missing keys/quote — the caller turns that into a rejection."""
     from agent import broker, occ
 
@@ -510,6 +518,8 @@ def _live_quote(symbol: str) -> dict:
     if occ.is_option(symbol):
         q = b.option_quotes([symbol]).get(symbol)
     else:
+        # broker.quotes() auto-routes crypto pairs to the crypto endpoint;
+        # equities take the SIP/IEX path. Single-lookup either way.
         q = b.quotes([symbol]).get(symbol)
     if not q or not q.get("bid") or not q.get("ask"):
         raise ValueError(f"no live quote for {symbol}")
@@ -559,8 +569,10 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     refuses to book when the market is closed, the quote is degenerate, or
     the quote is stale. Extended hours are allowed for equities with tighter
     spread guards; options are refused outside RTH (OPRA book is genuinely
-    bad pre-open/post-close). Exactly one of ``shares`` / ``notional`` sizes
-    the order (fractional ok).
+    bad pre-open/post-close). **Crypto** pairs (BTC/USD, ETH/USD, …) trade
+    24/7 and skip the RTH/close-soon gates; their spread cap is 3% and no
+    options structure is possible.  Exactly one of ``shares`` / ``notional``
+    sizes the order (fractional ok — required for high-priced crypto).
     """
     from agent import broker, occ
 
@@ -568,12 +580,13 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     symbol = symbol.upper().strip()
     side = side.upper().strip()
     is_opt = occ.is_option(symbol)
+    is_cx = broker.is_crypto(symbol)
     if (shares is None) == (notional is None):
         return {"ok": False, "error": "pass exactly one of shares or notional"}
 
     try:
         b = broker.Broker()
-        sess = b.session() if hasattr(b, "session") else (
+        sess = b.session(symbol) if hasattr(b, "session") else (
             "regular" if b.is_market_open() else "closed")
         if sess == "closed":
             return {"ok": False, "error":
@@ -583,6 +596,7 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
                     "options fills are RTH-only — OPRA book is too thin outside "
                     "regular hours"}
         # Late-day discipline: don't open a new position we can't sell today.
+        # Crypto is 24/7 so the "can't sell today" premise doesn't apply.
         if sess == "regular" and side == "BUY" and hasattr(b, "is_close_soon") \
                 and b.is_close_soon(minutes=15):
             return {"ok": False, "error":
@@ -592,8 +606,14 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
         return {"ok": False, "error": f"live quote unavailable: {exc}"}
 
     bid, ask = float(q["bid"]), float(q["ask"])
-    max_spread = (MAX_SPREAD_OPT if is_opt
-                  else (MAX_SPREAD_EQ_EXT if sess == "extended" else MAX_SPREAD_EQ))
+    if is_cx:
+        max_spread = MAX_SPREAD_CRYPTO
+    elif is_opt:
+        max_spread = MAX_SPREAD_OPT
+    elif sess == "extended":
+        max_spread = MAX_SPREAD_EQ_EXT
+    else:
+        max_spread = MAX_SPREAD_EQ
     if bid <= 0 or ask <= 0 or ask < bid or (ask - bid) / ask > max_spread:
         return {"ok": False, "error":
                 f"degenerate quote (crossed or >{max_spread:.0%} spread)",
@@ -603,7 +623,12 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     # old print. Only rejects when we can actually measure it; a quote without
     # a timestamp is unusual (SDK always sets one) but not an outright reject.
     age = _quote_age_sec(q.get("t"))
-    max_age = MAX_QUOTE_AGE_SEC_OPT if is_opt else MAX_QUOTE_AGE_SEC_EQ
+    if is_cx:
+        max_age = MAX_QUOTE_AGE_SEC_CRYPTO
+    elif is_opt:
+        max_age = MAX_QUOTE_AGE_SEC_OPT
+    else:
+        max_age = MAX_QUOTE_AGE_SEC_EQ
     if age is not None and age > max_age:
         return {"ok": False, "error":
                 f"stale quote ({age:.0f}s old, cap {max_age:.0f}s) — feed hiccup?",
@@ -618,9 +643,14 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
             return {"ok": False, "error": "notional too small for one contract",
                     "contract_cost": per_unit}
 
+    if is_opt:
+        src = "alpaca_opra_rest"
+    elif is_cx:
+        src = "alpaca_crypto_rest"
+    else:
+        src = "alpaca_sip_rest"
     snapshot = {"bid": bid, "ask": ask, "mid": q.get("mid"), "t": q.get("t"),
-                "src": "alpaca_opra_rest" if is_opt else "alpaca_sip_rest",
-                "slippage_bp": slippage_bp, "session": sess}
+                "src": src, "slippage_bp": slippage_bp, "session": sess}
     return record_trade(store, symbol=symbol, side=side, shares=shares,
                         price=price, rationale=rationale, run_id=run_id,
                         fill_quote=snapshot, account=account)
