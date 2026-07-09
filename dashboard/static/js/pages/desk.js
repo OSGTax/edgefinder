@@ -21,12 +21,6 @@ function pill(text, cls) {
   return h('span', { class: 'c-pill ' + (cls || 'neutral'), text });
 }
 
-function statCard(label, value, cls, tip) {
-  return h('div', { class: 'c-stat', title: tip || null },
-    h('div', { class: 'label' + (tip ? ' desk-hint' : ''), text: label }),
-    h('div', { class: 'value ' + (cls || ''), text: value }));
-}
-
 /* the account's change since the last completed trading session — grouped
    from the same equity marks the chart already shows, oldest→newest */
 function todayChange(series) {
@@ -43,12 +37,19 @@ function todayChange(series) {
   return { dollars: latest - prior, pct: (latest - prior) / prior * 100 };
 }
 
-/* ── stats + strategy + regime headers ── */
+/* Populate the sticky hero: value, today's move, P&L / return / cash /
+   count, and the two chips (strategy + market mood). Everything the reader
+   most wants to know, in one place, above every zone. */
 async function loadHeader() {
-  const statsEl = document.getElementById('desk-stats');
-  const stratEl = document.getElementById('desk-strategy');
-  const regimeEl = document.getElementById('desk-regime');
-  skeleton(statsEl);
+  const $ = id => document.getElementById(id);
+  const setText = (id, txt, cls) => {
+    const el = $(id); if (!el) return;
+    el.textContent = txt;
+    if (cls != null) {
+      el.classList.remove('t-up', 't-down');
+      if (cls) el.classList.add(cls);
+    }
+  };
   try {
     const [pf, strat, regime, eq] = await Promise.all([
       apiGet('/api/desk/portfolio'),
@@ -57,46 +58,63 @@ async function loadHeader() {
       apiGet('/api/desk/equity?limit=500').catch(() => null),
     ]);
 
-    clear(statsEl);
-    const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
-    const today = todayChange(eq);
-    statsEl.append(
-      statCard('Account value', fmtDollar(pf.equity)),
-      today
-        ? statCard('Today', fmtPnl(today.dollars) + ' (' + fmtPct(today.pct) + ')',
-            today.dollars >= 0 ? 't-up' : 't-down',
-            'The change in account value since the last completed trading session')
-        : statCard('Today', '—', '', 'Not enough history yet to show a day-over-day change'),
-      statCard('Profit / loss', fmtPnl(pf.total_pnl), pnlCls),
-      statCard('Return', fmtPct(pf.total_return_pct / 100, { signed: true }), pnlCls),
-      statCard('Cash on hand', fmtDollar(pf.cash)),
-      statCard('Investments', String((pf.positions || []).length)),
-    );
+    setText('desk-hero-account', fmtDollar(pf.equity));
 
-    clear(stratEl);
-    if (strat.current) {
-      stratEl.append(h('span', {
-        class: 'c-pill info',
-        title: strat.current.thesis || 'The strategy the AI is currently running.',
-        text: 'Strategy v' + strat.current.version + ' · ' + strat.current.name,
-      }));
+    const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
+    setText('desk-hero-pnl', fmtPnl(pf.total_pnl), pnlCls);
+    setText('desk-hero-return', fmtPct(pf.total_return_pct / 100, { signed: true }), pnlCls);
+    setText('desk-hero-cash', fmtDollar(pf.cash));
+    setText('desk-hero-count', String((pf.positions || []).length));
+
+    // Today's move — the change since the last completed session
+    const todayEl = $('desk-hero-today');
+    if (todayEl) {
+      clear(todayEl);
+      const today = todayChange(eq);
+      todayEl.append(h('span', { class: 'lbl', text: 'Today' }));
+      if (today) {
+        const cls = today.dollars >= 0 ? 't-up' : 't-down';
+        todayEl.append(h('span', {
+          class: cls,
+          title: 'The change in account value since the last completed trading session',
+          text: fmtPnl(today.dollars) + ' (' + fmtPct(today.pct) + ')',
+        }));
+      } else {
+        todayEl.append(h('span', {
+          class: 'empty',
+          title: 'Not enough history yet to show a day-over-day change',
+          text: '—',
+        }));
+      }
     }
 
-    clear(regimeEl);
-    if (regime && regime.tag) {
-      const MOOD = {
-        risk_on: ['Market mood: favorable', 'up',
-          'The major indexes are in uptrends — conditions that historically reward being invested.'],
-        risk_off: ['Market mood: defensive', 'down',
-          'The market is below its long-term trend — the AI leans toward caution and cash.'],
-        neutral: ['Market mood: mixed', 'neutral',
-          'Trend signals are conflicting — neither clearly favorable nor defensive.'],
-      };
-      const [label, cls, tip] = MOOD[regime.tag] || MOOD.neutral;
-      regimeEl.append(h('span', { class: 'c-pill ' + cls, title: tip, text: label }));
+    // Chips: strategy + market mood
+    const chipsEl = $('desk-hero-chips');
+    if (chipsEl) {
+      clear(chipsEl);
+      if (strat && strat.current) {
+        chipsEl.append(h('span', {
+          class: 'c-pill info',
+          title: strat.current.thesis || 'The strategy the AI is currently running.',
+          text: 'Strategy v' + strat.current.version + ' · ' + strat.current.name,
+        }));
+      }
+      if (regime && regime.tag) {
+        const MOOD = {
+          risk_on: ['Market mood: favorable', 'up',
+            'The major indexes are in uptrends — conditions that historically reward being invested.'],
+          risk_off: ['Market mood: defensive', 'down',
+            'The market is below its long-term trend — the AI leans toward caution and cash.'],
+          neutral: ['Market mood: mixed', 'neutral',
+            'Trend signals are conflicting — neither clearly favorable nor defensive.'],
+        };
+        const [label, cls, tip] = MOOD[regime.tag] || MOOD.neutral;
+        chipsEl.append(h('span', { class: 'c-pill ' + cls, title: tip, text: label }));
+      }
     }
   } catch (err) {
-    renderError(statsEl, err, loadHeader);
+    // The hero must never take the whole page down — leave placeholders in place
+    console.error('desk header load failed', err);
   }
 }
 
@@ -854,6 +872,94 @@ async function loadAll() {
   ]);
 }
 
+/* ── card collapse: chevron in each card header toggles visibility,
+   preferences persisted per-card in localStorage. Cards can opt into a
+   default-collapsed state via data-collapsed="1" on the .desk-card. ── */
+const COLLAPSE_KEY = 'ef-desk-collapse-v1';
+function loadCollapseSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+}
+function saveCollapseSet(set) {
+  try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...set])); }
+  catch (e) { /* private mode, quota — silent */ }
+}
+function wireCollapse() {
+  const cards = document.querySelectorAll('.desk-card[data-collapse-key]');
+  const persisted = loadCollapseSet();
+  // First-visit defaults come from data-collapsed="1"; user prefs override.
+  for (const card of cards) {
+    const key = card.getAttribute('data-collapse-key');
+    if (!key) continue;
+    if (persisted.has(key) || (card.getAttribute('data-collapsed') === '1' && !persisted.has('!' + key))) {
+      card.classList.add('collapsed');
+    }
+  }
+  document.addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-collapse-btn]');
+    if (!btn) return;
+    const card = btn.closest('.desk-card');
+    if (!card) return;
+    const key = card.getAttribute('data-collapse-key');
+    if (!key) return;
+    const set = loadCollapseSet();
+    const wasCollapsed = card.classList.toggle('collapsed');
+    if (wasCollapsed) {
+      set.add(key); set.delete('!' + key);
+    } else {
+      set.delete(key);
+      // remember the user explicitly opened a default-collapsed card
+      if (card.getAttribute('data-collapsed') === '1') set.add('!' + key);
+    }
+    saveCollapseSet(set);
+  });
+}
+
+/* ── anchor nav scrollspy: highlight the visible zone in the sticky nav.
+   Also smooth-scroll into view on click, respecting scroll-margin-top so
+   the target zone header clears the sticky topnav + anchor bar. ── */
+function wireAnchorNav() {
+  const nav = document.getElementById('desk-anchornav');
+  if (!nav) return;
+  const anchors = [...nav.querySelectorAll('.desk-anchor')];
+  const setActive = zoneId => {
+    for (const a of anchors) {
+      const on = a.getAttribute('data-zone') === zoneId;
+      a.classList.toggle('active', on);
+    }
+  };
+  // click: smooth-scroll to the zone
+  nav.addEventListener('click', ev => {
+    const a = ev.target.closest('.desk-anchor');
+    if (!a) return;
+    const zoneId = a.getAttribute('data-zone');
+    const zone = document.getElementById(zoneId);
+    if (!zone) return;
+    ev.preventDefault();
+    zone.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setActive(zoneId);
+    history.replaceState(null, '', '#' + zoneId);
+  });
+  // scrollspy: highlight whichever zone the reader is looking at
+  const zones = [...document.querySelectorAll('.desk-zone')];
+  if (!zones.length || !('IntersectionObserver' in window)) return;
+  const io = new IntersectionObserver(entries => {
+    const visible = entries
+      .filter(e => e.isIntersecting)
+      .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+    if (visible.length) setActive(visible[0].target.id);
+  }, {
+    // Zone counts as "visible" when its top clears the sticky bar
+    rootMargin: '-120px 0px -55% 0px',
+    threshold: [0, 0.1, 0.25, 0.5],
+  });
+  for (const z of zones) io.observe(z);
+  // default: first zone is active
+  setActive(zones[0].id);
+}
+
+wireCollapse();
+wireAnchorNav();
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)

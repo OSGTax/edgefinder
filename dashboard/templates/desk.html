@@ -3,143 +3,243 @@
 {% block head %}<link rel="stylesheet" href="/static/css/desk.css">{% endblock %}
 
 {% block content %}
-<div class="flex items-center gap-12 mb-16 flex-wrap">
-  <h2>Trading Desk</h2>
-  <span id="desk-strategy" class="c-chips"></span>
-  <span class="spacer"></span>
-  <button id="desk-whatsnew-btn" class="desk-wn-btn" type="button" aria-expanded="false" hidden>
-    <span class="desk-wn-spark">&#9670;</span> What's New<span id="desk-whatsnew-badge" class="desk-wn-badge" hidden></span>
-  </button>
-  <span id="desk-regime" class="c-chips"></span>
-</div>
+<h2 class="desk-page-title">Trading Desk</h2>
+
+<!-- HERO: at-a-glance account status. Reads the top of the page from
+     one spot — value, today, P&L, chips, and What's New. -->
+<section id="desk-hero" class="desk-hero c-card">
+  <div class="desk-hero-primary">
+    <div class="desk-hero-headline">
+      <div class="desk-hero-label">Account value</div>
+      <div class="desk-hero-value" id="desk-hero-account">—</div>
+    </div>
+    <div class="desk-hero-today" id="desk-hero-today"></div>
+  </div>
+  <dl class="desk-hero-stats">
+    <div>
+      <dt title="Total profit or loss since the paper account was funded">Profit / loss</dt>
+      <dd id="desk-hero-pnl">—</dd>
+    </div>
+    <div>
+      <dt title="Percent return since the paper account was funded">Return</dt>
+      <dd id="desk-hero-return">—</dd>
+    </div>
+    <div>
+      <dt title="Dollars not currently invested in any position">Cash on hand</dt>
+      <dd id="desk-hero-cash">—</dd>
+    </div>
+    <div>
+      <dt title="How many different investments are currently held">Investments</dt>
+      <dd id="desk-hero-count">—</dd>
+    </div>
+  </dl>
+  <div class="desk-hero-foot">
+    <div class="desk-hero-chips" id="desk-hero-chips"></div>
+    <span class="spacer"></span>
+    <button id="desk-whatsnew-btn" class="desk-wn-btn" type="button" aria-expanded="false" hidden>
+      <span class="desk-wn-spark">&#9670;</span> What's New<span id="desk-whatsnew-badge" class="desk-wn-badge" hidden></span>
+    </button>
+  </div>
+</section>
+
+<!-- ANCHOR NAV: sticky under the topnav; jump between the four zones.
+     Scrollspy highlights the visible zone. Horizontal-scroll on mobile. -->
+<nav class="desk-anchornav" id="desk-anchornav" aria-label="Sections">
+  <a href="#zone-book" class="desk-anchor" data-zone="zone-book">The Book</a>
+  <a href="#zone-markets" class="desk-anchor" data-zone="zone-markets">Markets</a>
+  <a href="#zone-reasoning" class="desk-anchor" data-zone="zone-reasoning">Reasoning</a>
+  <a href="#zone-history" class="desk-anchor" data-zone="zone-history">History &amp; Learning</a>
+</nav>
 
 <!-- attention banner: the single newest improvement, dismissible -->
 <div id="desk-whatsnew-banner" class="desk-wn-banner" hidden></div>
 <!-- full feed of recent improvements, toggled by the header button -->
 <div id="desk-whatsnew-panel" class="desk-wn-panel c-card mb-16" hidden></div>
 
-<!-- live SIP tape (SSE) -->
-<div id="desk-tape-banner" class="desk-tape-banner" hidden></div>
-<div class="c-card mb-16">
-  <div class="c-card-header">Live prices
-    <span id="desk-tape-live" class="desk-live-dot" hidden></span>
-    <span class="spacer"></span>
-    <span id="desk-tape-status" class="t-dim"></span>
-  </div>
-  <div class="c-card-sub">Real-time prices straight from the exchanges — the same numbers the AI trades on. "Bid" is what buyers offer, "ask" is what sellers want.</div>
-  <div class="c-card-body" id="desk-tape"></div>
-</div>
+<!-- ZONE 1: THE BOOK — what the paper account owns and how it's grown. -->
+<section id="zone-book" class="desk-zone">
+  <header class="desk-zone-head">
+    <h3 class="desk-zone-title">The Book</h3>
+    <p class="desk-zone-sub">The paper account — what it owns, how it's allocated, and how it's grown.</p>
+  </header>
+  <div class="desk-zone-grid">
 
-<!-- options intelligence: chain summary + growing IV bank -->
-<div class="c-card mb-16">
-  <div class="c-card-header">Options radar
-    <input id="desk-opt-symbol" class="desk-opt-select" list="desk-opt-list"
-           maxlength="6" autocomplete="off" spellcheck="false"
-           placeholder="any symbol…">
-    <datalist id="desk-opt-list"></datalist>
-    <span class="spacer"></span>
-    <span id="desk-opt-meta" class="t-dim"></span>
-  </div>
-  <div class="c-card-sub">What the options market expects for a stock — how big a move traders are bracing for, and what protection costs. Type any symbol. Hover any term for a plain-English explanation.</div>
-  <div class="c-card-body" id="desk-options"></div>
-</div>
-
-<!-- market movers: gainers / losers / most-active from the fresh hot set -->
-<div class="c-card mb-16">
-  <div class="c-card-header">Market movers
-    <span class="spacer"></span>
-    <span id="desk-movers-meta" class="t-dim"></span>
-  </div>
-  <div class="c-card-sub">The biggest winners, losers, and most-traded names across the ~500 most-liquid stocks the AI tracks — as of the last market close. A read on where the action is, not the AI's own picks.</div>
-  <div class="c-card-body" id="desk-movers"></div>
-</div>
-
-<div id="desk-stats" class="pf-grid mb-16"></div>
-
-<div class="c-card mb-16">
-  <div class="c-card-header">Account value over time
-    <span class="spacer"></span>
-    <span id="desk-equity-meta" class="t-dim"></span>
-  </div>
-  <div class="c-card-sub">The whole account (cash + investments), recorded every trading cycle. Started at $100,000.</div>
-  <div class="c-card-body tight">
-    <div class="ch-shell">
-      <div class="ch-pane tall" id="desk-equity-chart"></div>
+    <div class="c-card desk-card desk-span-2" data-collapse-key="equity">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Account value over time</span>
+        <span class="spacer"></span>
+        <span id="desk-equity-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">The whole account (cash + investments), recorded every trading cycle. Started at $100,000.</div>
+      <div class="c-card-body tight">
+        <div class="ch-shell">
+          <div class="ch-pane tall" id="desk-equity-chart"></div>
+        </div>
+      </div>
     </div>
-  </div>
-</div>
 
-<div class="grid-2 mb-16">
-  <div class="c-card">
-    <div class="c-card-header">What the AI owns right now</div>
-    <div class="c-card-sub">Every investment currently held, what it cost, what it's worth now, and the gain or loss so far.</div>
-    <div class="c-card-body" id="desk-positions"></div>
-  </div>
-  <div class="c-card">
-    <div class="c-card-header">The AI thinking out loud
-      <span class="spacer"></span>
-      <span id="desk-thinking-run" class="t-dim"></span>
+    <div class="c-card desk-card desk-span-2" data-collapse-key="positions">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>What the AI owns right now</span>
+      </div>
+      <div class="c-card-sub">Every investment currently held, what it cost, what it's worth now, and the gain or loss so far.</div>
+      <div class="c-card-body" id="desk-positions"></div>
     </div>
-    <div class="c-card-sub">Its live reasoning, in its own words, as each trading cycle runs.</div>
-    <div class="c-card-body" id="desk-thinking"></div>
-  </div>
-</div>
 
-<!-- dividend calendar: per-holding ex-dates + amounts (Alpaca corporate actions) -->
-<div class="c-card mb-16">
-  <div class="c-card-header">Dividend calendar
-    <span class="spacer"></span>
-    <span id="desk-dividends-meta" class="t-dim"></span>
-  </div>
-  <div class="c-card-sub">For each holding that pays a dividend: the most recent payment, the next one on the calendar, and the estimated yearly payout per share. A dividend is a cash payment a company sends shareholders.</div>
-  <div class="c-card-body" id="desk-dividends"></div>
-</div>
+    <div class="c-card desk-card desk-span-2" data-collapse-key="dividends">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Dividend calendar</span>
+        <span class="spacer"></span>
+        <span id="desk-dividends-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">For each holding that pays a dividend: the most recent payment, the next one on the calendar, and the estimated yearly payout per share. A dividend is a cash payment a company sends shareholders.</div>
+      <div class="c-card-body" id="desk-dividends"></div>
+    </div>
 
-<div class="c-card mb-16">
-  <div class="c-card-header">The latest decision
-    <span class="spacer"></span>
-    <span id="desk-decision-when" class="t-dim"></span>
   </div>
-  <div class="c-card-sub">What the AI decided on its most recent cycle — what it bought, held, or sold, and the reasoning behind each pick.</div>
-  <div class="c-card-body">
-    <div id="desk-summary" class="mb-16"></div>
-    <div id="desk-picks"></div>
-    <div id="desk-watchlist" class="mt-16"></div>
-  </div>
-</div>
+</section>
 
-<!-- recent fills: each trade with the live bid/ask it priced off (the receipt) -->
-<div class="c-card mb-16">
-  <div class="c-card-header">Recent fills
-    <span class="spacer"></span>
-    <span id="desk-fills-meta" class="t-dim"></span>
-  </div>
-  <div class="c-card-sub">Every trade the AI made, with the exact live bid and ask it priced against at that moment — the receipt proving each fill hit the real market.</div>
-  <div class="c-card-body" id="desk-fills"></div>
-</div>
+<!-- ZONE 2: MARKETS — the wider market context, not the AI's own picks. -->
+<section id="zone-markets" class="desk-zone">
+  <header class="desk-zone-head">
+    <h3 class="desk-zone-title">Markets</h3>
+    <p class="desk-zone-sub">What the wider market is doing right now — a read on where the action is.</p>
+  </header>
+  <div class="desk-zone-grid">
 
-<!-- the lessons wiki: what the AI has learned from its own results -->
-<div class="c-card mb-16">
-  <div class="c-card-header">What the AI has learned
-    <span class="spacer"></span>
-    <span id="desk-wiki-meta" class="t-dim"></span>
-  </div>
-  <div class="c-card-sub">A small notebook the AI keeps of lessons from its own wins and losses — rewritten as real results come in, never from hunches. Lightly reviewed every cycle; deeply reviewed every Friday after the close. Every edit is logged in the Strategy diary.</div>
-  <div class="c-card-body" id="desk-wiki"></div>
-</div>
+    <div id="desk-tape-banner" class="desk-tape-banner desk-span-2" hidden></div>
 
-<div class="grid-2">
-  <div class="c-card">
-    <div class="c-card-header">Homework: history tests</div>
-    <div class="c-card-sub">Before betting (paper) money on an idea, the AI tests how it would have performed in past markets versus simply buying the S&amp;P 500.</div>
-    <div class="c-card-body" id="desk-backtests"></div>
+    <div class="c-card desk-card desk-span-2" data-collapse-key="tape">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Live prices</span>
+        <span id="desk-tape-live" class="desk-live-dot" hidden></span>
+        <span class="spacer"></span>
+        <span id="desk-tape-status" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">Real-time prices straight from the exchanges — the same numbers the AI trades on. "Bid" is what buyers offer, "ask" is what sellers want.</div>
+      <div class="c-card-body" id="desk-tape"></div>
+    </div>
+
+    <div class="c-card desk-card" data-collapse-key="options">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Options radar</span>
+        <input id="desk-opt-symbol" class="desk-opt-select" list="desk-opt-list"
+               maxlength="6" autocomplete="off" spellcheck="false"
+               placeholder="any symbol…">
+        <datalist id="desk-opt-list"></datalist>
+        <span class="spacer"></span>
+        <span id="desk-opt-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">What the options market expects for a stock — how big a move traders are bracing for, and what protection costs. Type any symbol. Hover any term for a plain-English explanation.</div>
+      <div class="c-card-body" id="desk-options"></div>
+    </div>
+
+    <div class="c-card desk-card" data-collapse-key="movers">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Market movers</span>
+        <span class="spacer"></span>
+        <span id="desk-movers-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">The biggest winners, losers, and most-traded names across the ~500 most-liquid stocks the AI tracks — as of the last market close.</div>
+      <div class="c-card-body" id="desk-movers"></div>
+    </div>
+
   </div>
-  <div class="c-card">
-    <div class="c-card-header">Strategy diary</div>
-    <div class="c-card-sub">Every time the AI changes its approach, it writes down what changed and why.</div>
-    <div class="c-card-body" id="desk-journal"></div>
+</section>
+
+<!-- ZONE 3: THE AI'S REASONING — the latest decision and its running thoughts. -->
+<section id="zone-reasoning" class="desk-zone">
+  <header class="desk-zone-head">
+    <h3 class="desk-zone-title">The AI's Reasoning</h3>
+    <p class="desk-zone-sub">Why it decided what it did — in its own words.</p>
+  </header>
+  <div class="desk-zone-grid">
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="decision">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>The latest decision</span>
+        <span class="spacer"></span>
+        <span id="desk-decision-when" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">What the AI decided on its most recent cycle — what it bought, held, or sold, and the reasoning behind each pick.</div>
+      <div class="c-card-body">
+        <div id="desk-summary" class="mb-16"></div>
+        <div id="desk-picks"></div>
+        <div id="desk-watchlist" class="mt-16"></div>
+      </div>
+    </div>
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="thinking">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>The AI thinking out loud</span>
+        <span class="spacer"></span>
+        <span id="desk-thinking-run" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">Its live reasoning, in its own words, as each trading cycle runs.</div>
+      <div class="c-card-body" id="desk-thinking"></div>
+    </div>
+
   </div>
-</div>
+</section>
+
+<!-- ZONE 4: HISTORY & LEARNING — the record of trades + what the AI has learned. -->
+<section id="zone-history" class="desk-zone">
+  <header class="desk-zone-head">
+    <h3 class="desk-zone-title">History &amp; Learning</h3>
+    <p class="desk-zone-sub">The record of trades, and what the AI has learned from its own results.</p>
+  </header>
+  <div class="desk-zone-grid">
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="fills">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Recent fills</span>
+        <span class="spacer"></span>
+        <span id="desk-fills-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">Every trade the AI made, with the exact live bid and ask it priced against at that moment — the receipt proving each fill hit the real market.</div>
+      <div class="c-card-body" id="desk-fills"></div>
+    </div>
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="wiki">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>What the AI has learned</span>
+        <span class="spacer"></span>
+        <span id="desk-wiki-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">A small notebook the AI keeps of lessons from its own wins and losses — rewritten as real results come in, never from hunches. Lightly reviewed every cycle; deeply reviewed every Friday after the close.</div>
+      <div class="c-card-body" id="desk-wiki"></div>
+    </div>
+
+    <div class="c-card desk-card" data-collapse-key="backtests" data-collapsed="1">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Homework: history tests</span>
+      </div>
+      <div class="c-card-sub">Before betting (paper) money on an idea, the AI tests how it would have performed in past markets versus simply buying the S&amp;P 500.</div>
+      <div class="c-card-body" id="desk-backtests"></div>
+    </div>
+
+    <div class="c-card desk-card" data-collapse-key="journal" data-collapsed="1">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Strategy diary</span>
+      </div>
+      <div class="c-card-sub">Every time the AI changes its approach, it writes down what changed and why.</div>
+      <div class="c-card-body" id="desk-journal"></div>
+    </div>
+
+  </div>
+</section>
 {% endblock %}
 
 {% block scripts %}

@@ -1,5 +1,171 @@
 /* Trading Desk — page-specific styles (tokens only, no hard-coded colors). */
 
+/* ═══════════════════════════════════════════════════════════════
+   Redesign v8.7: hero + zones + sticky anchor nav.
+   Structure: page title (small) → hero card → sticky anchor nav →
+   4 zones (Book / Markets / Reasoning / History) each with a
+   named header and a 2-col grid of cards (cards can .desk-span-2
+   to go full-width). Everything collapses to 1 col ≤900px.
+   ═══════════════════════════════════════════════════════════════ */
+
+.desk-page-title {
+  margin: 0 0 var(--t-s2);
+  font-size: var(--t-fs-xs);
+  color: var(--t-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  font-weight: 600;
+}
+
+/* ── HERO: at-a-glance account status ── */
+.desk-hero { padding: 18px 20px; margin-bottom: 14px; }
+.desk-hero-primary {
+  display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+}
+.desk-hero-headline { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.desk-hero-label {
+  font-size: var(--t-fs-xs); text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--t-text-3);
+}
+.desk-hero-value {
+  font-family: var(--t-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 36px; font-weight: 700; line-height: 1.05;
+  color: var(--t-text);
+}
+.desk-hero-today {
+  font-family: var(--t-font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--t-fs-lg); font-weight: 600;
+  padding-bottom: 4px;
+}
+.desk-hero-today .lbl {
+  font-family: var(--t-font-ui);
+  font-size: var(--t-fs-xs); text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--t-text-3);
+  margin-right: 6px; font-weight: 600;
+}
+.desk-hero-today .empty { color: var(--t-text-3); font-weight: 400; }
+
+.desk-hero-stats {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px 24px;
+  margin: 16px 0 12px; padding: 14px 0 0;
+  border-top: 1px solid var(--t-border);
+}
+.desk-hero-stats > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.desk-hero-stats dt {
+  font-size: var(--t-fs-xs); text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--t-text-3); margin: 0;
+  border-bottom: 1px dotted var(--t-text-3);
+  align-self: flex-start; cursor: help;
+}
+.desk-hero-stats dd {
+  margin: 0;
+  font-family: var(--t-font-mono); font-variant-numeric: tabular-nums;
+  font-size: var(--t-fs-xl); font-weight: 700; color: var(--t-text);
+}
+
+.desk-hero-foot {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.desk-hero-foot .spacer { flex: 1; }
+.desk-hero-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+
+@media (max-width: 640px) {
+  .desk-hero { padding: 14px; }
+  .desk-hero-value { font-size: 28px; }
+  .desk-hero-today { font-size: var(--t-fs-base); }
+  .desk-hero-stats {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 14px; margin-top: 12px; padding-top: 12px;
+  }
+  .desk-hero-stats dd { font-size: var(--t-fs-lg); }
+}
+
+/* ── ANCHOR NAV: sticky just below the topnav ── */
+.desk-anchornav {
+  position: sticky; top: var(--t-nav-h); z-index: 30;
+  display: flex; gap: 4px;
+  padding: 8px 0; margin-bottom: 14px;
+  background: var(--t-bg);
+  border-bottom: 1px solid var(--t-border);
+  overflow-x: auto; scrollbar-width: none;
+}
+.desk-anchornav::-webkit-scrollbar { display: none; }
+.desk-anchor {
+  padding: 6px 12px; border-radius: var(--t-radius-sm);
+  color: var(--t-text-2); font-size: var(--t-fs-sm); font-weight: 600;
+  text-decoration: none; white-space: nowrap;
+  border: 1px solid transparent;
+}
+.desk-anchor:hover {
+  color: var(--t-text); background: var(--t-surface-2); text-decoration: none;
+}
+.desk-anchor.active {
+  color: var(--t-text); background: var(--t-surface-2);
+  border-color: var(--t-border-strong);
+}
+
+/* ── ZONES: named sections with head + 2-col card grid ── */
+.desk-zone {
+  margin-bottom: 28px;
+  scroll-margin-top: calc(var(--t-nav-h) + 62px);
+}
+.desk-zone-head {
+  display: flex; align-items: baseline; gap: 14px;
+  padding: 0 2px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.desk-zone-title {
+  margin: 0; font-size: var(--t-fs-xl); font-weight: 700;
+  color: var(--t-text);
+}
+.desk-zone-sub {
+  margin: 0; color: var(--t-text-3);
+  font-size: var(--t-fs-sm); line-height: 1.45;
+}
+
+.desk-zone-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;
+}
+.desk-span-2 { grid-column: 1 / -1; }
+
+@media (max-width: 900px) {
+  .desk-zone-grid { grid-template-columns: 1fr; gap: 12px; }
+  .desk-span-2 { grid-column: auto; }
+  .desk-zone { margin-bottom: 20px; }
+}
+
+/* ── CARD COLLAPSE: chevron toggle in the header, state via localStorage ── */
+.desk-collapse {
+  font: inherit; font-size: 11px; line-height: 1;
+  color: var(--t-text-3);
+  background: none; border: 1px solid var(--t-border);
+  border-radius: var(--t-radius-sm);
+  padding: 3px 6px; margin-right: 2px;
+  cursor: pointer;
+  transition: transform 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.desk-collapse:hover {
+  color: var(--t-text); border-color: var(--t-border-strong);
+}
+.desk-card.collapsed .desk-collapse { transform: rotate(-90deg); }
+.desk-card.collapsed .c-card-body,
+.desk-card.collapsed .c-card-sub {
+  display: none;
+}
+.desk-card.collapsed .c-card-header { border-bottom: none; }
+
+/* Ensure long tables inside desk cards scroll horizontally on mobile
+   rather than blowing out the card width. */
+.desk-card .c-card-body { min-width: 0; overflow-x: auto; }
+.desk-card .c-card-body.tight { overflow: visible; }
+
+/* ═══════════════════════════════════════════════════════════════
+   End redesign v8.7 block. Legacy per-panel styles below.
+   ═══════════════════════════════════════════════════════════════ */
+
+
 /* live thinking feed */
 .desk-feed { display: flex; flex-direction: column; gap: var(--t-s2); max-height: 420px; overflow-y: auto; }
 .desk-feed-line {
