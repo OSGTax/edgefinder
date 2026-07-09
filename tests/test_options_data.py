@@ -97,7 +97,6 @@ def test_options_endpoints_graceful_without_keys(store, monkeypatch):
     from config.settings import settings
     monkeypatch.setattr(settings, "alpaca_api_key", "", raising=False)
     monkeypatch.setattr(settings, "alpaca_api_secret", "", raising=False)
-    monkeypatch.setattr(settings, "polygon_api_key", "", raising=False)
     import agent.options_data as od
     od._cache.clear()
     import dashboard.dependencies as deps

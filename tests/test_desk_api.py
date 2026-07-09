@@ -12,10 +12,6 @@ from fastapi.testclient import TestClient
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'desk.db'}")
     monkeypatch.setenv("EDGEFINDER_SCHEDULER_ENABLED", "false")
-    # No data provider in tests: blank the key so init_services returns early
-    # (no scheduler, no network plan-probe). The desk endpoints don't use it.
-    from config.settings import settings as _settings
-    monkeypatch.setattr(_settings, "polygon_api_key", "", raising=False)
 
     from edgefinder.db.engine import Base, get_engine
     import edgefinder.db.models  # noqa: F401

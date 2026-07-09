@@ -11,10 +11,28 @@ import logging
 
 import pandas as pd
 
-from config.settings import settings
 from edgefinder.data.market_data import IndicatorSnapshot
 
 logger = logging.getLogger(__name__)
+
+
+# Indicator parameters — historically these lived in config.settings under
+# the ``signal_*`` prefix, but only this module ever read them. Moved next to
+# their consumer so the settings surface stops being a museum of the retired
+# strategy workbench.
+RSI_PERIOD = 14
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+BB_PERIOD = 20
+BB_STD = 2.0
+ATR_PERIOD = 14
+ADX_PERIOD = 14
+STOCH_RSI_PERIOD = 14
+STOCH_RSI_K = 3
+STOCH_RSI_D = 3
+WILLIAMS_R_PERIOD = 14
+VOLUME_AVG_PERIOD = 20
 
 
 # ── Pure pandas indicator functions (from signals/engine.py) ──
@@ -144,38 +162,38 @@ def compute_indicators_from_bars(df: pd.DataFrame) -> IndicatorSnapshot | None:
     ema_200 = _ema(close, 200) if len(df) >= 200 else pd.Series([None] * len(df))
 
     # RSI
-    rsi = _rsi(close, settings.signal_rsi_period)
+    rsi = _rsi(close, RSI_PERIOD)
 
     # MACD
     macd_line, macd_signal, macd_hist = _macd(
-        close, settings.signal_macd_fast, settings.signal_macd_slow, settings.signal_macd_signal
+        close, MACD_FAST, MACD_SLOW, MACD_SIGNAL
     )
 
     # Bollinger Bands
     bb_upper, bb_middle, bb_lower = _bollinger_bands(
-        close, settings.signal_bb_period, settings.signal_bb_std
+        close, BB_PERIOD, BB_STD
     )
     bb_width_series = (bb_upper - bb_lower) / bb_middle.replace(0, float("nan"))
 
     # ATR
-    atr = _atr(high, low, close, settings.signal_atr_period)
+    atr = _atr(high, low, close, ATR_PERIOD)
 
     # ADX
     adx_series, plus_di_series, minus_di_series = _adx(
-        high, low, close, settings.signal_adx_period
+        high, low, close, ADX_PERIOD
     )
 
     # Stochastic RSI
     stoch_k, stoch_d = _stochastic_rsi(
-        close, settings.signal_stoch_rsi_period,
-        settings.signal_stoch_rsi_k, settings.signal_stoch_rsi_d,
+        close, STOCH_RSI_PERIOD,
+        STOCH_RSI_K, STOCH_RSI_D,
     )
 
     # Williams %R
-    williams = _williams_r(high, low, close, settings.signal_williams_r_period)
+    williams = _williams_r(high, low, close, WILLIAMS_R_PERIOD)
 
     # Volume
-    vol_avg = volume.rolling(window=settings.signal_volume_avg_period).mean()
+    vol_avg = volume.rolling(window=VOLUME_AVG_PERIOD).mean()
     vol_ratio = volume / vol_avg.replace(0, float("nan"))
 
     def _safe_float(series, idx=-1):
@@ -244,23 +262,23 @@ def compute_snapshot_series(df: pd.DataFrame) -> list[IndicatorSnapshot]:
     ema_9, ema_21 = _ema(close, 9), _ema(close, 21)
     ema_50 = _ema(close, 50) if n >= 50 else nan
     ema_200 = _ema(close, 200) if n >= 200 else nan
-    rsi = _rsi(close, settings.signal_rsi_period)
+    rsi = _rsi(close, RSI_PERIOD)
     macd_line, macd_signal, macd_hist = _macd(
-        close, settings.signal_macd_fast, settings.signal_macd_slow,
-        settings.signal_macd_signal,
+        close, MACD_FAST, MACD_SLOW,
+        MACD_SIGNAL,
     )
     bb_u, bb_m, bb_l = _bollinger_bands(
-        close, settings.signal_bb_period, settings.signal_bb_std
+        close, BB_PERIOD, BB_STD
     )
     bb_width = (bb_u - bb_l) / bb_m.replace(0, float("nan"))
-    atr = _atr(high, low, close, settings.signal_atr_period)
-    adx, plus_di, minus_di = _adx(high, low, close, settings.signal_adx_period)
+    atr = _atr(high, low, close, ATR_PERIOD)
+    adx, plus_di, minus_di = _adx(high, low, close, ADX_PERIOD)
     stoch_k, stoch_d = _stochastic_rsi(
-        close, settings.signal_stoch_rsi_period,
-        settings.signal_stoch_rsi_k, settings.signal_stoch_rsi_d,
+        close, STOCH_RSI_PERIOD,
+        STOCH_RSI_K, STOCH_RSI_D,
     )
-    williams = _williams_r(high, low, close, settings.signal_williams_r_period)
-    vol_avg = volume.rolling(window=settings.signal_volume_avg_period).mean()
+    williams = _williams_r(high, low, close, WILLIAMS_R_PERIOD)
+    vol_avg = volume.rolling(window=VOLUME_AVG_PERIOD).mean()
     vol_ratio = volume / vol_avg.replace(0, float("nan"))
 
     def f(s, i):

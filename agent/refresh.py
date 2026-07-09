@@ -39,6 +39,11 @@ logger = logging.getLogger(__name__)
 # the per-symbol / per-pass `except` guards already catch it and the run
 # continues instead of hanging.
 NET_TIMEOUT_S = 20.0
+# R2 parquet PUTs move multi-MB payloads over 443; a 20s socket timeout that
+# works for Alpaca REST is aggressive for a healthy-but-slow parquet write.
+# Widen it for the R2 sync path only, so a big archive push isn't spuriously
+# killed by the same knob that keeps a hung TLS handshake bounded.
+R2_NET_TIMEOUT_S = 90.0
 
 
 def _bound_network(timeout: float = NET_TIMEOUT_S) -> None:
@@ -148,7 +153,9 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
             if sym.upper() in have_today:
                 skipped += 1
                 continue
-            s = options_data.get_summary(sym)
+            # dte_max=30 is enough for the IV data bank — long-dated OPRA is
+            # slower to fetch and rarely trades on the hourly agent's radar
+            s = options_data.get_summary(sym, dte_max=30)
             if options_data.persist_snapshot(store, s, snap_date=today):
                 written += 1
         summary["iv_snapshots"] = {"written": written, "skipped_have_today": skipped}
@@ -534,7 +541,9 @@ def _r2_merge_sync(symbols: list[str]):
     if not all(os.getenv(k) for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
                                       "R2_ENDPOINT", "R2_BUCKET")):
         return "skipped (no R2_* env)"
-    _bound_network()
+    # R2 needs a wider socket timeout than Alpaca REST — parquet PUTs are
+    # multi-MB and legitimately take longer than a JSON-shaped Alpaca call.
+    _bound_network(R2_NET_TIMEOUT_S)
     try:  # setup only — a failure here really is fatal to the whole sync
         import boto3
         import pandas as pd

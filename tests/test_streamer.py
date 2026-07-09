@@ -53,8 +53,6 @@ def test_warm_does_not_clobber_ws_data():
 
 def test_quotes_endpoint_serves_cache(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'q.db'}")
-    from config.settings import settings
-    monkeypatch.setattr(settings, "polygon_api_key", "", raising=False)
     from fastapi.testclient import TestClient
     import agent.streamer as streamer
     from edgefinder.db.engine import Base, get_engine
