@@ -348,6 +348,14 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-alloc-seg.s7, .desk-alloc-swatch.s7 { stroke: var(--t-s7); background: var(--t-s7); }
 .desk-alloc-seg.cash, .desk-alloc-swatch.cash { stroke: var(--t-benchmark); background: var(--t-benchmark); }
 
+/* ── footnote: quiet paper-account / not-investment-advice reminder ── */
+.desk-footnote {
+  max-width: 62ch; margin: 4px auto 24px; padding: 0 var(--t-s2);
+  color: var(--t-text-3); font-size: var(--t-fs-xs); line-height: 1.5;
+  text-align: center;
+}
+.desk-footnote strong { color: var(--t-text-2); font-weight: 600; }
+
 /* lessons wiki — the AI's curated notebook */
 .desk-wiki-page { padding-bottom: var(--t-s3); border-bottom: 1px solid var(--t-border); margin-bottom: var(--t-s3); }
 .desk-wiki-page:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
