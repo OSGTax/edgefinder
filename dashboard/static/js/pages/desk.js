@@ -21,10 +21,26 @@ function pill(text, cls) {
   return h('span', { class: 'c-pill ' + (cls || 'neutral'), text });
 }
 
-function statCard(label, value, cls) {
-  return h('div', { class: 'c-stat' },
-    h('div', { class: 'label', text: label }),
+function statCard(label, value, cls, tip) {
+  return h('div', { class: 'c-stat', title: tip || null },
+    h('div', { class: 'label' + (tip ? ' desk-hint' : ''), text: label }),
     h('div', { class: 'value ' + (cls || ''), text: value }));
+}
+
+/* the account's change since the last completed trading session — grouped
+   from the same equity marks the chart already shows, oldest→newest */
+function todayChange(series) {
+  if (!series || series.length < 2) return null;
+  const byDay = new Map();
+  for (const p of series) {
+    if (p.t && p.equity != null) byDay.set(p.t.slice(0, 10), p.equity);
+  }
+  const days = [...byDay.keys()].sort();
+  if (days.length < 2) return null;
+  const latest = byDay.get(days[days.length - 1]);
+  const prior = byDay.get(days[days.length - 2]);
+  if (!prior) return null;
+  return { dollars: latest - prior, pct: (latest - prior) / prior * 100 };
 }
 
 /* ── stats + strategy + regime headers ── */
@@ -34,16 +50,23 @@ async function loadHeader() {
   const regimeEl = document.getElementById('desk-regime');
   skeleton(statsEl);
   try {
-    const [pf, strat, regime] = await Promise.all([
+    const [pf, strat, regime, eq] = await Promise.all([
       apiGet('/api/desk/portfolio'),
       apiGet('/api/desk/strategy'),
       apiGet('/api/desk/regime').catch(() => null),
+      apiGet('/api/desk/equity?limit=500').catch(() => null),
     ]);
 
     clear(statsEl);
     const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
+    const today = todayChange(eq);
     statsEl.append(
       statCard('Account value', fmtDollar(pf.equity)),
+      today
+        ? statCard('Today', fmtPnl(today.dollars) + ' (' + fmtPct(today.pct) + ')',
+            today.dollars >= 0 ? 't-up' : 't-down',
+            'The change in account value since the last completed trading session')
+        : statCard('Today', '—', '', 'Not enough history yet to show a day-over-day change'),
       statCard('Profit / loss', fmtPnl(pf.total_pnl), pnlCls),
       statCard('Return', fmtPct(pf.total_return_pct / 100, { signed: true }), pnlCls),
       statCard('Cash on hand', fmtDollar(pf.cash)),
