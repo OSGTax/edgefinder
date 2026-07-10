@@ -300,6 +300,31 @@ class DeskWiki(Base):
     updated_run_id: Mapped[str | None] = mapped_column(String(40))
 
 
+# ── desk_briefs — the nightly research pack ──
+
+
+class DeskBrief(Base):
+    """One nightly research pack, precomputed while the whole-market data is
+    already in hand (the data-refresh routine builds it right after the
+    ingest). The hourly trading cycle reads ONE dense payload — regime,
+    ranked universe, movers, trend roster, headlines, data-coverage verdict —
+    instead of re-deriving it with a dozen exploratory scans, so its context
+    goes to deciding, not gathering. One row per (account, brief_date),
+    rebuilt in place; written only by ``agent.market brief-build``.
+    """
+
+    __tablename__ = "desk_briefs"
+    __table_args__ = (
+        UniqueConstraint("account", "brief_date", name="uq_desk_brief_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    brief_date: Mapped[date] = mapped_column(Date, index=True)
+    built_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -432,5 +457,13 @@ DESK_TABLE_DDL: list[str] = [
         updated_at TIMESTAMP DEFAULT NOW(),
         updated_run_id VARCHAR(40),
         CONSTRAINT uq_desk_wiki_account_slug UNIQUE (account, slug)
+    )""",
+    """CREATE TABLE IF NOT EXISTS desk_briefs (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        brief_date DATE NOT NULL,
+        built_at TIMESTAMP DEFAULT NOW(),
+        payload JSON NOT NULL,
+        CONSTRAINT uq_desk_brief_date UNIQUE (account, brief_date)
     )""",
 ]

@@ -96,14 +96,22 @@ short, candid lines; this is the live "thinking" panel the owner watches.
   daily bars for your universe (keeps indicators/backtests current).
 
 ### 1. Observe (phase: observe)
+- `python -m agent.market brief` — **read this FIRST**: last night's research
+  pack (regime, ranked universe, movers, trend roster with indicators,
+  headlines, data-coverage verdict) in one call. Built nightly by the
+  data-refresh routine so you spend your context deciding, not gathering —
+  skip the separate `regime`/`universe` calls when the brief is fresh. If
+  `exists` is false or `stale` is true, fall back to the individual scans
+  below and say so in a thinking note.
 - `python -m agent.ledger state` — cash, positions, equity, P&L.
 - `python -m agent.brain state-get` — your current strategy (thesis/rules/params).
 - `python -m agent.brain wiki-get` — your lessons wiki (playbook, lessons,
   mistakes, market notes), distilled from your own MEASURED results. Read it
   before deciding — it is your accumulated experience.
-- `python -m agent.market regime` — SPY/QQQ/IWM trend + a regime tag.
+- `python -m agent.market regime` — only when the brief is missing/stale.
 - `python -m agent.broker quote --symbols <held + candidates>` — **LIVE
-  prices** (bid/ask/mid, real-time SIP). This is what you trade on.
+  prices** (bid/ask/mid, real-time SIP). This is what you trade on. The brief
+  is last night's picture; the tape is NOW — when they disagree, the tape wins.
 Narrate: how is the book doing, is the strategy working, what is the market
 doing RIGHT NOW (live quotes vs yesterday's closes tells you today's move).
 
@@ -146,7 +154,22 @@ backtest grounds the IDEA, it does not predict your exact fills.)
 ### 4. Decide (phase: decide)
 Choose the **target book**: `{symbol: weight}`. Full discretion — any number
 of names, any sizing within the guardrails. Per held name: hold / add /
-trim / exit. If conviction changed the approach:
+trim / exit.
+
+**The bear-case beat (required before the big moves).** Before executing a
+strategy PIVOT or any single position that would exceed 20% of equity,
+write the strongest honest case AGAINST it first:
+```
+python -m agent.brain think --run-id <RID> --phase bear-case \
+    --text "Against <move>: <the best 2-3 arguments, with numbers>"
+```
+Then decide with the bear case on the table, and say in your decide note
+why the thesis survives it (or downsize/walk away — that is a win, record
+what stopped you). You narrate favorably by default — every trader does —
+so this beat exists to catch the trade only momentum was carrying. The
+owner sees both sides on the desk.
+
+If conviction changed the approach:
 ```
 python -m agent.brain state-set --name "..." --thesis "..." \
     --rules-file rules.json --params-file params.json --bump   # pivot

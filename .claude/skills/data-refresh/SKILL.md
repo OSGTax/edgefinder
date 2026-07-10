@@ -30,7 +30,19 @@ Anything outside top-N is still quote- and fill-able live and can be topped up
 on demand with `agent.refresh --source alpaca --symbols X,Y` (or by putting a
 name on the watchlist).
 
-### 2. Report coverage
+### 2. Build tonight's research brief
+```
+python -m agent.market brief-build --top 40
+```
+The whole-market picture is freshest right now, so pack it once: regime,
+ranked universe, movers across the last two well-covered sessions, a trend
+roster with indicators, headlines for the leaders, and the data-coverage
+verdict. Tomorrow's hourly trading cycles read this ONE payload
+(`agent.market brief`) instead of re-deriving it every hour — the trader
+spends its context deciding, not gathering. If the build reports
+`coverage_status` other than `green`, say so loudly in your report.
+
+### 3. Report coverage
 Count names with a bar on the latest trading day so a decaying ingest is
 visible, not silent:
 ```
@@ -48,7 +60,7 @@ PY
 Healthy is coverage at/near `--top`. A sharp drop means the ingest is failing
 partway (usually a network hang) — investigate before it decays further.
 
-### 3. Storage-headroom check — flag before a limit bites
+### 4. Storage-headroom check — flag before a limit bites
 Free tiers: **R2 = 10 GB**, **Supabase DB = 500 MB**. `daily_bars` is the
 dominant table and (post-rebuild) only GROWS — there is no prune — so watch it.
 Report R2 bytes used and the `daily_bars` row scale; if R2 is over ~8 GB or the
@@ -69,8 +81,10 @@ PY
 ```
 
 ## Guardrails
-- **Data only.** This routine never touches the book (`desk_*`), the strategy,
-  or UI files — it maintains the market-data asset the whole system reads.
+- **Data only.** This routine never touches the book, the strategy, or UI
+  files — it maintains the market-data asset the whole system reads. Its ONE
+  sanctioned `desk_*` write is the research brief (`desk_briefs`, via
+  `agent.market brief-build`) — packaged market observation, not book state.
 - **Idempotent + bounded.** `agent.refresh` sets a socket timeout so a hung
   Alpaca call fails fast instead of stalling the whole ingest; re-running is a
   cheap near-noop when already current.
