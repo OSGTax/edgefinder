@@ -414,11 +414,23 @@ def regime(*, as_of: date | None = None) -> dict:
 # full-universe coverage. One thin session is normal (today's intraday
 # partial); two means last night's ingest was missed; three or more means
 # whole-market research is running on stale rankings.
+#
+# Thin sessions alone can't see TOTAL death, though — when every writer stops
+# (all Routines dead), no new bar dates appear and the newest date IS the last
+# full one, thin_sessions=0 forever. The calendar-age anchor below catches
+# that: bars older than a long weekend can't be green no matter their shape.
 
-FULL_COVERAGE_MIN = 1000  # bars on a date for it to count as a full nightly ingest
+# Bars on a date for it to count as a full nightly ingest. The nightly runs
+# --top 1000 and lands ~1,020-1,035 rows (top-N + the forced keep set), so
+# 900 leaves ~10% headroom: one failed 100-name fetch batch in an otherwise
+# successful ingest must not flip the whole date to "thin".
+FULL_COVERAGE_MIN = 900
+COVERAGE_AMBER_AGE_DAYS = 4  # newest bar older than this → at most amber
+COVERAGE_RED_AGE_DAYS = 6    # older than this → red (holiday weekend is 4)
 
 
-def coverage_verdict(date_counts, *, full_min: int | None = None) -> dict:
+def coverage_verdict(date_counts, *, full_min: int | None = None,
+                     today: date | None = None) -> dict:
     """Classify market-data freshness from per-date bar counts (pure logic).
 
     ``date_counts``: iterable of ``(date-or-iso-str, count)`` in any order.
@@ -426,21 +438,29 @@ def coverage_verdict(date_counts, *, full_min: int | None = None) -> dict:
     matters. Returns status green (0-1 thin sessions), amber (2), or red (3+,
     or no full-coverage date in the window); ``research_ok`` is False only on
     red, so one transient missed nightly degrades the display without benching
-    the trader.
+    the trader. Independently of shape, the newest bar's calendar age caps the
+    verdict (amber past COVERAGE_AMBER_AGE_DAYS, red past
+    COVERAGE_RED_AGE_DAYS) so a totally dead pipeline — no new dates at all —
+    cannot read as fresh.
     """
     full_min = FULL_COVERAGE_MIN if full_min is None else full_min
+    today = today or date.today()
     counts: dict[str, int] = {}
     for d, n in date_counts:
         key = str(d)[:10]
         counts[key] = max(counts.get(key, 0), int(n or 0))
     out: dict = {"full_min": full_min, "latest_date": None, "latest_count": 0,
-                 "last_full_date": None, "thin_sessions": 0,
-                 "status": "red", "research_ok": False}
+                 "latest_age_days": None, "last_full_date": None,
+                 "thin_sessions": 0, "status": "red", "research_ok": False}
     if not counts:
         return out
     latest = max(counts)
     out["latest_date"] = latest
     out["latest_count"] = counts[latest]
+    try:
+        out["latest_age_days"] = (today - date.fromisoformat(latest)).days
+    except ValueError:
+        pass
     full_dates = [d for d, n in counts.items() if n >= full_min]
     if full_dates:
         last_full = max(full_dates)
@@ -455,6 +475,13 @@ def coverage_verdict(date_counts, *, full_min: int | None = None) -> dict:
         out["status"] = "amber"
     else:
         out["status"] = "red"
+    # Calendar anchor: silence is not health.
+    age = out["latest_age_days"]
+    if age is not None:
+        if age > COVERAGE_RED_AGE_DAYS:
+            out["status"] = "red"
+        elif age > COVERAGE_AMBER_AGE_DAYS and out["status"] == "green":
+            out["status"] = "amber"
     out["research_ok"] = out["status"] != "red"
     return out
 
@@ -472,14 +499,17 @@ def universe_coverage(*, window: int = 10,
 
     full_min = FULL_COVERAGE_MIN if full_min is None else full_min
     store = get_store()
-    # Recent bar dates: SPY is always in the hot set (stream seed + index),
-    # plus the true newest date in case SPY's own bar is the one missing.
-    spy_rows = store.select("daily_bars", columns="date",
-                            filters={"symbol": "SPY"},
-                            order=[("date", "desc")], limit=window)
+    # Recent bar dates, anchored on the index ETFs (stream seeds + protected
+    # keeps — always written by both the top-up and the nightly), plus the
+    # true newest date in case even those are the rows missing. A thin date
+    # none of the anchors traded would be invisible; the calendar-age anchor
+    # in coverage_verdict bounds the damage of that blind spot.
+    anchor_rows = store.select("daily_bars", columns="date",
+                               filters={"symbol": ("in", ["SPY", "QQQ", "IWM"])},
+                               order=[("date", "desc")], limit=window * 3)
     newest = store.select("daily_bars", columns="date",
                           order=[("date", "desc")], limit=1)
-    dates = sorted({str(r["date"])[:10] for r in [*spy_rows, *newest]},
+    dates = sorted({str(r["date"])[:10] for r in [*anchor_rows, *newest]},
                    reverse=True)[:window]
     date_counts: list[tuple[str, int]] = []
     for d in dates:

@@ -14,7 +14,9 @@ import pytest
 
 from agent.data import coverage_verdict
 
-D0 = date(2026, 7, 6)
+# Relative to today: the verdict has a calendar-age anchor, so fixed dates
+# would rot as the wall clock advances. day(3) == today.
+D0 = date.today() - timedelta(days=3)
 
 
 def day(n: int) -> str:
@@ -75,6 +77,39 @@ def test_verdict_duplicate_dates_keep_max_count():
     assert v["last_full_date"] == day(0) and v["status"] == "green"
 
 
+# ── the calendar-age anchor: silence is not health ──
+
+
+def test_verdict_total_silence_cannot_stay_green():
+    # Every writer dead: no new dates at all. Shape says green (0 thin
+    # sessions after a full ingest) — the age anchor must override.
+    anchor = date(2026, 6, 1)
+    v = coverage_verdict([(str(anchor), 2000)],
+                         today=anchor + timedelta(days=5))
+    assert v["status"] == "amber"  # past the long-weekend grace
+    v = coverage_verdict([(str(anchor), 2000)],
+                         today=anchor + timedelta(days=7))
+    assert v["status"] == "red" and v["research_ok"] is False
+    assert v["latest_age_days"] == 7
+
+
+def test_verdict_age_anchor_respects_holiday_weekend():
+    # Thursday full ingest, Friday holiday, checked Monday (age 4): green.
+    anchor = date(2026, 6, 4)
+    v = coverage_verdict([(str(anchor), 2000)],
+                         today=anchor + timedelta(days=4))
+    assert v["status"] == "green"
+
+
+def test_verdict_age_anchor_never_upgrades():
+    # A fresh-but-thin picture stays red; the anchor only caps, never lifts.
+    anchor = date(2026, 6, 1)
+    v = coverage_verdict([(str(anchor + timedelta(days=n)), 10)
+                          for n in range(3)],
+                         today=anchor + timedelta(days=2))
+    assert v["status"] == "red"
+
+
 # ── universe_coverage (store gatherer) + preflight ──
 
 
@@ -124,6 +159,14 @@ def test_universe_coverage_empty_table(store):
 
     v = universe_coverage(full_min=5)
     assert v["status"] == "red" and v["research_ok"] is False
+
+
+def test_pg_store_select_honors_columns(store):
+    # Regression: PgStore.select used to ignore `columns` and fetch full-width
+    # rows — load-bearing once preflight polls coverage hourly.
+    seed_bars(store, D0, ["SPY", "AAA"])
+    rows = store.select("daily_bars", columns="date,symbol", limit=1)
+    assert set(rows[0].keys()) == {"date", "symbol"}
 
 
 def test_preflight_exposes_research_ok_and_siblings(store, monkeypatch):

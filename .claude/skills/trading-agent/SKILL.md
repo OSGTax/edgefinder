@@ -78,10 +78,15 @@ short, candid lines; this is the live "thinking" panel the owner watches.
   thinking note naming `universe_coverage.last_full_date`, manage existing
   holds only (marks, settles, exits your strategy already calls for), and do
   NOT open new positions from whole-market research — you would be picking
-  from a rotted scan. If the session is `closed` or pre-market (you have the
-  time), attempt ONE self-heal first:
-  `python -m agent.refresh --source alpaca-market --top 1000`, then re-run
-  preflight; otherwise just flag it. Never silently trade around stale data.
+  from a rotted scan. Check the session first (`python -m agent.broker
+  session`): if it prints `closed` or `extended` pre-market, you have the
+  time — attempt ONE self-heal, `python -m agent.refresh --source
+  alpaca-market --top 1000`, then re-run preflight. **Precedence:** this
+  self-heal runs BEFORE the closed-session stop rule below — heal first,
+  then record the no-op line and stop as usual. During regular hours, just
+  flag it. Never silently trade around stale data. (If `research_ok` is
+  false with `research_ok_reason` saying the CHECK failed rather than the
+  data being stale, treat it the same — degraded — but say which it was.)
 - **Check `siblings.warnings`** in the same JSON — every cycle is the
   watchdog for the other routines. If the app-evolver or the weekly
   reflection is overdue, say so in a thinking note so the owner sees it.

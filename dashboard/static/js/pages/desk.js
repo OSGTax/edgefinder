@@ -87,7 +87,9 @@ async function loadHeader() {
       apiGet('/api/desk/strategy'),
       apiGet('/api/desk/regime').catch(() => null),
       apiGet('/api/desk/equity?limit=500').catch(() => null),
-      apiGet('/api/desk/data-health').catch(() => null),
+      // A failed health check must render as VISIBLY unknown, not vanish —
+      // the pill exists to surface exactly the states where fetches fail.
+      apiGet('/api/desk/data-health').catch(() => ({ status: 'unknown' })),
     ]);
 
     setText('desk-hero-account', fmtDollar(pf.equity));
@@ -165,8 +167,10 @@ async function loadHeader() {
             'Last night’s whole-market data refresh was missed — research rankings are one session behind.'],
           red: ['Research data: stale', 'down',
             'The whole-market data refresh has been down for several sessions — the AI limits itself to managing existing holdings until it recovers.'],
+          unknown: ['Research data: unavailable', 'warn',
+            'The data-health check itself failed — freshness cannot be verified right now.'],
         };
-        const [label, cls, tip] = DATA[dataHealth.status] || DATA.red;
+        const [label, cls, tip] = DATA[dataHealth.status] || DATA.unknown;
         const full = dataHealth.last_full_date
           ? ' (last full refresh: ' + dataHealth.last_full_date + ')' : '';
         chipsEl.append(h('span', { class: 'c-pill ' + cls, title: tip + full, text: label }));

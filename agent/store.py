@@ -108,7 +108,10 @@ class PgStore:
         from sqlalchemy import select as sa_select
 
         t = self._table(table)
-        stmt = sa_select(t)
+        if columns and columns != "*":
+            stmt = sa_select(*(t.c[c.strip()] for c in columns.split(",")))
+        else:
+            stmt = sa_select(t)
         stmt = self._apply_filters(stmt, t, filters)
         for col, direction in (order or []):
             c = t.c[col]

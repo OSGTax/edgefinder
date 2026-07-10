@@ -57,10 +57,15 @@ def run() -> dict:
     # Universe coverage — bar AGE can look fresh while the nightly whole-market
     # ingest is dead (the hourly top-up keeps a handful of names current), so
     # this measures thin sessions since the last full-coverage ingest instead.
+    # One retry: this is the chattiest check (several round-trips) and a single
+    # network blip must not bench the trader for a whole cycle.
     def _universe():
         from agent.data import universe_coverage
 
-        return universe_coverage()
+        try:
+            return universe_coverage()
+        except Exception:  # noqa: BLE001 — retry once before reporting
+            return universe_coverage()
 
     check("universe_coverage", _universe, critical=False)
 
@@ -89,10 +94,22 @@ def run() -> dict:
         ch = store.select("desk_changelog", columns="ts",
                           order=[("ts", "desc")], limit=1)
         detail["app_evolver_age_days"] = age_days(ch[0]["ts"]) if ch else None
-        th = store.select("desk_thinking", columns="run_id,ts",
-                          order=[("ts", "desc")], limit=300)
-        refl = next((r for r in th
-                     if str(r.get("run_id") or "").startswith("reflect-")), None)
+        # Reflection: the journal is the durable low-volume trail — the weekly
+        # skill always closes with a "Weekly reflection ..." note. (kind="wiki"
+        # rows are NOT reflection-specific: hourly cycles journal wiki edits
+        # too.) The thinking feed is only a fallback — at ~17 cycles/day,
+        # Friday's reflect-* lines scroll past any sane limit within days.
+        jr = store.select("desk_journal", columns="title,ts",
+                          order=[("ts", "desc")], limit=100)
+        refl = next((r for r in jr
+                     if str(r.get("title") or "").startswith("Weekly reflection")),
+                    None)
+        if refl is None:
+            th = store.select("desk_thinking", columns="run_id,ts",
+                              order=[("ts", "desc")], limit=300)
+            refl = next((r for r in th
+                         if str(r.get("run_id") or "").startswith("reflect-")),
+                        None)
         detail["reflection_age_days"] = age_days(refl["ts"]) if refl else None
         if detail["app_evolver_age_days"] is None or detail["app_evolver_age_days"] > 3:
             detail["warnings"].append("app-evolver has not shipped in >3 days")
@@ -112,9 +129,17 @@ def run() -> dict:
 
     # The skill's degrade gate: whole-market research is only trustworthy when
     # the universe coverage is green/amber (see agent.data.coverage_verdict).
+    # A check that errored (after its retry) reads as NOT ok — conservative on
+    # purpose — with the reason spelled out so the skill can tell "data is
+    # stale" from "the check itself could not run".
     cov = out["checks"].get("universe_coverage", {})
     out["research_ok"] = bool(cov.get("ok")
                               and cov.get("detail", {}).get("research_ok"))
+    if not out["research_ok"]:
+        out["research_ok_reason"] = (
+            cov.get("detail", {}).get("status", "unknown")
+            if cov.get("ok") else
+            f"coverage check failed twice: {cov.get('error', 'unknown')}")
 
     return out
 
