@@ -41,9 +41,18 @@ over vibes (the same style rules as the trading charter).
   the strategy you were running and the notebook as it stands.
 
 ### 2. Grade every pick that closed or meaningfully aged this week
-For each: what did you SAY (`why_now` / `rationale`), and what HAPPENED
-(realized P&L, `since_this_run_pct`)? **Grade against `alpha_pct`, not raw
-dollars** — every pick and run carries the SPY move over the same window
+Grading is MECHANICAL now, not retrospective storytelling. Each pick in
+`outcomes` carries its own registry: `prediction` (the falsifiable claim),
+`horizon_days` (when it comes due), and `kill` (what proves it wrong).
+For each pick at or past its horizon — and every closed pick regardless:
+1. Quote the prediction verbatim.
+2. State what happened: `since_this_run_pct`, `alpha_pct`, and whether the
+   `kill` criterion fired (and if it fired, whether the trader honored it —
+   an ignored kill is its own mistake, log it in `mistakes`).
+3. Verdict: prediction TRUE / FALSE / NOT YET DUE.
+Older picks without a registry (pre-v8.16): grade on `why_now` as before
+and say the grade is soft. **Grade against `alpha_pct`, not raw dollars** —
+every pick and run carries the SPY move over the same window
 (`spy_same_window_pct`); a long book that made money in a market that rose
 more UNDERPERFORMED. Assign one grade, with both numbers next to it:
 - **Right for the right reason** — thesis played out as described.
@@ -70,6 +79,14 @@ With the grades in hand, rewrite pages via
 - **Generalize** a one-off into a rule only once it has REPEATED.
 - Every kept lesson should carry its evidence (names, dates, P&L) —
   a lesson that cites no number is a hunch wearing a suit.
+- **Tag every lesson with the regime it was learned in** (`[risk_on]`,
+  `[risk_off]`, `[neutral]`) — a rule that worked in a rising market is
+  not yet a rule for a falling one, and the tag stops it overreaching.
+- The `lessons` and `mistakes` pages EXIST TO BE POPULATED: once graded
+  predictions start resolving, an empty mistakes page doesn't mean no
+  mistakes — it means the grading isn't being written down. A false
+  prediction, an ignored kill, and a rejected name that beat your picks
+  are all mistakes-page material, each with its numbers.
 - Keep every page comfortably under its cap. The caps are not the target;
   brevity is.
 

@@ -173,7 +173,18 @@ python -m agent.ledger fill --symbol NVDA --side buy --notional 12500 \
 Write the run's dossier so the desk page renders it. Small JSON files:
 - `weights.json` — the executed `{symbol: weight}`.
 - `picks.json` — per-name dossiers:
-  `{"symbol","action","why_now","rationale","evidence":{...},"news":[...]}`.
+  `{"symbol","action","why_now","rationale","evidence":{...},"news":[...],
+  "prediction","horizon_days","kill"}`. The last three are the
+  **prediction registry** and are REQUIRED on every buy/add:
+  - `prediction` — one falsifiable sentence about what happens and why
+    ("AVGO reclaims $410 within 10 sessions on AI-capex follow-through"),
+    not a vibe ("looks strong").
+  - `horizon_days` — when the prediction is due to be graded.
+  - `kill` — the exit criterion that proves you wrong ("closes below
+    $385"). Honor your own kills in later cycles — a kill you ignore is
+    a lesson you chose not to learn.
+  Friday's reflection grades predicted-vs-happened mechanically; a pick
+  without a prediction can only be graded on vibes, which is worthless.
 - `watchlist.json` — near-misses: `[{"symbol","note"}]`.
 - `rejected.json` — the alternatives that LOST the slot:
   `[{"symbol","why_not"}]`. Your playbook already makes you name them —

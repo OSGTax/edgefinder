@@ -121,6 +121,23 @@ def test_rejected_round_trip(store):
     assert run["rejected"][0]["symbol"] == "ABC"
 
 
+def test_prediction_registry_passes_through_outcomes(store):
+    """v8.16: prediction/horizon_days/kill ride the pick dossier into
+    outcomes so Friday grading is mechanical — predicted vs happened."""
+    from agent import ledger
+    from agent.brain import save_decision
+
+    save_decision(store, run_id="P", summary="registry",
+                  picks=[{"symbol": "XYZ", "action": "buy",
+                          "prediction": "reclaims $410 within 10 sessions",
+                          "horizon_days": 10, "kill": "closes below $385"}])
+    out = ledger.outcomes(store, days=30)
+    pick = next(r for r in out["runs"] if r["run_id"] == "P")["picks"][0]
+    assert pick["prediction"] == "reclaims $410 within 10 sessions"
+    assert pick["horizon_days"] == 10
+    assert pick["kill"] == "closes below $385"
+
+
 def test_empty_book_has_no_book_block(store):
     from agent import ledger
 
