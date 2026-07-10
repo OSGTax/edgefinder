@@ -204,18 +204,55 @@ def _spy_closes(store, *, since: str) -> list[tuple[str, float]]:
             for r in rows if r.get("close")]
 
 
-def _spy_window_pct(spy: list[tuple[str, float]], start_date: str) -> float | None:
-    """SPY price change from the last close ON/BEFORE ``start_date`` to the
-    latest stored close. None when no baseline exists in the series."""
-    base = None
+def _et_date(ts) -> str | None:
+    """The ET calendar date of a naive-UTC desk timestamp.
+
+    Windows are trading-day windows: a 19:30 ET decision is already next-day
+    in UTC, and dating it by the UTC calendar would baseline SPY off the NEXT
+    session's close — a full day of index movement misattributed to alpha."""
+    from zoneinfo import ZoneInfo
+
+    if ts is None:
+        return None
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return str(ts)[:10]
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return str(ts.astimezone(ZoneInfo("America/New_York")).date())
+
+
+def _spy_window_pct(spy: list[tuple[str, float]], start_date: str,
+                    end_date: str | None = None) -> float | None:
+    """SPY price change over a trading window, honestly bounded.
+
+    Baseline: the last close STRICTLY BEFORE ``start_date`` — the final print
+    before the window's day opened. (A close ON the start date is 16:00 ET,
+    AFTER an intraday entry — and for a same-day window it would be the
+    endpoint itself, yielding a confident fake 0.00.) Endpoint: the last
+    close on/before ``end_date`` when given (a closed pick's exit day), else
+    the latest stored close. Returns None when the window has no baseline or
+    no completed span (baseline row == endpoint row) — None means "too young
+    to benchmark", never zero."""
+    base = base_d = None
     for d, c in spy:
-        if d <= start_date[:10]:
-            base = c
+        if d < start_date[:10]:
+            base, base_d = c, d
         else:
             break
     if not base:
         return None
-    return round((spy[-1][1] - base) / base * 100, 2)
+    end, end_d = spy[-1][1], spy[-1][0]
+    if end_date is not None:
+        bounded = [(d, c) for d, c in spy if d <= end_date[:10]]
+        if not bounded:
+            return None
+        end_d, end = bounded[-1]
+    if end_d == base_d:
+        return None
+    return round((end - base) / base * 100, 2)
 
 
 def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
@@ -248,9 +285,8 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                  if (run_id and d["run_id"] == run_id)
                  or (not run_id and str(d.get("ts") or "") >= str(cutoff))]
 
-    inception = str(trades[0]["ts"])[:10] if trades else None
-    window_starts = [str(d.get("ts") or "")[:10]
-                     for d in decisions if d.get("ts")]
+    inception = _et_date(trades[0]["ts"]) if trades else None
+    window_starts = [w for w in (_et_date(d.get("ts")) for d in decisions) if w]
     if inception:
         window_starts.append(inception)
     spy = _spy_closes(store, since=min(window_starts)) if window_starts else []
@@ -262,14 +298,16 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
     runs = []
     for d in decisions:
         rid = d["run_id"]
-        run_spy_pct = (_spy_window_pct(spy, str(d.get("ts") or ""))
-                       if d.get("ts") else None)
+        run_date = _et_date(d.get("ts"))
+        run_spy_pct = _spy_window_pct(spy, run_date) if run_date else None
         picks_out = []
         for p in (d.get("picks") or []):
             sym = str(p.get("symbol") or "").upper()
+            raw_fills = fills_by_run.get((rid, sym), [])
             fills = [{"side": f["side"], "shares": f["shares"], "price": f["price"]}
-                     for f in fills_by_run.get((rid, sym), [])]
+                     for f in raw_fills]
             buys = [f for f in fills if f["side"] == "BUY"]
+            sells = [f for f in fills if f["side"] == "SELL"]
             entry_avg = (sum(f["shares"] * f["price"] for f in buys)
                          / sum(f["shares"] for f in buys)) if buys else None
             pos = positions.get(sym)
@@ -284,22 +322,56 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                                                        - pos["avg_price"]) * m, 2)}
             since_pct = (round((mark - entry_avg) / entry_avg * 100, 2)
                          if (entry_avg and mark) else None)
-            alpha = (round(since_pct - run_spy_pct, 2)
-                     if (since_pct is not None and run_spy_pct is not None)
-                     else None)
+            # A round trip closed within this run gets an EXACT realized
+            # return and an exit-bounded SPY window — the grading target the
+            # weekly reflection prioritizes, previously None.
+            closed_pct = exit_spy_pct = None
+            bought = sum(f["shares"] for f in buys)
+            sold = sum(f["shares"] for f in sells)
+            if buys and sells and abs(bought - sold) <= EPS_SHARES:
+                sell_avg = sum(f["shares"] * f["price"] for f in sells) / sold
+                closed_pct = round((sell_avg - entry_avg) / entry_avg * 100, 2)
+                exit_date = _et_date(raw_fills[-1].get("ts"))
+                if run_date and exit_date:
+                    exit_spy_pct = _spy_window_pct(spy, run_date, exit_date)
+            is_opt = occ.is_option(sym)
+            live_pct = closed_pct if closed_pct is not None else since_pct
+            spy_pct = exit_spy_pct if closed_pct is not None else run_spy_pct
+            # Options: premium %-moves carry leverage and theta — subtracting
+            # an index move from them is not alpha. Grade options on realized
+            # dollars + thesis instead.
+            alpha = (round(live_pct - spy_pct, 2)
+                     if (live_pct is not None and spy_pct is not None
+                         and not is_opt) else None)
             picks_out.append({
                 "symbol": sym, "action": p.get("action"),
+                "is_option": is_opt,
                 "why_now": p.get("why_now"), "rationale": p.get("rationale"),
                 "prediction": p.get("prediction"),
                 "horizon_days": p.get("horizon_days"), "kill": p.get("kill"),
                 "fills": fills, "entry_avg_px": round(entry_avg, 4) if entry_avg else None,
                 "realized_pnl": round(by_run_symbol.get((rid, sym), 0.0), 2),
                 "open_now": open_now, "since_this_run_pct": since_pct,
-                "spy_same_window_pct": run_spy_pct, "alpha_pct": alpha})
+                "closed_return_pct": closed_pct,
+                "spy_same_window_pct": spy_pct, "alpha_pct": alpha})
+        # How many completed SPY sessions the window spans — alpha on fewer
+        # than 2 is inside the benchmark's own noise; the skills must not
+        # grade it as skill.
+        sessions = 0
+        if run_date and spy:
+            base_d = None
+            for sd, _ in spy:
+                if sd < run_date:
+                    base_d = sd
+                else:
+                    break
+            if base_d is not None:
+                sessions = sum(1 for sd, _ in spy if sd > base_d)
         runs.append({"run_id": rid, "ts": str(d.get("ts") or ""),
                      "regime": d.get("regime"), "summary": d.get("summary"),
                      "picks": picks_out, "rejected": d.get("rejected") or [],
                      "spy_same_window_pct": run_spy_pct,
+                     "spy_window_sessions": sessions,
                      "run_realized_pnl": round(sum(
                          v for (r, _), v in by_run_symbol.items() if r == rid), 2)})
 
@@ -344,8 +416,17 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                           "spy_same_window_pct / alpha_pct benchmark each window "
                           "against SPY closes from daily_bars (price return, "
                           "dividends excluded on both sides — the book books no "
-                          "dividend cash either); a long book's raw P&L is "
-                          "mostly market beta, so grade alpha, not dollars.",
+                          "dividend cash either). SPY baseline = the last close "
+                          "STRICTLY BEFORE the window's ET start date; endpoint "
+                          "= exit-day close for round trips closed in-run "
+                          "(closed_return_pct), else the latest stored close. "
+                          "None means too-young-to-benchmark, never zero. Alpha "
+                          "under spy_window_sessions < 2 is inside benchmark "
+                          "noise — do not grade it as skill. Options carry "
+                          "alpha_pct = null by design: premium %-moves embed "
+                          "leverage/theta; grade them on realized dollars and "
+                          "thesis. A long book's raw P&L is mostly market "
+                          "beta, so grade alpha, not dollars.",
             "book": book, "runs": runs, "symbols": symbols_out,
             "settlement": {"realized_pnl": settlement_pnl},
             "unattributed_trades": unattributed}

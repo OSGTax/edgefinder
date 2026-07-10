@@ -441,6 +441,15 @@ function applyLiveMarks() {
   const pnlCls = totalPnl >= 0 ? 't-up' : 't-down';
   setText('desk-hero-pnl', fmtPnl(totalPnl), pnlCls);
   setText('desk-hero-return', fmtPct(returnPct / 100, { signed: true }), pnlCls);
+  // Keep 'vs S&P 500' consistent with the live Return beside it — the SPY
+  // side is daily-close based and static between page loads, so live alpha
+  // is just live return minus the cached SPY return.
+  const spy = ref && ref.vs_spy ? ref.vs_spy.spy_return_pct : null;
+  if (spy != null) {
+    const a = returnPct - spy;
+    setText('desk-hero-alpha', fmtPct(a / 100, { signed: true }),
+      a >= 0 ? 't-up' : 't-down');
+  }
   // cash and count don't change from live marks — leave them alone.
 
   // LIVE indicator: reveal the pulsing dot + freshness age.

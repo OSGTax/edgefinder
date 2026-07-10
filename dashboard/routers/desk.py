@@ -51,6 +51,8 @@ def portfolio(db: Session = Depends(get_db)):
     """Cash, positions (marked), equity, and P&L — the book right now."""
     from sqlalchemy import func as safunc
 
+    from agent import occ
+
     positions = (db.query(DeskPosition)
                  .filter(DeskPosition.account == ACCOUNT).all())
     # Cash = starting capital + Σ sell − Σ buy, computed from the trade ledger
@@ -62,13 +64,14 @@ def portfolio(db: Session = Depends(get_db)):
     rows, pos_value = [], 0.0
     for p in positions:
         mark = p.last_price or p.avg_price
-        mv = round(p.shares * mark, 2)
+        m = 100 if occ.is_option(p.symbol) else 1  # OCC contracts are ×100
+        mv = round(p.shares * mark * m, 2)
         pos_value += mv
         rows.append({
             "symbol": p.symbol, "shares": p.shares,
             "avg_price": round(p.avg_price, 4), "last_price": round(mark, 4),
-            "market_value": mv, "cost_basis": round(p.shares * p.avg_price, 2),
-            "unrealized_pnl": round(p.shares * (mark - p.avg_price), 2),
+            "market_value": mv, "cost_basis": round(p.shares * p.avg_price * m, 2),
+            "unrealized_pnl": round(p.shares * (mark - p.avg_price) * m, 2),
             "opened_at": _iso(p.opened_at), "marked_at": _iso(p.marked_at),
         })
     equity = round(c + pos_value, 2)
@@ -80,27 +83,31 @@ def portfolio(db: Session = Depends(get_db)):
     # vs SPY since inception — a long book's raw return is mostly market beta,
     # so the hero shows the difference. SPY closes come from daily_bars
     # (index_daily froze at the cutover); price return on both sides, since
-    # the ledger books no dividend cash either.
+    # the ledger books no dividend cash either. Convention matches
+    # agent.ledger._spy_window_pct: baseline = last close STRICTLY BEFORE the
+    # ET inception date (a close ON it is 16:00, after the first fill — and on
+    # day one it would be the endpoint itself, a confident fake 0.0). Two
+    # indexed point-queries; this endpoint is polled every minute per client.
     vs_spy = None
     first_trade = (db.query(safunc.min(DeskTrade.ts))
                    .filter(DeskTrade.account == ACCOUNT).scalar())
     if first_trade is not None:
-        from datetime import timedelta
+        from datetime import date as _date
 
+        from agent.ledger import _et_date
         from edgefinder.db.models import DailyBar
 
-        inception = first_trade.date()
-        closes = (db.query(DailyBar.date, DailyBar.close)
-                  .filter(DailyBar.symbol == "SPY",
-                          DailyBar.date >= inception - timedelta(days=10))
-                  .order_by(DailyBar.date).all())
-        base = None
-        for d_, c_ in closes:
-            if d_ <= inception:
-                base = c_
-        if base and closes:
-            spy_pct = round((closes[-1][1] - base) / base * 100, 2)
-            vs_spy = {"inception": str(inception), "spy_as_of": str(closes[-1][0]),
+        inception = _date.fromisoformat(_et_date(first_trade))
+        base_row = (db.query(DailyBar.date, DailyBar.close)
+                    .filter(DailyBar.symbol == "SPY", DailyBar.date < inception)
+                    .order_by(desc(DailyBar.date)).first())
+        last_row = (db.query(DailyBar.date, DailyBar.close)
+                    .filter(DailyBar.symbol == "SPY")
+                    .order_by(desc(DailyBar.date)).first())
+        if (base_row and last_row and base_row[1]
+                and last_row[0] != base_row[0]):
+            spy_pct = round((last_row[1] - base_row[1]) / base_row[1] * 100, 2)
+            vs_spy = {"inception": str(inception), "spy_as_of": str(last_row[0]),
                       "spy_return_pct": spy_pct,
                       "alpha_pct": round(total_return_pct - spy_pct, 2)}
 

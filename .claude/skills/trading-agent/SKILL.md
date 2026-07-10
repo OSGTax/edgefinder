@@ -236,10 +236,16 @@ python -m agent.brain decision --run-id <RID> --regime risk_on \
 ### 7. Reflect (phase: reflect) — glance back; most cycles write NOTHING
 - `python -m agent.ledger outcomes --days 14` — how your past picks aged vs
   what you said when you made them (realized + open P&L per run and name;
-  `since_this_run_pct` is exact per pick). **Grade `alpha_pct`, not raw
-  P&L** — every window carries the SPY move over the same period
-  (`spy_same_window_pct`); a long book making money in a rising market is
-  beta, not skill. The `book` block shows the same thing account-wide.
+  `since_this_run_pct` is exact per pick; round trips closed in one run get
+  an exact `closed_return_pct`). **Grade `alpha_pct`, not raw P&L** — every
+  window carries the SPY move over the same period (`spy_same_window_pct`);
+  a long book making money in a rising market is beta, not skill. The
+  `book` block shows the same thing account-wide. **Maturity rules:** a
+  null alpha means too-young-to-benchmark, not zero; when
+  `spy_window_sessions` < 2 the number is inside the benchmark's own noise
+  — note the direction, draw no lesson. Options always carry null alpha by
+  design (premium %-moves embed leverage and theta): grade them on realized
+  dollars and whether the thesis played out.
 - Only if a MEASURED result teaches something durable, revise **AT MOST ONE**
   wiki page — edit in place, tighten rather than append, and cite the numbers
   (name, run, P&L) in both the page and the `--reason`:

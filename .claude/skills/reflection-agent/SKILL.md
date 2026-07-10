@@ -54,7 +54,13 @@ Older picks without a registry (pre-v8.16): grade on `why_now` as before
 and say the grade is soft. **Grade against `alpha_pct`, not raw dollars** —
 every pick and run carries the SPY move over the same window
 (`spy_same_window_pct`); a long book that made money in a market that rose
-more UNDERPERFORMED. Assign one grade, with both numbers next to it:
+more UNDERPERFORMED. Round trips closed within a run carry an exact
+`closed_return_pct` with an exit-bounded SPY window — that IS the grading
+number for closed picks. **Respect maturity:** null alpha = too young to
+benchmark (not zero); `spy_window_sessions` < 2 = inside benchmark noise —
+defer the verdict to next week rather than minting a lesson from noise.
+Options carry null alpha by design; grade them on realized dollars +
+thesis. Assign one grade, with both numbers next to it:
 - **Right for the right reason** — thesis played out as described.
 - **Right for the wrong reason** — made money, but not how you said. Luck
   is not skill; say so. (Positive P&L with negative alpha lands here too:

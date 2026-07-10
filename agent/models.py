@@ -193,7 +193,10 @@ class DeskDecision(Base):
     watchlist: Mapped[list | None] = mapped_column(JSON)
     # Candidates that LOST the slot this run: [{symbol, why_not}]. Graded by
     # the weekly reflection alongside the picks — "the thing I didn't buy did
-    # X" doubles the learning signal at zero risk.
+    # X" doubles the learning signal at zero risk. NOTE: a dev database
+    # created before v8.15 lacks this column and the ORM will error reading
+    # desk_decisions — rerun scripts/setup_db.py (prod self-heals via the
+    # idempotent ALTER in DESK_TABLE_DDL on deploy).
     rejected: Mapped[list | None] = mapped_column(JSON)
     strategy_version: Mapped[int | None] = mapped_column(Integer)
 

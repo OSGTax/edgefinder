@@ -57,12 +57,16 @@ def init_database():
     engine = get_engine()
     if os.getenv("RENDER"):
         logger.info("Render detected — running raw desk_* DDL (pooler-safe)")
-        with engine.begin() as conn:
-            for ddl in desk_models.DESK_TABLE_DDL:
-                try:
+        # One transaction PER statement: a failed statement poisons its
+        # Postgres transaction, so a single shared block would silently
+        # abort every later statement (including load-bearing ALTERs) and
+        # roll the whole batch back at commit.
+        for ddl in desk_models.DESK_TABLE_DDL:
+            try:
+                with engine.begin() as conn:
                     conn.execute(text(ddl))
-                except Exception:
-                    logger.exception("desk DDL failed (may already exist)")
+            except Exception:
+                logger.exception("desk DDL failed (may already exist)")
     else:
         logger.info("Running create_all for desk_* (dev/SQLite path)")
         Base.metadata.create_all(engine)

@@ -1,9 +1,13 @@
-"""Alpha-vs-SPY benchmarking + rejected-candidate registry (v8.15).
+"""Alpha-vs-SPY benchmarking + rejected-candidate registry (v8.15–v8.17.3).
 
-A long-only book's raw P&L is mostly market beta; outcomes() benchmarks every
-window against SPY closes from daily_bars (index_daily froze at the cutover)
-so reflection grades alpha. Decisions also record the candidates that LOST
-the slot (rejected) so Friday can grade the road not taken.
+Conventions under test (see outcomes()'s convention string):
+- SPY baseline = last close STRICTLY BEFORE the window's ET start date (a
+  close ON the start date is 16:00 ET, after the intraday entry — and on a
+  same-day window it would be the endpoint itself, a confident fake 0.00).
+- None = too-young-to-benchmark, never zero.
+- Round trips closed in-run get closed_return_pct + an exit-bounded window.
+- Options carry alpha_pct = None by design.
+- Decision timestamps are naive UTC; window dates are their ET dates.
 """
 
 from __future__ import annotations
@@ -13,7 +17,8 @@ from datetime import date, datetime, timedelta
 import pytest
 
 TODAY = date.today()
-D_ENTRY = TODAY - timedelta(days=4)  # decision + fills booked here
+D_ENTRY = TODAY - timedelta(days=4)   # decision + fills booked here
+D_BASE = D_ENTRY - timedelta(days=1)  # the strictly-before baseline close
 
 
 @pytest.fixture()
@@ -37,6 +42,22 @@ def seed_spy(store, closes: dict[date, float]) -> None:
     ], returning=False)
 
 
+def ts_of(d: date, hour: int = 15, minute: int = 30) -> datetime:
+    return datetime(d.year, d.month, d.day, hour, minute)  # naive UTC
+
+
+def seed_trade(store, run_id: str, symbol: str, side: str, shares: float,
+               price: float, ts: datetime) -> None:
+    from agent import occ
+
+    mult = 100 if occ.is_option(symbol) else 1  # OCC premium moves ×100 cash
+    store.insert("desk_trades", {
+        "account": "agent", "ts": ts, "run_id": run_id, "symbol": symbol,
+        "side": side, "shares": shares, "price": price,
+        "dollars": round(shares * price * mult, 2), "rationale": "test"},
+        returning=False)
+
+
 def seed_backdated_book(store) -> None:
     """One decision + one XYZ buy fill on D_ENTRY, marked at 110 today."""
     from agent import ledger
@@ -46,32 +67,39 @@ def seed_backdated_book(store) -> None:
                   picks=[{"symbol": "XYZ", "action": "buy", "why_now": "test",
                           "rationale": "trend"}],
                   rejected=[{"symbol": "ABC", "why_not": "falling knife"}])
-    entry_ts = datetime(D_ENTRY.year, D_ENTRY.month, D_ENTRY.day, 15, 30)
-    store.update("desk_decisions", {"run_id": "A"}, {"ts": entry_ts},
+    store.update("desk_decisions", {"run_id": "A"}, {"ts": ts_of(D_ENTRY)},
                  returning=False)
-    store.insert("desk_trades", {
-        "account": "agent", "ts": entry_ts, "run_id": "A", "symbol": "XYZ",
-        "side": "BUY", "shares": 10.0, "price": 100.0, "dollars": 1000.0,
-        "rationale": "trend"}, returning=False)
+    seed_trade(store, "A", "XYZ", "BUY", 10.0, 100.0, ts_of(D_ENTRY))
     ledger.mark(store, prices={"XYZ": 110.0})
+
+
+def test_et_date_rolls_back_evening_runs():
+    from agent.ledger import _et_date
+
+    # 00:30 UTC is 19:30/20:30 ET the PREVIOUS calendar day.
+    assert _et_date("2026-07-10T00:30:00") == "2026-07-09"
+    assert _et_date(datetime(2026, 7, 10, 0, 30)) == "2026-07-09"
+    assert _et_date("2026-07-10T15:30:00") == "2026-07-10"
 
 
 def test_pick_run_and_book_alpha(store):
     from agent import ledger
 
-    # SPY: 600 on entry day → 612 latest = +2.00% over the window.
-    seed_spy(store, {D_ENTRY: 600.0,
-                     D_ENTRY + timedelta(days=2): 606.0,
+    # Baseline 600 the day BEFORE entry; endpoint 612 today = +2.00%.
+    seed_spy(store, {D_BASE: 600.0,
+                     D_ENTRY + timedelta(days=1): 606.0,
                      TODAY: 612.0})
     seed_backdated_book(store)
 
     out = ledger.outcomes(store, days=30)
     run = next(r for r in out["runs"] if r["run_id"] == "A")
     assert run["spy_same_window_pct"] == 2.0
+    assert run["spy_window_sessions"] == 2  # two completed closes after base
     pick = run["picks"][0]
     assert pick["since_this_run_pct"] == 10.0   # 110 vs 100 entry
     assert pick["spy_same_window_pct"] == 2.0
     assert pick["alpha_pct"] == 8.0             # skill, net of the market
+    assert pick["is_option"] is False
 
     # Book: equity = 100_000 - 1_000 + 10*110 = 100_100 → +0.10% vs SPY +2.00%
     book = out["book"]
@@ -81,18 +109,76 @@ def test_pick_run_and_book_alpha(store):
     assert book["alpha_pct"] == -1.9            # made money, lost to the index
 
 
-def test_baseline_uses_last_close_on_or_before_window_start(store):
+def test_baseline_is_strictly_before_window_start(store):
     from agent import ledger
 
-    # No SPY bar ON the entry date (weekend entry): baseline falls back to the
-    # prior close, and the buffer in _spy_closes must reach it.
+    # A close ON the entry date must NOT be the baseline (it prints at 16:00,
+    # after the intraday fill). Baseline = 500 three days earlier.
     seed_spy(store, {D_ENTRY - timedelta(days=3): 500.0,
+                     D_ENTRY: 505.0,
                      TODAY: 510.0})
     seed_backdated_book(store)
 
     out = ledger.outcomes(store, days=30)
     run = next(r for r in out["runs"] if r["run_id"] == "A")
-    assert run["spy_same_window_pct"] == 2.0    # 510 vs 500
+    assert run["spy_same_window_pct"] == 2.0    # 510 vs 500, not vs 505
+
+
+def test_degenerate_window_is_none_not_zero(store):
+    from agent import ledger
+
+    # Only one SPY row at/before the window: baseline row == endpoint row.
+    # The old code reported a confident 0.00 here — alpha then silently
+    # equaled the raw return. None means "too young to benchmark".
+    seed_spy(store, {D_BASE: 600.0})
+    seed_backdated_book(store)
+
+    out = ledger.outcomes(store, days=30)
+    run = next(r for r in out["runs"] if r["run_id"] == "A")
+    assert run["spy_same_window_pct"] is None
+    assert run["picks"][0]["alpha_pct"] is None
+
+
+def test_closed_round_trip_gets_exit_bounded_window(store):
+    from agent import ledger
+    from agent.brain import save_decision
+
+    d_exit = D_ENTRY + timedelta(days=1)
+    seed_spy(store, {D_BASE: 600.0, d_exit: 606.0, TODAY: 612.0})
+    save_decision(store, run_id="A", summary="round trip",
+                  picks=[{"symbol": "XYZ", "action": "buy"}])
+    store.update("desk_decisions", {"run_id": "A"}, {"ts": ts_of(D_ENTRY)},
+                 returning=False)
+    seed_trade(store, "A", "XYZ", "BUY", 10.0, 100.0, ts_of(D_ENTRY))
+    seed_trade(store, "A", "XYZ", "SELL", 10.0, 110.0, ts_of(d_exit))
+
+    out = ledger.outcomes(store, days=30)
+    pick = next(r for r in out["runs"] if r["run_id"] == "A")["picks"][0]
+    assert pick["closed_return_pct"] == 10.0
+    # SPY window stops at the EXIT day's close (606), not today's 612:
+    assert pick["spy_same_window_pct"] == 1.0
+    assert pick["alpha_pct"] == 9.0
+    assert pick["open_now"] is None
+
+
+def test_option_pick_alpha_is_null_by_design(store):
+    from agent import ledger
+    from agent.brain import save_decision
+
+    occ_sym = "NVDA270116C00200000"
+    seed_spy(store, {D_BASE: 600.0, TODAY: 612.0})
+    save_decision(store, run_id="O", summary="call",
+                  picks=[{"symbol": occ_sym, "action": "buy"}])
+    store.update("desk_decisions", {"run_id": "O"}, {"ts": ts_of(D_ENTRY)},
+                 returning=False)
+    seed_trade(store, "O", occ_sym, "BUY", 2.0, 5.0, ts_of(D_ENTRY))
+    ledger.mark(store, prices={occ_sym: 7.5})
+
+    out = ledger.outcomes(store, days=30)
+    pick = next(r for r in out["runs"] if r["run_id"] == "O")["picks"][0]
+    assert pick["is_option"] is True
+    assert pick["since_this_run_pct"] == 50.0   # premium move still shown
+    assert pick["alpha_pct"] is None            # but never called alpha
 
 
 def test_no_spy_data_degrades_to_none(store):
@@ -106,19 +192,6 @@ def test_no_spy_data_degrades_to_none(store):
     assert out["book"]["spy_since_inception_pct"] is None
     assert out["book"]["alpha_pct"] is None
     assert out["book"]["since_inception_pct"] == 0.1  # book math still exact
-
-
-def test_rejected_round_trip(store):
-    from agent import ledger
-
-    seed_spy(store, {D_ENTRY: 600.0, TODAY: 612.0})
-    seed_backdated_book(store)
-
-    rows = store.select("desk_decisions", filters={"run_id": "A"})
-    assert rows[0]["rejected"] == [{"symbol": "ABC", "why_not": "falling knife"}]
-    out = ledger.outcomes(store, days=30)
-    run = next(r for r in out["runs"] if r["run_id"] == "A")
-    assert run["rejected"][0]["symbol"] == "ABC"
 
 
 def test_prediction_registry_passes_through_outcomes(store):
@@ -138,6 +211,27 @@ def test_prediction_registry_passes_through_outcomes(store):
     assert pick["kill"] == "closes below $385"
 
 
+def test_rejected_round_trip_and_amend_clears(store):
+    from agent import ledger
+    from agent.brain import save_decision
+
+    seed_spy(store, {D_BASE: 600.0, TODAY: 612.0})
+    seed_backdated_book(store)
+
+    rows = store.select("desk_decisions", filters={"run_id": "A"})
+    assert rows[0]["rejected"] == [{"symbol": "ABC", "why_not": "falling knife"}]
+    out = ledger.outcomes(store, days=30)
+    run = next(r for r in out["runs"] if r["run_id"] == "A")
+    assert run["rejected"][0]["symbol"] == "ABC"
+
+    # Amending the decision without --rejected-file must CLEAR the registry
+    # (full-rewrite semantics) — a stale reject list must never stay paired
+    # with rewritten picks.
+    save_decision(store, run_id="A", summary="amended")
+    rows = store.select("desk_decisions", filters={"run_id": "A"})
+    assert rows[0]["rejected"] is None
+
+
 def test_empty_book_has_no_book_block(store):
     from agent import ledger
 
@@ -154,7 +248,7 @@ def test_portfolio_and_decision_endpoints(store, monkeypatch):
     deps._engine = deps._session_factory = None
     agent_data._session_factory = None
 
-    seed_spy(store, {D_ENTRY: 600.0, TODAY: 612.0})
+    seed_spy(store, {D_BASE: 600.0, TODAY: 612.0})
     seed_backdated_book(store)
 
     from dashboard.app import app
@@ -168,3 +262,28 @@ def test_portfolio_and_decision_endpoints(store, monkeypatch):
 
         d = c.get("/api/desk/decision/latest").json()
         assert d["rejected"] == [{"symbol": "ABC", "why_not": "falling knife"}]
+
+
+def test_portfolio_applies_option_multiplier(store, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import agent.data as agent_data
+    import dashboard.dependencies as deps
+    from agent import ledger
+
+    deps._engine = deps._session_factory = None
+    agent_data._session_factory = None
+
+    occ_sym = "NVDA270116C00200000"
+    seed_trade(store, "O", occ_sym, "BUY", 2.0, 5.0, ts_of(D_ENTRY))
+    ledger.mark(store, prices={occ_sym: 7.5})
+
+    from dashboard.app import app
+
+    with TestClient(app) as c:
+        pf = c.get("/api/desk/portfolio").json()
+        row = next(p for p in pf["positions"] if p["symbol"] == occ_sym)
+        assert row["market_value"] == 1500.0     # 2 contracts × 7.5 × 100
+        assert row["unrealized_pnl"] == 500.0    # 2 × (7.5-5.0) × 100
+        # equity = 100k - 1000 premium + 1500 mark
+        assert pf["equity"] == pytest.approx(100500.0)

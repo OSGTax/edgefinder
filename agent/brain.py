@@ -132,15 +132,20 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
         "decision_date": decision_date or date.today(), "regime": regime,
         "summary": summary, "target_weights": target_weights, "picks": picks,
         "watchlist": watchlist, "strategy_version": strategy_version}
-    # Only sent when provided: keeps writes working against a DB that predates
-    # the column (render_start's idempotent ALTER adds it on the next deploy).
+    # INSERT-path only: the key is omitted when absent so first writes keep
+    # working against a DB that predates the column (render_start's
+    # idempotent ALTER adds it on the next deploy). The update path above
+    # always writes it — full-rewrite semantics.
     if rejected is not None:
         values["rejected"] = rejected
     existing = store.select("desk_decisions",
                             filters={"account": account, "run_id": run_id}, limit=1)
     if existing:
-        store.update("desk_decisions", {"id": existing[0]["id"]}, values,
-                     returning=False)
+        # Full-rewrite semantics, same as every other field: an amend without
+        # --rejected-file CLEARS the registry — a stale rejected list must
+        # never stay paired with rewritten picks.
+        store.update("desk_decisions", {"id": existing[0]["id"]},
+                     {**values, "rejected": rejected}, returning=False)
         return {"ok": True, "run_id": run_id, "id": existing[0]["id"]}
     rows = store.insert("desk_decisions", {
         "account": account, "run_id": run_id, "ts": _utcnow(), **values})
