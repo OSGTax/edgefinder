@@ -63,6 +63,14 @@ more UNDERPERFORMED. Assign one grade, with both numbers next to it:
   (a good bet can lose; a bad bet can win).
 Narrate the scoreboard as you go.
 
+**Audit the bear-case discipline.** For every fill this week that pushed a
+single name above 20% of equity, and every pivot (`state-set --bump`),
+check the same run's thinking feed for a `bear-case` phase entry
+(`/api/desk/thinking?run_id=<RID>` or the desk page). An oversize or pivot
+with NO bear-case row is itself a mistake — log it on the `mistakes` page
+with the run id, regardless of whether the trade worked. Discipline that
+only applies when convenient is not discipline.
+
 **Then grade the road not taken.** Each run's `rejected` list names the
 candidates that lost the slot and why. For each: what did the rejected name
 do since that run (`agent.market history --symbol X`), and was the stated

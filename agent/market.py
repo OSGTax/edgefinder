@@ -18,11 +18,20 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from agent import data
 
 ACCOUNT = "agent"
-BRIEF_STALE_HOURS = 36  # older than this → the cycle should scan manually
+BRIEF_STALE_HOURS = 36  # wall-clock cap; brief_date recency is checked too
+ET = ZoneInfo("America/New_York")
+
+
+def _et_today() -> date:
+    """Trading dates are ET dates — a 21:00 ET nightly build is 01:00 UTC
+    'tomorrow', and stamping UTC would mislabel the brief and split the
+    per-night upsert across two rows."""
+    return datetime.now(ET).date()
 
 
 def _parse_date(v: str | None) -> date | None:
@@ -37,15 +46,23 @@ def _parse_date(v: str | None) -> date | None:
 # dozen scans — its context goes to deciding, not gathering.
 
 
-def _movers(store, *, top_k: int = 8, min_coverage: int = 300) -> dict:
+def _movers(store, *, top_k: int = 8, min_coverage: int | None = None) -> dict:
     """Gainers/losers/most-active across the last two WELL-COVERED sessions.
 
-    A session only counts when it has >= ``min_coverage`` bars — today's
-    partial intraday top-up (a handful of held names) must never be one side
-    of a market-wide comparison."""
-    lo = date.today() - timedelta(days=7)
+    A session only counts when it has >= ``min_coverage`` bars (default: the
+    same FULL_COVERAGE_MIN the coverage verdict uses — one payload, one
+    definition of trustworthy). Today's partial intraday top-up, or a
+    partially-failed nightly, must never be one side of a market-wide
+    comparison. Symbols with a split between the two sessions are excluded:
+    daily_bars stores RAW closes, so a 10:1 split would otherwise fabricate
+    a -90% 'loser'."""
+    min_coverage = data.FULL_COVERAGE_MIN if min_coverage is None else min_coverage
+    lo = _et_today() - timedelta(days=7)
+    # Explicit total order — the REST lane pages with limit/offset, and
+    # unordered offset pagination can skip/duplicate rows between pages.
     rows = store.select("daily_bars", columns="symbol,close,volume,date",
-                        filters={"date": ("gte", lo)})
+                        filters={"date": ("gte", lo)},
+                        order=[("date", "asc"), ("symbol", "asc")])
     by_date: dict[str, dict[str, tuple[float, float]]] = {}
     for r in rows:
         c = r.get("close")
@@ -61,36 +78,67 @@ def _movers(store, *, top_k: int = 8, min_coverage: int = 300) -> dict:
                 "note": f"fewer than two sessions with >={min_coverage} "
                         "symbols in the last week — is the nightly ingest ok?"}
     cur_d, prev_d = fat[0], fat[1]
+    split_syms: set[str] = set()
+    try:
+        srows = store.select("ticker_splits", columns="symbol,execution_date",
+                             filters={"execution_date": ("gt", prev_d)})
+        split_syms = {r["symbol"] for r in srows
+                      if str(r.get("execution_date") or "")[:10] <= cur_d}
+    except Exception:  # noqa: BLE001 — split guard is best-effort
+        pass
     prev = by_date[prev_d]
     changed = []
     for sym, (c, v) in by_date[cur_d].items():
-        if c < 1.0 or any(ch in sym for ch in (".", "/", "=")):
+        if c < 1.0 or sym in split_syms or any(ch in sym for ch in (".", "/", "=")):
             continue
         p = prev.get(sym)
         if p and p[0] > 0:
             changed.append({"symbol": sym, "close": round(c, 2),
                             "change_pct": round((c - p[0]) / p[0] * 100, 2),
                             "dollar_volume": round(c * v)})
-    return {"as_of": cur_d, "prior": prev_d,
-            "gainers": sorted(changed, key=lambda r: -r["change_pct"])[:top_k],
-            "losers": sorted(changed, key=lambda r: r["change_pct"])[:top_k],
-            "most_active": sorted(changed,
-                                  key=lambda r: -r["dollar_volume"])[:top_k]}
+    span = (date.fromisoformat(cur_d) - date.fromisoformat(prev_d)).days
+    out = {"as_of": cur_d, "prior": prev_d, "span_days": span,
+           "gainers": sorted(changed, key=lambda r: -r["change_pct"])[:top_k],
+           "losers": sorted(changed, key=lambda r: r["change_pct"])[:top_k],
+           "most_active": sorted(changed,
+                                 key=lambda r: -r["dollar_volume"])[:top_k]}
+    if span > 4:
+        out["note"] = (f"the two covered sessions are {span} days apart — "
+                       "these are multi-session moves, not one day")
+    if split_syms:
+        out["splits_excluded"] = sorted(split_syms)
+    return out
 
 
 def build_brief(*, top: int = 40) -> dict:
-    """Assemble tonight's research pack and upsert it (one row per date)."""
+    """Assemble tonight's research pack and upsert it (one row per ET date).
+
+    Every section is independently fault-tolerant: on the REST lane this is
+    ~70 sequential network calls, and one transient failure must degrade ONE
+    section (recorded in ``payload.errors``), not abort the night's brief.
+    """
     from agent.store import get_store
 
     store = get_store()
-    today = date.today()
+    today = _et_today()
+    errors: list[str] = []
 
-    regime = data.regime()
-    coverage = data.universe_coverage()
-    top_syms = data.universe(top)
-    movers = _movers(store)
+    def _safe(name, fn, default):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 — degrade the section, keep the brief
+            errors.append(f"{name}: {type(exc).__name__}: {exc}"[:200])
+            return default
 
-    roster = data.latest_indicators(top_syms) if top_syms else {}
+    regime = _safe("regime", data.regime, {})
+    coverage = _safe("coverage", data.universe_coverage, {})
+    top_syms = _safe("universe", lambda: data.universe(top), [])
+    movers = _safe("movers", lambda: _movers(store),
+                   {"as_of": None, "gainers": [], "losers": [],
+                    "most_active": []})
+
+    roster = (_safe("trend_roster", lambda: data.latest_indicators(top_syms), {})
+              if top_syms else {})
     trend = []
     for sym in top_syms:
         info = roster.get(sym)
@@ -113,7 +161,7 @@ def build_brief(*, top: int = 40) -> dict:
          *[m["symbol"] for m in movers.get("losers", [])[:5]]]))[:15]
     headlines = {}
     for sym in news_syms:
-        items = data.news(sym, limit=3)
+        items = _safe(f"news:{sym}", lambda s=sym: data.news(s, limit=3), [])
         if items:
             headlines[sym] = [{"title": i.get("title"),
                                "published": str(i.get("published_utc"))[:16]}
@@ -121,29 +169,46 @@ def build_brief(*, top: int = 40) -> dict:
 
     payload = {"as_of": str(today), "regime": regime, "coverage": coverage,
                "universe_top": top_syms, "movers": movers,
-               "trend_roster": trend, "headlines": headlines}
+               "trend_roster": trend, "headlines": headlines,
+               "errors": errors}
     built_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    values = {"payload": payload, "built_at": built_at}
     existing = store.select("desk_briefs",
                             filters={"account": ACCOUNT, "brief_date": today},
                             limit=1)
     if existing:
-        store.update("desk_briefs", {"id": existing[0]["id"]},
-                     {"payload": payload, "built_at": built_at},
+        store.update("desk_briefs", {"id": existing[0]["id"]}, values,
                      returning=False)
     else:
-        store.insert("desk_briefs",
-                     {"account": ACCOUNT, "brief_date": today,
-                      "built_at": built_at, "payload": payload},
-                     returning=False)
+        try:
+            store.insert("desk_briefs",
+                         {"account": ACCOUNT, "brief_date": today, **values},
+                         returning=False)
+        except Exception:  # noqa: BLE001 — lost the insert race: update instead
+            rows = store.select("desk_briefs",
+                                filters={"account": ACCOUNT,
+                                         "brief_date": today}, limit=1)
+            if not rows:
+                raise
+            store.update("desk_briefs", {"id": rows[0]["id"]}, values,
+                         returning=False)
     return {"ok": True, "brief_date": str(today),
             "universe": len(top_syms), "trend_roster": len(trend),
             "movers_as_of": movers.get("as_of"),
             "coverage_status": coverage.get("status"),
-            "headline_symbols": len(headlines)}
+            "headline_symbols": len(headlines),
+            "errors": errors}
 
 
 def get_brief() -> dict:
-    """The latest research pack, with an honest staleness flag."""
+    """The latest research pack, with an honest staleness flag.
+
+    ``stale`` is ALWAYS a bool and defaults to True — a brief is fresh only
+    when proven fresh on both clocks: built recently (wall-clock hours) AND
+    built for today-or-yesterday in ET (session recency). Pure hours alone
+    let a brief that predates an entire completed session read fresh after
+    one missed nightly; an unparseable/NULL built_at must degrade to stale,
+    never crash or read as fresh."""
     from agent.store import get_store
 
     rows = get_store().select("desk_briefs", filters={"account": ACCOUNT},
@@ -152,18 +217,20 @@ def get_brief() -> dict:
         return {"exists": False,
                 "note": "no brief built yet — scan manually this cycle"}
     r = rows[0]
-    stale = None
+    stale = True
     try:
         built = r["built_at"]
         if isinstance(built, str):
             built = datetime.fromisoformat(built.replace("Z", "+00:00"))
         if built.tzinfo is not None:
             built = built.astimezone(timezone.utc).replace(tzinfo=None)
-        age_h = (datetime.now(timezone.utc).replace(tzinfo=None)
-                 - built).total_seconds() / 3600
-        stale = age_h > BRIEF_STALE_HOURS
-    except (TypeError, ValueError):
-        pass
+        age_ok = ((datetime.now(timezone.utc).replace(tzinfo=None) - built)
+                  .total_seconds() / 3600 <= BRIEF_STALE_HOURS)
+        bdate = date.fromisoformat(str(r["brief_date"])[:10])
+        session_ok = bdate >= _et_today() - timedelta(days=1)
+        stale = not (age_ok and session_ok)
+    except Exception:  # noqa: BLE001 — not provably fresh ⇒ stale
+        stale = True
     return {"exists": True, "brief_date": str(r["brief_date"])[:10],
             "built_at": str(r["built_at"]), "stale": stale,
             "payload": r["payload"]}

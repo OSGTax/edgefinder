@@ -454,6 +454,20 @@ def data_health(db: Session = Depends(get_db)):
     return coverage_verdict(rows)
 
 
+@router.get("/brief")
+def research_brief(db: Session = Depends(get_db)):
+    """The nightly research pack the agent reads first each cycle — surfaced
+    so the owner can inspect exactly what the trader saw. Read-only."""
+    from agent.models import DeskBrief
+
+    r = (db.query(DeskBrief).filter(DeskBrief.account == ACCOUNT)
+         .order_by(desc(DeskBrief.brief_date)).first())
+    if not r:
+        return {"exists": False}
+    return {"exists": True, "brief_date": str(r.brief_date),
+            "built_at": _iso(r.built_at), "payload": r.payload}
+
+
 @router.get("/whatsnew")
 def whatsnew(db: Session = Depends(get_db), limit: int = Query(25, le=100)):
     """The "What's New" feed — dashboard improvements the agent shipped.

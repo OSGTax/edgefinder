@@ -466,4 +466,9 @@ DESK_TABLE_DDL: list[str] = [
         payload JSON NOT NULL,
         CONSTRAINT uq_desk_brief_date UNIQUE (account, brief_date)
     )""",
+    # Same lockdown as every other desk_* table (scripts/enable_rls.sql):
+    # RLS on, zero policies — anon/authenticated denied; the owning postgres
+    # role (Render/agent) bypasses. Without this a new public-schema table is
+    # world-writable through the Supabase Data API. Idempotent.
+    "ALTER TABLE desk_briefs ENABLE ROW LEVEL SECURITY",
 ]

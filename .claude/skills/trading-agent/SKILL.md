@@ -161,9 +161,15 @@ Choose the **target book**: `{symbol: weight}`. Full discretion — any number
 of names, any sizing within the guardrails. Per held name: hold / add /
 trim / exit.
 
-**The bear-case beat (required before the big moves).** Before executing a
-strategy PIVOT or any single position that would exceed 20% of equity,
-write the strongest honest case AGAINST it first:
+**The bear-case beat (required before the big moves).** The trigger is
+computed, not vibed: before a strategy PIVOT (any `state-set --bump`), or
+whenever `(current market value of the name + the new buy notional) ÷ the
+equity that `ledger state` just printed` **> 0.20**, write the strongest
+honest case AGAINST it first — state the arithmetic in the note ("$14k held
++ $8k add = $22k on $99.0k equity = 22.2%"). Adds count: pushing an
+existing 15% name to 23% is an oversize. The Friday reflection audits
+this — an oversize fill with no same-run bear-case row is logged as a
+mistake:
 ```
 python -m agent.brain think --run-id <RID> --phase bear-case \
     --text "Against <move>: <the best 2-3 arguments, with numbers>"

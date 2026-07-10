@@ -39,8 +39,11 @@ ranked universe, movers across the last two well-covered sessions, a trend
 roster with indicators, headlines for the leaders, and the data-coverage
 verdict. Tomorrow's hourly trading cycles read this ONE payload
 (`agent.market brief`) instead of re-deriving it every hour — the trader
-spends its context deciding, not gathering. If the build reports
-`coverage_status` other than `green`, say so loudly in your report.
+spends its context deciding, not gathering. The build is section-tolerant:
+transient failures land in the output's `errors` list instead of aborting.
+If `errors` is non-empty, re-run the build ONCE (it upserts in place); if
+errors persist or `coverage_status` is not `green`, say so loudly in your
+report.
 
 ### 3. Report coverage
 Count names with a bar on the latest trading day so a decaying ingest is
