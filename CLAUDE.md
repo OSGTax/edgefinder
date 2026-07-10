@@ -102,10 +102,14 @@ One Supabase Postgres database, two namespaces:
 - **The agent's own tables** (`agent/models.py`): `desk_trades` (append-only
   fill ledger — **the source of truth for cash**), `desk_positions`
   (projection rebuilt from the ledger), `desk_equity`, `desk_strategy_state`,
-  `desk_journal`, `desk_thinking`, `desk_decisions`, `desk_backtests`,
-  `desk_changelog`, `desk_options_snap`, `desk_wiki`.
+  `desk_journal`, `desk_thinking`, `desk_decisions` (picks carry a
+  prediction registry — `prediction`/`horizon_days`/`kill` — plus a
+  `rejected` candidates list), `desk_backtests`, `desk_changelog`,
+  `desk_options_snap`, `desk_wiki`, `desk_briefs` (the nightly research
+  pack the trading cycle reads first).
 - **Kept market-data tables** (`edgefinder/db/models.py`, read-only inputs):
-  `daily_bars` (raw bars; splits applied at load), `index_daily`,
+  `daily_bars` (raw bars; splits applied at load), `index_daily` (FROZEN at
+  the 2026-06 cutover — SPY benchmarks read `daily_bars` instead),
   `ticker_news`, `ticker_splits`, `dividends` (+ `fundamentals_snapshots`).
 
 **Account integrity (CRITICAL):** cash is always recomputed from the
@@ -146,12 +150,14 @@ python -m agent.preflight          # DB reachable + data fresh? run before anyth
 
 # The agent's own tools (JSON out) — the skill drives these via Bash
 python -m agent.ledger state                      # cash, positions, equity, P&L
+python -m agent.market brief                      # the nightly research pack (read FIRST)
 python -m agent.market regime                     # SPY/QQQ/IWM trend + regime tag
 python -m agent.market universe --top 40          # most-liquid names
 python -m agent.broker quote --symbols NVDA,SPY   # LIVE bid/ask
 python -m agent.backtest_tool --symbols A,B,C --rule momentum:5
 python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 \
     --rationale "..." --run-id 2026-07-07T14:30   # books at the LIVE quote
+python -m agent.ledger outcomes --days 14         # picks vs predictions vs SPY (alpha)
 
 # Dashboard
 uvicorn dashboard.app:app --reload   # http://localhost:8000/ → /desk
@@ -166,11 +172,12 @@ DATABASE_URL= python -m pytest tests/ -q -m "not integration"
 Pages: `/` → redirects to `/desk` · `/symbol/{sym}` chart page.
 
 `/api/desk/*` (read-only projections of the `desk_*` tables —
-`dashboard/routers/desk.py`): `portfolio`, `equity`, `decision/latest`,
-`thinking`, `backtests`, `strategy`, `wiki`, `regime`, `movers`,
-`holding-stats`, `dividends`, `quotes`, `stream` (SSE live ticks),
-`options/{symbol}`, `options/{symbol}/history`, `broker-health`,
-`whatsnew`, `trades`.
+`dashboard/routers/desk.py`): `portfolio` (incl. `vs_spy` since-inception
+alpha), `equity`, `decision/latest`, `thinking`, `backtests`, `strategy`,
+`wiki`, `regime`, `movers`, `holding-stats`, `dividends`, `quotes`,
+`stream` (SSE live ticks), `options/{symbol}`, `options/{symbol}/history`,
+`broker-health`, `data-health` (bar-coverage freshness — the desk pill),
+`brief` (the nightly research pack), `whatsnew`, `trades`.
 
 `/api/symbols/{sym}/bars?range=&indicators=` and `/api/symbols/{sym}/events`
 power the chart page. `/api/health` returns status + version.
