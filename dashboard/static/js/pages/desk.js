@@ -95,6 +95,13 @@ async function loadHeader() {
     const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
     setText('desk-hero-pnl', fmtPnl(pf.total_pnl), pnlCls);
     setText('desk-hero-return', fmtPct(pf.total_return_pct / 100, { signed: true }), pnlCls);
+    if (pf.vs_spy && pf.vs_spy.alpha_pct != null) {
+      const a = pf.vs_spy.alpha_pct;
+      setText('desk-hero-alpha', fmtPct(a / 100, { signed: true }),
+        a >= 0 ? 't-up' : 't-down');
+    } else {
+      setText('desk-hero-alpha', '—', '');
+    }
     setText('desk-hero-cash', fmtDollar(pf.cash));
     setText('desk-hero-count', String((pf.positions || []).length));
 

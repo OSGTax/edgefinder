@@ -75,11 +75,41 @@ def portfolio(db: Session = Depends(get_db)):
     for r in rows:
         r["weight"] = round(r["market_value"] / equity, 4) if equity else 0.0
     rows.sort(key=lambda r: -r["market_value"])
+    total_return_pct = round((equity - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 2)
+
+    # vs SPY since inception — a long book's raw return is mostly market beta,
+    # so the hero shows the difference. SPY closes come from daily_bars
+    # (index_daily froze at the cutover); price return on both sides, since
+    # the ledger books no dividend cash either.
+    vs_spy = None
+    first_trade = (db.query(safunc.min(DeskTrade.ts))
+                   .filter(DeskTrade.account == ACCOUNT).scalar())
+    if first_trade is not None:
+        from datetime import timedelta
+
+        from edgefinder.db.models import DailyBar
+
+        inception = first_trade.date()
+        closes = (db.query(DailyBar.date, DailyBar.close)
+                  .filter(DailyBar.symbol == "SPY",
+                          DailyBar.date >= inception - timedelta(days=10))
+                  .order_by(DailyBar.date).all())
+        base = None
+        for d_, c_ in closes:
+            if d_ <= inception:
+                base = c_
+        if base and closes:
+            spy_pct = round((closes[-1][1] - base) / base * 100, 2)
+            vs_spy = {"inception": str(inception), "spy_as_of": str(closes[-1][0]),
+                      "spy_return_pct": spy_pct,
+                      "alpha_pct": round(total_return_pct - spy_pct, 2)}
+
     return {
         "account": ACCOUNT, "cash": c, "positions_value": round(pos_value, 2),
         "equity": equity, "starting_capital": STARTING_CAPITAL,
         "total_pnl": round(equity - STARTING_CAPITAL, 2),
-        "total_return_pct": round((equity - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 2),
+        "total_return_pct": total_return_pct,
+        "vs_spy": vs_spy,
         "positions": rows,
     }
 
@@ -109,7 +139,8 @@ def latest_decision(db: Session = Depends(get_db)):
         "decision_date": str(d.decision_date) if d.decision_date else None,
         "regime": d.regime, "summary": d.summary,
         "target_weights": d.target_weights or {}, "picks": d.picks or [],
-        "watchlist": d.watchlist or [], "strategy_version": d.strategy_version,
+        "watchlist": d.watchlist or [], "rejected": d.rejected or [],
+        "strategy_version": d.strategy_version,
     }
 
 

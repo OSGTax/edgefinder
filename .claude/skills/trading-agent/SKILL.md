@@ -175,17 +175,26 @@ Write the run's dossier so the desk page renders it. Small JSON files:
 - `picks.json` — per-name dossiers:
   `{"symbol","action","why_now","rationale","evidence":{...},"news":[...]}`.
 - `watchlist.json` — near-misses: `[{"symbol","note"}]`.
+- `rejected.json` — the alternatives that LOST the slot:
+  `[{"symbol","why_not"}]`. Your playbook already makes you name them —
+  record them, because "the thing I didn't buy did X" is free learning
+  signal: the Friday reflection grades these against SPY exactly like your
+  picks. An empty list on a shopping cycle means you didn't really shop.
 ```
 python -m agent.brain decision --run-id <RID> --regime risk_on \
     --summary "one-paragraph what-I-did-and-why" \
     --weights-file weights.json --picks-file picks.json \
-    --watchlist-file watchlist.json --strategy-version <ver>
+    --watchlist-file watchlist.json --rejected-file rejected.json \
+    --strategy-version <ver>
 ```
 
 ### 7. Reflect (phase: reflect) — glance back; most cycles write NOTHING
 - `python -m agent.ledger outcomes --days 14` — how your past picks aged vs
   what you said when you made them (realized + open P&L per run and name;
-  `since_this_run_pct` is exact per pick).
+  `since_this_run_pct` is exact per pick). **Grade `alpha_pct`, not raw
+  P&L** — every window carries the SPY move over the same period
+  (`spy_same_window_pct`); a long book making money in a rising market is
+  beta, not skill. The `book` block shows the same thing account-wide.
 - Only if a MEASURED result teaches something durable, revise **AT MOST ONE**
   wiki page — edit in place, tighten rather than append, and cite the numbers
   (name, run, P&L) in both the page and the `--reason`:

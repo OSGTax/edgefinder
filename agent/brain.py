@@ -124,6 +124,7 @@ def think(store=None, *, run_id: str, text: str, phase: str | None = None,
 def save_decision(store=None, *, run_id: str, regime: str | None = None,
                   summary: str | None = None, target_weights: dict | None = None,
                   picks: list | None = None, watchlist: list | None = None,
+                  rejected: list | None = None,
                   strategy_version: int | None = None,
                   decision_date: date | None = None, account: str = "agent") -> dict:
     store = store or _store()
@@ -131,6 +132,10 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
         "decision_date": decision_date or date.today(), "regime": regime,
         "summary": summary, "target_weights": target_weights, "picks": picks,
         "watchlist": watchlist, "strategy_version": strategy_version}
+    # Only sent when provided: keeps writes working against a DB that predates
+    # the column (render_start's idempotent ALTER adds it on the next deploy).
+    if rejected is not None:
+        values["rejected"] = rejected
     existing = store.select("desk_decisions",
                             filters={"account": account, "run_id": run_id}, limit=1)
     if existing:
@@ -269,6 +274,9 @@ def main(argv: list[str] | None = None) -> None:
     de.add_argument("--weights-file", default=None)
     de.add_argument("--picks-file", default=None)
     de.add_argument("--watchlist-file", default=None)
+    de.add_argument("--rejected-file", default=None,
+                    help="JSON [{symbol, why_not}] — candidates that lost the "
+                         "slot this run; the weekly reflection grades them")
     de.add_argument("--strategy-version", type=int, default=None)
 
     args = p.parse_args(argv)
@@ -304,6 +312,7 @@ def main(argv: list[str] | None = None) -> None:
             target_weights=_load_json(args.weights_file),
             picks=_load_json(args.picks_file),
             watchlist=_load_json(args.watchlist_file),
+            rejected=_load_json(args.rejected_file),
             strategy_version=args.strategy_version), indent=2))
 
 

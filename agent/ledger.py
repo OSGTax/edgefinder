@@ -187,6 +187,37 @@ def _realized_pnl(trades: list[dict]):
     return by_run_symbol, by_symbol
 
 
+def _spy_closes(store, *, since: str) -> list[tuple[str, float]]:
+    """SPY daily closes (ascending) from ``daily_bars``, with a lookback buffer
+    so a window starting on a weekend/holiday still finds a baseline close.
+
+    Price return only — dividends are excluded, which matches the book (the
+    ledger books no dividend cash), so the comparison is like-for-like.
+    ``index_daily`` is NOT used: it froze at the 2026-06-22 cutover."""
+    from datetime import date as _date, timedelta as _td
+
+    start = _date.fromisoformat(since[:10]) - _td(days=10)
+    rows = store.select("daily_bars", columns="date,close",
+                        filters={"symbol": "SPY", "date": ("gte", start)},
+                        order=[("date", "asc")])
+    return [(str(r["date"])[:10], float(r["close"]))
+            for r in rows if r.get("close")]
+
+
+def _spy_window_pct(spy: list[tuple[str, float]], start_date: str) -> float | None:
+    """SPY price change from the last close ON/BEFORE ``start_date`` to the
+    latest stored close. None when no baseline exists in the series."""
+    base = None
+    for d, c in spy:
+        if d <= start_date[:10]:
+            base = c
+        else:
+            break
+    if not base:
+        return None
+    return round((spy[-1][1] - base) / base * 100, 2)
+
+
 def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
              account: str = ACCOUNT) -> dict:
     """How past decisions actually aged — the grounding for wiki lessons.
@@ -195,9 +226,13 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
     realized P&L (closing-run attribution, see ``_realized_pnl``), current
     open exposure, and ``since_this_run_pct`` — the current mark vs THAT
     run's own average fill price (exact per pick, the primary reflection
-    signal). Settlement rows (run_id='settlement') are bucketed separately;
-    trades with no run_id are counted, never silently dropped. No network:
-    marks come from desk_positions.last_price, same as ``state()``."""
+    signal). Every window also carries the SPY move over the same period
+    (``spy_same_window_pct``) and the difference (``alpha_pct``) — raw P&L
+    on a long book is mostly beta; alpha is the skill signal reflection
+    should grade. Settlement rows (run_id='settlement') are bucketed
+    separately; trades with no run_id are counted, never silently dropped.
+    No network: marks come from desk_positions.last_price, same as
+    ``state()``."""
     from agent import occ
 
     store = store or _store()
@@ -213,6 +248,13 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                  if (run_id and d["run_id"] == run_id)
                  or (not run_id and str(d.get("ts") or "") >= str(cutoff))]
 
+    inception = str(trades[0]["ts"])[:10] if trades else None
+    window_starts = [str(d.get("ts") or "")[:10]
+                     for d in decisions if d.get("ts")]
+    if inception:
+        window_starts.append(inception)
+    spy = _spy_closes(store, since=min(window_starts)) if window_starts else []
+
     fills_by_run: dict[tuple[str | None, str], list[dict]] = {}
     for t in trades:
         fills_by_run.setdefault((t.get("run_id"), t["symbol"]), []).append(t)
@@ -220,6 +262,8 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
     runs = []
     for d in decisions:
         rid = d["run_id"]
+        run_spy_pct = (_spy_window_pct(spy, str(d.get("ts") or ""))
+                       if d.get("ts") else None)
         picks_out = []
         for p in (d.get("picks") or []):
             sym = str(p.get("symbol") or "").upper()
@@ -240,15 +284,22 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                                                        - pos["avg_price"]) * m, 2)}
             since_pct = (round((mark - entry_avg) / entry_avg * 100, 2)
                          if (entry_avg and mark) else None)
+            alpha = (round(since_pct - run_spy_pct, 2)
+                     if (since_pct is not None and run_spy_pct is not None)
+                     else None)
             picks_out.append({
                 "symbol": sym, "action": p.get("action"),
                 "why_now": p.get("why_now"), "rationale": p.get("rationale"),
+                "prediction": p.get("prediction"),
+                "horizon_days": p.get("horizon_days"), "kill": p.get("kill"),
                 "fills": fills, "entry_avg_px": round(entry_avg, 4) if entry_avg else None,
                 "realized_pnl": round(by_run_symbol.get((rid, sym), 0.0), 2),
-                "open_now": open_now, "since_this_run_pct": since_pct})
+                "open_now": open_now, "since_this_run_pct": since_pct,
+                "spy_same_window_pct": run_spy_pct, "alpha_pct": alpha})
         runs.append({"run_id": rid, "ts": str(d.get("ts") or ""),
                      "regime": d.get("regime"), "summary": d.get("summary"),
-                     "picks": picks_out,
+                     "picks": picks_out, "rejected": d.get("rejected") or [],
+                     "spy_same_window_pct": run_spy_pct,
                      "run_realized_pnl": round(sum(
                          v for (r, _), v in by_run_symbol.items() if r == rid), 2)})
 
@@ -267,14 +318,35 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                                      * m, 2) if pos else 0.0),
             "open_shares": float(pos["shares"]) if pos else 0.0,
             "is_option": occ.is_option(sym)})
+    book = None
+    if inception:
+        c = STARTING_CAPITAL
+        for t in trades:
+            c += float(t["dollars"]) * (1 if t["side"] == "SELL" else -1)
+        pos_value = sum(
+            float(p["shares"]) * float(p.get("last_price") or p["avg_price"])
+            * _mult(s) for s, p in positions.items())
+        book_pct = round((c + pos_value - STARTING_CAPITAL)
+                         / STARTING_CAPITAL * 100, 2)
+        spy_pct = _spy_window_pct(spy, inception)
+        book = {"inception": inception, "since_inception_pct": book_pct,
+                "spy_since_inception_pct": spy_pct,
+                "alpha_pct": (round(book_pct - spy_pct, 2)
+                              if spy_pct is not None else None)}
+
     return {"as_of": str(_utcnow()), "days": days,
             "convention": "realized P&L is attributed to the run that booked "
                           "the CLOSING fill, priced against the global average "
                           "cost at that moment — approximate when several runs "
                           "built the lot; per-symbol totals are exact. "
                           "since_this_run_pct compares the current mark to that "
-                          "run's own average fill and is exact per pick.",
-            "runs": runs, "symbols": symbols_out,
+                          "run's own average fill and is exact per pick. "
+                          "spy_same_window_pct / alpha_pct benchmark each window "
+                          "against SPY closes from daily_bars (price return, "
+                          "dividends excluded on both sides — the book books no "
+                          "dividend cash either); a long book's raw P&L is "
+                          "mostly market beta, so grade alpha, not dollars.",
+            "book": book, "runs": runs, "symbols": symbols_out,
             "settlement": {"realized_pnl": settlement_pnl},
             "unattributed_trades": unattributed}
 

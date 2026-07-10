@@ -42,14 +42,25 @@ over vibes (the same style rules as the trading charter).
 
 ### 2. Grade every pick that closed or meaningfully aged this week
 For each: what did you SAY (`why_now` / `rationale`), and what HAPPENED
-(realized P&L, `since_this_run_pct`)? Assign one grade, with the dollar
-number next to it:
+(realized P&L, `since_this_run_pct`)? **Grade against `alpha_pct`, not raw
+dollars** — every pick and run carries the SPY move over the same window
+(`spy_same_window_pct`); a long book that made money in a market that rose
+more UNDERPERFORMED. Assign one grade, with both numbers next to it:
 - **Right for the right reason** — thesis played out as described.
 - **Right for the wrong reason** — made money, but not how you said. Luck
-  is not skill; say so.
+  is not skill; say so. (Positive P&L with negative alpha lands here too:
+  the market carried you.)
 - **Wrong** — and whether the *process* was wrong or just the outcome
   (a good bet can lose; a bad bet can win).
 Narrate the scoreboard as you go.
+
+**Then grade the road not taken.** Each run's `rejected` list names the
+candidates that lost the slot and why. For each: what did the rejected name
+do since that run (`agent.market history --symbol X`), and was the stated
+`why_not` vindicated or refuted? A rejection that outperformed your pick by
+a wide margin is exactly as instructive as a losing trade — and it cost
+nothing to learn from. Score the week: picks' average alpha vs rejects'
+average move.
 
 ### 3. Curate the wiki (the real work)
 With the grades in hand, rewrite pages via

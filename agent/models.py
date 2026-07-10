@@ -191,6 +191,10 @@ class DeskDecision(Base):
     target_weights: Mapped[dict | None] = mapped_column(JSON)
     picks: Mapped[list | None] = mapped_column(JSON)
     watchlist: Mapped[list | None] = mapped_column(JSON)
+    # Candidates that LOST the slot this run: [{symbol, why_not}]. Graded by
+    # the weekly reflection alongside the picks — "the thing I didn't buy did
+    # X" doubles the learning signal at zero risk.
+    rejected: Mapped[list | None] = mapped_column(JSON)
     strategy_version: Mapped[int | None] = mapped_column(Integer)
 
 
@@ -377,9 +381,12 @@ DESK_TABLE_DDL: list[str] = [
         target_weights JSON,
         picks JSON,
         watchlist JSON,
+        rejected JSON,
         strategy_version INTEGER,
         CONSTRAINT uq_desk_decision_run UNIQUE (account, run_id)
     )""",
+    # Additive upgrade for desk_decisions tables created before v8.15.
+    "ALTER TABLE desk_decisions ADD COLUMN IF NOT EXISTS rejected JSON",
     "CREATE INDEX IF NOT EXISTS idx_desk_decision_account_ts ON desk_decisions (account, ts)",
     """CREATE TABLE IF NOT EXISTS desk_backtests (
         id SERIAL PRIMARY KEY,

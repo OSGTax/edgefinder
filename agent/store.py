@@ -85,11 +85,21 @@ class PgStore:
         for col, spec in (filters or {}).items():
             c = table.c[col]
             if isinstance(spec, tuple) and len(spec) == 2:
+                # Dispatch lazily — building every expression eagerly would
+                # call c.in_(val) on scalar values (dates, numbers) and raise.
                 op, val = spec
-                stmt = stmt.where({
-                    "in": c.in_(val), "gte": c >= val, "lte": c <= val,
-                    "gt": c > val, "lt": c < val,
-                }[op])
+                if op == "in":
+                    stmt = stmt.where(c.in_(val))
+                elif op == "gte":
+                    stmt = stmt.where(c >= val)
+                elif op == "lte":
+                    stmt = stmt.where(c <= val)
+                elif op == "gt":
+                    stmt = stmt.where(c > val)
+                elif op == "lt":
+                    stmt = stmt.where(c < val)
+                else:
+                    raise ValueError(f"unknown filter op {op!r}")
             else:
                 stmt = stmt.where(c == spec)
         return stmt
