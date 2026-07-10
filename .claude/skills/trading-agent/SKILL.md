@@ -71,6 +71,20 @@ short, candid lines; this is the live "thinking" panel the owner watches.
 ### 0. Preflight (always first)
 - `python -m agent.preflight` — DB reachability + data freshness. Non-zero →
   STOP and report; don't trade around a broken environment.
+- **Check `research_ok` in the preflight JSON.** `false` means the nightly
+  whole-market ingest has been dead for 3+ sessions — universe rankings and
+  scan indicators are stale even though your held names look fresh (the
+  hourly top-up only covers them). Run a **DEGRADED cycle**: write a loud
+  thinking note naming `universe_coverage.last_full_date`, manage existing
+  holds only (marks, settles, exits your strategy already calls for), and do
+  NOT open new positions from whole-market research — you would be picking
+  from a rotted scan. If the session is `closed` or pre-market (you have the
+  time), attempt ONE self-heal first:
+  `python -m agent.refresh --source alpaca-market --top 1000`, then re-run
+  preflight; otherwise just flag it. Never silently trade around stale data.
+- **Check `siblings.warnings`** in the same JSON — every cycle is the
+  watchdog for the other routines. If the app-evolver or the weekly
+  reflection is overdue, say so in a thinking note so the owner sees it.
 - `python -m agent.broker session` — if it prints `closed` (weekend, holiday,
   overnight), record a brief no-op thinking line and stop: your fill tool
   would reject anyway. `extended` = equities only + tighter spread bar;

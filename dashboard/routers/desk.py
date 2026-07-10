@@ -398,6 +398,31 @@ def broker_health():
     return out
 
 
+@router.get("/data-health")
+def data_health(db: Session = Depends(get_db)):
+    """Freshness of the market-data asset behind research (not the live tape).
+
+    Bar age alone can't detect a dead nightly ingest — the hourly top-up keeps
+    a handful of held names current while the other ~2,000 symbols go stale.
+    This counts bar rows per recent date and reports sessions since the last
+    full-coverage ingest (one definition, shared with agent.preflight).
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import func as safunc
+
+    from agent.data import coverage_verdict
+    from edgefinder.db.models import DailyBar
+
+    latest = db.query(safunc.max(DailyBar.date)).scalar()
+    if latest is None:
+        return coverage_verdict([])
+    lo = latest - timedelta(days=21)
+    rows = (db.query(DailyBar.date, safunc.count(DailyBar.symbol))
+            .filter(DailyBar.date >= lo).group_by(DailyBar.date).all())
+    return coverage_verdict(rows)
+
+
 @router.get("/whatsnew")
 def whatsnew(db: Session = Depends(get_db), limit: int = Query(25, le=100)):
     """The "What's New" feed — dashboard improvements the agent shipped.

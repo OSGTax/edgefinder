@@ -402,3 +402,91 @@ def regime(*, as_of: date | None = None) -> dict:
     else:
         out["tag"] = "neutral"
     return out
+
+
+# ── market-data coverage (is the whole-market scan trustworthy?) ──
+#
+# Bar AGE alone cannot detect a dead nightly ingest: the hourly top-up keeps
+# writing a handful of held/streamed names every session, so "latest bar =
+# yesterday" stays true while the other ~2,000 symbols quietly rot (this is
+# exactly how the 2026-07-08 outage went unnoticed). The honest unit of
+# staleness is a *thin session*: a bar date newer than the last date with
+# full-universe coverage. One thin session is normal (today's intraday
+# partial); two means last night's ingest was missed; three or more means
+# whole-market research is running on stale rankings.
+
+FULL_COVERAGE_MIN = 1000  # bars on a date for it to count as a full nightly ingest
+
+
+def coverage_verdict(date_counts, *, full_min: int | None = None) -> dict:
+    """Classify market-data freshness from per-date bar counts (pure logic).
+
+    ``date_counts``: iterable of ``(date-or-iso-str, count)`` in any order.
+    Counts may be capped at ``full_min`` by the caller — only the threshold
+    matters. Returns status green (0-1 thin sessions), amber (2), or red (3+,
+    or no full-coverage date in the window); ``research_ok`` is False only on
+    red, so one transient missed nightly degrades the display without benching
+    the trader.
+    """
+    full_min = FULL_COVERAGE_MIN if full_min is None else full_min
+    counts: dict[str, int] = {}
+    for d, n in date_counts:
+        key = str(d)[:10]
+        counts[key] = max(counts.get(key, 0), int(n or 0))
+    out: dict = {"full_min": full_min, "latest_date": None, "latest_count": 0,
+                 "last_full_date": None, "thin_sessions": 0,
+                 "status": "red", "research_ok": False}
+    if not counts:
+        return out
+    latest = max(counts)
+    out["latest_date"] = latest
+    out["latest_count"] = counts[latest]
+    full_dates = [d for d, n in counts.items() if n >= full_min]
+    if full_dates:
+        last_full = max(full_dates)
+        out["last_full_date"] = last_full
+        out["thin_sessions"] = sum(1 for d in counts if d > last_full)
+    else:
+        out["thin_sessions"] = len(counts)  # nothing full in the window
+    thin = out["thin_sessions"]
+    if full_dates and thin <= 1:
+        out["status"] = "green"
+    elif full_dates and thin == 2:
+        out["status"] = "amber"
+    else:
+        out["status"] = "red"
+    out["research_ok"] = out["status"] != "red"
+    return out
+
+
+def universe_coverage(*, window: int = 10,
+                      full_min: int | None = None) -> dict:
+    """Recent per-date coverage of ``daily_bars`` via the store (both lanes).
+
+    The store has no aggregates on the REST lane, so counts are measured by
+    fetching at most ``full_min`` symbol rows per date — enough to know
+    full-vs-thin, never more. Walks dates newest-first and stops at the first
+    full-coverage date (older history can't change the verdict).
+    """
+    from agent.store import get_store
+
+    full_min = FULL_COVERAGE_MIN if full_min is None else full_min
+    store = get_store()
+    # Recent bar dates: SPY is always in the hot set (stream seed + index),
+    # plus the true newest date in case SPY's own bar is the one missing.
+    spy_rows = store.select("daily_bars", columns="date",
+                            filters={"symbol": "SPY"},
+                            order=[("date", "desc")], limit=window)
+    newest = store.select("daily_bars", columns="date",
+                          order=[("date", "desc")], limit=1)
+    dates = sorted({str(r["date"])[:10] for r in [*spy_rows, *newest]},
+                   reverse=True)[:window]
+    date_counts: list[tuple[str, int]] = []
+    for d in dates:
+        rows = store.select("daily_bars", columns="symbol",
+                            filters={"date": date.fromisoformat(d)},
+                            limit=full_min)
+        date_counts.append((d, len(rows)))
+        if len(rows) >= full_min:
+            break  # verdict can't change past the first full date
+    return coverage_verdict(date_counts, full_min=full_min)

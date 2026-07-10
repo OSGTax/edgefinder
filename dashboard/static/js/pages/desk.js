@@ -82,11 +82,12 @@ async function loadHeader() {
     }
   };
   try {
-    const [pf, strat, regime, eq] = await Promise.all([
+    const [pf, strat, regime, eq, dataHealth] = await Promise.all([
       apiGet('/api/desk/portfolio'),
       apiGet('/api/desk/strategy'),
       apiGet('/api/desk/regime').catch(() => null),
       apiGet('/api/desk/equity?limit=500').catch(() => null),
+      apiGet('/api/desk/data-health').catch(() => null),
     ]);
 
     setText('desk-hero-account', fmtDollar(pf.equity));
@@ -148,6 +149,20 @@ async function loadHeader() {
         };
         const [label, cls, tip] = MOOD[regime.tag] || MOOD.neutral;
         chipsEl.append(h('span', { class: 'c-pill ' + cls, title: tip, text: label }));
+      }
+      if (dataHealth && dataHealth.status) {
+        const DATA = {
+          green: ['Research data: fresh', 'up',
+            'The nightly whole-market data refresh is current — stock rankings and research use up-to-date history.'],
+          amber: ['Research data: aging', 'warn',
+            'Last night’s whole-market data refresh was missed — research rankings are one session behind.'],
+          red: ['Research data: stale', 'down',
+            'The whole-market data refresh has been down for several sessions — the AI limits itself to managing existing holdings until it recovers.'],
+        };
+        const [label, cls, tip] = DATA[dataHealth.status] || DATA.red;
+        const full = dataHealth.last_full_date
+          ? ' (last full refresh: ' + dataHealth.last_full_date + ')' : '';
+        chipsEl.append(h('span', { class: 'c-pill ' + cls, title: tip + full, text: label }));
       }
     }
   } catch (err) {

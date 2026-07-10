@@ -54,6 +54,54 @@ def run() -> dict:
 
     check("market_data", _bars, critical=False)
 
+    # Universe coverage — bar AGE can look fresh while the nightly whole-market
+    # ingest is dead (the hourly top-up keeps a handful of names current), so
+    # this measures thin sessions since the last full-coverage ingest instead.
+    def _universe():
+        from agent.data import universe_coverage
+
+        return universe_coverage()
+
+    check("universe_coverage", _universe, critical=False)
+
+    # Sibling routines — the desk is four independent schedules (trading,
+    # nightly ingest, app evolver, weekly reflection) and none of them can see
+    # a dead sibling on their own. Cheap artifact-age checks make every cycle
+    # a watchdog for the others.
+    def _siblings():
+        from datetime import datetime, timezone
+
+        from agent.store import get_store
+
+        store = get_store()
+        now = datetime.now(timezone.utc)
+
+        def age_days(ts) -> float | None:
+            if ts is None:
+                return None
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return round((now - ts).total_seconds() / 86400, 1)
+
+        detail: dict = {"warnings": []}
+        ch = store.select("desk_changelog", columns="ts",
+                          order=[("ts", "desc")], limit=1)
+        detail["app_evolver_age_days"] = age_days(ch[0]["ts"]) if ch else None
+        th = store.select("desk_thinking", columns="run_id,ts",
+                          order=[("ts", "desc")], limit=300)
+        refl = next((r for r in th
+                     if str(r.get("run_id") or "").startswith("reflect-")), None)
+        detail["reflection_age_days"] = age_days(refl["ts"]) if refl else None
+        if detail["app_evolver_age_days"] is None or detail["app_evolver_age_days"] > 3:
+            detail["warnings"].append("app-evolver has not shipped in >3 days")
+        if detail["reflection_age_days"] is None or detail["reflection_age_days"] > 9:
+            detail["warnings"].append("weekly reflection has not run in >9 days")
+        return detail
+
+    check("siblings", _siblings, critical=False)
+
     # R2 archive (the deep-history bar lane)
     def _r2():
         from agent.data import r2_available
@@ -61,6 +109,12 @@ def run() -> dict:
         return {"available": r2_available()}
 
     check("r2", _r2, critical=False)
+
+    # The skill's degrade gate: whole-market research is only trustworthy when
+    # the universe coverage is green/amber (see agent.data.coverage_verdict).
+    cov = out["checks"].get("universe_coverage", {})
+    out["research_ok"] = bool(cov.get("ok")
+                              and cov.get("detail", {}).get("research_ok"))
 
     return out
 
