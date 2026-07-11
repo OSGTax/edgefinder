@@ -920,7 +920,8 @@ async function loadFills() {
         h('th', { text: 'Side' }), h('th', { class: 'num', text: 'Shares' }),
         h('th', { class: 'num', text: 'Fill price' }),
         h('th', { class: 'num', text: 'Live bid / ask', title: 'The real-time bid and ask the fill priced against at that moment' }),
-        h('th', { class: 'num', text: 'Value' }))),
+        h('th', { class: 'num', text: 'Value' }),
+        h('th', { text: 'Why', title: 'The AI\'s stated reason for this trade at the time — hover to read it in full' }))),
       h('tbody', {}, ...rows.map(r => {
         const q = r.fill_quote || {};
         const isOpt = OCC_RE_F.test(r.symbol);
@@ -928,6 +929,11 @@ async function loadFills() {
         const quote = (q.bid != null && q.ask != null)
           ? h('span', { class: 't-dim', text: fmtPrice(q.bid) + ' / ' + fmtPrice(q.ask) })
           : h('span', { class: 't-dim', text: '—' });
+        const rationale = (r.rationale || '').trim();
+        const why = rationale
+          ? h('td', { class: 'desk-fills-why', title: rationale },
+              (rationale.length > 60 ? rationale.slice(0, 60) + '…' : rationale))
+          : h('td', { class: 't-dim', text: '—' });
         return h('tr', {},
           h('td', { class: 't-dim', text: timeAgo(r.t) }),
           h('td', {}, h('a', { href: '/symbol/' + (isOpt ? r.symbol.match(/^[A-Z]+/)[0] : r.symbol), class: 'c-link', text: r.symbol })),
@@ -935,7 +941,8 @@ async function loadFills() {
           h('td', { class: 'num', text: fmtNum(Math.abs(r.shares), isOpt ? 0 : 2) }),
           h('td', { class: 'num', text: fmtPrice(r.price) }),
           h('td', { class: 'num' }, quote),
-          h('td', { class: 'num', text: fmtDollar(Math.abs(r.dollars)) }));
+          h('td', { class: 'num', text: fmtDollar(Math.abs(r.dollars)) }),
+          why);
       })));
     el.append(table);
   } catch (err) { renderError(el, err, loadFills); }
