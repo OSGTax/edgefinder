@@ -36,7 +36,7 @@ rules). The agent's operating manual is
 |---|---|---|
 | Quote streamer | Render (always-on) | One Alpaca SIP WebSocket → in-memory `QuoteCache` → SSE to `/desk` (`/api/desk/stream`) |
 | Desk page | Render | Live ticks, the book, thinking feed, decisions, journal, What's New |
-| Trading brain | Claude Code Routine, hourly ~04:00–20:00 ET trading days | Runs the `trading-agent` skill; fills via `agent.ledger fill` |
+| Trading brain | Claude Code Routine, **agent-paced** (no cron: each run's summary requests its next run time; the owner fires it) | Runs the `trading-agent` skill; fills via `agent.ledger fill` |
 | Data refresh | Claude Code Routine, nightly | `data-refresh` skill — whole-market ingest, fresh top-N set |
 | App evolver | Claude Code Routine, nightly | `app-evolver` skill — one small announced `/desk` improvement |
 | Reflection | Claude Code Routine, Friday post-close | `reflection-agent` skill — score aged ideas, prune the lessons wiki |
