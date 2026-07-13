@@ -345,6 +345,10 @@
 }
 .desk-hint { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
+.desk-fills-why {
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+  cursor: help; color: var(--t-text-2);
+}
 
 /* ── market movers ── */
 .desk-mv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--t-space-4); }
