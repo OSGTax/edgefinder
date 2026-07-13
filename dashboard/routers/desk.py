@@ -461,6 +461,34 @@ def data_health(db: Session = Depends(get_db)):
     return coverage_verdict(rows)
 
 
+@router.get("/watch")
+def attention(db: Session = Depends(get_db)):
+    """The attention system, visible: armed/tripped tripwires and the
+    trader's planned self-scheduled check-ins (with reasons). Read-only."""
+    from datetime import datetime, timedelta
+
+    from agent.models import DeskWake, DeskWatch
+
+    wires = (db.query(DeskWatch).filter(DeskWatch.account == ACCOUNT)
+             .order_by(desc(DeskWatch.id)).limit(40).all())
+    horizon = datetime.utcnow() - timedelta(hours=24)
+    wakes = (db.query(DeskWake)
+             .filter(DeskWake.account == ACCOUNT, DeskWake.at >= horizon)
+             .order_by(DeskWake.at).limit(40).all())
+    return {
+        "watches": [{
+            "id": w.id, "symbol": w.symbol, "kind": w.kind, "level": w.level,
+            "reason": w.reason, "status": w.status, "armed_at": _iso(w.armed_at),
+            "until": _iso(w.until), "tripped_at": _iso(w.tripped_at),
+            "tripped_price": w.tripped_price, "run_id": w.run_id,
+        } for w in wires],
+        "wakes": [{
+            "id": k.id, "at": _iso(k.at), "reason": k.reason,
+            "run_id": k.run_id, "created_at": _iso(k.created_at),
+        } for k in wakes],
+    }
+
+
 @router.get("/brief")
 def research_brief(db: Session = Depends(get_db)):
     """The nightly research pack the agent reads first each cycle — surfaced

@@ -285,6 +285,57 @@ class Broker:
             out.update({sym: normalize_quote(sym, q) for sym, q in res.items()})
         return out
 
+    def intraday_bars(self, symbols: list[str], *, timeframe: str = "15Min",
+                      limit: int = 32) -> dict[str, list[dict]]:
+        """Recent intraday bars — the structure between yesterday's daily bar
+        and this second's quote, for short-term work. Read-only, never stored
+        (daily_bars stays daily; this is a live glance, not an asset). Routes
+        crypto pairs to the crypto endpoint. ``timeframe``: 1Min/5Min/15Min/
+        30Min/1Hour."""
+        from datetime import datetime, timedelta, timezone
+
+        from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
+        amounts = {"1Min": (1, TimeFrameUnit.Minute),
+                   "5Min": (5, TimeFrameUnit.Minute),
+                   "15Min": (15, TimeFrameUnit.Minute),
+                   "30Min": (30, TimeFrameUnit.Minute),
+                   "1Hour": (1, TimeFrameUnit.Hour)}
+        if timeframe not in amounts:
+            raise ValueError(f"timeframe must be one of {sorted(amounts)}")
+        amount, unit = amounts[timeframe]
+        tf = TimeFrame(amount, unit)
+        # Enough lookback to fill `limit` bars across a weekend/overnight gap.
+        minutes = amount * (60 if unit == TimeFrameUnit.Hour else 1)
+        start = (datetime.now(timezone.utc)
+                 - timedelta(minutes=minutes * limit * 4 + 4320))
+
+        def _rows(res, syms):
+            out = {}
+            for sym in syms:
+                bars = res.data.get(sym) or []
+                out[sym] = [{"t": str(b.timestamp), "o": _f(b.open),
+                             "h": _f(b.high), "l": _f(b.low),
+                             "c": _f(b.close), "v": _f(b.volume)}
+                            for b in bars][-limit:]
+            return out
+
+        eq = [s for s in symbols if not is_crypto(s)]
+        cx = [s for s in symbols if is_crypto(s)]
+        out: dict[str, list[dict]] = {}
+        if eq:
+            from alpaca.data.enums import DataFeed
+            feed = DataFeed.SIP if self._c["feed"] == "sip" else DataFeed.IEX
+            res = self.data.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=eq, timeframe=tf, start=start, feed=feed))
+            out.update(_rows(res, eq))
+        if cx:
+            res = self.crypto_data.get_crypto_bars(CryptoBarsRequest(
+                symbol_or_symbols=cx, timeframe=tf, start=start))
+            out.update(_rows(res, cx))
+        return out
+
     def list_assets(self, *, optionable: bool = False,
                     fractionable_only: bool = False,
                     asset_class: str = "us_equity") -> list[dict]:
@@ -507,6 +558,12 @@ def main(argv: list[str] | None = None) -> int:
     ch.add_argument("--symbol", required=True)
     ch.add_argument("--dte-max", type=int, default=60)
     ch.add_argument("--moneyness", type=float, default=0.20)
+    ib = sub.add_parser("bars", help="recent INTRADAY bars (live glance, not stored)")
+    ib.add_argument("--symbols", required=True,
+                    help="comma-separated; crypto pairs use a slash (BTC/USD)")
+    ib.add_argument("--timeframe", default="15Min",
+                    choices=["1Min", "5Min", "15Min", "30Min", "1Hour"])
+    ib.add_argument("--limit", type=int, default=32)
     asrt = sub.add_parser("assets", help="enumerate the tradable universe")
     asrt.add_argument("--optionable", action="store_true",
                       help="only names with listed options (equities only)")
@@ -546,6 +603,10 @@ def main(argv: list[str] | None = None) -> int:
             out.update(b.option_quotes([s.strip().upper() for s in args.contracts.split(",") if s.strip()]))
         if not out:
             out = {"error": "pass --symbols and/or --contracts"}
+    elif args.cmd == "bars":
+        out = b.intraday_bars(
+            [s.strip().upper() for s in args.symbols.split(",") if s.strip()],
+            timeframe=args.timeframe, limit=args.limit)
     elif args.cmd == "chain":
         out = b.option_chain(args.symbol, dte_max=args.dte_max,
                              moneyness=args.moneyness)

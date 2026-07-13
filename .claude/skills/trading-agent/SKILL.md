@@ -101,7 +101,11 @@ short, candid lines; this is the live "thinking" panel the owner watches.
   daily bars for your universe (keeps indicators/backtests current).
 
 ### 1. Observe (phase: observe)
-- `python -m agent.market brief` — **read this FIRST**: last night's research
+- `python -m agent.brain watch-list` — **tripped tripwires FIRST**: each one
+  is a level you told the streamer to watch because it mattered; address it
+  (or explicitly stand down, in a thinking note) before anything else. Then
+  note what's still armed and clear what no longer matters.
+- `python -m agent.market brief` — **read before any research**: last night's
   pack (regime, ranked universe, movers, trend roster with indicators,
   headlines, data-coverage verdict) in one call. Built nightly by the
   data-refresh routine so you spend your context deciding, not gathering —
@@ -143,6 +147,11 @@ Then form a shortlist (held names to review + new ideas). Evidence per name:
 - `python -m agent.market news --symbol X --limit 8` — the "why now".
 - Live intraday read: compare `agent.broker quote` mids to the latest daily
   close — today's move is signal your daily bars don't have yet.
+- `python -m agent.broker bars --symbols A,B --timeframe 15Min --limit 32` —
+  recent INTRADAY structure (works for crypto pairs too) when the shape of
+  today matters: is this a steady grind, a spike-and-fade, a base breaking
+  out? A live glance for short-term judgment — never stored, and daily bars
+  remain the evidence for backtests.
 
 ### 3. Ground it (phase: research)
 Backtest what you're leaning toward — don't trade a hunch:
@@ -258,6 +267,49 @@ python -m agent.brain wiki-set --slug mistakes --body-file page.md \
   curation (grading the whole week, pruning, merging) is the Friday
   reflection routine's job — don't do it here. An hourly wobble is not a
   lesson; most cycles the honest move is no edit at all.
+
+### 8. Attention (phase: decide) — decide when to look next
+
+You own your own attention: the hourly heartbeat is only your FLOOR. On the
+way out of every cycle, decide what deserves watching and when you should
+look again — and say why, out loud.
+
+- **Arm tripwires** for the specific levels you actually care about — a
+  kill-criterion, a breakout trigger, an index shock:
+```
+python -m agent.brain watch-set --symbol AMD --below 540 \
+    --reason "kill level from run 2026-07-10T14:30 prediction" --run-id <RID>
+```
+  The always-on streamer watches them against the live tape every few
+  seconds. Clear wires that no longer matter (`watch-clear --id N`). Wires
+  expire in 24h unless you pass `--until`/`--hours` — re-arm what still
+  matters each cycle.
+- **Plan an extra wake** when something has a CLOCK on it (a level nearly
+  tripped, a catalyst at 2pm, a close you want to trade into). Two steps,
+  in order:
+  1. `python -m agent.brain wake-plan --at 2026-07-10T19:45:00Z --reason
+     "NVDA 0.4% above kill; decide before the close" --run-id <RID>` —
+     this is the BUDGET GATE (max 20 self-scheduled wakes per ET day,
+     >= 15 minutes apart). If it says no, the answer is no.
+  2. Only after `ok: true`: arm the actual one-shot trigger with the
+     claude-code-remote `create_trigger` tool (`run_once_at` = the same
+     time, `create_new_session_on_fire` = true), prompt: "Run one FOCUSED
+     EdgeFinder trading check (trading-agent skill, focused-wake rules):
+     you asked to wake now because: <reason>." If the scheduling tool is
+     not available in this session, say so in a thinking note — the
+     heartbeat covers you.
+- **Most cycles need NO extra wake.** A quiet tape means see-you-next-hour;
+  extra attention must be earned by a named reason the owner can read on
+  the desk. Never schedule a wake to "check on things".
+
+**Focused-wake discipline (when a cycle starts from a self-scheduled wake
+or a tripped wire):** run preflight + settle as always, then check
+`python -m agent.brain watch-list` — TRIPPED wires first. Act ONLY on the
+named reason you woke for: manage that position, assess that event, execute
+that pending decision. No full re-research, no new whole-market scanning,
+no strategy pivots from a focused wake — if the wake revealed something
+bigger, note it and leave it for the next heartbeat cycle. More attention
+must never quietly become more churn.
 
 ## Options doctrine (defined-risk only — the ledger enforces this)
 

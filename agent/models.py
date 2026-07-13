@@ -328,6 +328,55 @@ class DeskBrief(Base):
     payload: Mapped[dict] = mapped_column(JSON)
 
 
+# ── the attention system: tripwires + planned wakes ──
+
+
+class DeskWatch(Base):
+    """One standing tripwire the brain armed on its way out.
+
+    The always-on streamer sweeps armed wires against the live tape every few
+    seconds and marks trips; the brain reads them FIRST at its next wake.
+    Cheap code watches continuously so expensive judgment only shows up when
+    something it named actually happened. Written only by ``agent.brain
+    watch-set`` / ``watch-clear``; the streamer's only write is the trip.
+    """
+
+    __tablename__ = "desk_watch"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    run_id: Mapped[str | None] = mapped_column(String(40))
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    kind: Mapped[str] = mapped_column(String(10))  # above | below
+    level: Mapped[float] = mapped_column(Float)
+    reason: Mapped[str] = mapped_column(Text)
+    armed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    until: Mapped[datetime | None] = mapped_column(DateTime)  # expiry (UTC)
+    # armed | tripped | expired | disarmed
+    status: Mapped[str] = mapped_column(String(10), default="armed", index=True)
+    tripped_at: Mapped[datetime | None] = mapped_column(DateTime)
+    tripped_price: Mapped[float | None] = mapped_column(Float)
+
+
+class DeskWake(Base):
+    """One self-scheduled check-in the brain planned (and why).
+
+    The budget ledger for the attention system: ``agent.brain wake-plan``
+    enforces the per-day cap and minimum gap against these rows BEFORE the
+    skill arms the actual one-shot trigger, and the desk shows the owner
+    when the trader plans to look next. Append-only.
+    """
+
+    __tablename__ = "desk_wakes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    run_id: Mapped[str | None] = mapped_column(String(40))
+    at: Mapped[datetime] = mapped_column(DateTime, index=True)  # UTC fire time
+    reason: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -474,4 +523,30 @@ DESK_TABLE_DDL: list[str] = [
     # role (Render/agent) bypasses. Without this a new public-schema table is
     # world-writable through the Supabase Data API. Idempotent.
     "ALTER TABLE desk_briefs ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_watch (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        run_id VARCHAR(40),
+        symbol VARCHAR(24) NOT NULL,
+        kind VARCHAR(10) NOT NULL,
+        level FLOAT NOT NULL,
+        reason TEXT NOT NULL,
+        armed_at TIMESTAMP DEFAULT NOW(),
+        until TIMESTAMP,
+        status VARCHAR(10) DEFAULT 'armed',
+        tripped_at TIMESTAMP,
+        tripped_price FLOAT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_watch_status ON desk_watch (account, status)",
+    "ALTER TABLE desk_watch ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_wakes (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        run_id VARCHAR(40),
+        at TIMESTAMP NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_wakes_at ON desk_wakes (account, at)",
+    "ALTER TABLE desk_wakes ENABLE ROW LEVEL SECURITY",
 ]

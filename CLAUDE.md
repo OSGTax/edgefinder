@@ -106,7 +106,11 @@ One Supabase Postgres database, two namespaces:
   prediction registry — `prediction`/`horizon_days`/`kill` — plus a
   `rejected` candidates list), `desk_backtests`, `desk_changelog`,
   `desk_options_snap`, `desk_wiki`, `desk_briefs` (the nightly research
-  pack the trading cycle reads first).
+  pack the trading cycle reads first), `desk_watch` (tripwires the
+  always-on streamer sweeps against the live tape), `desk_wakes` (the
+  budget ledger for self-scheduled check-ins — the brain owns its own
+  attention: heartbeat cron as the floor, `brain wake-plan` + one-shot
+  triggers for extra focused wakes, max 20/ET-day, 15-min gap).
 - **Kept market-data tables** (`edgefinder/db/models.py`, read-only inputs):
   `daily_bars` (raw bars; splits applied at load), `index_daily` (FROZEN at
   the 2026-06 cutover — SPY benchmarks read `daily_bars` instead),
@@ -154,6 +158,9 @@ python -m agent.market brief                      # the nightly research pack (r
 python -m agent.market regime                     # SPY/QQQ/IWM trend + regime tag
 python -m agent.market universe --top 40          # most-liquid names
 python -m agent.broker quote --symbols NVDA,SPY   # LIVE bid/ask
+python -m agent.broker bars --symbols NVDA --timeframe 15Min  # intraday glance
+python -m agent.brain watch-set --symbol AMD --below 540 --reason "..."  # tripwire
+python -m agent.brain wake-plan --at 2026-07-10T19:45:00Z --reason "..."  # budget gate
 python -m agent.backtest_tool --symbols A,B,C --rule momentum:5
 python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 \
     --rationale "..." --run-id 2026-07-07T14:30   # books at the LIVE quote
@@ -177,7 +184,8 @@ alpha), `equity`, `decision/latest`, `thinking`, `backtests`, `strategy`,
 `wiki`, `regime`, `movers`, `holding-stats`, `dividends`, `quotes`,
 `stream` (SSE live ticks), `options/{symbol}`, `options/{symbol}/history`,
 `broker-health`, `data-health` (bar-coverage freshness — the desk pill),
-`brief` (the nightly research pack), `whatsnew`, `trades`.
+`brief` (the nightly research pack), `watch` (tripwires + planned wakes —
+the attention system), `whatsnew`, `trades`.
 
 `/api/symbols/{sym}/bars?range=&indicators=` and `/api/symbols/{sym}/events`
 power the chart page. `/api/health` returns status + version.

@@ -152,6 +152,146 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
     return {"ok": True, "run_id": run_id, "id": (rows[0]["id"] if rows else None)}
 
 
+# ── attention: tripwires + planned wakes ────────────────
+#
+# The brain owns its own attention. On the way out of a cycle it can arm
+# TRIPWIRES (price levels the always-on streamer watches on the live tape)
+# and PLAN WAKES (self-scheduled one-shot check-ins with a stated reason).
+# wake-plan is the budget gate: the skill may only arm the actual trigger
+# after wake-plan says ok, so the cap and minimum gap are enforced and every
+# planned check-in is on the record for the desk.
+
+WAKE_MAX_PER_DAY = 20     # self-scheduled wakes per ET day (heartbeat separate)
+WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes
+
+
+def watch_set(store=None, *, symbol: str, above: float | None = None,
+              below: float | None = None, reason: str,
+              until: str | None = None, hours: float = 24.0,
+              run_id: str | None = None, account: str = "agent") -> dict:
+    """Arm one tripwire. Exactly one of above/below; reason is mandatory —
+    an unexplained tripwire is noise waiting to happen."""
+    from datetime import timedelta
+
+    store = store or _store()
+    if (above is None) == (below is None):
+        return {"ok": False, "error": "pass exactly one of --above / --below"}
+    if not (reason or "").strip():
+        return {"ok": False, "error": "--reason is required"}
+    level = above if above is not None else below
+    if level is None or level <= 0:
+        return {"ok": False, "error": "level must be positive"}
+    expiry = (datetime.fromisoformat(until) if until
+              else _utcnow() + timedelta(hours=hours))
+    rows = store.insert("desk_watch", {
+        "account": account, "run_id": run_id, "symbol": symbol.upper(),
+        "kind": "above" if above is not None else "below",
+        "level": float(level), "reason": reason.strip(),
+        "armed_at": _utcnow(), "until": expiry, "status": "armed"})
+    return {"ok": True, "id": rows[0]["id"] if rows else None,
+            "symbol": symbol.upper(),
+            "kind": "above" if above is not None else "below",
+            "level": float(level), "until": str(expiry)}
+
+
+def watch_list(store=None, *, include_done: bool = False,
+               account: str = "agent") -> dict:
+    """Armed + tripped wires (the brain reads TRIPPED first at every wake)."""
+    store = store or _store()
+    rows = store.select("desk_watch", filters={"account": account},
+                        order=[("id", "desc")], limit=100)
+    out = {"tripped": [], "armed": [], "done": []}
+    now = _utcnow()
+    for r in rows:
+        until = r.get("until")
+        if isinstance(until, str):
+            try:
+                until = datetime.fromisoformat(until.replace("Z", "+00:00"))
+                until = until.replace(tzinfo=None)
+            except ValueError:
+                until = None
+        status = r.get("status")
+        if status == "armed" and until is not None and until < now:
+            status = "expired"  # lazily reported; the sweep also writes it
+        entry = {k: (str(v) if isinstance(v, datetime) else v)
+                 for k, v in r.items()}
+        entry["status"] = status
+        if status == "tripped":
+            out["tripped"].append(entry)
+        elif status == "armed":
+            out["armed"].append(entry)
+        elif include_done:
+            out["done"].append(entry)
+    if not include_done:
+        out.pop("done")
+    return out
+
+
+def watch_clear(store=None, *, watch_id: int, account: str = "agent") -> dict:
+    """Disarm one wire (position exited, level no longer relevant)."""
+    store = store or _store()
+    rows = store.select("desk_watch",
+                        filters={"account": account, "id": watch_id}, limit=1)
+    if not rows:
+        return {"ok": False, "error": f"no watch id {watch_id}"}
+    store.update("desk_watch", {"id": watch_id}, {"status": "disarmed"},
+                 returning=False)
+    return {"ok": True, "id": watch_id, "status": "disarmed"}
+
+
+def wake_plan(store=None, *, at: str, reason: str,
+              run_id: str | None = None, account: str = "agent") -> dict:
+    """Validate + record one planned self-wake. THE budget gate.
+
+    Enforces the per-ET-day cap and the minimum gap. The skill arms the
+    actual one-shot trigger ONLY after this returns ok — so every extra
+    run the trader grants itself is counted, reasoned, and visible."""
+    from datetime import timedelta
+
+    from agent.ledger import _et_date
+
+    store = store or _store()
+    if not (reason or "").strip():
+        return {"ok": False, "error": "--reason is required"}
+    try:
+        when = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        when = (when.astimezone(timezone.utc).replace(tzinfo=None)
+                if when.tzinfo else when)
+    except ValueError:
+        return {"ok": False, "error": f"unparseable --at {at!r} (use ISO UTC)"}
+    now = _utcnow()
+    if when <= now:
+        return {"ok": False, "error": "--at must be in the future (UTC)"}
+    gap = timedelta(minutes=WAKE_MIN_GAP_MIN)
+    if when - now < gap:
+        return {"ok": False,
+                "error": f"too soon: wakes must be >= {WAKE_MIN_GAP_MIN} "
+                         "minutes out — the tape is already being watched "
+                         "by the streamer and your tripwires"}
+    recent = store.select("desk_wakes", filters={"account": account},
+                          order=[("at", "desc")], limit=60)
+    same_day = [r for r in recent if _et_date(r["at"]) == _et_date(when)]
+    if len(same_day) >= WAKE_MAX_PER_DAY:
+        return {"ok": False,
+                "error": f"budget spent: {WAKE_MAX_PER_DAY} planned wakes "
+                         "already on that ET day — the heartbeat still runs"}
+    for r in same_day:
+        other = r["at"]
+        if isinstance(other, str):
+            other = datetime.fromisoformat(other.replace("Z", "+00:00"))
+            other = other.replace(tzinfo=None)
+        if abs((when - other).total_seconds()) < gap.total_seconds():
+            return {"ok": False,
+                    "error": f"a wake is already planned at {other} — keep "
+                             f">= {WAKE_MIN_GAP_MIN} minutes between wakes"}
+    rows = store.insert("desk_wakes", {
+        "account": account, "run_id": run_id, "at": when,
+        "reason": reason.strip(), "created_at": now})
+    return {"ok": True, "id": rows[0]["id"] if rows else None,
+            "at": str(when),
+            "budget_left_today": WAKE_MAX_PER_DAY - len(same_day) - 1}
+
+
 # ── lessons wiki (Karpathy-style system-prompt learning) ────
 #
 # A small, size-capped set of curated pages the agent reads at the start of
@@ -272,6 +412,28 @@ def main(argv: list[str] | None = None) -> None:
                     help="why this edit — cite the measured result")
     ws.add_argument("--run-id", default=None)
 
+    wset = sub.add_parser("watch-set", help="arm a tripwire on the live tape")
+    wset.add_argument("--symbol", required=True)
+    wset.add_argument("--above", type=float, default=None)
+    wset.add_argument("--below", type=float, default=None)
+    wset.add_argument("--reason", required=True)
+    wset.add_argument("--until", default=None, help="ISO UTC expiry")
+    wset.add_argument("--hours", type=float, default=24.0,
+                      help="expiry horizon when --until not given")
+    wset.add_argument("--run-id", default=None)
+
+    wl = sub.add_parser("watch-list")
+    wl.add_argument("--all", action="store_true", dest="include_done")
+
+    wc = sub.add_parser("watch-clear")
+    wc.add_argument("--id", type=int, required=True, dest="watch_id")
+
+    wp = sub.add_parser("wake-plan",
+                        help="budget-gate + record a self-scheduled check-in")
+    wp.add_argument("--at", required=True, help="ISO UTC fire time")
+    wp.add_argument("--reason", required=True)
+    wp.add_argument("--run-id", default=None)
+
     de = sub.add_parser("decision")
     de.add_argument("--run-id", required=True)
     de.add_argument("--regime", default=None)
@@ -319,6 +481,19 @@ def main(argv: list[str] | None = None) -> None:
             watchlist=_load_json(args.watchlist_file),
             rejected=_load_json(args.rejected_file),
             strategy_version=args.strategy_version), indent=2))
+    elif args.cmd == "watch-set":
+        print(json.dumps(watch_set(
+            store, symbol=args.symbol, above=args.above, below=args.below,
+            reason=args.reason, until=args.until, hours=args.hours,
+            run_id=args.run_id), indent=2))
+    elif args.cmd == "watch-list":
+        print(json.dumps(watch_list(store, include_done=args.include_done),
+                         indent=2))
+    elif args.cmd == "watch-clear":
+        print(json.dumps(watch_clear(store, watch_id=args.watch_id), indent=2))
+    elif args.cmd == "wake-plan":
+        print(json.dumps(wake_plan(store, at=args.at, reason=args.reason,
+                                   run_id=args.run_id), indent=2))
 
 
 if __name__ == "__main__":
