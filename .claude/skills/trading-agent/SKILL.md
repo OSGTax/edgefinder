@@ -160,16 +160,27 @@ Then form a shortlist (held names to review + new ideas). Evidence per name:
   remain the evidence for backtests.
 
 ### 3. Ground it (phase: research)
-Backtest what you're leaning toward — don't trade a hunch:
+**Start from the Strategy Lab leaderboard in your brief**
+(`lab_leaderboard`): the nightly sweep has already tested dozens of rule x
+universe x schedule combos on split-sample consistency. A leaderboard rule
+carries far better evidence than a one-off backtest you run mid-cycle —
+its `score` is the WORST half's excess vs SPY, and the `honesty` line
+tells you how many combos were tested (expect live shrinkage). Adopting
+or evolving toward a QUALIFIED lab rule is the preferred way to change
+strategy; say which leaderboard entry you're drawing on.
+
+Then backtest what you're specifically leaning toward — don't trade a hunch:
 ```
-python -m agent.backtest_tool --symbols A,B,C --rule momentum:5 \
+python -m agent.backtest_tool --symbols A,B,C --rule momo_trend:5 \
     --schedule monthly --start 2021-01-01 --save --run-id <RID> \
-    --label "momentum:5 on shortlist"
+    --label "momo_trend:5 on shortlist"
 ```
-Rules: `buyhold:SYM`, `equal_weight`, `momentum:K`, `trend:SYM`. A rule that
-doesn't beat SPY net of costs is evidence AGAINST it — respect that. (Note
-honestly: backtests fill at daily closes; your live fills are intraday. The
-backtest grounds the IDEA, it does not predict your exact fills.)
+Rules: `buyhold:SYM`, `equal_weight`, `momentum:K`, `trend:SYM`,
+`momo_trend:K`, `meanrev:K`, `breakout:K`, `regime_momentum:K` (needs SPY
+in the list). A rule that doesn't beat SPY net of costs is evidence
+AGAINST it — respect that. (Note honestly: backtests fill at daily closes;
+your live fills are intraday. The backtest grounds the IDEA, it does not
+predict your exact fills.)
 
 ### 4. Decide (phase: decide)
 Choose the **target book**: `{symbol: weight}`. Full discretion — any number
@@ -302,9 +313,9 @@ python -m agent.brain watch-set --symbol AMD --below 540 \
   The owner fires the Routine — maybe on time, maybe late, maybe not
   today. When a session starts, `wake-due` shows which of your own
   requests it is honoring (or which were missed — acknowledge those).
-  **Learning-phase cadence:** while the market is OPEN, default to
-  requesting your next run **45–120 minutes out** — you are building a
-  track record and a notebook, and reps compound. Ask for longer only
+  **Learning-phase cadence:** while the market is OPEN, request the time
+  you'd ENJOY — **30–90 minutes out** is the expected rhythm; you are
+  building a track record and a notebook, and reps compound. Ask for longer only
   when the market is closing/closed (overnight → next open; Friday →
   Monday). The discipline that keeps frequent runs from becoming churn is
   NOT a slower clock — it is the unchanged evidence bar for trades: a run

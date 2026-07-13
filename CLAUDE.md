@@ -38,6 +38,7 @@ rules). The agent's operating manual is
 | Desk page | Render | Live ticks, the book, thinking feed, decisions, journal, What's New |
 | Trading brain | Claude Code Routine, **agent-paced** (no cron: each run's summary requests its next run time; the owner fires it) | Runs the `trading-agent` skill; fills via `agent.ledger fill` |
 | Data refresh | Claude Code Routine, nightly | `data-refresh` skill — whole-market ingest, fresh top-N set |
+| Strategy Lab | Claude Code Routine, nightly post-ingest | `strategy-lab` skill — mass backtest sweep, split-sample scored, leaderboard → the brief |
 | App evolver | Claude Code Routine, nightly | `app-evolver` skill — one small announced `/desk` improvement |
 | Reflection | Claude Code Routine, Friday post-close | `reflection-agent` skill — score aged ideas, prune the lessons wiki |
 | Book + state | Supabase (`desk_*` tables) | Ledger (source of truth), strategy, journal, thinking, changelog |
@@ -162,6 +163,8 @@ python -m agent.broker bars --symbols NVDA --timeframe 15Min  # intraday glance
 python -m agent.brain watch-set --symbol AMD --below 540 --reason "..."  # tripwire
 python -m agent.brain wake-plan --at 2026-07-10T19:45:00Z --reason "..."  # budget gate
 python -m agent.backtest_tool --symbols A,B,C --rule momentum:5
+python -m agent.lab sweep --max-combos 80    # nightly strategy search (21y, split-sample)
+python -m agent.lab leaderboard              # current honest winners
 python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 \
     --rationale "..." --run-id 2026-07-07T14:30   # books at the LIVE quote
 python -m agent.ledger outcomes --days 14         # picks vs predictions vs SPY (alpha)

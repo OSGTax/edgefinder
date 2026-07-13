@@ -167,9 +167,20 @@ def build_brief(*, top: int = 40) -> dict:
                                "published": str(i.get("published_utc"))[:16]}
                               for i in items]
 
+    # Strategy Lab leaderboard: what the nightly sweeps currently rate as the
+    # most robust rules (split-sample qualified, worst-half ranked) — the
+    # trading cycle's grounding evidence, precomputed.
+    def _lab():
+        from agent import lab
+
+        return lab.leaderboard(top=8)
+
+    lab_board = _safe("lab", _lab, {})
+
     payload = {"as_of": str(today), "regime": regime, "coverage": coverage,
                "universe_top": top_syms, "movers": movers,
                "trend_roster": trend, "headlines": headlines,
+               "lab_leaderboard": lab_board,
                "errors": errors}
     built_at = datetime.now(timezone.utc).replace(tzinfo=None)
     values = {"payload": payload, "built_at": built_at}
