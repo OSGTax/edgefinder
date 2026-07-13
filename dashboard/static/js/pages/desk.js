@@ -602,6 +602,67 @@ async function loadBacktests() {
   } catch (err) { renderError(el, err, loadBacktests); }
 }
 
+/* ── strategy lab: the nightly strategy-search leaderboard ── */
+const LAB_RULE_NAMES = {
+  momentum: 'Pure momentum',
+  momo_trend: 'Momentum, uptrends only',
+  meanrev: 'Buy the dip (uptrends only)',
+  breakout: '52-week-high breakouts',
+  regime_momentum: 'Momentum with a market-crash switch',
+  equal_weight: 'Own everything equally',
+  buyhold: 'Buy and hold',
+  trend: 'Ride the trend',
+};
+
+function labRuleName(rule) {
+  const [fam, k] = String(rule || '').split(':');
+  const base = LAB_RULE_NAMES[fam] || rule;
+  return k ? base + ' (top ' + k + ')' : base;
+}
+
+async function loadLab() {
+  const el = document.getElementById('desk-lab');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const d = await apiGet('/api/desk/lab');
+    clear(el);
+    if (!d || !d.combos_tested) {
+      renderEmpty(el, 'First nightly sweep pending — the lab runs after each market close.');
+      return;
+    }
+    // The honesty line comes FIRST — winners only mean something next to
+    // the number of attempts.
+    el.append(h('p', { class: 'desk-lab-honesty t-dim', text:
+      d.combos_tested + ' strategy variations tested over the last two weeks — '
+      + d.qualified + ' qualified (beat the S&P 500 in BOTH halves of history). '
+      + 'Scores show each strategy’s WORSE half; expect live results to shrink.' }));
+    if (!d.top || !d.top.length) {
+      el.append(h('p', { class: 'desk-lab-honesty', text:
+        'Nothing currently qualifies — an honest filter says no most nights.' }));
+      return;
+    }
+    const table = h('table', { class: 'c-table' },
+      h('thead', {}, h('tr', {},
+        h('th', { text: 'Strategy', title: 'The rule the lab tested, in plain terms' }),
+        h('th', { text: 'Stocks it picks from', title: 'The most-traded N stocks in the AI’s universe' }),
+        h('th', { text: 'Rhythm', title: 'How often the strategy re-picks its holdings' }),
+        h('th', { class: 'num', text: 'Edge (worse half)', title: 'How much it beat the S&P 500 by in its WEAKER half of 21 years of history — the skeptic’s number, after trading costs' }),
+        h('th', { class: 'num', text: 'Smoothness', title: 'Sharpe ratio in the recent half: return relative to how bumpy the ride was — higher is better' }),
+        h('th', { class: 'num', text: 'Worst dip', title: 'The deepest peak-to-bottom drop in the recent half' }))),
+      h('tbody', {}, ...d.top.map(e => h('tr', {},
+        h('td', {}, h('div', { text: labRuleName(e.rule) }),
+          h('div', { class: 't-dim desk-bt-when', text: e.rule })),
+        h('td', { text: String(e.universe || '').replace('top', 'top ') + ' stocks' }),
+        h('td', { text: e.schedule === 'weekly' ? 'weekly' : 'monthly' }),
+        h('td', { class: 'num ' + (e.score >= 0 ? 't-up' : 't-down'),
+          text: e.score != null ? (e.score >= 0 ? '+' : '') + fmtNum(e.score, 1) + '%' : '—' }),
+        h('td', { class: 'num', text: e.sharpe_out != null ? fmtNum(e.sharpe_out, 2) : '—' }),
+        h('td', { class: 'num', text: e.max_dd_out != null ? fmtNum(e.max_dd_out, 1) + '%' : '—' })))));
+    el.append(table);
+  } catch (err) { renderError(el, err, loadLab); }
+}
+
 /* ── strategy journal ── */
 /* ── lessons wiki: what the AI has learned (curated, size-capped) ── */
 const WIKI_TITLES = {
@@ -1068,6 +1129,7 @@ async function loadAll() {
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
     loadOptions(), loadMovers(), loadDividends(), loadFills(), loadWiki(),
+    loadLab(),
   ]);
 }
 
@@ -1162,4 +1224,4 @@ wireAnchorNav();
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); loadWiki(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); loadWiki(); loadLab(); }, 60_000);

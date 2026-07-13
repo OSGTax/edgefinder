@@ -164,6 +164,29 @@ def test_leaderboard_ranks_by_worst_half_and_reports_tested(store):
     assert "expect live shrinkage" in b["honesty"]
 
 
+def test_lab_endpoint_serves_leaderboard(store, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import agent.data as agent_data
+    import dashboard.dependencies as deps
+
+    deps._engine = deps._session_factory = None
+    agent_data._session_factory = None
+    seed_lab_row(store, "regime_momentum:3", "top60", "monthly",
+                 qualifies=True, score=12.0)
+
+    from dashboard.app import app
+
+    with TestClient(app) as c:
+        r = c.get("/api/desk/lab").json()
+        assert r["combos_tested"] == 1 and r["qualified"] == 1
+        assert r["top"][0]["rule"] == "regime_momentum:3"
+        assert "shrinkage" in r["honesty"]
+        # The desk page carries the lab card + loader.
+        page = c.get("/desk").text
+        assert 'id="desk-lab"' in page
+
+
 def test_leaderboard_dedupes_to_newest_result(store):
     from agent.lab import leaderboard
 

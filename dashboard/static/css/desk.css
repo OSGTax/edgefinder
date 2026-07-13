@@ -450,3 +450,10 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
     align-items: flex-start;
   }
 }
+
+/* ── strategy lab ── */
+.desk-lab-honesty {
+  margin: 0 0 var(--t-space-3);
+  font-size: var(--t-fs-sm);
+  line-height: 1.5;
+}

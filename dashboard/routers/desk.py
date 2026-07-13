@@ -490,6 +490,20 @@ def attention(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/lab")
+def lab_leaderboard():
+    """The Strategy Lab's current leaderboard — split-sample qualified rules
+    ranked by their WORST half's excess vs SPY, always with the tested count
+    (multiple-comparisons honesty). Read-only; same source the brief carries."""
+    from agent import lab
+
+    try:
+        return lab.leaderboard(top=10)
+    except Exception as exc:  # noqa: BLE001 — panel must degrade, not 500
+        return {"error": f"{type(exc).__name__}: {exc}", "top": [],
+                "combos_tested": 0, "qualified": 0}
+
+
 @router.get("/brief")
 def research_brief(db: Session = Depends(get_db)):
     """The nightly research pack the agent reads first each cycle — surfaced
