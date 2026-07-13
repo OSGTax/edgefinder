@@ -284,32 +284,34 @@ python -m agent.brain watch-set --symbol AMD --below 540 \
   seconds. Clear wires that no longer matter (`watch-clear --id N`). Wires
   expire in 24h unless you pass `--until`/`--hours` — re-arm what still
   matters each cycle.
-- **Plan an extra wake** when something has a CLOCK on it (a level nearly
-  tripped, a catalyst at 2pm, a close you want to trade into). Two steps,
-  in order:
-  1. `python -m agent.brain wake-plan --at 2026-07-10T19:45:00Z --reason
-     "NVDA 0.4% above kill; decide before the close" --run-id <RID>` —
-     this is the BUDGET GATE (max 20 self-scheduled wakes per ET day,
-     >= 15 minutes apart). If it says no, the answer is no.
-  2. Only after `ok: true`: arm the actual one-shot trigger with the
-     claude-code-remote `create_trigger` tool (`run_once_at` = the same
-     time, `create_new_session_on_fire` = true), prompt: "Run one FOCUSED
-     EdgeFinder trading check (trading-agent skill, focused-wake rules):
-     you asked to wake now because: <reason>." If the scheduling tool is
-     not available in this session, say so in a thinking note — the
-     heartbeat covers you.
+- **Plan an extra focus window** when something has a CLOCK on it (a level
+  nearly tripped, a catalyst at 2pm, a close you want to trade into):
+  `python -m agent.brain wake-plan --at 2026-07-10T19:45:00Z --reason
+  "NVDA 0.4% above kill; decide before the close" --run-id <RID>` —
+  this is the BUDGET GATE (max 20 planned wakes per ET day, >= 15 minutes
+  apart). If it says no, the answer is no. **A plan is a promise the next
+  heartbeat honors, not a scheduled trigger** — Routine sessions have no
+  scheduler MCP (probed 2026-07-13), so the first cycle at/after the
+  planned time picks it up via `wake-due` and runs it as a focused wake.
+  Plan with the hourly cadence in mind: a 19:45 plan gets honored by the
+  20:05 heartbeat.
 - **Most cycles need NO extra wake.** A quiet tape means see-you-next-hour;
   extra attention must be earned by a named reason the owner can read on
   the desk. Never schedule a wake to "check on things".
 
-**Focused-wake discipline (when a cycle starts from a self-scheduled wake
-or a tripped wire):** run preflight + settle as always, then check
-`python -m agent.brain watch-list` — TRIPPED wires first. Act ONLY on the
-named reason you woke for: manage that position, assess that event, execute
-that pending decision. No full re-research, no new whole-market scanning,
-no strategy pivots from a focused wake — if the wake revealed something
-bigger, note it and leave it for the next heartbeat cycle. More attention
-must never quietly become more churn.
+**Focused-wake discipline (tripped wires and due wake-plans):** at every
+cycle start, after preflight + settle, run `python -m agent.brain wake-due`
+and `watch-list`. Each DUE wake-plan and each TRIPPED wire is a focused
+obligation: handle it FIRST — manage that position, assess that event,
+execute that pending decision — narrating each, and stamp every plan you
+handled with `python -m agent.brain wake-honor --id N --run-id <RID>`.
+Only after the focused obligations are cleared may the cycle proceed to
+normal research. When the focused work IS the whole reason the cycle
+matters (everything else is quiet), stop there — no forced re-research,
+no strategy pivots bolted onto a focused check. `wake-due` also reports
+`missed` plans (aged out un-honored — e.g. planned late Friday, market
+closed): acknowledge them in a thinking note so a promise is never
+silently dropped. More attention must never quietly become more churn.
 
 ## Options doctrine (defined-risk only — the ledger enforces this)
 

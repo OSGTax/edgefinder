@@ -289,7 +289,64 @@ def wake_plan(store=None, *, at: str, reason: str,
         "reason": reason.strip(), "created_at": now})
     return {"ok": True, "id": rows[0]["id"] if rows else None,
             "at": str(when),
-            "budget_left_today": WAKE_MAX_PER_DAY - len(same_day) - 1}
+            "budget_left_today": WAKE_MAX_PER_DAY - len(same_day) - 1,
+            "note": "a plan is a promise the next heartbeat honors — the "
+                    "first cycle at/after this time runs it as a FOCUSED "
+                    "wake (Routine sessions have no scheduler MCP)"}
+
+
+def wake_due(store=None, *, run_id: str | None = None,
+             lookback_hours: float = 8.0, account: str = "agent") -> dict:
+    """Unhonored wake-plans whose time has come — check at every cycle start.
+
+    Returns plans with ``at`` <= now that no cycle has honored yet (recent
+    ones only: a plan that aged past ``lookback_hours`` un-honored is
+    reported separately as missed, not resurrected as fresh)."""
+    from datetime import timedelta
+
+    store = store or _store()
+    now = _utcnow()
+    rows = store.select("desk_wakes", filters={"account": account},
+                        order=[("at", "desc")], limit=60)
+    due, missed = [], []
+    for r in rows:
+        if r.get("honored_run_id"):
+            continue
+        at = r["at"]
+        if isinstance(at, str):
+            try:
+                at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+                at = at.replace(tzinfo=None) if at.tzinfo is None else \
+                    at.astimezone(timezone.utc).replace(tzinfo=None)
+            except ValueError:
+                continue
+        if at > now:
+            continue
+        entry = {"id": r["id"], "at": str(at), "reason": r.get("reason"),
+                 "planned_by_run": r.get("run_id")}
+        if now - at <= timedelta(hours=lookback_hours):
+            due.append(entry)
+        else:
+            missed.append(entry)
+    return {"due": due, "missed": missed,
+            "note": ("honor each due plan as a FOCUSED wake this cycle, then "
+                     "wake-honor it" if due else "no due wake-plans")}
+
+
+def wake_honor(store=None, *, wake_id: int, run_id: str,
+               account: str = "agent") -> dict:
+    """Stamp a due wake-plan as honored by this run (exactly once)."""
+    store = store or _store()
+    rows = store.select("desk_wakes",
+                        filters={"account": account, "id": wake_id}, limit=1)
+    if not rows:
+        return {"ok": False, "error": f"no wake id {wake_id}"}
+    if rows[0].get("honored_run_id"):
+        return {"ok": False, "error": f"wake {wake_id} already honored by "
+                                      f"{rows[0]['honored_run_id']}"}
+    store.update("desk_wakes", {"id": wake_id},
+                 {"honored_run_id": run_id}, returning=False)
+    return {"ok": True, "id": wake_id, "honored_run_id": run_id}
 
 
 # ── lessons wiki (Karpathy-style system-prompt learning) ────
@@ -434,6 +491,13 @@ def main(argv: list[str] | None = None) -> None:
     wp.add_argument("--reason", required=True)
     wp.add_argument("--run-id", default=None)
 
+    wd = sub.add_parser("wake-due",
+                        help="unhonored due wake-plans (check at cycle start)")
+
+    wh = sub.add_parser("wake-honor")
+    wh.add_argument("--id", type=int, required=True, dest="wake_id")
+    wh.add_argument("--run-id", required=True)
+
     de = sub.add_parser("decision")
     de.add_argument("--run-id", required=True)
     de.add_argument("--regime", default=None)
@@ -494,6 +558,11 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "wake-plan":
         print(json.dumps(wake_plan(store, at=args.at, reason=args.reason,
                                    run_id=args.run_id), indent=2))
+    elif args.cmd == "wake-due":
+        print(json.dumps(wake_due(store), indent=2, default=str))
+    elif args.cmd == "wake-honor":
+        print(json.dumps(wake_honor(store, wake_id=args.wake_id,
+                                    run_id=args.run_id), indent=2))
 
 
 if __name__ == "__main__":

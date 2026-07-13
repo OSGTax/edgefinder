@@ -362,9 +362,11 @@ class DeskWake(Base):
     """One self-scheduled check-in the brain planned (and why).
 
     The budget ledger for the attention system: ``agent.brain wake-plan``
-    enforces the per-day cap and minimum gap against these rows BEFORE the
-    skill arms the actual one-shot trigger, and the desk shows the owner
-    when the trader plans to look next. Append-only.
+    enforces the per-day cap and minimum gap, and the desk shows the owner
+    when the trader plans to look next. Routine-spawned sessions have no
+    scheduler MCP (probed 2026-07-13), so a plan is a PROMISE the next
+    heartbeat honors: the first cycle at/after ``at`` runs it as a focused
+    wake and stamps ``honored_run_id``. Rows are otherwise append-only.
     """
 
     __tablename__ = "desk_wakes"
@@ -375,6 +377,7 @@ class DeskWake(Base):
     at: Mapped[datetime] = mapped_column(DateTime, index=True)  # UTC fire time
     reason: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    honored_run_id: Mapped[str | None] = mapped_column(String(40))
 
 
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
@@ -545,8 +548,10 @@ DESK_TABLE_DDL: list[str] = [
         run_id VARCHAR(40),
         at TIMESTAMP NOT NULL,
         reason TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
+        created_at TIMESTAMP DEFAULT NOW(),
+        honored_run_id VARCHAR(40)
     )""",
+    "ALTER TABLE desk_wakes ADD COLUMN IF NOT EXISTS honored_run_id VARCHAR(40)",
     "CREATE INDEX IF NOT EXISTS idx_desk_wakes_at ON desk_wakes (account, at)",
     "ALTER TABLE desk_wakes ENABLE ROW LEVEL SECURITY",
 ]

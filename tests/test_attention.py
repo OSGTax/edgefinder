@@ -166,6 +166,30 @@ def test_wake_plan_enforces_daily_cap(store):
     assert not r["ok"] and "budget spent" in r["error"]
 
 
+def test_wake_due_and_honor_loop(store):
+    from agent.brain import wake_due, wake_honor
+
+    now = datetime.utcnow()
+    store.insert("desk_wakes", [
+        {"account": "agent", "at": now - timedelta(minutes=20),
+         "reason": "due now", "created_at": now - timedelta(hours=1)},
+        {"account": "agent", "at": now + timedelta(hours=2),
+         "reason": "future", "created_at": now},
+        {"account": "agent", "at": now - timedelta(hours=12),
+         "reason": "ancient", "created_at": now - timedelta(hours=13)},
+    ], returning=False)
+
+    d = wake_due(store)
+    assert [w["reason"] for w in d["due"]] == ["due now"]
+    assert [w["reason"] for w in d["missed"]] == ["ancient"]  # reported, not fresh
+
+    wid = d["due"][0]["id"]
+    assert wake_honor(store, wake_id=wid, run_id="RID-1")["ok"]
+    # Honored exactly once; second honor and second due both refuse.
+    assert not wake_honor(store, wake_id=wid, run_id="RID-2")["ok"]
+    assert wake_due(store)["due"] == []
+
+
 # ── the desk surface ──
 
 

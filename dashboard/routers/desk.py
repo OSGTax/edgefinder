@@ -485,6 +485,7 @@ def attention(db: Session = Depends(get_db)):
         "wakes": [{
             "id": k.id, "at": _iso(k.at), "reason": k.reason,
             "run_id": k.run_id, "created_at": _iso(k.created_at),
+            "honored_run_id": k.honored_run_id,
         } for k in wakes],
     }
 
