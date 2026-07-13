@@ -82,10 +82,10 @@
 
 <!-- ANCHOR NAV: sticky under the topnav; jump between the remaining zones. -->
 <nav class="desk-anchornav" id="desk-anchornav" aria-label="Sections">
-  <a href="#zone-book" class="desk-anchor" data-zone="zone-book">Cashflow</a>
-  <a href="#zone-markets" class="desk-anchor" data-zone="zone-markets">Markets</a>
+  <a href="#desk-hero" class="desk-anchor" data-zone="desk-hero">Overview</a>
   <a href="#zone-reasoning" class="desk-anchor" data-zone="zone-reasoning">Reasoning</a>
-  <a href="#zone-history" class="desk-anchor" data-zone="zone-history">History &amp; Learning</a>
+  <a href="#zone-history" class="desk-anchor" data-zone="zone-history">Learning</a>
+  <a href="#zone-markets" class="desk-anchor" data-zone="zone-markets">Markets</a>
 </nav>
 
 <!-- attention banner: the single newest improvement, dismissible -->
@@ -93,86 +93,26 @@
 <!-- full feed of recent improvements, toggled by the header button -->
 <div id="desk-whatsnew-panel" class="desk-wn-panel c-card mb-16" hidden></div>
 
-<!-- ZONE 1: CASHFLOW — dividend income on the account's holdings. -->
-<section id="zone-book" class="desk-zone">
-  <header class="desk-zone-head">
-    <h3 class="desk-zone-title">Cashflow</h3>
-    <p class="desk-zone-sub">Dividend payments received and expected on the AI's holdings.</p>
-  </header>
-  <div class="desk-zone-grid">
-
-    <div class="c-card desk-card desk-span-2" data-collapse-key="dividends">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Dividend calendar</span>
-        <span class="spacer"></span>
-        <span id="desk-dividends-meta" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">For each holding that pays a dividend: the most recent payment, the next one on the calendar, and the estimated yearly payout per share. A dividend is a cash payment a company sends shareholders.</div>
-      <div class="c-card-body" id="desk-dividends"></div>
-    </div>
-
-  </div>
-</section>
-
-<!-- ZONE 2: MARKETS — the wider market context, not the AI's own picks. -->
-<section id="zone-markets" class="desk-zone">
-  <header class="desk-zone-head">
-    <h3 class="desk-zone-title">Markets</h3>
-    <p class="desk-zone-sub">What the wider market is doing right now — a read on where the action is.</p>
-  </header>
-  <div class="desk-zone-grid">
-
-    <div id="desk-tape-banner" class="desk-tape-banner desk-span-2" hidden></div>
-
-    <div class="c-card desk-card desk-span-2" data-collapse-key="tape">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Live prices</span>
-        <span id="desk-tape-live" class="desk-live-dot" hidden></span>
-        <span class="spacer"></span>
-        <span id="desk-tape-status" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">Real-time prices straight from the exchanges — the same numbers the AI trades on. "Bid" is what buyers offer, "ask" is what sellers want.</div>
-      <div class="c-card-body" id="desk-tape"></div>
-    </div>
-
-    <div class="c-card desk-card" data-collapse-key="options">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Options radar</span>
-        <input id="desk-opt-symbol" class="desk-opt-select" list="desk-opt-list"
-               maxlength="6" autocomplete="off" spellcheck="false"
-               placeholder="any symbol…">
-        <datalist id="desk-opt-list"></datalist>
-        <span class="spacer"></span>
-        <span id="desk-opt-meta" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">What the options market expects for a stock — how big a move traders are bracing for, and what protection costs. Type any symbol. Hover any term for a plain-English explanation.</div>
-      <div class="c-card-body" id="desk-options"></div>
-    </div>
-
-    <div class="c-card desk-card" data-collapse-key="movers">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Market movers</span>
-        <span class="spacer"></span>
-        <span id="desk-movers-meta" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">The biggest winners, losers, and most-traded names across the ~500 most-liquid stocks the AI tracks — as of the last market close.</div>
-      <div class="c-card-body" id="desk-movers"></div>
-    </div>
-
-  </div>
-</section>
-
-<!-- ZONE 3: THE AI'S REASONING — the latest decision and its running thoughts. -->
+<!-- ZONE 1: THE AI'S REASONING — what it's watching, deciding, and thinking.
+     This is the desk's unique content, so it comes first; market data is
+     commodity and lives at the bottom. -->
 <section id="zone-reasoning" class="desk-zone">
   <header class="desk-zone-head">
     <h3 class="desk-zone-title">The AI's Reasoning</h3>
-    <p class="desk-zone-sub">Why it decided what it did — in its own words.</p>
+    <p class="desk-zone-sub">What it's watching, what it decided, and why — in its own words.</p>
   </header>
   <div class="desk-zone-grid">
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="watch">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>What the AI is watching</span>
+        <span class="spacer"></span>
+        <span id="desk-watch-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">Price alarms the AI has set on its own positions (checked against live prices every few seconds, around the clock) and when it plans to look at the market next.</div>
+      <div class="c-card-body" id="desk-watch"></div>
+    </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="decision">
       <div class="c-card-header">
@@ -203,23 +143,21 @@
   </div>
 </section>
 
-<!-- ZONE 4: HISTORY & LEARNING — the record of trades + what the AI has learned. -->
+<!-- ZONE 2: LEARNING & TRACK RECORD — the lab, the notebook, the receipts. -->
 <section id="zone-history" class="desk-zone">
   <header class="desk-zone-head">
-    <h3 class="desk-zone-title">History &amp; Learning</h3>
-    <p class="desk-zone-sub">The record of trades, and what the AI has learned from its own results.</p>
+    <h3 class="desk-zone-title">Learning &amp; Track Record</h3>
+    <p class="desk-zone-sub">What the AI is learning — from 21 years of history every night, and from its own results every week.</p>
   </header>
   <div class="desk-zone-grid">
 
-    <div class="c-card desk-card desk-span-2" data-collapse-key="fills">
+    <div class="c-card desk-card desk-span-2" data-collapse-key="lab">
       <div class="c-card-header">
         <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Recent fills</span>
-        <span class="spacer"></span>
-        <span id="desk-fills-meta" class="t-dim"></span>
+        <span>Strategy Lab</span>
       </div>
-      <div class="c-card-sub">Every trade the AI made, with the exact live bid and ask it priced against at that moment — the receipt proving each fill hit the real market.</div>
-      <div class="c-card-body" id="desk-fills"></div>
+      <div class="c-card-sub">Every night the AI tests dozens of strategy variations against 21 years of market history. A strategy makes this board only if it beat the S&amp;P 500 in both halves of history &mdash; and its score is its performance in the WORSE half, so lucky streaks don't rank.</div>
+      <div class="c-card-body" id="desk-lab"></div>
     </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="wiki">
@@ -242,15 +180,6 @@
       <div class="c-card-body" id="desk-backtests"></div>
     </div>
 
-    <div class="c-card desk-card" data-collapse-key="lab">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Strategy Lab</span>
-      </div>
-      <div class="c-card-sub">Every night the AI tests dozens of strategy variations against 21 years of market history. A strategy makes this board only if it beat the S&amp;P 500 in both halves of history &mdash; and its score is its performance in the WORSE half, so lucky streaks don't rank.</div>
-      <div class="c-card-body" id="desk-lab"></div>
-    </div>
-
     <div class="c-card desk-card" data-collapse-key="journal" data-collapsed="1">
       <div class="c-card-header">
         <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
@@ -258,6 +187,79 @@
       </div>
       <div class="c-card-sub">Every time the AI changes its approach, it writes down what changed and why.</div>
       <div class="c-card-body" id="desk-journal"></div>
+    </div>
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="fills" data-collapsed="1">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Trade receipts</span>
+        <span class="spacer"></span>
+        <span id="desk-fills-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">Every trade the AI made, with the exact live prices it traded against at that moment — the receipt proving each trade hit the real market.</div>
+      <div class="c-card-body" id="desk-fills"></div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ZONE 3: MARKETS — commodity market context; useful, but last on purpose. -->
+<section id="zone-markets" class="desk-zone">
+  <header class="desk-zone-head">
+    <h3 class="desk-zone-title">Markets</h3>
+    <p class="desk-zone-sub">The wider market: live prices, big movers, what options traders expect, and dividends on the AI's holdings. Click any section open.</p>
+  </header>
+  <div class="desk-zone-grid">
+
+    <div id="desk-tape-banner" class="desk-tape-banner desk-span-2" hidden></div>
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="tape" data-collapsed="1">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Live prices</span>
+        <span id="desk-tape-live" class="desk-live-dot" hidden></span>
+        <span class="spacer"></span>
+        <span id="desk-tape-status" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">Real-time prices straight from the exchanges — the same numbers the AI trades on. "Bid" is what buyers offer, "ask" is what sellers want.</div>
+      <div class="c-card-body" id="desk-tape"></div>
+    </div>
+
+    <div class="c-card desk-card" data-collapse-key="movers" data-collapsed="1">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Market movers</span>
+        <span class="spacer"></span>
+        <span id="desk-movers-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">The biggest winners, losers, and most-traded names across the ~1,000 most-liquid stocks the AI tracks — as of the last market close.</div>
+      <div class="c-card-body" id="desk-movers"></div>
+    </div>
+
+    <div class="c-card desk-card" data-collapse-key="options" data-collapsed="1">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Options radar</span>
+        <input id="desk-opt-symbol" class="desk-opt-select" list="desk-opt-list"
+               maxlength="6" autocomplete="off" spellcheck="false"
+               placeholder="any symbol…">
+        <datalist id="desk-opt-list"></datalist>
+        <span class="spacer"></span>
+        <span id="desk-opt-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">What the options market expects for a stock — how big a move traders are bracing for, and what protection costs. Type any symbol. Hover any term for a plain-English explanation.</div>
+      <div class="c-card-body" id="desk-options"></div>
+    </div>
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="dividends" data-collapsed="1">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Dividend calendar</span>
+        <span class="spacer"></span>
+        <span id="desk-dividends-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">For each holding that pays a dividend: the most recent payment, the next one on the calendar, and the estimated yearly payout per share. A dividend is a cash payment a company sends shareholders.</div>
+      <div class="c-card-body" id="desk-dividends"></div>
     </div>
 
   </div>

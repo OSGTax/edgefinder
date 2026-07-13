@@ -348,7 +348,7 @@ function optionsTable(rows) {
     h('thead', {}, h('tr', {},
       h('th', { text: 'Option contract', title: 'e.g. "NVDA $200C 2027-01-16" = the right to buy NVDA at $200 until Jan 16 2027' }),
       h('th', { text: 'Side', title: 'LONG = the AI bought it. SHORT = the AI sold it (always backed by shares, cash, or another option — never naked)' }),
-      h('th', { class: 'num', text: 'Qty', title: 'Contracts held; each contract covers 100 shares' }),
+      h('th', { class: 'num', text: 'Contracts', title: 'How many option contracts; each contract covers 100 shares' }),
       h('th', { class: 'num', text: 'Days left', title: 'Days until the contract expires' }),
       h('th', { class: 'num', text: 'Paid' }), h('th', { class: 'num', text: 'Now' }),
       h('th', { class: 'num', text: 'Worth' }),
@@ -502,15 +502,84 @@ async function loadThinking() {
     if (!data.lines.length) { renderEmpty(el, 'No thinking recorded yet.'); runEl.textContent = ''; return; }
     runEl.textContent = data.run_id ? ('run ' + data.run_id) : '';
     clear(el);
+    // Show the freshest handful; the full transcript is one click away —
+    // the feed is the single longest block on the page when left uncapped.
+    const VISIBLE = 6;
     const feed = h('div', { class: 'desk-feed' });
-    for (const line of data.lines) {
-      feed.append(h('div', { class: 'desk-feed-line' },
+    data.lines.forEach((line, i) => {
+      const row = h('div', { class: 'desk-feed-line' },
         h('span', { class: 'desk-feed-phase', text: line.phase || '·' }),
         h('span', { class: 'desk-feed-text', text: line.text }),
-        h('span', { class: 'desk-feed-time t-dim', text: timeAgo(line.t) })));
-    }
+        h('span', { class: 'desk-feed-time t-dim', text: timeAgo(line.t) }));
+      if (i >= VISIBLE) row.hidden = true;
+      feed.append(row);
+    });
     el.append(feed);
+    if (data.lines.length > VISIBLE) {
+      const btn = h('button', {
+        class: 'desk-opt-chainbtn', type: 'button',
+        text: 'Show all ' + data.lines.length + ' lines',
+      });
+      btn.addEventListener('click', () => {
+        const hiddenNow = feed.querySelector('[hidden]') != null;
+        feed.querySelectorAll('.desk-feed-line').forEach(r => { r.hidden = false; });
+        if (!hiddenNow) {
+          feed.querySelectorAll('.desk-feed-line').forEach((r, i) => {
+            if (i >= VISIBLE) r.hidden = true;
+          });
+        }
+        btn.textContent = hiddenNow
+          ? 'Show only the latest'
+          : 'Show all ' + data.lines.length + ' lines';
+      });
+      el.append(btn);
+    }
   } catch (err) { renderError(el, err, loadThinking); }
+}
+
+/* ── what the AI is watching: tripwires + planned check-ins ── */
+async function loadWatch() {
+  const el = document.getElementById('desk-watch');
+  const metaEl = document.getElementById('desk-watch-meta');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const d = await apiGet('/api/desk/watch');
+    const wires = (d.watches || []).filter(w => w.status === 'armed' || w.status === 'tripped');
+    const now = Date.now();
+    const wakes = (d.wakes || []).filter(k => !k.honored_run_id
+      && k.at && (new Date(k.at).getTime() > now - 6 * 3600e3));
+    clear(el);
+    if (metaEl) {
+      metaEl.textContent = wires.length
+        ? wires.length + ' alarm' + (wires.length === 1 ? '' : 's') + ' set' : '';
+    }
+    if (!wires.length && !wakes.length) {
+      renderEmpty(el, 'No price alarms set right now — the AI arms them on positions it needs to react to.');
+      return;
+    }
+    const list = h('div', { class: 'desk-watch-list' });
+    for (const w of wires) {
+      const dir = w.kind === 'below' ? 'falls under' : 'climbs past';
+      const tripped = w.status === 'tripped';
+      list.append(h('div', { class: 'desk-watch-row' },
+        pill(tripped ? 'TRIPPED' : 'watching', tripped ? 'down' : 'info'),
+        h('span', { class: 'desk-watch-text', text:
+          w.symbol + ' — alert if the price ' + dir + ' $' + fmtNum(w.level, 2)
+          + (w.reason ? ' · ' + w.reason : '') }),
+        h('span', { class: 'desk-feed-time t-dim',
+          text: tripped && w.tripped_at ? 'tripped ' + timeAgo(w.tripped_at)
+            : 'set ' + timeAgo(w.armed_at) })));
+    }
+    for (const k of wakes) {
+      list.append(h('div', { class: 'desk-watch-row' },
+        pill('next check', 'neutral'),
+        h('span', { class: 'desk-watch-text', text:
+          'Wants to look again ' + fmtDateTimeET(k.at)
+          + (k.reason ? ' — ' + k.reason : '') })));
+    }
+    el.append(list);
+  } catch (err) { renderError(el, err, loadWatch); }
 }
 
 /* ── latest decision: picks + watchlist ── */
@@ -755,7 +824,7 @@ function renderTape(snap) {
   const anyFresh = syms.some(s => !quotes[s].stale);
   liveDot.hidden = !(snap.connected && anyFresh);
   statusEl.textContent = snap.connected
-    ? `${syms.length} symbols · SIP live`
+    ? `${syms.length} symbols · live exchange feed`
     : 'stream reconnecting — quotes may be stale';
   banner.hidden = snap.connected || anyFresh;
   if (!banner.hidden) {
@@ -767,9 +836,12 @@ function renderTape(snap) {
   fillOptSelect(syms);
   const table = h('table', { class: 'c-table desk-tape-table' },
     h('thead', {}, h('tr', {},
-      h('th', { text: 'Symbol' }), h('th', { class: 'num', text: 'Bid' }),
-      h('th', { class: 'num', text: 'Ask' }), h('th', { class: 'num', text: 'Mid' }),
-      h('th', { class: 'num', text: 'Last' }), h('th', { class: 'num', text: 'Age' }))),
+      h('th', { text: 'Symbol' }),
+      h('th', { class: 'num', text: 'Bid', title: 'The best price buyers are offering right now' }),
+      h('th', { class: 'num', text: 'Ask', title: 'The best price sellers are asking right now' }),
+      h('th', { class: 'num', text: 'Mid', title: 'Halfway between bid and ask — the fair-value estimate' }),
+      h('th', { class: 'num', text: 'Last', title: 'The price of the most recent actual trade' }),
+      h('th', { class: 'num', text: 'Age', title: 'How old this quote is, in seconds' }))),
     h('tbody', {}, ...syms.map(s => {
       const q = quotes[s];
       const dir = q.mid != null && tapePrev[s] != null
@@ -879,13 +951,13 @@ async function loadOptions() {
       metaEl.textContent = '';
       return;
     }
-    metaEl.textContent = `expiry ${s.expiry} · ${s.dte} DTE`;
+    metaEl.textContent = `expiry ${s.expiry} · ${s.dte} days left`;
     const em = s.expected_move_pct != null
       ? `±${fmtNum(s.expected_move_pct, 1)}% ($${fmtNum(s.expected_move_dollars, 2)})` : '—';
     const stats = h('div', { class: 'pf-grid mb-16' },
       optStat('Stock price', fmtPrice(s.spot),
         '', 'The current market price of the stock itself'),
-      optStat('Implied volatility', s.atm_iv != null ? fmtNum(s.atm_iv * 100, 1) + '%' : '—',
+      optStat('Expected swings (IV)', s.atm_iv != null ? fmtNum(s.atm_iv * 100, 1) + '%' : '—',
         '', 'How jumpy the options market expects this stock to be — higher = bigger expected swings (and pricier options)'),
       optStat('Expected move', em,
         '', `The size of the price swing (up OR down) that options traders are pricing in between now and ${s.expiry}`),
@@ -899,7 +971,22 @@ async function loadOptions() {
 
     const rows = chainRows(s);
     if (rows.length) {
-      el.append(h('div', { class: 'desk-opt-chainwrap' },
+      // The full chain is the one genuinely professional table on the page —
+      // opt-in behind a toggle so the default read stays plain-English.
+      const wrap = h('div', { class: 'desk-opt-chainwrap', hidden: true });
+      const btn = h('button', {
+        class: 'desk-opt-chainbtn', type: 'button',
+        text: 'Show the full option chain (pro view)',
+      });
+      btn.addEventListener('click', () => {
+        wrap.hidden = !wrap.hidden;
+        btn.textContent = wrap.hidden
+          ? 'Show the full option chain (pro view)'
+          : 'Hide the full option chain';
+      });
+      el.append(btn);
+      el.append(wrap);
+      wrap.append(h('div', {},
         h('table', { class: 'c-table desk-opt-chain' },
           h('thead', {}, h('tr', {},
             h('th', { class: 'num', text: 'C bid' }), h('th', { class: 'num', text: 'C ask' }),
@@ -1129,7 +1216,7 @@ async function loadAll() {
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
     loadOptions(), loadMovers(), loadDividends(), loadFills(), loadWiki(),
-    loadLab(),
+    loadLab(), loadWatch(),
   ]);
 }
 
@@ -1224,4 +1311,4 @@ wireAnchorNav();
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); loadWiki(); loadLab(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); loadWiki(); loadLab(); loadWatch(); }, 60_000);

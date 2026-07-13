@@ -59,6 +59,35 @@ def test_desk_page_renders(client):
     assert "/static/js/pages/desk.js" in r.text
 
 
+def test_desk_page_information_architecture(client):
+    """v9 IA: reasoning first, learning second, markets last (collapsed);
+    the watch card exists; the overview anchor leads the nav."""
+    import re
+
+    html = client.get("/desk").text
+
+    reasoning = html.index('id="zone-reasoning"')
+    learning = html.index('id="zone-history"')
+    markets = html.index('id="zone-markets"')
+    assert reasoning < learning < markets
+
+    assert 'id="desk-watch"' in html            # the attention card
+    assert 'id="desk-lab"' in html              # the lab leaderboard
+    assert 'data-zone="desk-hero">Overview' in html
+
+    def card_tag(key):
+        m = re.search(r'<div class="c-card desk-card[^"]*" '
+                      r'data-collapse-key="%s"[^>]*>' % key, html)
+        assert m, f"card {key} missing"
+        return m.group(0)
+
+    # Commodity market cards ship collapsed; the reasoning/learning core is open.
+    for key in ("tape", "movers", "options", "dividends", "fills"):
+        assert 'data-collapsed="1"' in card_tag(key), f"{key} should be collapsed"
+    for key in ("watch", "decision", "thinking", "lab", "wiki"):
+        assert 'data-collapsed="1"' not in card_tag(key), f"{key} should be open"
+
+
 def test_portfolio_endpoint(client):
     r = client.get("/api/desk/portfolio")
     assert r.status_code == 200

@@ -457,3 +457,20 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
   font-size: var(--t-fs-sm);
   line-height: 1.5;
 }
+
+/* ── what the AI is watching ── */
+.desk-watch-list { display: flex; flex-direction: column; gap: var(--t-space-2); }
+.desk-watch-row {
+  display: flex; align-items: baseline; gap: var(--t-space-2);
+  font-size: var(--t-fs-sm); line-height: 1.5;
+}
+.desk-watch-text { flex: 1; min-width: 0; }
+
+/* pro-view toggles (option chain, full thinking feed) */
+.desk-opt-chainbtn {
+  background: none; border: 1px solid var(--t-border);
+  border-radius: var(--t-radius-sm); color: var(--t-text-2);
+  font: inherit; font-size: var(--t-fs-xs); cursor: pointer;
+  padding: 4px 10px; margin-top: var(--t-space-2);
+}
+.desk-opt-chainbtn:hover { color: var(--t-text); border-color: var(--t-border-strong); }
