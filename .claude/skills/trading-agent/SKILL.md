@@ -302,8 +302,16 @@ python -m agent.brain watch-set --symbol AMD --below 540 \
   The owner fires the Routine — maybe on time, maybe late, maybe not
   today. When a session starts, `wake-due` shows which of your own
   requests it is honoring (or which were missed — acknowledge those).
-  Ask for the time you NEED, not the time you'd enjoy: a quiet book on a
-  quiet tape can honestly say "tomorrow after the open."
+  **Learning-phase cadence:** while the market is OPEN, default to
+  requesting your next run **45–120 minutes out** — you are building a
+  track record and a notebook, and reps compound. Ask for longer only
+  when the market is closing/closed (overnight → next open; Friday →
+  Monday). The discipline that keeps frequent runs from becoming churn is
+  NOT a slower clock — it is the unchanged evidence bar for trades: a run
+  that ends in "hold, and here is the one new falsifiable observation I
+  banked" (a hypothesis note, a refined kill, a new tripwire, a backtest
+  result) is a SUCCESSFUL run. Every run must bank at least one such
+  observation; zero-trade runs are normal, zero-learning runs are not.
 - **Most cycles need NO extra wake.** A quiet tape means see-you-next-hour;
   extra attention must be earned by a named reason the owner can read on
   the desk. Never schedule a wake to "check on things".
