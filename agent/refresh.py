@@ -377,6 +377,11 @@ def _alpaca_latest_daily(b, symbols: list[str], *, lookback_days: int = 7,
     for i in range(0, len(symbols), chunk):
         batch = symbols[i:i + chunk]
         try:
+            # `end=today` (midnight UTC) is INTENTIONAL here, unlike the
+            # history ingest: ranking wants each name's last COMPLETED
+            # session — the nightly runs post-midnight UTC so that's the
+            # just-closed day, and an intraday manual run must not rank the
+            # market on partial morning volume.
             req = StockBarsRequest(symbol_or_symbols=batch, timeframe=TimeFrame.Day,
                                    start=start, end=date.today())
             res = b.data.get_stock_bars(req)
@@ -412,8 +417,13 @@ def _ingest_history_batched(store, b, symbols: list[str], *, max_days: int,
     for i in range(0, len(symbols), chunk):
         batch = symbols[i:i + chunk]
         try:
+            # No `end`: the SDK turns a bare date into midnight UTC, which
+            # silently EXCLUDES today's in-progress bar — that made the
+            # "hourly top-up" a structural no-op all session. Defaulting to
+            # now includes today's partial; the per-symbol delete-then-insert
+            # upsert refines it each cycle and post-close runs finalize it.
             req = StockBarsRequest(symbol_or_symbols=batch, timeframe=TimeFrame.Day,
-                                   start=start, end=date.today())
+                                   start=start)
             res = b.data.get_stock_bars(req)
             data = res.data if hasattr(res, "data") else {}
         except Exception as exc:  # noqa: BLE001 — one batch can't abort the run
