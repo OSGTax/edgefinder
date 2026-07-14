@@ -154,7 +154,12 @@ def test_wake_plan_enforces_min_gap(store):
 def test_wake_plan_enforces_daily_cap(store):
     from agent.brain import WAKE_MAX_PER_DAY, wake_plan
 
-    base = datetime.utcnow() + timedelta(minutes=30)
+    # Anchor at tomorrow 14:00 UTC (10:00 ET): the 20 seeds span ~6.7 hours
+    # and must all land on ONE ET day for the cap to bind — a "now + 30min"
+    # base run in the evening spills seeds past ET midnight and the cap
+    # legitimately doesn't trip (time-of-day flake, caught 2026-07-14).
+    tomorrow = datetime.utcnow().date() + timedelta(days=1)
+    base = datetime(tomorrow.year, tomorrow.month, tomorrow.day, 14, 0)
     # Seed the day's budget as spent (direct inserts — cheap and exact).
     store.insert("desk_wakes", [
         {"account": "agent", "at": base + timedelta(minutes=20 * i),

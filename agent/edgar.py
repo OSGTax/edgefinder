@@ -349,7 +349,8 @@ def pit_rows(symbol: str, cik: int, cf: dict) -> list[dict]:
             "free_cash_flow": fcf,
             # price-ratio ingredients (consumed at decision/brief time):
             "_revenue_ttm": rev_ttm, "_net_income_ttm": ni_ttm,
-            "_fcf_ttm": fcf, "_ebitda_ttm": ebitda, "_shares": shares,
+            "_fcf_ttm": fcf, "_ocf_ttm": ocf_ttm, "_capex_ttm": capex_ttm,
+            "_ebitda_ttm": ebitda, "_shares": shares,
             "_book_equity": equity, "_total_debt": debt, "_cash": cash,
             "_eps_diluted_fy": _latest_annual(collected["eps_diluted"], filed),
             "_period_end": str(rev_end) if rev_end else None,
@@ -512,11 +513,17 @@ VALIDATION_INGREDIENTS = [
     # different quantity and would test the convention, not extraction.
     ("earnings_per_share",
      lambda p: p.get("_eps_diluted_fy"), lambda f, r: f.get("diluted_eps")),
-    ("free_cash_flow",
-     lambda p: p.get("_fcf_ttm"),
-     lambda f, r: (f["operating_cash_flow"] - f["capex"]
-                   if f.get("operating_cash_flow") is not None
-                   and f.get("capex") is not None else None)),
+    # Cash flow is gated on OPERATING CASH FLOW — the one cash-flow figure
+    # both pipelines extract from the same filed line (autopsy: exact
+    # dollar-for-dollar matches). The vendor's "capex" is a broader concept
+    # than XBRL PP&E purchases (ABBV: theirs $6.6B incl. intangible/
+    # milestone payments vs $1.2B actual PP&E; sign convention also mixed,
+    # 1094 negative / 149 positive) — so vendor FCF is NOT comparable to
+    # ours by construction, and comparing it would test their definition,
+    # not our extraction.
+    ("operating_cash_flow",
+     lambda p: p.get("_ocf_ttm"),
+     lambda f, r: f.get("operating_cash_flow")),
 ]
 PASS_WITHIN = 0.10   # ±10%
 PASS_SHARE = 0.90    # >=90% of comparables

@@ -143,6 +143,8 @@ def test_ytd_cashflow_differencing():
     # At the FY-2020 10-K: Q4 = 18-12 = 6 → OCF-TTM 3+4+5+6 = 18;
     # capex quarters 1,1,1,1 → TTM 4; FCF = 18 - 4 = 14.
     feb = by_filed["2021-02-25"]["data"]
+    assert feb["_ocf_ttm"] == pytest.approx(18.0)
+    assert feb["_capex_ttm"] == pytest.approx(4.0)
     assert feb["_fcf_ttm"] == pytest.approx(14.0)
     assert feb["free_cash_flow"] == pytest.approx(14.0)
 
@@ -272,7 +274,7 @@ def test_validate_ingredient_agreement(store, monkeypatch):
     m = rep["metrics"]
     for label in ("revenue_fy", "net_income_fy", "book_equity",
                   "total_assets", "shares_outstanding",
-                  "earnings_per_share", "free_cash_flow"):
+                  "earnings_per_share", "operating_cash_flow"):
         assert m[label]["n"] == 1 and m[label]["agree_share"] == 1.0, label
     cr = m["current_ratio"]
     assert cr["n"] == 1 and cr["agree_share"] == 0.0
