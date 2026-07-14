@@ -87,6 +87,10 @@ def make_companyfacts():
                     {"units": {"USD": ocf}},
                 "PaymentsToAcquirePropertyPlantAndEquipment":
                     {"units": {"USD": capex}},
+                "EarningsPerShareDiluted": {"units": {"USD/shares": [
+                    _fact("2020-12-31", 1.0, "2021-02-25", "2020-01-01",
+                          form="10-K"),
+                ]}},
             },
         },
     }
@@ -143,7 +147,7 @@ def test_ytd_cashflow_differencing():
     assert feb["free_cash_flow"] == pytest.approx(14.0)
 
 
-def test_tag_waterfall_prefers_modern_tag():
+def test_tag_waterfall_prefers_total_revenues():
     from agent.edgar import _collect
 
     facts = {"us-gaap": {
@@ -154,7 +158,9 @@ def test_tag_waterfall_prefers_modern_tag():
                                      "2020-01-01")]}},
     }}
     got = _collect(facts, "revenue")
-    assert got[0]["val"] == 100.0  # the modern tag outranks Revenues
+    # Total Revenues outranks the ASC-606 contract tag — for commodity and
+    # financial firms the contract tag is only a subset of the top line.
+    assert got[0]["val"] == 99.0
 
 
 def test_price_ratios_at_decision_time():

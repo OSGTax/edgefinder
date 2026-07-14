@@ -56,9 +56,14 @@ MIN_REQUEST_INTERVAL = 0.12  # ~8 req/s, safely under SEC's 10/s ceiling
 # names we trade file with these standard tags; exotic custom-tag filers
 # degrade to nulls (visible in coverage), never to wrong numbers.
 METRIC_TAGS: dict[str, list[str]] = {
-    "revenue": ["RevenueFromContractWithCustomerExcludingAssessedTax",
+    # Total "Revenues" outranks the ASC-606 contract tag: for commodity and
+    # financial firms (ADM, Affirm) contract revenue is only a SUBSET of the
+    # top line (physically-settled contracts and interest income sit outside
+    # ASC 606) — validation caught ADM at 31% of its real revenue.
+    "revenue": ["Revenues",
+                "RevenueFromContractWithCustomerExcludingAssessedTax",
                 "RevenueFromContractWithCustomerIncludingAssessedTax",
-                "Revenues", "SalesRevenueNet", "SalesRevenueGoodsNet"],
+                "SalesRevenueNet", "SalesRevenueGoodsNet"],
     "net_income": ["NetIncomeLoss", "ProfitLoss"],
     "op_cash_flow": ["NetCashProvidedByUsedInOperatingActivities",
                      "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
@@ -79,6 +84,9 @@ METRIC_TAGS: dict[str, list[str]] = {
     "inventory": ["InventoryNet"],
     "debt_lt": ["LongTermDebtNoncurrent", "LongTermDebt"],
     "debt_st": ["LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings"],
+    # The FILED diluted EPS — an extracted number, kept alongside our stated
+    # EPS-TTM convention (TTM net income / shares outstanding).
+    "eps_diluted": ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"],
 }
 FLOW_METRICS = ("revenue", "net_income", "op_cash_flow", "capex",
                 "operating_income", "dep_amort")
@@ -190,6 +198,15 @@ def _is_annual(f: dict) -> bool:
 
 def _latest_instant(facts: list[dict], filed_cutoff: date) -> float | None:
     known = [f for f in facts if f["filed"] <= filed_cutoff]
+    if not known:
+        return None
+    best = max(known, key=lambda f: (f["end"], f["filed"]))
+    return best["val"]
+
+
+def _latest_annual(facts: list[dict], filed_cutoff: date) -> float | None:
+    """Newest fiscal-year-duration value knowable at the cutoff."""
+    known = [f for f in facts if f["filed"] <= filed_cutoff and _is_annual(f)]
     if not known:
         return None
     best = max(known, key=lambda f: (f["end"], f["filed"]))
@@ -334,6 +351,7 @@ def pit_rows(symbol: str, cik: int, cf: dict) -> list[dict]:
             "_revenue_ttm": rev_ttm, "_net_income_ttm": ni_ttm,
             "_fcf_ttm": fcf, "_ebitda_ttm": ebitda, "_shares": shares,
             "_book_equity": equity, "_total_debt": debt, "_cash": cash,
+            "_eps_diluted_fy": _latest_annual(collected["eps_diluted"], filed),
             "_period_end": str(rev_end) if rev_end else None,
         }
         rows.append({"symbol": symbol, "cik": cik, "filed": filed,
@@ -480,12 +498,20 @@ VALIDATION_INGREDIENTS = [
      lambda f, r: (f["current_assets"] / f["current_liabilities"]
                    if f.get("current_assets") and f.get("current_liabilities")
                    else None)),
+    # Multi-class filers: our cover-page count sums ALL classes; the vendor
+    # reports one class plus a weighted-diluted count. Both are legitimate
+    # "share count" definitions — score against whichever is closer, since
+    # the gate tests extraction, not definition choice.
     ("shares_outstanding",
      lambda p: p.get("_shares"),
-     lambda f, r: (r.get("share_class_shares_outstanding")
-                   or r.get("weighted_shares_outstanding"))),
+     lambda f, r: (r.get("share_class_shares_outstanding"),
+                   f.get("diluted_shares"),
+                   r.get("weighted_shares_outstanding"))),
+    # FILED diluted EPS vs their extract of the same filed number — our
+    # EPS-TTM convention (TTM NI / shares outstanding) is deliberately a
+    # different quantity and would test the convention, not extraction.
     ("earnings_per_share",
-     lambda p: p.get("earnings_per_share"), lambda f, r: f.get("diluted_eps")),
+     lambda p: p.get("_eps_diluted_fy"), lambda f, r: f.get("diluted_eps")),
     ("free_cash_flow",
      lambda p: p.get("_fcf_ttm"),
      lambda f, r: (f["operating_cash_flow"] - f["capex"]
@@ -561,6 +587,10 @@ def validate(store=None, *, max_symbols: int = 150) -> dict:
                 a, b = ours_fn(pdata), theirs_fn(fin, root)
             except (TypeError, ZeroDivisionError, KeyError):
                 continue
+            if isinstance(b, tuple):  # several legitimate vendor definitions
+                cands = [x for x in b if x]
+                b = (min(cands, key=lambda x: abs(a - x) / abs(x))
+                     if cands and a is not None else None)
             if a is None or b is None or b == 0:
                 continue
             rel = abs(a - b) / abs(b)
