@@ -6,8 +6,9 @@
 import { apiGet } from '../core/net.js';
 import { toEpochSec, fmtPrice, fmtPct, fmtPnl, fmtCompact, fmtDate, fmtNum, upDownClass } from '../core/fmt.js';
 import { h, clear, skeleton, renderError, renderEmpty, debounce } from '../core/dom.js';
-import { createChart, colors, syncPanes, rangeSwitcher, fullscreenButton, tradeMarkers, eventMarkers, mergeMarkers } from '../core/charts.js';
+import { createChart, colors, syncPanes, rangeSwitcher, fullscreenButton, eventMarkers, mergeMarkers } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
+import { sparkline } from '../components/sparkline.js';
 
 /* ── state ── */
 const RANGES = [
@@ -77,8 +78,8 @@ async function loadSymbol() {
   const [bars, events, trades, profile] = await Promise.allSettled([
     apiGet(`/api/symbols/${state.symbol}/bars?range=${state.range}&indicators=true`, { timeout: 30000 }),
     apiGet(`/api/symbols/${state.symbol}/events`),
-    apiGet(`/api/trades?symbol=${state.symbol}&limit=200`),
-    apiGet(`/api/research/ticker/${state.symbol}`),
+    apiGet(`/api/desk/trades?limit=500`),
+    apiGet(`/api/symbols/${state.symbol}/fundamentals`),
   ]);
   shell.classList.remove('loading');
 
@@ -90,7 +91,16 @@ async function loadSymbol() {
   }
   state.bars = bars.value;
   state.events = events.status === 'fulfilled' ? events.value : { dividends: [], splits: [], news: [] };
-  state.trades = trades.status === 'fulfilled' ? (trades.value.trades || trades.value || []) : [];
+  // The AI's own fills for this symbol (the desk ledger is the only trades
+  // source since the workbench was retired). Option fills on the same
+  // underlying count too — their OCC symbol is underlying + 6-digit date +
+  // C/P + 8-digit strike.
+  const isMine = t => t.symbol === state.symbol ||
+    (t.symbol && t.symbol.startsWith(state.symbol) &&
+     /^\d{6}[CP]\d{8}$/.test(t.symbol.slice(state.symbol.length)));
+  state.trades = trades.status === 'fulfilled'
+    ? (trades.value || []).filter(isMine)
+    : [];
   state.profile = profile.status === 'fulfilled' ? profile.value : null;
 
   renderHeader();
@@ -214,14 +224,7 @@ function buildCharts() {
 function applyMarkers() {
   if (!charts) return;
   const lists = [];
-  if (state.markers.has('trades')) {
-    const enriched = state.trades.map(t => ({
-      ...t,
-      entry_epoch: toEpochSec((t.entry_time || '').slice(0, 10)),
-      exit_epoch: t.exit_time ? toEpochSec(t.exit_time.slice(0, 10)) : null,
-    }));
-    lists.push(tradeMarkers(enriched));
-  }
+  if (state.markers.has('trades')) lists.push(fillMarkers(state.trades));
   lists.push(eventMarkers(state.events, state.markers));
   charts.candle.setMarkers(mergeMarkers(...lists));
 }
@@ -262,39 +265,60 @@ function barVolumeAt(time) {
   return _volMap.get(time);
 }
 
-/* ── chart click -> trade drawer ── */
+/* ── fills → chart markers ──
+   The desk ledger records individual fills (one row per buy/sell), not
+   entry/exit round trips — each fill gets its own arrow. */
+function fillMarkers(fills) {
+  const c = colors();
+  const out = [];
+  fills.forEach((t, i) => {
+    const time = toEpochSec((t.t || '').slice(0, 10));
+    if (!time) return;
+    const buy = (t.side || '').toLowerCase() === 'buy';
+    out.push({
+      time,
+      position: buy ? 'belowBar' : 'aboveBar',
+      shape: buy ? 'arrowUp' : 'arrowDown',
+      color: buy ? c.accent : c.down,
+      text: buy ? 'B' : 'S',
+      id: `fill:${i}`,
+    });
+  });
+  return out.sort((a, b) => a.time - b.time);
+}
+
+/* ── chart click -> fill drawer ── */
 function onChartClick(param) {
   const id = param.hoveredObjectId;
   if (!id || typeof id !== 'string') return;
-  const m = id.match(/^(entry|exit):(.+)$/);
+  const m = id.match(/^fill:(\d+)$/);
   if (!m) return;
-  const trade = state.trades.find(t => t.trade_id === m[2]);
-  if (trade) openTradeDrawer(trade);
+  const fill = state.trades[Number(m[1])];
+  if (fill) openTradeDrawer(fill);
 }
 
 function openTradeDrawer(t) {
   const drawer = document.getElementById('trade-drawer');
   document.getElementById('trade-drawer-title').textContent =
-    `${t.symbol} · ${t.strategy_name} · ${(t.direction || 'LONG')}`;
+    `${t.symbol} · ${(t.side || '').toUpperCase()}`;
   const body = document.getElementById('trade-drawer-body');
+  const q = t.fill_quote || null;
   const rows = [
-    ['Status', t.status], ['Shares', t.shares],
-    ['Entry', `${fmtPrice(t.entry_price)} · ${fmtDate(t.entry_time)}`],
-    ['Exit', t.exit_price ? `${fmtPrice(t.exit_price)} · ${fmtDate(t.exit_time)}` : '—'],
-    ['P&L', t.pnl_dollars != null ? `${fmtPnl(t.pnl_dollars)} (${fmtPct(t.pnl_percent ?? null)})` : '—'],
-    ['R multiple', t.r_multiple ?? '—'],
-    ['Exit reason', t.exit_reason || '—'],
+    ['When', fmtDate(t.t)],
+    ['Side', (t.side || '').toUpperCase()],
+    [t.symbol && t.symbol.length > 6 ? 'Contracts' : 'Shares', t.shares],
+    ['Fill price', fmtPrice(t.price)],
+    ['Dollars', t.dollars != null ? fmtPnl(Math.abs(t.dollars)) : '—'],
+    ['Quote at fill', q && q.bid != null && q.ask != null
+      ? `${fmtPrice(q.bid)} / ${fmtPrice(q.ask)} (bid/ask)` : '—'],
+    ['Run', t.run_id || '—'],
   ];
   const kv = h('dl', { class: 'c-kv' });
   for (const [k, v] of rows) kv.append(h('dt', { text: k }), h('dd', { text: String(v ?? '—') }));
   clear(body).append(kv);
-  if (t.entry_reasoning) {
-    body.append(h('h4', { class: 'mt-16', text: 'Entry reasoning' }),
-                h('p', { class: 't-2', text: t.entry_reasoning }));
-  }
-  if (t.exit_reasoning) {
-    body.append(h('h4', { class: 'mt-16', text: 'Exit reasoning' }),
-                h('p', { class: 't-2', text: t.exit_reasoning }));
+  if (t.rationale) {
+    body.append(h('h4', { class: 'mt-16', text: 'Why the AI did it' }),
+                h('p', { class: 't-2', text: t.rationale }));
   }
   drawer.classList.add('open');
 }
@@ -380,58 +404,96 @@ async function renderRailOptions(body) {
   } catch (err) { renderError(body, err, () => renderRailOptions(body)); }
 }
 
-const PROFILE_FIELDS = [
-  ['company_name', 'Company', v => v],
-  ['sector', 'Sector', v => v],
-  ['market_cap', 'Market cap', v => '$' + fmtCompact(v)],
-  ['price_to_earnings', 'P/E', v => v.toFixed(1)],
-  ['peg_ratio', 'PEG', v => v.toFixed(2)],
-  ['earnings_growth', 'Earnings growth', v => fmtPct(v * 100)],
-  ['revenue_growth', 'Revenue growth', v => fmtPct(v * 100)],
-  ['return_on_equity', 'ROE', v => fmtPct(v * 100)],
-  ['debt_to_equity', 'Debt/Equity', v => v.toFixed(2)],
-  ['current_ratio', 'Current ratio', v => v.toFixed(2)],
-  ['dividend_yield', 'Dividend yield', v => fmtPct(v * 100, { signed: false })],
-  ['short_interest', 'Short interest', v => fmtPct(v * 100, { signed: false })],
-  ['news_sentiment', 'News sentiment', v => v.toFixed(2)],
-  ['rsi_14', 'RSI 14', v => v.toFixed(1)],
+/* ── Research tab: SEC EDGAR point-in-time fundamentals (public domain) ──
+   Plain-English labels; the technical term rides in the tooltip. Every
+   number's provenance is stated: which filing, and which price. */
+const RESEARCH_FIELDS = [
+  // [key, label, formatter, tooltip]
+  ['market_cap', 'Company value', v => '$' + fmtCompact(v),
+    'Market capitalization: share price × shares outstanding'],
+  ['price_to_earnings', 'Price vs profit', v => v.toFixed(1) + '×',
+    'P/E ratio: how many dollars you pay per dollar of yearly profit (no figure when the company runs a loss)'],
+  ['price_to_sales', 'Price vs sales', v => v.toFixed(2) + '×',
+    'P/S ratio: company value relative to a year of revenue'],
+  ['price_to_book', 'Price vs net worth', v => v.toFixed(2) + '×',
+    'P/B ratio: price relative to accounting net worth (book value)'],
+  ['ev_to_ebitda', 'Value vs core earnings', v => v.toFixed(1) + '×',
+    'EV/EBITDA: total company value (incl. debt) vs earnings before interest, tax, depreciation'],
+  ['fcf_yield', 'Cash generated', v => fmtPct(v * 100, { signed: false }),
+    'Free-cash-flow yield: spare cash produced per year as a share of company value'],
+  ['earnings_per_share', 'Profit per share', v => '$' + v.toFixed(2),
+    'Trailing-twelve-month net income divided by shares outstanding'],
+  ['return_on_equity', 'Profit on net worth', v => fmtPct(v * 100, { signed: false }),
+    'ROE: yearly profit as a share of the owners’ stake'],
+  ['revenue_growth', 'Sales growth (yr)', v => fmtPct(v * 100),
+    'Trailing 12 months of revenue vs the 12 months before'],
+  ['earnings_growth', 'Profit growth (yr)', v => fmtPct(v * 100),
+    'Trailing 12 months of profit vs the 12 months before'],
+  ['debt_to_equity', 'Debt load', v => v.toFixed(2) + '×',
+    'Total debt relative to the owners’ stake — blank means the company reports no debt'],
+  ['current_ratio', 'Bills coverage', v => v.toFixed(2) + '×',
+    'Current ratio: short-term assets vs bills due within a year'],
 ];
 
 function renderProfile(body) {
   const p = state.profile;
-  if (!p) { renderEmpty(body, 'No profile data'); return; }
-  const src = p.ticker || p;       // report may nest the entry
+  if (!p) { renderEmpty(body, 'Research data unavailable right now.'); return; }
+  if (!p.covered) { renderEmpty(body, p.note || 'No company filings for this symbol.'); return; }
+  clear(body);
+
+  const s = p.snapshot || {};
   const kv = h('dl', { class: 'c-kv' });
-  let n = 0;
-  for (const [key, label, fmt] of PROFILE_FIELDS) {
-    const v = src[key];
-    if (v == null || v === '') continue;
-    kv.append(h('dt', { text: label }), h('dd', { text: String(fmt(v)) }));
-    n++;
+  for (const [key, label, fmt, tip] of RESEARCH_FIELDS) {
+    const v = s[key];
+    if (v == null) continue;
+    kv.append(h('dt', { text: label, title: tip }),
+              h('dd', { class: 'num', text: String(fmt(v)) }));
   }
-  if (!n) { renderEmpty(body, 'No profile data'); return; }
-  clear(body).append(kv);
+  body.append(kv);
+
+  // Trend lines across every filing since 2009: sales and profit-per-share.
+  const revs = (p.series || []).map(r => r._revenue_ttm).filter(v => v != null);
+  const eps = (p.series || []).map(r => r.earnings_per_share).filter(v => v != null);
+  const trend = (label, values, tip) => values.length >= 4
+    ? h('div', { class: 'sym-research-trend', title: tip },
+        h('span', { class: 't-dim', text: label }), sparkline(values, { size: 'lg' }))
+    : null;
+  const t1 = trend('Yearly sales since ’09', revs,
+    'Trailing-twelve-month revenue at each SEC filing');
+  const t2 = trend('Profit/share since ’09', eps,
+    'Trailing-twelve-month earnings per share at each SEC filing (split-affected eras show level shifts)');
+  if (t1) body.append(t1);
+  if (t2) body.append(t2);
+
+  body.append(h('p', { class: 't-dim sym-research-src', text:
+    `Source: ${p.filings} SEC filings (point-in-time), ` +
+    `latest ${p.latest_form || 'filing'} on ${p.latest_filed}` +
+    (p.price_used ? ` · priced at $${fmtNum(p.price_used, 2)} (${p.price_as_of})` : '') }));
 }
 
 function renderRailTrades(body) {
-  if (!state.trades.length) { renderEmpty(body, 'No trades in this symbol'); return; }
+  if (!state.trades.length) {
+    renderEmpty(body, 'The AI hasn’t traded this symbol yet.');
+    return;
+  }
   const list = h('div', { class: 'flex-col gap-4' });
-  for (const t of state.trades) {
-    const pnl = t.pnl_dollars;
+  for (const t of state.trades) {  // endpoint returns newest first
+    const buy = (t.side || '').toLowerCase() === 'buy';
+    const unit = t.symbol && t.symbol.length > 6 ? 'ct' : 'sh';
     const row = h('div', {
       class: 'c-tl clickable',
       onclick: () => {
         openTradeDrawer(t);
-        const e = toEpochSec((t.entry_time || '').slice(0, 10));
+        const e = toEpochSec((t.t || '').slice(0, 10));
         if (e && charts) {
-          charts.price.timeScale().setVisibleRange({ from: e - 45 * 86400, to: (toEpochSec(t.exit_time?.slice(0, 10)) || e) + 45 * 86400 });
+          charts.price.timeScale().setVisibleRange({ from: e - 45 * 86400, to: e + 45 * 86400 });
         }
       },
     },
-      h('div', { class: 'when', text: fmtDate(t.entry_time) }),
+      h('div', { class: 'when', text: fmtDate(t.t) }),
       h('div', { class: 'what' },
-        h('span', { class: 'num', text: `${t.strategy_name} · ${t.shares} sh @ ${fmtPrice(t.entry_price)} ` }),
-        h('span', { class: 'num ' + upDownClass(pnl), text: pnl != null ? fmtPnl(pnl) : t.status }),
+        h('span', { class: 'num ' + (buy ? 't-up' : 't-down'), text: buy ? 'BUY ' : 'SELL ' }),
+        h('span', { class: 'num', text: `${t.shares} ${unit} @ ${fmtPrice(t.price)}` }),
       ),
     );
     list.append(row);
@@ -517,7 +579,7 @@ function initSearch() {
 
   const search = debounce(async (q) => {
     try {
-      const data = await apiGet(`/api/research/search?q=${encodeURIComponent(q)}&limit=10`);
+      const data = await apiGet(`/api/symbols/search?q=${encodeURIComponent(q)}&limit=10`);
       const items = data.results || data || [];
       show(items.length ? items : [], items.length ? null : 'No matches — Enter to load anyway');
     } catch { hide(); }

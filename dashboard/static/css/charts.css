@@ -154,3 +154,9 @@
   border-bottom: 1px solid var(--t-border); font-size: var(--t-fs-sm); }
 .sym-opt-chain td, .sym-opt-chain th { font-variant-numeric: tabular-nums; }
 .sym-opt-atm td { background: var(--t-accent-dim); }
+
+/* symbol rail: research tab (SEC EDGAR fundamentals) */
+.sym-research-trend { display: flex; justify-content: space-between; align-items: center;
+  gap: var(--t-space-3); padding: var(--t-space-2) 0; border-bottom: 1px solid var(--t-border);
+  font-size: var(--t-fs-sm); }
+.sym-research-src { margin-top: var(--t-space-3); font-size: var(--t-fs-xs); line-height: 1.5; }
