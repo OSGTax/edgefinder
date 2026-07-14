@@ -44,6 +44,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.sqlite import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from edgefinder.db.engine import Base
@@ -135,6 +136,57 @@ class TickerSplit(Base):
     execution_date: Mapped[str] = mapped_column(String(20))
     split_from: Mapped[int | None] = mapped_column(Integer)
     split_to: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class FundamentalsSnapshot(Base):
+    """FROZEN Polygon-era fundamentals snapshots (through 2026-06-10).
+
+    ORM restored (it was dropped with the workbench purge) because the table
+    is the VALIDATION REFERENCE for the EDGAR pipeline: 128k vendor-computed
+    rows to cross-check our computed values against. Read-only forever; the
+    vendor product that fed it was sunset 2026-06-22.
+    """
+
+    __tablename__ = "fundamentals_snapshots"
+    __table_args__ = (
+        UniqueConstraint("symbol", "as_of", name="uq_fund_snap_symbol_asof"),
+        Index("idx_fund_snap_symbol_asof", "symbol", "as_of"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    as_of: Mapped[date] = mapped_column(Date, index=True)
+    data: Mapped[dict] = mapped_column(JSON)
+
+
+class FundamentalsPit(Base):
+    """Point-in-time fundamentals from SEC EDGAR — one row per FILING.
+
+    ``data`` holds PRICE-FREE values knowable at ``filed`` (EPS-TTM, ROE,
+    debt/equity, growth, plus `_`-prefixed ratio ingredients — shares, TTM
+    revenue/income/FCF/EBITDA, book equity, debt, cash). Price-dependent
+    ratios are computed at decision/brief time against a price the caller
+    vouches for. Written only by ``agent.edgar`` (nightly via the refresh);
+    the frozen Polygon-era ``fundamentals_snapshots`` table stays untouched
+    as the validation reference. Public-domain source: display anything.
+    """
+
+    __tablename__ = "fundamentals_pit"
+    __table_args__ = (
+        UniqueConstraint("symbol", "filed", "period_end",
+                         name="uq_fund_pit_symbol_filed_period"),
+        Index("idx_fund_pit_symbol_filed", "symbol", "filed"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(10), index=True)
+    cik: Mapped[int | None] = mapped_column(Integer)
+    filed: Mapped[date] = mapped_column(Date, index=True)
+    period_end: Mapped[date | None] = mapped_column(Date)
+    form: Mapped[str | None] = mapped_column(String(12))
+    source: Mapped[str] = mapped_column(String(12), default="edgar")
+    data: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

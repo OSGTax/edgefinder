@@ -26,7 +26,11 @@ class Settings(BaseSettings):
     )
 
     # ── ACCOUNT ──────────────────────────────────────
-    starting_capital: float = 100_000.00
+    starting_capital: float = 100_000.0
+
+    # SEC EDGAR fundamentals — the declared User-Agent IS the authentication
+    # (SEC fair-access policy). Owner-approved contact, 2026-07-14.
+    edgar_user_agent: str = "EdgeFinder mike@oshorelinegroup.com"
 
     # ── LIVE BROKER (Alpaca paper + real-time data) ──
     # The account of record for live paper trading and the real-time quote

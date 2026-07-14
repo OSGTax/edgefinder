@@ -554,4 +554,21 @@ DESK_TABLE_DDL: list[str] = [
     "ALTER TABLE desk_wakes ADD COLUMN IF NOT EXISTS honored_run_id VARCHAR(40)",
     "CREATE INDEX IF NOT EXISTS idx_desk_wakes_at ON desk_wakes (account, at)",
     "ALTER TABLE desk_wakes ENABLE ROW LEVEL SECURITY",
+    # fundamentals_pit is a MARKET-DATA table (edgefinder/db/models.py), not a
+    # desk_* one, but new tables reach prod through this idempotent list —
+    # same precedent as desk_briefs. Written only by agent.edgar.
+    """CREATE TABLE IF NOT EXISTS fundamentals_pit (
+        id SERIAL PRIMARY KEY,
+        symbol VARCHAR(10) NOT NULL,
+        cik INTEGER,
+        filed DATE NOT NULL,
+        period_end DATE,
+        form VARCHAR(12),
+        source VARCHAR(12) DEFAULT 'edgar',
+        data JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_fund_pit_symbol_filed_period UNIQUE (symbol, filed, period_end)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_fund_pit_symbol_filed ON fundamentals_pit (symbol, filed)",
+    "ALTER TABLE fundamentals_pit ENABLE ROW LEVEL SECURITY",
 ]

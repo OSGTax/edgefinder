@@ -507,6 +507,18 @@ def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
     # detected per symbol (unchanged names cost one tiny query), so this is
     # cheap when already current.
     summary["r2_sync"] = _r2_merge_sync(universe)
+    # SEC EDGAR fundamentals for the same universe (isolated pass, like the
+    # news/corp-actions passes on the hourly path): first run per symbol is a
+    # full 2009+ backfill (companyfacts returns whole history in one call),
+    # nightly reruns insert only new filings. ~1000 throttled calls ≈ a few
+    # minutes at SEC's sanctioned rate; a failure here never aborts the bars.
+    try:
+        from agent import edgar
+
+        summary["edgar"] = edgar.ingest(get_store(), symbols=universe)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("edgar fundamentals pass failed: %s", exc)
+        summary["edgar"] = f"error: {exc}"
     return summary
 
 
