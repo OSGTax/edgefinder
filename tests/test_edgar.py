@@ -53,6 +53,20 @@ def make_companyfacts():
     cl = [_fact("2020-09-26", 15.0, "2020-10-30")]
     inv = [_fact("2020-09-26", 6.0, "2020-10-30")]
     debt = [_fact("2020-09-26", 20.0, "2020-10-30")]
+    # Cash-flow statements in 10-Qs carry ONLY cumulative year-to-date
+    # durations (the real-world shape) — quarters must come from differencing.
+    ocf = [
+        _fact("2020-03-28", 3.0, "2020-04-30", "2020-01-01"),    # Q1 (~90d)
+        _fact("2020-06-27", 7.0, "2020-07-30", "2020-01-01"),    # 6M cum
+        _fact("2020-09-26", 12.0, "2020-10-30", "2020-01-01"),   # 9M cum
+        _fact("2020-12-31", 18.0, "2021-02-25", "2020-01-01", form="10-K"),
+    ]
+    capex = [
+        _fact("2020-03-28", 1.0, "2020-04-30", "2020-01-01"),
+        _fact("2020-06-27", 2.0, "2020-07-30", "2020-01-01"),
+        _fact("2020-09-26", 3.0, "2020-10-30", "2020-01-01"),
+        _fact("2020-12-31", 4.0, "2021-02-25", "2020-01-01", form="10-K"),
+    ]
     return {
         "cik": 12345, "entityName": "Testco",
         "facts": {
@@ -69,6 +83,10 @@ def make_companyfacts():
                 "LiabilitiesCurrent": {"units": {"USD": cl}},
                 "InventoryNet": {"units": {"USD": inv}},
                 "LongTermDebtNoncurrent": {"units": {"USD": debt}},
+                "NetCashProvidedByUsedInOperatingActivities":
+                    {"units": {"USD": ocf}},
+                "PaymentsToAcquirePropertyPlantAndEquipment":
+                    {"units": {"USD": capex}},
             },
         },
     }
@@ -104,6 +122,25 @@ def test_pit_rows_restatement_honesty():
     assert d["_shares"] == 10.0
     # EPS-TTM = TTM net income / shares = (8-2-2-2 + 2.5*3) / 10 = 9.5/10
     assert d["earnings_per_share"] == pytest.approx(0.95)
+
+
+def test_ytd_cashflow_differencing():
+    """10-Q cash-flow facts are cumulative YTD — quarters derive by
+    differencing consecutive periods with the same fiscal-year start."""
+    from agent.edgar import pit_rows
+
+    rows = pit_rows("TST", 12345, make_companyfacts())
+    by_filed = {str(r["filed"]): r for r in rows}
+
+    # At the Oct-2020 10-Q: OCF quarters Q1=3, Q2=7-3=4, Q3=12-7=5 — only
+    # three quarters known (no 2019 history) → TTM stays honestly None.
+    assert by_filed["2020-10-30"]["data"]["_fcf_ttm"] is None
+
+    # At the FY-2020 10-K: Q4 = 18-12 = 6 → OCF-TTM 3+4+5+6 = 18;
+    # capex quarters 1,1,1,1 → TTM 4; FCF = 18 - 4 = 14.
+    feb = by_filed["2021-02-25"]["data"]
+    assert feb["_fcf_ttm"] == pytest.approx(14.0)
+    assert feb["free_cash_flow"] == pytest.approx(14.0)
 
 
 def test_tag_waterfall_prefers_modern_tag():
@@ -200,26 +237,39 @@ def test_pit_loader_semantics(store, monkeypatch):
 # ── validation harness ──
 
 
-def test_validate_agreement_stats(store, monkeypatch):
+def test_validate_ingredient_agreement(store, monkeypatch):
+    """The gate compares SAME-FILING quantities against the vendor's raw
+    extracts (raw_data.financials) — definitions and timing cancel out.
+    Ratio-level comparison vs the frozen table is invalid by construction
+    (stale-annual reference, different D/E + FCF definitions)."""
     from agent.edgar import ingest, validate
 
     _patch_edgar_network(monkeypatch, {"TST": make_companyfacts()})
     ingest(store, symbols=["TST"])
-    # Frozen vendor row shortly after the 10-K: EPS agrees (within 10%),
-    # current_ratio disagrees wildly (frozen says 4.0, ours 2.0).
+    # Frozen snapshot embedding the vendor's FY-2020 filing extracts. All
+    # ingredients match ours except current liabilities (theirs → ratio 4.0,
+    # ours 2.0) — one engineered disagreement.
     store.insert("fundamentals_snapshots", {
         "symbol": "TST", "as_of": date(2021, 3, 1),
-        "data": {"symbol": "TST", "earnings_per_share": 1.0,
-                 "current_ratio": 4.0}}, returning=False)
-    store.insert("daily_bars", {
-        "symbol": "TST", "date": date(2021, 2, 26), "open": 19, "high": 19,
-        "low": 19, "close": 19.0, "volume": 1e6, "source": "test"},
+        "data": {"symbol": "TST",
+                 "raw_data": {
+                     "share_class_shares_outstanding": 10.0,
+                     "financials": {
+                         "revenues": 50.0, "net_income": 10.0,
+                         "equity": 44.0, "total_assets": 110.0,
+                         "current_assets": 30.0, "current_liabilities": 7.5,
+                         "diluted_eps": 1.0,
+                         "operating_cash_flow": 18.0, "capex": 4.0}}}},
         returning=False)
 
     rep = validate(store, max_symbols=10)
-    eps = rep["metrics"]["earnings_per_share"]
-    cr = rep["metrics"]["current_ratio"]
-    assert eps["n"] == 1 and eps["agree_share"] == 1.0   # 1.0 vs ours 1.0
+    m = rep["metrics"]
+    for label in ("revenue_fy", "net_income_fy", "book_equity",
+                  "total_assets", "shares_outstanding",
+                  "earnings_per_share", "free_cash_flow"):
+        assert m[label]["n"] == 1 and m[label]["agree_share"] == 1.0, label
+    cr = m["current_ratio"]
     assert cr["n"] == 1 and cr["agree_share"] == 0.0
     assert cr["worst"][0]["symbol"] == "TST"
-    assert rep["verdict"] == "FAIL"  # n>=20 gate unmet + disagreement
+    assert rep["compared_symbols"] == 1
+    assert rep["verdict"] == "FAIL"  # min-20-pairs gate unmet on every metric

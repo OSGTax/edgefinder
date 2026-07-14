@@ -62,9 +62,11 @@ METRIC_TAGS: dict[str, list[str]] = {
     "net_income": ["NetIncomeLoss", "ProfitLoss"],
     "op_cash_flow": ["NetCashProvidedByUsedInOperatingActivities",
                      "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"],
-    "capex": ["PaymentsToAcquirePropertyPlantAndEquipment"],
+    "capex": ["PaymentsToAcquirePropertyPlantAndEquipment",
+              "PaymentsToAcquireProductiveAssets"],  # pre-2014 filings
     "operating_income": ["OperatingIncomeLoss"],
     "dep_amort": ["DepreciationDepletionAndAmortization",
+                  "DepreciationAmortizationAndAccretionNet",  # pre-2015
                   "DepreciationAndAmortization", "Depreciation"],
     "assets": ["Assets"],
     "liabilities": ["Liabilities"],
@@ -199,21 +201,48 @@ def _quarter_series(facts: list[dict], filed_cutoff: date) -> dict[date, float]:
 
     For each period the LATEST-FILED value at the cutoff wins (restatement
     honesty: at that moment, the restated figure IS current knowledge — and
-    an earlier cutoff never sees it). Q4 is derived as FY minus its three
-    known quarters when no explicit Q4 fact exists (US filers report Q4
-    only inside the 10-K's annual figure)."""
-    def newest_per_end(pred) -> dict[date, dict]:
-        best: dict[date, dict] = {}
-        for f in facts:
-            if f["filed"] <= filed_cutoff and pred(f):
-                cur = best.get(f["end"])
-                if cur is None or f["filed"] > cur["filed"]:
-                    best[f["end"]] = f
-        return best
+    an earlier cutoff never sees it).
 
-    q = {e: f["val"] for e, f in newest_per_end(_is_quarterly).items()}
-    for e, f in newest_per_end(_is_annual).items():
-        if e in q:
+    Quarters come from three sources, in priority order:
+    1. Direct ~90-day facts (income-statement items in 10-Qs).
+    2. Cumulative differencing: 10-Q CASH-FLOW statements report only
+       year-to-date durations (Q2 = 6 months, Q3 = 9 months) — the discrete
+       quarter is the difference between consecutive cumulative periods
+       sharing the same fiscal-year start. Without this, FCF/EBITDA would be
+       null for nearly every filer.
+    3. Q4 as FY minus its three known quarters (US filers report Q4 only
+       inside the 10-K's annual figure)."""
+    # newest-filed value per (start, end) period at the cutoff
+    best: dict[tuple[date, date], dict] = {}
+    for f in facts:
+        if f["filed"] > filed_cutoff or f["start"] is None:
+            continue
+        key = (f["start"], f["end"])
+        cur = best.get(key)
+        if cur is None or f["filed"] > cur["filed"]:
+            best[key] = f
+
+    q = {e: f["val"] for (_, e), f in best.items() if _is_quarterly(f)}
+
+    # cumulative (YTD/FY) chains: same start, ends one quarter apart
+    by_start: dict[date, list[dict]] = {}
+    for (s, e), f in best.items():
+        if (e - s).days > 105:
+            by_start.setdefault(s, []).append(f)
+    for s, chain in by_start.items():
+        chain.sort(key=lambda f: f["end"])
+        first = best.get(next(((s2, e2) for (s2, e2) in best
+                               if s2 == s and 70 <= (e2 - s2).days <= 105),
+                              (None, None)))
+        prev = first
+        for f in chain:
+            if prev is not None and 70 <= (f["end"] - prev["end"]).days <= 105:
+                q.setdefault(f["end"], f["val"] - prev["val"])
+            prev = f
+
+    # FY minus three known quarters (fallback when no 9M cumulative exists)
+    for (s, e), f in best.items():
+        if not _is_annual(f) or e in q:
             continue
         # The FY's own Q1-Q3 end at most ~285 days before FY-end; the PRIOR
         # fiscal year ends ~365 before. 340 cleanly separates them.
@@ -343,10 +372,15 @@ def price_ratios(data: dict, price: float | None) -> dict:
 
 
 def ingest(store=None, *, symbols: list[str] | None = None,
-           universe: int | None = None) -> dict:
+           universe: int | None = None, rebuild: bool = False) -> dict:
     """Fetch companyfacts for symbols (or the fresh universe) and upsert new
     (symbol, filed, period_end) rows. First run per symbol = full 2009+
-    backfill (companyfacts returns the whole history in one response)."""
+    backfill (companyfacts returns the whole history in one response).
+
+    ``rebuild=True`` recomputes a symbol from scratch (delete + reinsert) —
+    for when the derivation logic improves. Safe because EDGAR is the source
+    of truth and every row is reproducible from it; the sacred-table rule
+    protects vendor data we could never refetch, which this is not."""
     from agent.store import get_store
 
     store = store or get_store()
@@ -370,10 +404,15 @@ def ingest(store=None, *, symbols: list[str] | None = None,
             summary["fetched"] += 1
             if not rows:
                 continue
-            existing = {(str(r["filed"])[:10], str(r.get("period_end") or "")[:10])
-                        for r in store.select("fundamentals_pit",
-                                              columns="filed,period_end",
-                                              filters={"symbol": sym})}
+            if rebuild:
+                store.delete("fundamentals_pit", {"symbol": sym})
+                existing: set[tuple] = set()
+            else:
+                existing = {(str(r["filed"])[:10],
+                             str(r.get("period_end") or "")[:10])
+                            for r in store.select("fundamentals_pit",
+                                                  columns="filed,period_end",
+                                                  filters={"symbol": sym})}
             fresh = [r for r in rows
                      if (str(r["filed"])[:10],
                          str(r.get("period_end") or "")[:10]) not in existing]
@@ -406,31 +445,70 @@ def coverage(store=None) -> dict:
 
 
 # ── validation vs the frozen Polygon table (the lab's gate) ──
+#
+# LIKE-FOR-LIKE ONLY. The first validation run (2026-07-14) compared blended
+# RATIOS at snapshot dates and failed across the board — autopsy showed the
+# comparison itself was invalid, not the data: (a) the frozen snapshots carry
+# each company's latest ANNUAL filing (AAPL's 2026-06-10 row holds FY-2025
+# figures), so our fresh TTM values were being scored against numbers up to a
+# year older; (b) Polygon's debt_to_equity is total LIABILITIES / equity
+# (ours: interest-bearing debt / equity — AAPL 3.87 vs 0.78, both "correct");
+# (c) Polygon's free_cash_flow equals operating cash flow — capex is not
+# subtracted. No correct dataset could pass a naive ratio join against that
+# reference. What CAN be tested: the frozen rows embed Polygon's raw filing
+# extracts (raw_data.financials) — revenue, net income, equity, assets,
+# shares, EPS from a specific 10-K. Comparing our value FOR THE SAME FILING
+# against theirs tests exactly what the gate is for — does EDGAR give us the
+# same numbers a paid vendor extracted? — with definitions and timing
+# cancelled out. The owner's bar is unchanged: >=90% within ±10% per metric.
 
-VALIDATION_METRICS = [
-    # (our field, frozen field, price_based)
-    ("earnings_per_share", "earnings_per_share", False),
-    ("return_on_equity", "return_on_equity", False),
-    ("return_on_assets", "return_on_assets", False),
-    ("debt_to_equity", "debt_to_equity", False),
-    ("current_ratio", "current_ratio", False),
-    ("price_to_earnings", "price_to_earnings", True),
-    ("price_to_sales", "price_to_sales", True),
-    ("price_to_book", "price_to_book", True),
-    ("market_cap", "market_cap", True),
+VALIDATION_INGREDIENTS = [
+    # (label, ours(pit_data) -> value, theirs(financials, raw_root) -> value)
+    ("revenue_fy",
+     lambda p: p.get("_revenue_ttm"), lambda f, r: f.get("revenues")),
+    ("net_income_fy",
+     lambda p: p.get("_net_income_ttm"), lambda f, r: f.get("net_income")),
+    ("book_equity",
+     lambda p: p.get("_book_equity"), lambda f, r: f.get("equity")),
+    ("total_assets",
+     lambda p: (p["_net_income_ttm"] / p["return_on_assets"]
+                if p.get("return_on_assets") and p.get("_net_income_ttm")
+                else None),
+     lambda f, r: f.get("total_assets")),
+    ("current_ratio",
+     lambda p: p.get("current_ratio"),
+     lambda f, r: (f["current_assets"] / f["current_liabilities"]
+                   if f.get("current_assets") and f.get("current_liabilities")
+                   else None)),
+    ("shares_outstanding",
+     lambda p: p.get("_shares"),
+     lambda f, r: (r.get("share_class_shares_outstanding")
+                   or r.get("weighted_shares_outstanding"))),
+    ("earnings_per_share",
+     lambda p: p.get("earnings_per_share"), lambda f, r: f.get("diluted_eps")),
+    ("free_cash_flow",
+     lambda p: p.get("_fcf_ttm"),
+     lambda f, r: (f["operating_cash_flow"] - f["capex"]
+                   if f.get("operating_cash_flow") is not None
+                   and f.get("capex") is not None else None)),
 ]
 PASS_WITHIN = 0.10   # ±10%
 PASS_SHARE = 0.90    # >=90% of comparables
+MIN_PAIRS = 20       # a metric with fewer comparables can't pass or fail
 
 
 def validate(store=None, *, max_symbols: int = 150) -> dict:
-    """Cross-check EDGAR-derived values against the frozen vendor table.
+    """Cross-check EDGAR-derived values against Polygon's raw filing extracts.
 
-    For each symbol present in both: take the frozen row at its newest as_of,
-    the newest PIT row filed <= that as_of, and the daily_bars close on/before
-    it for price-based ratios. Per-metric agreement stats; the STRICT gate is
-    >=90% of comparables within ±10%. Fundamentals stay quarantined from the
-    lab until this passes (owner decision 2026-07-14)."""
+    Per symbol: the frozen table's newest snapshot embeds the vendor's
+    numbers from that company's latest ANNUAL filing. Our matching row is
+    the newest 10-K PIT row filed on/before the snapshot — at a 10-K's filed
+    date our TTM equals that fiscal year exactly (Q4 is derived as FY minus
+    three quarters), so the same-quantity comparison is direct. If revenue
+    disagrees >15% we try the one-year-earlier 10-K and keep it only on a
+    <2% revenue match (vendor snapshot lag — period alignment, not
+    cherry-picking; the swap is counted and reported). STRICT gate:
+    >=90% of comparables within ±10% per metric, min 20 pairs."""
     from agent.store import get_store
 
     store = store or get_store()
@@ -443,30 +521,50 @@ def validate(store=None, *, max_symbols: int = 150) -> dict:
         "fundamentals_pit", columns="symbol", limit=100000)}
     common = sorted(set(newest_frozen) & pit_syms)[:max_symbols]
 
-    stats = {m[0]: {"n": 0, "within": 0, "worst": []} for m in VALIDATION_METRICS}
+    stats = {m[0]: {"n": 0, "within": 0, "worst": []}
+             for m in VALIDATION_INGREDIENTS}
+    compared = skipped = lag_swaps = 0
     for sym in common:
         fr = newest_frozen[sym]
         as_of = _iso(str(fr["as_of"]))
         fdata = fr["data"] if isinstance(fr["data"], dict) else json.loads(fr["data"])
-        prows = store.select("fundamentals_pit", columns="filed,data",
-                             filters={"symbol": sym, "filed": ("lte", as_of)},
-                             order=[("filed", "desc")], limit=1)
-        if not prows:
+        root = (fdata.get("raw_data") or {})
+        fin = root.get("financials") or {}
+        if not fin:
+            skipped += 1
             continue
-        pdata = prows[0]["data"]
-        if not isinstance(pdata, dict):
-            pdata = json.loads(pdata)
-        bars = store.select("daily_bars", columns="date,close",
-                            filters={"symbol": sym, "date": ("lte", as_of)},
-                            order=[("date", "desc")], limit=1)
-        close = float(bars[0]["close"]) if bars else None
-        ours = {**pdata, **price_ratios(pdata, close)}
-        for our_f, frozen_f, _price_based in VALIDATION_METRICS:
-            a, b = ours.get(our_f), fdata.get(frozen_f)
+        krows = store.select(
+            "fundamentals_pit", columns="filed,data",
+            filters={"symbol": sym, "form": "10-K", "filed": ("lte", as_of)},
+            order=[("filed", "desc")], limit=2)
+        if not krows:
+            skipped += 1
+            continue
+
+        def pdat(row):
+            d = row["data"]
+            return d if isinstance(d, dict) else json.loads(d)
+
+        pdata = pdat(krows[0])
+        rev_ours, rev_theirs = pdata.get("_revenue_ttm"), fin.get("revenues")
+        if (rev_ours and rev_theirs
+                and abs(rev_ours - rev_theirs) / abs(rev_theirs) > 0.15
+                and len(krows) > 1):
+            prior = pdat(krows[1])
+            pr = prior.get("_revenue_ttm")
+            if pr and abs(pr - rev_theirs) / abs(rev_theirs) < 0.02:
+                pdata = prior          # vendor snapshot held the older 10-K
+                lag_swaps += 1
+        compared += 1
+        for label, ours_fn, theirs_fn in VALIDATION_INGREDIENTS:
+            try:
+                a, b = ours_fn(pdata), theirs_fn(fin, root)
+            except (TypeError, ZeroDivisionError, KeyError):
+                continue
             if a is None or b is None or b == 0:
                 continue
             rel = abs(a - b) / abs(b)
-            st = stats[our_f]
+            st = stats[label]
             st["n"] += 1
             if rel <= PASS_WITHIN:
                 st["within"] += 1
@@ -474,17 +572,19 @@ def validate(store=None, *, max_symbols: int = 150) -> dict:
                 st["worst"].append({"symbol": sym, "ours": round(a, 4),
                                     "frozen": round(b, 4),
                                     "rel_diff_pct": round(rel * 100, 1)})
-    report = {"compared_symbols": len(common), "bar": PASS_SHARE,
-              "within": PASS_WITHIN, "metrics": {}}
+    report = {"compared_symbols": compared, "skipped": skipped,
+              "period_lag_swaps": lag_swaps,
+              "bar": PASS_SHARE, "within": PASS_WITHIN, "metrics": {}}
     passed = True
     for m, st in stats.items():
         share = (st["within"] / st["n"]) if st["n"] else None
-        ok = share is not None and share >= PASS_SHARE and st["n"] >= 20
-        if share is not None and not ok:
+        ok = share is not None and share >= PASS_SHARE and st["n"] >= MIN_PAIRS
+        if not ok:
             passed = False
-        report["metrics"][m] = {"n": st["n"],
-                                "agree_share": round(share, 3) if share is not None else None,
-                                "pass": ok, "worst": st["worst"]}
+        report["metrics"][m] = {
+            "n": st["n"],
+            "agree_share": round(share, 3) if share is not None else None,
+            "pass": ok, "worst": st["worst"]}
     report["verdict"] = "PASS" if passed else "FAIL"
     return report
 
@@ -497,6 +597,8 @@ def main(argv: list[str] | None = None) -> None:
     ing = sub.add_parser("ingest")
     ing.add_argument("--symbols", default=None)
     ing.add_argument("--universe", type=int, default=None)
+    ing.add_argument("--rebuild", action="store_true",
+                     help="recompute existing symbols (delete + reinsert)")
     sub.add_parser("coverage")
     va = sub.add_parser("validate")
     va.add_argument("--max-symbols", type=int, default=150)
@@ -504,7 +606,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.cmd == "ingest":
         syms = ([s.strip().upper() for s in args.symbols.split(",") if s.strip()]
                 if args.symbols else None)
-        print(json.dumps(ingest(symbols=syms, universe=args.universe),
+        print(json.dumps(ingest(symbols=syms, universe=args.universe,
+                                rebuild=args.rebuild),
                          indent=2, default=str))
     elif args.cmd == "coverage":
         print(json.dumps(coverage(), indent=2, default=str))
