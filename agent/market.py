@@ -110,6 +110,76 @@ def _movers(store, *, top_k: int = 8, min_coverage: int | None = None) -> dict:
     return out
 
 
+def compute_screens(rows: list[dict], *, top_exclude: int = 40,
+                    pool_max_rank: int = 1000) -> dict:
+    """Full-market discovery screens (pure logic over bar rows).
+
+    The trader's research funnel starts from the top-40 dollar-volume list,
+    which is megacaps by construction — after a week it had traded 9 famous
+    names. These screens surface what that funnel structurally misses:
+    leaders among dollar-volume ranks 41..pool_max_rank. 3-MONTH structure
+    (the window the nightly fresh set affordably supports over ~1,000 names):
+    - beyond_megacaps: top 15 by 3-month return, price > $5, above its
+      50-session average (uptrend gate at this window).
+    - new_highs: within 2% of a fresh 70-session high with positive 3m return.
+    ``rows``: dicts with symbol/date/close/volume, any order.
+    """
+    series: dict[str, list[tuple[str, float, float]]] = {}
+    for r in rows:
+        c = r.get("close")
+        if c is None:
+            continue
+        series.setdefault(r["symbol"], []).append(
+            (str(r["date"])[:10], float(c), float(r.get("volume") or 0.0)))
+    for sym in series:
+        series[sym].sort()
+    # Rank by median dollar volume over each name's last 5 sessions.
+    dv = {sym: sorted(c * v for _, c, v in s[-5:])[len(s[-5:]) // 2]
+          for sym, s in series.items() if len(s) >= 5}
+    ranked = sorted(dv, key=lambda s: -dv[s])
+    rank = {sym: i + 1 for i, sym in enumerate(ranked)}
+
+    pool = []
+    for sym, s in series.items():
+        rk = rank.get(sym)
+        if rk is None or rk <= top_exclude or rk > pool_max_rank:
+            continue
+        closes = [c for _, c, _ in s]
+        if len(closes) < 64 or closes[-1] < 5.0 \
+                or any(ch in sym for ch in (".", "/", "=")):
+            continue
+        ret3m = closes[-1] / closes[-64] - 1.0
+        avg50 = sum(closes[-50:]) / 50
+        hi70 = max(closes[-70:])
+        pool.append({"symbol": sym, "rank": rk, "close": round(closes[-1], 2),
+                     "ret_3m_pct": round(ret3m * 100, 1),
+                     "above_50d": closes[-1] > avg50,
+                     "high_prox": round(closes[-1] / hi70, 4) if hi70 else 0})
+    beyond = sorted((p for p in pool if p["ret_3m_pct"] > 0 and p["above_50d"]),
+                    key=lambda p: -p["ret_3m_pct"])[:15]
+    highs = sorted((p for p in pool if p["high_prox"] >= 0.98
+                    and p["ret_3m_pct"] > 0),
+                   key=lambda p: -p["high_prox"])[:10]
+    strip = ("above_50d", "high_prox")
+    return {"pool_size": len(pool),
+            "note": "3-month structure over dollar-volume ranks "
+                    f"{top_exclude + 1}-{pool_max_rank} of the fresh set — "
+                    "the leaders the top-40 funnel structurally misses",
+            "beyond_megacaps": [{k: v for k, v in p.items() if k not in strip}
+                                for p in beyond],
+            "new_highs": [{k: v for k, v in p.items() if k not in strip}
+                          for p in highs]}
+
+
+def _screens(store) -> dict:
+    """Gather ~100 trading days of the fresh set and compute the screens."""
+    lo = _et_today() - timedelta(days=150)
+    rows = store.select("daily_bars", columns="symbol,date,close,volume",
+                        filters={"date": ("gte", lo)},
+                        order=[("date", "asc"), ("symbol", "asc")])
+    return compute_screens(rows)
+
+
 def build_brief(*, top: int = 40) -> dict:
     """Assemble tonight's research pack and upsert it (one row per ET date).
 
@@ -176,11 +246,12 @@ def build_brief(*, top: int = 40) -> dict:
         return lab.leaderboard(top=8)
 
     lab_board = _safe("lab", _lab, {})
+    screens = _safe("screens", lambda: _screens(store), {})
 
     payload = {"as_of": str(today), "regime": regime, "coverage": coverage,
                "universe_top": top_syms, "movers": movers,
                "trend_roster": trend, "headlines": headlines,
-               "lab_leaderboard": lab_board,
+               "lab_leaderboard": lab_board, "screens": screens,
                "errors": errors}
     built_at = datetime.now(timezone.utc).replace(tzinfo=None)
     values = {"payload": payload, "built_at": built_at}

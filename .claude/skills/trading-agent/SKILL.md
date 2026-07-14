@@ -139,6 +139,14 @@ of trading from memory:
   volume from the fresh hot set (the nightly `--source alpaca-market` ingest
   keeps ~1000+ names current). These are the market's leaders right now; scan
   them for uptrends + momentum that fit your thesis.
+- **Look past the megacaps — the brief's `screens` section exists because
+  your funnel is biased.** It lists the 3-month leaders and fresh-high names
+  among dollar-volume ranks 41–1000 — real, liquid companies the top-40 list
+  structurally hides. On any cycle where you shop, at least ONE shortlist
+  candidate must come from `screens`; if it loses the slot, `rejected.json`
+  says why. Friday's grading then measures whether the megacap habit costs
+  alpha — data, not vibes. (A screens name you buy still needs the same
+  evidence bar: live quote, indicators, news, backtest support.)
 - `python -m agent.broker assets --optionable --limit 40` — enumerate optionable
   underlyings when you want an options structure on a name you don't hold.
 - Any name you name is quote-and-fillable live even if it's outside the fresh

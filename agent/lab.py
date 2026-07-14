@@ -45,7 +45,11 @@ RULES = (
     + [f"regime_momentum:{k}" for k in (3, 5, 8, 12)]
 )
 SCHEDULES = ("weekly", "monthly")
-UNIVERSES = ("top20", "top40", "top60")  # most-liquid slices of the hot set
+# Most-liquid slices of the hot set, plus mid200 (dollar-volume ranks 41-240):
+# a rule that only works on megacaps is riding fame, not edge — and deep-
+# history tests on today's top names carry survivorship shine that mid-tier
+# slices partially deflate.
+UNIVERSES = ("top20", "top40", "top60", "mid200")
 
 
 def build_grid() -> list[dict]:
@@ -77,8 +81,11 @@ def score_combo(half_a: dict, half_b: dict) -> dict:
 def _universe_symbols(name: str) -> list[str]:
     from agent import data
 
-    n = {"top20": 20, "top40": 40, "top60": 60}[name]
-    syms = data.universe(n)
+    if name == "mid200":
+        syms = data.universe(240)[40:]
+    else:
+        n = {"top20": 20, "top40": 40, "top60": 60}[name]
+        syms = data.universe(n)
     if "SPY" not in syms:
         syms = [*syms, "SPY"]  # regime gauge for regime_momentum; harmless else
     return syms

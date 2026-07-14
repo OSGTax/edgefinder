@@ -83,6 +83,46 @@ def test_build_brief_upserts_one_row_per_date(store):
     assert payload["coverage"]["status"] in ("green", "amber", "red")
 
 
+def test_compute_screens_surfaces_midtier_leaders():
+    from agent.market import compute_screens
+
+    # 45 "megacaps": huge dollar volume, flat price action.
+    rows = []
+    days = [str(TODAY - timedelta(days=n)) for n in range(99, -1, -1)]
+    for i in range(45):
+        sym = f"MEGA{i:02d}"
+        for d in days:
+            rows.append({"symbol": sym, "date": d, "close": 100.0,
+                         "volume": 1e9 - i * 1e6})
+    # Mid-tier leader: modest volume, +50% over the window, at its high.
+    for j, d in enumerate(days):
+        rows.append({"symbol": "RISER", "date": d,
+                     "close": 20.0 + j * 0.1, "volume": 3e6})
+    # Mid-tier laggard and a sub-$5 name: must not appear.
+    for d in days:
+        rows.append({"symbol": "FLAT", "date": d, "close": 50.0, "volume": 2e6})
+        rows.append({"symbol": "PENNY", "date": d, "close": 3.0, "volume": 4e6})
+
+    s = compute_screens(rows, top_exclude=40)
+    beyond = [e["symbol"] for e in s["beyond_megacaps"]]
+    assert "RISER" in beyond
+    assert all(not b.startswith("MEGA") for b in beyond)  # funnel bias excluded
+    assert "PENNY" not in beyond and "FLAT" not in beyond
+    assert "RISER" in [e["symbol"] for e in s["new_highs"]]  # ends at its high
+    riser = next(e for e in s["beyond_megacaps"] if e["symbol"] == "RISER")
+    assert riser["rank"] > 40 and riser["ret_3m_pct"] > 20
+
+
+def test_brief_payload_carries_screens(store):
+    from agent.market import build_brief
+
+    for i in range(1, 3):
+        seed_day(store, TODAY - timedelta(days=i), {"AAA": 100.0, "SPY": 600.0})
+    build_brief(top=3)
+    rows = store.select("desk_briefs", filters={"account": "agent"})
+    assert "screens" in rows[0]["payload"]
+
+
 def test_movers_exclude_split_symbols(store):
     from agent.market import _movers
 

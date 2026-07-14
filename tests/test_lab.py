@@ -24,6 +24,8 @@ def test_grid_is_deterministic_and_complete():
     assert len(g1) == len({(c["rule"], c["schedule"], c["universe"])
                            for c in g1})  # no duplicate combos
     assert len(g1) > 100  # a real sweep space, not a toy
+    # The mid-tier slice is in the grid: rules must survive beyond megacaps.
+    assert {c["universe"] for c in g1} == {"top20", "top40", "top60", "mid200"}
 
 
 def test_score_combo_requires_both_halves_positive():

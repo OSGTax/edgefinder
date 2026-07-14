@@ -42,7 +42,12 @@ Run id: `lab-YYYY-MM-DD`. Narrate with
 4. `python -m agent.lab leaderboard --top 10` — sanity-check the standing
    board the brief will carry tomorrow (it reads the last 14 days of lab
    rows, deduped to the newest per combo).
-5. Close with one `brain think` summary line: tested N, qualified M, top
+5. **Rebuild the brief so tomorrow carries TONIGHT's board:**
+   `python -m agent.market brief-build` — it upserts tonight's brief in
+   place. The data-refresh routine built it before your sweep ran; without
+   this rebuild the trader reads a leaderboard one night stale. If the
+   build output's `errors` list is non-empty, re-run it once.
+6. Close with one `brain think` summary line: tested N, qualified M, top
    rule + its worst-half excess, and anything the trader should notice
    tomorrow. If the sweep errored badly (many combos failing), say so
    loudly — a silent lab is a lying lab.

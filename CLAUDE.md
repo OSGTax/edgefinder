@@ -38,7 +38,7 @@ rules). The agent's operating manual is
 | Desk page | Render | Live ticks, the book, thinking feed, decisions, journal, What's New |
 | Trading brain | Claude Code Routine, **agent-paced** (no cron: each run's summary requests its next run time; the owner fires it) | Runs the `trading-agent` skill; fills via `agent.ledger fill` |
 | Data refresh | Claude Code Routine, nightly | `data-refresh` skill — whole-market ingest, fresh top-N set |
-| Strategy Lab | Claude Code Routine, nightly post-ingest | `strategy-lab` skill — mass backtest sweep, split-sample scored, leaderboard → the brief |
+| Strategy Lab | Claude Code Routine, nightly post-ingest | `strategy-lab` skill — mass backtest sweep (incl. mid-tier universe), split-sample scored, leaderboard → rebuilds the brief |
 | App evolver | Claude Code Routine, nightly | `app-evolver` skill — one small announced `/desk` improvement |
 | Reflection | Claude Code Routine, Friday post-close | `reflection-agent` skill — score aged ideas, prune the lessons wiki |
 | Book + state | Supabase (`desk_*` tables) | Ledger (source of truth), strategy, journal, thinking, changelog |
