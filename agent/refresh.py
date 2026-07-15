@@ -53,6 +53,15 @@ def _bound_network(timeout: float = NET_TIMEOUT_S) -> None:
     socket.setdefaulttimeout(timeout)
 
 
+def _backfill_needed(earliest_r2_date: str | None, start: date) -> bool:
+    """Pure resumability check for ``backfill_r2_history``: does a symbol
+    whose R2 archive currently starts at ``earliest_r2_date`` (``None`` when
+    there's no archive yet) still need fetching for a backfill targeting
+    ``start``? False when the archive already reaches back to (or past)
+    ``start`` — already covered by a legacy import or a prior backfill run."""
+    return not (earliest_r2_date and earliest_r2_date <= start.isoformat())
+
+
 def alpaca_bars_to_rows(bars, symbol: str) -> list[dict]:
     """Alpaca daily-bar objects → daily_bars rows (pure; unit-tested)."""
     rows = []
@@ -548,6 +557,183 @@ def merge_bar_frames(r2_rows, db_rows):
     return out.reset_index(drop=True)
 
 
+def _r2_client():
+    """Shared R2/S3 client + bucket setup for the merge-sync and backfill
+    paths. Returns ``(s3, bucket)`` or ``None`` when R2_* creds are absent OR
+    client construction itself fails (malformed endpoint, bad credential
+    format, ...) — archival is best-effort everywhere else in this module,
+    so a setup failure here must degrade the same way, not raise and abort
+    whatever refresh/backfill run called it."""
+    import os
+
+    if not all(os.getenv(k) for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+                                      "R2_ENDPOINT", "R2_BUCKET")):
+        return None
+    try:
+        import boto3
+
+        s3 = boto3.client("s3", endpoint_url=os.environ["R2_ENDPOINT"],
+                          aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+                          aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"])
+        return s3, os.environ["R2_BUCKET"]
+    except Exception as exc:  # noqa: BLE001 — archival is best-effort
+        logger.warning("R2 client setup failed: %s", exc)
+        return None
+
+
+def backfill_r2_history(symbols: list[str], *, start: date,
+                        end: date | None = None, chunk: int = 100,
+                        dry_run: bool = False) -> dict:
+    """ONE-TIME deep-history backfill straight into the R2 archive.
+
+    The nightly ``alpaca-market`` ingest only ever pulls a trailing
+    ``max_days`` window and flows through ``daily_bars`` (a deliberately
+    RECENT-only hot set — see ``refresh_alpaca_market``). Backfilling years
+    of history for a thousand-plus symbols that way would bloat that table
+    by millions of rows for no operational benefit, so this path fetches
+    Alpaca bars for an explicit historical ``[start, end)`` window and merges
+    them straight into the grow-only R2 parquet archive, bypassing
+    ``daily_bars`` entirely.
+
+    Resumable and idempotent by construction, no extra state needed: each
+    symbol's CURRENT earliest R2 date is read before fetching anything: a
+    symbol whose archive already reaches back to (or past) ``start`` — the
+    11 legacy benchmark ETFs with genuine ~21y history, or a symbol a prior
+    run already backfilled — is skipped, costing one S3 read and zero Alpaca
+    calls. A killed/interrupted run can simply be re-invoked with the same
+    arguments and only fetches what's still missing.
+
+    Each symbol's parquet is re-read immediately before its merge+write (not
+    cached from the resumability check above) — this run shares the same
+    ``bars/{symbol}.parquet`` keys with the hourly ``_r2_merge_sync`` path,
+    and a stale in-memory frame written back after a long batched run could
+    silently discard whatever the hourly sync wrote in between.
+
+    Alpaca's own historical depth is NOT unlimited: as of this writing every
+    equity/ETF caps at 2016-01-04 regardless of how far back ``start`` asks
+    (confirmed live across AAPL/SPY/MSFT/JPM/IBM) — that is a data-source
+    ceiling, not a bug this tool can work around. Passing a ``start`` before
+    that ceiling is harmless (Alpaca simply returns what it has); it does
+    NOT reach the deeper history the legacy ETF rows carry.
+    """
+    import io
+    import time
+
+    import pandas as pd
+
+    from agent import broker
+
+    if not broker.enabled():
+        return {"error": "no Alpaca keys — cannot backfill"}
+    client = _r2_client()
+    if client is None:
+        return {"error": "no R2_* creds — nothing to backfill into"}
+    s3, bucket = client
+    _bound_network(R2_NET_TIMEOUT_S)
+    b = broker.Broker()
+
+    try:
+        manifest = json.loads(s3.get_object(
+            Bucket=bucket, Key="manifest.json")["Body"].read())
+    except Exception:  # noqa: BLE001 — missing manifest = fresh entries
+        manifest = {}
+
+    def _flush_manifest() -> bool:
+        try:
+            s3.put_object(Bucket=bucket, Key="manifest.json",
+                          Body=json.dumps(manifest).encode())
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("backfill manifest flush failed: %s", exc)
+            return False
+
+    def _read_parquet(sym: str):
+        try:
+            body = s3.get_object(Bucket=bucket,
+                                 Key=f"bars/{sym}.parquet")["Body"].read()
+            return pd.read_parquet(io.BytesIO(body))
+        except Exception:  # noqa: BLE001 — no parquet yet for this symbol
+            return None
+
+    # Skip symbols whose R2 archive already reaches back to (or past) `start`
+    # — the resumability check. One S3 read per symbol; cheap next to an
+    # Alpaca call, and this is a one-time job, not an hourly-cadence one.
+    # Deliberately NOT caching the frame here: a batched run spans many
+    # Alpaca calls with retries, and the hourly ``_r2_merge_sync`` shares
+    # these same parquet keys — a frame cached at the START of a long run
+    # and written back at the END would silently clobber anything the
+    # hourly sync wrote in between. Each symbol's frame is re-read fresh
+    # immediately before its merge+write below instead, mirroring
+    # ``_sync_one``'s same-iteration read-merge-write pattern.
+    needs_backfill: list[str] = []
+    already_covered = 0
+    for sym in symbols:
+        df = _read_parquet(sym)
+        earliest = str(df["date"].min())[:10] if df is not None and len(df) else None
+        if not _backfill_needed(earliest, start):
+            already_covered += 1
+            continue
+        needs_backfill.append(sym)
+
+    summary: dict = {"requested": len(symbols), "already_covered": already_covered,
+                     "to_backfill": len(needs_backfill), "start": start.isoformat(),
+                     "end": (end or date.today()).isoformat(), "dry_run": dry_run}
+    if dry_run or not needs_backfill:
+        summary["sample"] = needs_backfill[:25]
+        return summary
+
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+
+    synced = errors = bars_fetched = 0
+    dirty = 0
+    for i in range(0, len(needs_backfill), chunk):
+        batch = needs_backfill[i:i + chunk]
+        for attempt in range(3):
+            try:
+                req = StockBarsRequest(symbol_or_symbols=batch, timeframe=TimeFrame.Day,
+                                       start=start, end=end or date.today())
+                res = b.data.get_stock_bars(req)
+                fetched = res.data if hasattr(res, "data") else {}
+                break
+            except Exception as exc:  # noqa: BLE001 — one batch can't abort the run
+                if attempt == 2:
+                    logger.warning("backfill batch @%d failed: %s", i, exc)
+                    errors += len(batch)
+                    fetched = {}
+                else:
+                    time.sleep(0.5 * (attempt + 1))
+        for sym in batch:
+            rows = alpaca_bars_to_rows(fetched.get(sym, []), sym)
+            bars_fetched += len(rows)
+            if not rows:
+                continue
+            # Re-read fresh, right before merging — closes the race window
+            # against a concurrent hourly sync (see the comment above).
+            current_df = _read_parquet(sym)
+            merged = merge_bar_frames(current_df, rows)
+            try:
+                buf = io.BytesIO()
+                merged.to_parquet(buf, index=False)
+                s3.put_object(Bucket=bucket, Key=f"bars/{sym}.parquet",
+                              Body=buf.getvalue())
+                manifest[sym] = {"rows": int(len(merged)),
+                                 "max_date": str(merged["date"].iloc[-1]),
+                                 "min_date": str(merged["date"].iloc[0])}
+                synced += 1
+                dirty += 1
+                if dirty >= 200:
+                    _flush_manifest()
+                    dirty = 0
+            except Exception as exc:  # noqa: BLE001 — one symbol can't abort the run
+                logger.warning("backfill write failed for %s: %s", sym, exc)
+                errors += 1
+    if dirty:
+        _flush_manifest()
+    summary.update({"synced": synced, "errors": errors, "bars_fetched": bars_fetched})
+    return summary
+
+
 def _r2_merge_sync(symbols: list[str]):
     """Grow the R2 parquet archive from the DB — transport-agnostic.
 
@@ -557,26 +743,21 @@ def _r2_merge_sync(symbols: list[str]):
     fingerprint; unchanged symbols cost one tiny store query."""
     import io
     import json as _json
-    import os
     import time
 
-    if not all(os.getenv(k) for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
-                                      "R2_ENDPOINT", "R2_BUCKET")):
+    client = _r2_client()
+    if client is None:
         return "skipped (no R2_* env)"
     # R2 needs a wider socket timeout than Alpaca REST — parquet PUTs are
     # multi-MB and legitimately take longer than a JSON-shaped Alpaca call.
     _bound_network(R2_NET_TIMEOUT_S)
     try:  # setup only — a failure here really is fatal to the whole sync
-        import boto3
         import pandas as pd
 
         from agent.store import get_store
 
         store = get_store()
-        s3 = boto3.client("s3", endpoint_url=os.environ["R2_ENDPOINT"],
-                          aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-                          aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"])
-        bucket = os.environ["R2_BUCKET"]
+        s3, bucket = client
     except Exception as exc:  # noqa: BLE001 — archival is best-effort
         logger.warning("R2 merge-sync setup failed: %s", exc)
         return f"skipped ({type(exc).__name__}: {exc})"
@@ -657,15 +838,23 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--source", choices=["alpaca", "alpaca-market"], default="alpaca",
+    p.add_argument("--source", choices=["alpaca", "alpaca-market", "alpaca-backfill"],
+                   default="alpaca",
                    help="alpaca = live-universe top-up (default, cheap/hourly); "
-                        "alpaca-market = full-market rank + top-N ingest (nightly)")
+                        "alpaca-market = full-market rank + top-N ingest (nightly); "
+                        "alpaca-backfill = ONE-TIME deep-history R2 backfill")
     p.add_argument("--max-days", type=int, default=7)
     p.add_argument("--top", type=int, default=1000)
     p.add_argument("--optionable", action="store_true",
                    help="alpaca-market: restrict the catalog to optionable names")
     p.add_argument("--min-price", type=float, default=1.0)
     p.add_argument("--max-price", type=float, default=100_000.0)
+    p.add_argument("--symbols", type=str, default=None,
+                   help="alpaca-backfill: comma-separated symbol list "
+                        "(default: today's top --top by dollar volume)")
+    p.add_argument("--backfill-start", type=str, default="2016-01-04",
+                   help="alpaca-backfill: ISO date, earliest Alpaca will "
+                        "actually serve for equities/ETFs (default 2016-01-04)")
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args(argv)
     if args.source == "alpaca-market":
@@ -674,6 +863,14 @@ def main(argv: list[str] | None = None) -> None:
                                     min_price=args.min_price, max_price=args.max_price,
                                     optionable_only=args.optionable,
                                     dry_run=args.dry_run)
+    elif args.source == "alpaca-backfill":
+        if args.symbols:
+            syms = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+        else:
+            from agent import data
+            syms = data.universe(args.top)
+        out = backfill_r2_history(syms, start=date.fromisoformat(args.backfill_start),
+                                  dry_run=args.dry_run)
     else:
         out = refresh_alpaca(max_days=args.max_days)
     print(json.dumps(out, indent=2, default=str))
