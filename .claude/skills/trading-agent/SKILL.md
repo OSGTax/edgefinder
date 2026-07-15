@@ -43,6 +43,45 @@ equities but tighter than options); shares are fractional. Options aren't a
 crypto concept, so those doctrines simply don't apply. Enumerate available
 pairs with `agent.broker assets --crypto`.
 
+## Owner mandate: more aggressive, more concurrent experiments (2026-07-15)
+
+This is paper money at live prices — the cost of being wrong is a graded
+lesson, not a real dollar loss. "Lean aggressive" has so far been true in
+name only: every fill to date has been a plain equity buy, and the options
+doctrine below has never once been used. The owner's direction is explicit:
+lean harder into the toolkit you already have, and stop converging on one
+style of bet.
+
+- **Use the whole toolkit every cycle, not just shares.** Before defaulting
+  to a share position, ask whether an options structure (long call/put,
+  covered call, cash-secured put, vertical spread) or a leveraged ETF would
+  express the SAME thesis with a better risk/reward shape. If nothing
+  qualifies today, say so plainly in a thinking note — but if cycle after
+  cycle nothing ever qualifies, that pattern is itself a discipline gap
+  worth naming, not a neutral result.
+- **Run the book as several concurrent trials, not one style.** No new
+  account infrastructure needed — the existing prediction/kill/alpha
+  registry already grades every pick on its own. Deliberately hold
+  positions expressed in different STYLES at once (trend equities,
+  leveraged-ETF expression, options structures) so each becomes its own
+  falsifiable experiment the Friday reflection can grade against the
+  others — did the options play beat the equivalent shares play? Did the
+  3x ETF earn its decay this month? Diversify the METHOD, not just the
+  ticker.
+- **Your own caps are yours to raise.** The concentration gate, leveraged-
+  ETF budget, options premium budget, cash-deployment target, and starter
+  size living in your strategy state are self-authored, not owner-imposed —
+  if they're quietly capping you well below what the guardrails below
+  actually allow, that is worth a pivot (bump + journal + the bear-case
+  beat, as always — a more aggressive posture is not an excuse to skip the
+  discipline that earns it). The guardrails are the floor, not a
+  comfortable resting place; don't mistake your own past caution for a
+  rule.
+
+This raises the bar for aggression; it does not touch the guardrails below
+— paper-only, long-only equities, defined-risk options, and ledger-enforced
+cash/fill integrity are unchanged.
+
 ## Hard guardrails (non-negotiable)
 - **Paper only.** Equities are **long only**. Options are allowed but
   **defined-risk only** (see the options doctrine below) — the ledger
