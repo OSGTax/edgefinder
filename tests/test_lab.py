@@ -286,3 +286,45 @@ def test_value_momentum_in_lab_grid():
     grid = build_grid()
     rules = {g["rule"] for g in grid}
     assert {"value_momentum:5", "value_momentum:8"} <= rules
+
+
+# ── _pit_universe (regression: point-in-time universe, not today's list) ──
+
+
+def _bars(spec):
+    """spec: [(day_offset, volume)] at a constant $50 close, from 2020-01-01."""
+    start = date(2020, 1, 1)
+    rows = [{"date": start + timedelta(days=off), "open": 50.0, "high": 50.5,
+             "low": 49.5, "close": 50.0, "volume": vol} for off, vol in spec]
+    return pd.DataFrame(rows)
+
+
+def test_pit_universe_excludes_a_future_winner_before_it_existed():
+    """The exact shape of the bug the Lab flagged on 2026-07-15: a name that
+    is huge TODAY (LATER) must not appear in a universe ranked before it had
+    any trading history at all — only in one ranked after."""
+    from agent.lab import _pit_universe
+
+    pool = {
+        "LATER": _bars([(i, 60_000_000.0) for i in range(400, 440)]),  # starts day 400
+        "STEADY_A": _bars([(i, 5_000_000.0) for i in range(0, 440)]),
+        "STEADY_B": _bars([(i, 4_000_000.0) for i in range(0, 440)]),
+    }
+    early = date(2020, 1, 1) + timedelta(days=100)   # before LATER exists
+    late = date(2020, 1, 1) + timedelta(days=439)    # after LATER's volume
+
+    assert "LATER" not in _pit_universe(pool, "top20", early)
+    assert "LATER" in _pit_universe(pool, "top20", late)
+
+
+def test_pit_universe_mid200_applies_the_41_240_offset():
+    from agent.lab import _pit_universe
+
+    # 3 heavy names (would occupy ranks 1-3) + 1 lighter name — mid200 (rank
+    # offset 40) must skip the heavy names entirely on this tiny pool.
+    pool = {f"HEAVY{i}": _bars([(d, 90_000_000.0) for d in range(0, 200)])
+           for i in range(3)}
+    pool["LIGHT"] = _bars([(d, 1_000_000.0) for d in range(0, 200)])
+    as_of = date(2020, 1, 1) + timedelta(days=199)
+    syms = _pit_universe(pool, "mid200", as_of)
+    assert not {"HEAVY0", "HEAVY1", "HEAVY2"} & set(syms)

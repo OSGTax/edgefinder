@@ -251,17 +251,38 @@ def test_record_trade_options_band_wider(store):
 
 
 def test_broker_session_helper_states(monkeypatch):
-    """Broker.session() returns regular/extended/closed from clock + ET wall."""
-    from datetime import datetime, timezone, timedelta
+    """Broker.session() returns regular/extended/closed from clock + ET wall.
+
+    Regression coverage for a real bug: post-market detection used to compare
+    clk.next_open/next_close dates against "today", but Alpaca rolls both
+    fields forward to the NEXT trading session the instant regular hours end
+    — so next_close never falls on "today" during the 16:00-20:00 ET window
+    it was meant to catch, and session() always fell through to 'closed'.
+    The fix asks the calendar for today's own open/close instead.
+    """
+    from datetime import date, datetime, timezone
 
     from agent import broker
 
+    class _Cal:
+        def __init__(self, d, open_hm, close_hm):
+            self.date = d
+            self.open = datetime(d.year, d.month, d.day, *open_hm)
+            self.close = datetime(d.year, d.month, d.day, *close_hm)
+
     class _Trading:
-        def __init__(self, is_open, nxt_open, nxt_close):
+        def __init__(self, is_open, nxt_open, nxt_close, calendar_rows=None,
+                     calendar_raises=False):
             self._c = SimpleNamespace(is_open=is_open, next_open=nxt_open,
                                       next_close=nxt_close)
+            self._calendar_rows = calendar_rows if calendar_rows is not None else []
+            self._calendar_raises = calendar_raises
         def get_clock(self):
             return self._c
+        def get_calendar(self, filters=None):
+            if self._calendar_raises:
+                raise RuntimeError("calendar endpoint down")
+            return self._calendar_rows
 
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_KEY", "k")
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_SECRET", "s")
@@ -273,10 +294,40 @@ def test_broker_session_helper_states(monkeypatch):
     # regular hours: is_open=True
     b._trading = _Trading(True, None, None)
     assert b.session() == "regular"
-    # closed: is_open False and both next_open/next_close far future/past
-    b._trading = _Trading(False,
-                          datetime(2099, 1, 1, 14, 30, tzinfo=timezone.utc),
-                          datetime(2099, 1, 1, 21, 0, tzinfo=timezone.utc))
+
+    # closed: is_open False, no calendar row for today at all (weekend/holiday)
+    b._trading = _Trading(False, None, None, calendar_rows=[])
+    assert b.session() == "closed"
+
+    # calendar lookup fails: fail closed rather than mis-detect a tradeable session
+    b._trading = _Trading(False, None, None, calendar_raises=True)
+    assert b.session() == "closed"
+
+    # post-market on a real trading day: next_open/next_close already rolled
+    # forward to TOMORROW (the exact live shape that broke the old logic), but
+    # today's calendar row says the close was hours ago and we're still <20:00 ET.
+    import agent.broker as broker_mod
+    today = date(2026, 7, 15)
+    tomorrow_open = datetime(2026, 7, 16, 13, 30, tzinfo=timezone.utc)
+    tomorrow_close = datetime(2026, 7, 16, 20, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(broker_mod, "_now_utc",
+                        lambda: datetime(2026, 7, 15, 20, 9, tzinfo=timezone.utc))  # 16:09 ET
+    b._trading = _Trading(False, tomorrow_open, tomorrow_close,
+                          calendar_rows=[_Cal(today, (9, 30), (16, 0))])
+    assert b.session() == "extended"
+
+    # pre-market on a trading day: before today's open, past 04:00 ET.
+    monkeypatch.setattr(broker_mod, "_now_utc",
+                        lambda: datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc))  # 08:00 ET
+    b._trading = _Trading(False, None, None,
+                          calendar_rows=[_Cal(today, (9, 30), (16, 0))])
+    assert b.session() == "extended"
+
+    # too late (>=20:00 ET) is still closed even on a real trading day.
+    monkeypatch.setattr(broker_mod, "_now_utc",
+                        lambda: datetime(2026, 7, 16, 0, 30, tzinfo=timezone.utc))  # 20:30 ET
+    b._trading = _Trading(False, None, None,
+                          calendar_rows=[_Cal(today, (9, 30), (16, 0))])
     assert b.session() == "closed"
 
 

@@ -16,8 +16,10 @@ The honesty rules (multiple-comparisons discipline):
 - The leaderboard always reports how many combos were tested alongside the
   winners. Picking 5 of 300 tested means expect shrinkage live; saying so
   is the difference between research and marketing.
-- Bars are loaded ONCE per universe and reused across the whole grid
-  (loading dominates backtest cost).
+- Bars are loaded ONCE for a broad candidate pool and reused across the
+  whole grid (loading dominates backtest cost); each universe bucket's
+  actual symbol list is then ranked POINT-IN-TIME per half, not off today's
+  dollar volume — see _pit_universe.
 
 CLI (JSON out, like every agent tool):
   python -m agent.lab sweep --max-combos 80 --time-budget-secs 2400
@@ -28,7 +30,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import date
+from datetime import date, timedelta
 
 # Where in-sample ends and out-of-sample begins. Chosen so both halves hold
 # multiple regimes (GFC + 2010s bull in-sample; covid, 2022 bear, the AI bull
@@ -55,6 +57,13 @@ SCHEDULES = ("weekly", "monthly")
 # history tests on today's top names carry survivorship shine that mid-tier
 # slices partially deflate.
 UNIVERSES = ("top20", "top40", "top60", "mid200")
+# Broad superset the universe pool loads bars for, wide enough to cover any
+# top20/40/60/mid200 slice AS RANKED AT ANY POINT-IN-TIME in the backtest —
+# see _pit_universe. A name outside this pool today (thin/delisted since)
+# is invisible to the Lab even if it was genuinely liquid decades ago; that
+# residual gap is a data-availability limit of the hot set, not something
+# this fix can close, and is disclosed rather than hidden.
+POOL_SIZE = 300
 
 
 def build_grid() -> list[dict]:
@@ -83,16 +92,45 @@ def score_combo(half_a: dict, half_b: dict) -> dict:
             "max_dd_out": half_b.get("max_drawdown_pct")}
 
 
-def _universe_symbols(name: str) -> list[str]:
+def _universe_pool_symbols() -> list[str]:
+    """The broad candidate pool, loaded once and PIT-ranked per half by
+    ``_pit_universe`` below — see POOL_SIZE."""
     from agent import data
 
-    if name == "mid200":
-        syms = data.universe(240)[40:]
-    else:
-        n = {"top20": 20, "top40": 40, "top60": 60}[name]
-        syms = data.universe(n)
+    syms = data.universe(POOL_SIZE)
     if "SPY" not in syms:
         syms = [*syms, "SPY"]  # regime gauge for regime_momentum; harmless else
+    return syms
+
+
+def _pit_universe(pool_bars: dict, name: str, as_of) -> list[str]:
+    """Point-in-time symbol list for universe ``name``, ranked by dollar
+    volume using ONLY bars dated <= ``as_of`` (a trailing 190-day window,
+    matching ``agent.data.universe``'s own default).
+
+    This is the fix for a real bug: the old ``_universe_symbols`` ranked by
+    TODAY's dollar volume and reused that ONE list across the entire
+    2006-2026 backtest window. That reserves a permanent universe slot for
+    every eventual future winner (SOXL, TQQQ, ARM, APP, NBIS, ...) for
+    years before they existed or were liquid, which a top-K momentum rule
+    then rides for its whole real run — the Lab itself flagged the result
+    (momentum:3 monthly/top60 printing +5520% out-sample excess against a
+    +44% in-sample score, a 30-55x gap) as implausible on 2026-07-15. Using
+    ``rank_top_universe`` (the same PIT machinery live trading already uses
+    for its own universe scans) instead of a static today's-list closes
+    that look-ahead bias for good.
+    """
+    from edgefinder.engine.data import rank_top_universe
+
+    rank_start = as_of - timedelta(days=190)
+    if name == "mid200":
+        syms = rank_top_universe(pool_bars, as_of, 200, rank_offset=40,
+                                 rank_start=rank_start)
+    else:
+        n = {"top20": 20, "top40": 40, "top60": 60}[name]
+        syms = rank_top_universe(pool_bars, as_of, n, rank_start=rank_start)
+    if "SPY" not in syms and "SPY" in pool_bars:
+        syms = [*syms, "SPY"]
     return syms
 
 
@@ -116,7 +154,15 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
 
     store = get_store()
     bench = data.spy_series_df()
-    bars_cache: dict[str, dict] = {}
+    pool_syms = _universe_pool_symbols()
+    pool_bars_raw = data.load_bars(pool_syms, div_adjust=True, source="auto")
+    pool_bars = {s: df for s, df in pool_bars_raw.items()
+                if df is not None and len(df) > 210}
+    # Each half's universe is ranked ONCE (as of the day before that half
+    # starts trading — see _pit_universe) and reused across every combo that
+    # shares the same universe bucket, same caching shape as the old
+    # per-universe bars_cache.
+    uni_cache: dict[str, dict] = {}
     tested = qualified = errors = 0
     results: list[dict] = []
 
@@ -125,20 +171,26 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
             break
         uni = combo["universe"]
         try:
-            if uni not in bars_cache:
-                syms = _universe_symbols(uni)
-                bars = data.load_bars(syms, div_adjust=True, source="auto")
-                bars_cache[uni] = {s: df for s, df in bars.items()
-                                   if df is not None and len(df) > 210}
-            bars = bars_cache[uni]
-            if len(bars) < 5:
+            if uni not in uni_cache:
+                in_syms = _pit_universe(pool_bars, uni,
+                                        IN_SAMPLE_START - timedelta(days=1))
+                out_syms = _pit_universe(pool_bars, uni,
+                                         SPLIT_DATE - timedelta(days=1))
+                uni_cache[uni] = {
+                    "in": {s: pool_bars[s] for s in in_syms if s in pool_bars},
+                    "out": {s: pool_bars[s] for s in out_syms if s in pool_bars},
+                }
+            in_bars, out_bars = uni_cache[uni]["in"], uni_cache[uni]["out"]
+            if len(out_bars) < 5:
                 errors += 1
                 continue
             # Two honest halves: in-sample is bounded by TRIMMING bars at the
             # split (no peeking), out-sample simply starts trading there.
-            half_a = _bounded_half(bars, bench, combo, backtest_tool)
+            # Each half also trades its OWN point-in-time universe, not
+            # today's — see _pit_universe.
+            half_a = _bounded_half(in_bars, bench, combo, backtest_tool)
             half_b = backtest_tool.run_prepared(
-                bars, bench, combo["rule"], schedule=combo["schedule"],
+                out_bars, bench, combo["rule"], schedule=combo["schedule"],
                 start=SPLIT_DATE)
             verdict = score_combo(half_a, half_b)
             tested += 1

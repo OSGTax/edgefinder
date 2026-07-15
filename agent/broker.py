@@ -40,6 +40,14 @@ def is_crypto(symbol: str) -> bool:
     return "/" in (symbol or "")
 
 
+def _now_utc():
+    """Wall-clock now, as a seam tests can monkeypatch (a bare ``datetime.now``
+    call inside a function can't be patched via the module attribute since the
+    import is local to the function)."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
+
+
 def _et_utc_offset(utc_dt):
     """UTC offset for US Eastern time at ``utc_dt`` (DST-aware, dependency-free).
     DST runs from the 2nd Sunday of March through the 1st Sunday of November;
@@ -417,42 +425,47 @@ class Broker:
         holidays, or overnight. Options fills are blocked outside 'regular'
         (OPRA book is genuinely bad outside RTH — enforced in
         ledger.live_fill).
+
+        Post-market detection cannot use ``clk.next_open``/``next_close``:
+        the instant regular hours end, Alpaca rolls both fields forward to
+        the *next* trading session, so a "does next_close fall on today?"
+        check never matches during the 16:00–20:00 ET window it's meant to
+        catch (this was a live bug — see git history). Instead we ask
+        Alpaca's calendar for TODAY's actual open/close wall-clock times,
+        which don't move, and compare against those directly. An empty
+        calendar response means today isn't a trading day at all (weekend
+        or holiday) → closed.
         """
         if symbol is not None and is_crypto(symbol):
             return "crypto"
         clk = self.trading.get_clock()
         if bool(getattr(clk, "is_open", False)):
             return "regular"
-        # `next_open` is a tz-aware UTC datetime; when it's today's ET-date's
-        # session, we are pre-market on a trading day. When `next_close` is
-        # today's ET-date, we are post-market on a trading day. Anything else
-        # (weekend, holiday, overnight-past-8pm) is closed.
-        from datetime import datetime, timezone, timedelta
-        now = datetime.now(timezone.utc)
+        now = _now_utc()
         et_offset = _et_utc_offset(now)  # respects DST
         now_et = (now + et_offset).replace(tzinfo=None)
-        nxt_open = getattr(clk, "next_open", None)
-        nxt_close = getattr(clk, "next_close", None)
-
-        def _to_et(dt):
-            if dt is None:
-                return None
-            if getattr(dt, "tzinfo", None) is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return (dt.astimezone(timezone.utc) + et_offset).replace(tzinfo=None)
-
-        no_ = _to_et(nxt_open)
-        nc_ = _to_et(nxt_close)
-        # Pre-market: today (ET) matches next_open's ET date AND we're past 04:00.
-        if no_ and now_et.date() == no_.date() and now_et.hour >= 4 and now_et < no_:
-            return "extended"
-        # Post-market: next_close is later than next_open (we're between RTH and
-        # 20:00 ET on a trading day). Alpaca reports next_close AFTER next_open
-        # while the market is closed and about to open. When both refer to
-        # today's date and now > next_close, we're in the after-hours window.
-        if nc_ and now_et.date() == nc_.date() and now_et >= nc_ and now_et.hour < 20:
-            return "extended"
+        today_cal = self._today_calendar(now_et.date())
+        if today_cal is None:
+            return "closed"
+        if now_et.hour >= 4 and now_et < today_cal.open:
+            return "extended"  # pre-market
+        if now_et >= today_cal.close and now_et.hour < 20:
+            return "extended"  # post-market
         return "closed"
+
+    def _today_calendar(self, today):
+        """Today's trading-day calendar row (date/open/close, ET-naive) or
+        None when today isn't a trading session (weekend/holiday) or the
+        calendar lookup fails — fail closed rather than mis-detect a session
+        that would let a fill through against a market that isn't real."""
+        from alpaca.trading.requests import GetCalendarRequest
+        try:
+            rows = self.trading.get_calendar(GetCalendarRequest(start=today, end=today))
+        except Exception:
+            logger.warning("get_calendar failed; treating session as closed",
+                           exc_info=True)
+            return None
+        return rows[0] if rows else None
 
     def is_close_soon(self, minutes: int = 15) -> bool:
         """True when the RTH close is within ``minutes`` — refuse to open new
