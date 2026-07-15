@@ -43,6 +43,11 @@ RULES = (
     + [f"meanrev:{k}" for k in (3, 5, 8)]
     + [f"breakout:{k}" for k in (3, 5, 8)]
     + [f"regime_momentum:{k}" for k in (3, 5, 8, 12)]
+    # PIT SEC fundamentals (validation gate PASSED 2026-07-14 — see
+    # docs/fundamentals-validation.md). XBRL floor: no filings before ~2009,
+    # so these rules hold cash pre-2009 and their effective in-sample window
+    # is 2009-2017 — judge their split-sample consistency accordingly.
+    + [f"value_momentum:{k}" for k in (5, 8)]
 )
 SCHEDULES = ("weekly", "monthly")
 # Most-liquid slices of the hot set, plus mid200 (dollar-volume ranks 41-240):

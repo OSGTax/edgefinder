@@ -248,10 +248,18 @@ def build_brief(*, top: int = 40) -> dict:
     lab_board = _safe("lab", _lab, {})
     screens = _safe("screens", lambda: _screens(store), {})
 
+    def _fundamentals():
+        from agent import edgar
+
+        return edgar.coverage(store)
+
+    fundamentals = _safe("fundamentals", _fundamentals, {})
+
     payload = {"as_of": str(today), "regime": regime, "coverage": coverage,
                "universe_top": top_syms, "movers": movers,
                "trend_roster": trend, "headlines": headlines,
                "lab_leaderboard": lab_board, "screens": screens,
+               "fundamentals": fundamentals,
                "errors": errors}
     built_at = datetime.now(timezone.utc).replace(tzinfo=None)
     values = {"payload": payload, "built_at": built_at}

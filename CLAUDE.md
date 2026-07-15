@@ -69,6 +69,7 @@ edgefinder/
 │   ├── broker.py               #   Alpaca DATA-READER (read-only): quotes, clock, chains
 │   ├── streamer.py             #   the always-on SIP WebSocket → QuoteCache (Render)
 │   ├── refresh.py              #   Alpaca bar ingest: hourly top-up / nightly full-market
+│   ├── edgar.py                #   SEC EDGAR PIT fundamentals: ingest/coverage/validate
 │   ├── options_data.py         #   chain summary (ATM IV, expected move) + IV data bank
 │   ├── occ.py                  #   OCC option-symbol parse/format (pure)
 │   ├── store.py                #   transport-agnostic table access (pg | rest)
@@ -115,7 +116,12 @@ One Supabase Postgres database, two namespaces:
 - **Kept market-data tables** (`edgefinder/db/models.py`, read-only inputs):
   `daily_bars` (raw bars; splits applied at load), `index_daily` (FROZEN at
   the 2026-06 cutover — SPY benchmarks read `daily_bars` instead),
-  `ticker_news`, `ticker_splits`, `dividends` (+ `fundamentals_snapshots`).
+  `ticker_news`, `ticker_splits`, `dividends`, `fundamentals_pit` (SEC
+  EDGAR point-in-time fundamentals, one row per FILING — written only by
+  `agent.edgar`; validation gate PASSED 2026-07-14, see
+  `docs/fundamentals-validation.md`), and `fundamentals_snapshots` (the
+  frozen Polygon-era table, final snapshot 2026-06-10 — kept as the
+  validation reference, never updated).
 
 **Account integrity (CRITICAL):** cash is always recomputed from the
 append-only `desk_trades` ledger; positions are a rebuilt projection, so the
@@ -125,9 +131,15 @@ above the transport (`agent/store.py`) and is unit-tested on SQLite.
 
 ## Data sources & transports
 
-- **Alpaca (Algo Trader Plus) is the sole live data source** — SIP quotes,
-  market clock/calendar, daily bars, Benzinga news, OPRA option chains.
-  Polygon was retired; nothing calls it.
+- **Alpaca (Algo Trader Plus) is the sole live MARKET data source** — SIP
+  quotes, market clock/calendar, daily bars, Benzinga news, OPRA option
+  chains. Polygon was retired; nothing calls it.
+- **SEC EDGAR is the fundamentals source** (`agent/edgar.py` →
+  `fundamentals_pit`): free, public domain (display anything), and
+  point-in-time by construction — every fact carries its `filed` date.
+  ≤10 req/s with the declared User-Agent (`settings.edgar_user_agent`).
+  XBRL floor ~2009. Decision + validation records:
+  `docs/fundamentals-sources.md`, `docs/fundamentals-validation.md`.
 - **R2 archive** — grow-only parquet mirror, one object per symbol +
   manifest, 21 years deep; backtests read it. `agent.refresh` merge-syncs
   fresh Alpaca bars into it.

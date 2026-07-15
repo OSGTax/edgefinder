@@ -202,3 +202,87 @@ def test_leaderboard_dedupes_to_newest_result(store):
     b = leaderboard(top=5)
     assert b["combos_tested"] == 1
     assert b["qualified"] == 0  # tonight's verdict wins; stale wins don't linger
+
+
+# ── value_momentum: PIT fundamentals gate (validation-passed 2026-07-14) ──
+
+
+class _FakeFunds:
+    """raw_asof stand-in: {sym: (first_filed, raw_dict)} — None before
+    coverage, the dict after (mirrors PITFundamentals semantics)."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def raw_asof(self, sym, d):
+        ent = self.rows.get(sym)
+        if not ent:
+            return None
+        filed, raw = ent
+        return raw if d >= filed else None
+
+
+def _rising(price, gain=0.5, n=300):
+    return [price * (1 + gain * i / (n - 1)) / (1 + gain) for i in range(n)]
+
+
+def _funds(sym_specs):
+    return _FakeFunds({sym: (date(2010, 1, 1),
+                             {"_net_income_ttm": ni, "_shares": sh})
+                       for sym, (ni, sh) in sym_specs.items()})
+
+
+def test_value_momentum_excludes_losses_and_expensive_half():
+    from agent.backtest_tool import _ValueMomentum
+
+    s = _ValueMomentum(k=2, fundamentals=_funds({
+        "CHEAP_FAST": (100.0, 10.0),   # P/E 10 at price 100
+        "CHEAP_SLOW": (50.0, 10.0),    # P/E 20
+        "PRICY": (10.0, 10.0),         # P/E 100 — above the median cutoff
+        "LOSS": (-5.0, 10.0),          # loss-maker — never qualifies
+    }), splits={})
+    w = s.rebalance(_ctx([
+        _view("CHEAP_FAST", 100, closes=_rising(100, gain=0.8)),
+        _view("CHEAP_SLOW", 100, closes=_rising(100, gain=0.2)),
+        _view("PRICY", 100, closes=_rising(100, gain=0.9)),
+        _view("LOSS", 100, closes=_rising(100, gain=0.9)),
+    ]))
+    assert set(w) == {"CHEAP_FAST", "CHEAP_SLOW"}
+
+
+def test_value_momentum_split_basis_correction():
+    from agent.backtest_tool import _ValueMomentum
+
+    funds = {"SPLITCO": (100.0, 10.0), "PLAIN": (100.0, 10.0)}
+    views = [_view("SPLITCO", 100, closes=_rising(100)),
+             _view("PLAIN", 100, closes=_rising(100))]
+
+    # A 4:1 split AFTER the decision date (2026-07-13): filed shares must be
+    # multiplied ×4 to match the back-adjusted price basis → P/E 40 vs 10,
+    # so SPLITCO lands above the median cutoff and is excluded.
+    s = _ValueMomentum(k=2, fundamentals=_funds(funds),
+                       splits={"SPLITCO": [(date(2026, 8, 1), 4.0)]})
+    assert set(s.rebalance(_ctx(views))) == {"PLAIN"}
+
+    # The same split BEFORE the decision date changes nothing — filed shares
+    # already reflect it. Both names read P/E 10 and both are held.
+    s2 = _ValueMomentum(k=2, fundamentals=_funds(funds),
+                        splits={"SPLITCO": [(date(2026, 1, 2), 4.0)]})
+    assert set(s2.rebalance(_ctx(views))) == {"SPLITCO", "PLAIN"}
+
+
+def test_value_momentum_holds_cash_before_coverage():
+    from agent.backtest_tool import _ValueMomentum
+
+    # First filing arrives AFTER the decision date → nothing is knowable,
+    # nothing is held. Pre-2009 honesty: no borrowed future fundamentals.
+    late = _FakeFunds({"AAA": (date(2027, 1, 1),
+                               {"_net_income_ttm": 100.0, "_shares": 10.0})})
+    s = _ValueMomentum(k=2, fundamentals=late, splits={})
+    assert s.rebalance(_ctx([_view("AAA", 100, closes=_rising(100))])) == {}
+
+
+def test_value_momentum_in_lab_grid():
+    grid = build_grid()
+    rules = {g["rule"] for g in grid}
+    assert {"value_momentum:5", "value_momentum:8"} <= rules

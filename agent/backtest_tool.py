@@ -16,6 +16,10 @@ Rules (``--rule``):
   breakout:K          top-K closest to their 252-bar high with positive 3m return
   regime_momentum:K   momentum:K while SPY > its 200-EMA, else cash (needs SPY
                       in the symbol list; SPY itself is never selected)
+  value_momentum:K    momentum:K among PROFITABLE (positive TTM net income),
+                      NOT-EXPENSIVE (P/E <= cross-sectional median) names —
+                      point-in-time SEC fundamentals, validation-gated
+                      2026-07-14 (docs/fundamentals-validation.md); 2009+
 """
 
 from __future__ import annotations
@@ -169,6 +173,96 @@ class _RegimeMomentum:
         return weights
 
 
+class _ValueMomentum:
+    """Top-K by 6m return among PROFITABLE, NOT-EXPENSIVE names: positive
+    TTM net income AND P/E at or below the cross-sectional median at each
+    rebalance, both point-in-time from SEC filings (only filings filed on or
+    before the rebalance date are visible — `PITFundamentals.raw_asof`).
+
+    Basis honesty (the subtle part): engine prices are back-adjusted while
+    filed share counts are filing-basis, so a naive price×shares market cap
+    is off by every later split. Market cap here = split-adjusted close
+    (``close_raw`` where dividend adjustment preserved it, else the asset
+    price — for no-dividend names they are the same series) × filed shares
+    × the cumulative ratio of splits executing AFTER the decision date
+    (ticker_splits): price ÷ F times shares × F recovers the true printed
+    dollars, cancelling the split factor exactly.
+
+    Before EDGAR coverage begins (~2009) no name qualifies and the rule
+    holds cash: fundamentals unknowable then are never borrowed from the
+    future. The lab's effective in-sample for this family is 2009-2017."""
+
+    def __init__(self, k: int = 5, lookback: int = 126,
+                 fundamentals=None, splits: dict | None = None) -> None:
+        self.k = k
+        self.lookback = lookback
+        self._funds = fundamentals   # injectable for tests
+        self._splits = splits
+
+    @property
+    def name(self) -> str:
+        return f"value_momentum_k{self.k}"
+
+    def _load(self, symbols: list[str]) -> None:
+        if self._funds is None:
+            from edgefinder.data.pit_fundamentals import PITFundamentals
+
+            self._funds = PITFundamentals()
+            self._funds.preload(symbols)
+        if self._splits is None:
+            from agent.store import get_store
+
+            self._splits = {}
+            for r in get_store().select(
+                    "ticker_splits",
+                    columns="symbol,execution_date,split_from,split_to"):
+                try:
+                    ex = date.fromisoformat(str(r["execution_date"])[:10])
+                    ratio = float(r["split_to"]) / float(r["split_from"])
+                except (TypeError, ValueError, ZeroDivisionError):
+                    continue
+                if ratio > 0:
+                    self._splits.setdefault(r["symbol"], []).append((ex, ratio))
+
+    def _today_basis_shares(self, sym: str, d, shares: float) -> float:
+        f = 1.0
+        for ex, ratio in self._splits.get(sym, ()):
+            if ex > d:
+                f *= ratio
+        return shares * f
+
+    def rebalance(self, ctx: RebalanceContext) -> dict[str, float]:
+        self._load(sorted(ctx.assets))
+        pes: dict[str, float] = {}
+        for sym, a in ctx.assets.items():
+            raw = self._funds.raw_asof(sym, ctx.date)
+            if not raw:
+                continue
+            ni, sh = raw.get("_net_income_ttm"), raw.get("_shares")
+            if not ni or ni <= 0 or not sh:
+                continue                       # loss-makers never qualify
+            hist = a.history
+            px = (float(hist["close_raw"].iloc[-1])
+                  if "close_raw" in hist.columns else a.price)
+            mc = px * self._today_basis_shares(sym, ctx.date, sh)
+            if mc <= 0:
+                continue
+            pes[sym] = mc / ni
+        if not pes:
+            return {}
+        cutoff = sorted(pes.values())[(len(pes) - 1) // 2]   # lower median
+        scored = []
+        for sym, pe in pes.items():
+            if pe > cutoff:
+                continue                       # expensive half excluded
+            r = ctx.assets[sym].ret(self.lookback)
+            if r is not None and r > 0:
+                scored.append((r, sym))
+        scored.sort(reverse=True)
+        winners = [s for _, s in scored[: self.k]]
+        return {s: 1.0 / len(winners) for s in winners} if winners else {}
+
+
 def build_strategy(rule: str):
     rule = rule.strip()
     if rule.startswith("buyhold:"):
@@ -187,6 +281,8 @@ def build_strategy(rule: str):
         return _Breakout(k=int(rule.split(":", 1)[1]))
     if rule.startswith("regime_momentum:"):
         return _RegimeMomentum(k=int(rule.split(":", 1)[1]))
+    if rule.startswith("value_momentum:"):
+        return _ValueMomentum(k=int(rule.split(":", 1)[1]))
     raise ValueError(f"unknown rule {rule!r}")
 
 

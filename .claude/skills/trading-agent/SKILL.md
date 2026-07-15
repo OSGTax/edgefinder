@@ -185,10 +185,20 @@ python -m agent.backtest_tool --symbols A,B,C --rule momo_trend:5 \
 ```
 Rules: `buyhold:SYM`, `equal_weight`, `momentum:K`, `trend:SYM`,
 `momo_trend:K`, `meanrev:K`, `breakout:K`, `regime_momentum:K` (needs SPY
-in the list). A rule that doesn't beat SPY net of costs is evidence
-AGAINST it — respect that. (Note honestly: backtests fill at daily closes;
-your live fills are intraday. The backtest grounds the IDEA, it does not
-predict your exact fills.)
+in the list), `value_momentum:K` (momentum among profitable, below-median-
+P/E names — point-in-time SEC fundamentals; nothing before ~2009, so its
+history is shorter than the price rules'). A rule that doesn't beat SPY
+net of costs is evidence AGAINST it — respect that. (Note honestly:
+backtests fill at daily closes; your live fills are intraday. The backtest
+grounds the IDEA, it does not predict your exact fills.)
+
+**Fundamentals are now real evidence** (validation gate PASSED 2026-07-14
+— `docs/fundamentals-validation.md`): the brief carries a `fundamentals`
+coverage block, and per-company point-in-time numbers (EPS, ROE, growth,
+FCF, debt) live in `fundamentals_pit` via SEC EDGAR — public domain, so
+you may quote any figure on the desk. Cite fundamentals in a pick's
+evidence the same way you cite a backtest: by the number, with its filing
+date.
 
 ### 4. Decide (phase: decide)
 Choose the **target book**: `{symbol: weight}`. Full discretion — any number

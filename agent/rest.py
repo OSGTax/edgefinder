@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -101,11 +102,22 @@ class Rest:
             data = json.dumps(body, default=_jsonable).encode()
         req = urllib.request.Request(url, data=data, method=method,
                                      headers=self._headers(prefer))
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                return resp.status, resp.read().decode()
-        except urllib.error.HTTPError as exc:
-            raise RestError(exc.code, exc.read().decode()) from None
+        # GETs retry on transient transport drops (a Disk-IO-throttled
+        # Supabase resets connections mid-select). Writes NEVER retry here:
+        # a retried POST after an ambiguous failure could double-insert,
+        # and the ledger's integrity beats a nightly job's convenience.
+        attempts = 3 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    return resp.status, resp.read().decode()
+            except urllib.error.HTTPError as exc:
+                raise RestError(exc.code, exc.read().decode()) from None
+            except (urllib.error.URLError, ConnectionError, TimeoutError):
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+        raise RuntimeError("unreachable")  # pragma: no cover
 
     # PostgREST caps a single response (Supabase default: 1000 rows). Reads
     # page through with offset so a big select can never silently truncate —

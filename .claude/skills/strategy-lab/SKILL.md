@@ -39,6 +39,13 @@ Run id: `lab-YYYY-MM-DD`. Narrate with
    former leader that failed its out-sample half this pass, a rule family
    that keeps qualifying across universes (that repetition is the real
    signal), the tested/qualified honesty line.
+   The `value_momentum:K` family (added v9.4.0 after the fundamentals
+   validation gate PASSED — `docs/fundamentals-validation.md`) screens on
+   point-in-time SEC filings: positive TTM net income + below-median P/E.
+   XBRL starts ~2009, so these rules hold cash before then and their
+   effective in-sample half is 2009-2017 — a thinner window than the price
+   rules'. Say so when narrating their results; never compare their
+   21-year figures to a price rule's as if the exposure were equal.
 4. `python -m agent.lab leaderboard --top 10` — sanity-check the standing
    board the brief will carry tomorrow (it reads the last 14 days of lab
    rows, deduped to the newest per combo).
