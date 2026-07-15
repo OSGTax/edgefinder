@@ -77,6 +77,21 @@ with NO bear-case row is itself a mistake — log it on the `mistakes` page
 with the run id, regardless of whether the trade worked. Discipline that
 only applies when convenient is not discipline.
 
+**Audit fundamentals citations.** Since v9.4.0 picks may cite SEC-filed
+numbers (EPS, growth, P/E, FCF) as evidence. For each graded pick whose
+rationale cited one, verify the citation against what was knowable on the
+decision date — point-in-time, no hindsight:
+```
+python - <<'PY'
+from datetime import date
+from edgefinder.data.pit_fundamentals import PITFundamentals
+print(PITFundamentals().raw_asof("SYM", date(2026, 7, 10)))
+PY
+```
+A cited number that doesn't match its filing is a **process mistake**
+(mistakes-page material) even if the trade won — quoting data wrong and
+getting paid anyway is luck wearing a lab coat.
+
 **Then grade the road not taken.** Each run's `rejected` list names the
 candidates that lost the slot and why. For each: what did the rejected name
 do since that run (`agent.market history --symbol X`), and was the stated
@@ -92,7 +107,9 @@ With the grades in hand, rewrite pages via
 - **Merge** near-duplicates into one sharper line.
 - **Generalize** a one-off into a rule only once it has REPEATED.
 - Every kept lesson should carry its evidence (names, dates, P&L) —
-  a lesson that cites no number is a hunch wearing a suit.
+  a lesson that cites no number is a hunch wearing a suit. Filed
+  fundamentals now count as citable evidence (number + filing date),
+  held to the same bar as prices.
 - **Tag every lesson with the regime it was learned in** (`[risk_on]`,
   `[risk_off]`, `[neutral]`) — a rule that worked in a rising market is
   not yet a rule for a falling one, and the tag stops it overreaching.

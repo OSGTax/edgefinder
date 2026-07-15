@@ -34,6 +34,14 @@ gentler onboarding for a first-time visitor) rank above new data density.
 Prefer additions that need **no new heavy data path**. If an idea needs a new
 endpoint, it must read existing `desk_*` / market-data tables only.
 
+**A data surface you may draw on freely:** SEC EDGAR fundamentals
+(`fundamentals_pit`, validation-gated 2026-07-14) are **public domain — any
+figure may be displayed**, already served read-only at
+`/api/symbols/{sym}/fundamentals` (it powers the /symbol Research tab,
+v9.3.0). Desk-side ideas may READ this table through new read-only
+endpoints under the same guardrails as every other table — an allowed
+source, not a mandate; the one-small-improvement bar is unchanged.
+
 ## Hard guardrails (non-negotiable)
 - **Additive and desk-scoped.** Touch only the dashboard layer:
   `dashboard/templates/desk.html`, `dashboard/static/js/pages/desk.js`,

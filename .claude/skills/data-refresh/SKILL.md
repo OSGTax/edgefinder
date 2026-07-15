@@ -30,6 +30,15 @@ Anything outside top-N is still quote- and fill-able live and can be topped up
 on demand with `agent.refresh --source alpaca --symbols X,Y` (or by putting a
 name on the watchlist).
 
+The same run also ingests **SEC EDGAR fundamentals** for the universe (the
+`edgar` block in the summary JSON — validation-gated source, see
+`docs/fundamentals-validation.md`). READ that block and report
+`fetched / rows_inserted / errors`. New filings trickle in daily — tens of
+rows on a quiet night, hundreds during earnings season — so
+`rows_inserted: 0` for several consecutive nights DURING earnings season is
+a symptom to flag, not calm. ETFs and foreign listings legitimately have no
+CIK (`no_cik`); a handful of 404s on ETF trusts (DIA, MDY, QQQ) are normal.
+
 ### 2. Build tonight's research brief
 ```
 python -m agent.market brief-build --top 40
@@ -63,6 +72,15 @@ PY
 Healthy is coverage at/near `--top`. A sharp drop means the ingest is failing
 partway (usually a network hang) — investigate before it decays further.
 
+Also check the fundamentals side of the asset:
+```
+python -m agent.edgar coverage
+```
+Report `symbols / rows / stale_symbols`. Healthy is ~740+ symbols with a
+median of ~60 filings each; `stale_symbols` (no filing in 120 days) growing
+run-over-run means CIK resolution or the EDGAR pass is quietly failing —
+flag it loudly, same rule as bar coverage.
+
 ### 4. Storage-headroom check — flag before a limit bites
 Free tiers: **R2 = 10 GB**, **Supabase DB = 500 MB**. `daily_bars` is the
 dominant table and (post-rebuild) only GROWS — there is no prune — so watch it.
@@ -88,6 +106,12 @@ PY
   files — it maintains the market-data asset the whole system reads. Its ONE
   sanctioned `desk_*` write is the research brief (`desk_briefs`, via
   `agent.market brief-build`) — packaged market observation, not book state.
+- **`fundamentals_pit` is written only by `agent.edgar`** (which rides this
+  Routine's market refresh). EDGAR is a refetchable public-domain source, so
+  `python -m agent.edgar ingest --rebuild` exists to recompute history when
+  the derivation logic improves — it is a maintenance tool, never a nightly
+  step. The frozen `fundamentals_snapshots` table is the validation
+  reference: read-only, forever.
 - **Idempotent + bounded.** `agent.refresh` sets a socket timeout so a hung
   Alpaca call fails fast instead of stalling the whole ingest; re-running is a
   cheap near-noop when already current.
@@ -96,11 +120,10 @@ PY
 
 ## Owner setup (one-time — cannot be done from a sandbox)
 Create the Routine at **claude.ai/code/routines** on this repo:
-- **Cron:** `~7 6 * * *` (a few minutes past 06:00 local — an off-:00 minute so
-  it doesn't collide with every other job on the hour), i.e. after the U.S.
-  close and before the next session.
+- **Cron:** `45 0 * * 2-6` — **UTC** (8:45 PM ET Mon–Fri, after the U.S.
+  close; the Strategy Lab Routine follows at `0 2 * * 2-6` UTC so it sweeps
+  on tonight's fresh data).
 - **Prompt:** `Run the data-refresh skill.`
 - **Env:** the session needs the Supabase (DB) + Alpaca + R2_* credentials
-  available (same env as the trading Routine).
-This can share the end-of-day Routine that already runs `app-evolver`: refresh
-the data first, then evolve the desk.
+  available (same env as the trading Routine). SEC EDGAR needs no secret —
+  its authentication is the declared User-Agent (`settings.edgar_user_agent`).

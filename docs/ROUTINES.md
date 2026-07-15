@@ -2,17 +2,24 @@
 
 EdgeFinder runs entirely on **Claude Code Routines** (claude.ai/code/routines),
 not GitHub Actions or an in-process scheduler. Each Routine is a scheduled
-Claude session on this repo that runs one skill. There are four:
+Claude session on this repo that runs one skill. There are five —
+**crons in the Routine UI are UTC** (ET shown in parens):
 
-| Routine | Skill | Cron (local) | What it does |
+| Routine | Skill | Cron (UTC) | What it does |
 |---|---|---|---|
-| Trading cycle | `trading-agent` | `~7 */2 * * 1-5` (every ~2h, market hours) | Observe + trade the $100k paper book at live quotes |
-| Nightly data | `data-refresh` | `~7 6 * * *` (after the close) | Full-market ingest — keeps the top-N fresh set current |
-| Desk evolution | `app-evolver` | end-of-day | One small, tested, additive `/desk` improvement |
-| Weekly reflection | `reflection-agent` | `~5 17 * * 5` (Fri after close) | Grade the week, curate the lessons wiki |
+| Trading brain | `trading-agent` | **agent-paced, no cron** — each run ends with `NEXT RUN REQUESTED: <UTC>`; the owner fires the Routine manually | Observe + trade the $100k paper book at live quotes; tripwires + budgeted self-wakes cover the gaps |
+| Nightly data | `data-refresh` | `45 0 * * 2-6` (8:45 PM ET Mon–Fri) | Full-market bar ingest (top-1000 + R2 sync) **+ SEC EDGAR fundamentals ingest** + builds the research brief |
+| Strategy Lab | `strategy-lab` | `0 2 * * 2-6` (10:00 PM ET, post-ingest) | Sweeps the 168-combo grid (incl. `value_momentum` since v9.4.0) over 21y, split-sample scored; rebuilds the brief with tonight's board |
+| Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week mechanically (predictions, alpha, rejected list, fundamentals citations), curate the lessons wiki |
+| Desk evolution | `app-evolver` | `0 15 * * 6` (11:00 AM ET Sat) | One small, tested, additive `/desk` improvement, announced on What's New |
 
-`data-refresh` + `app-evolver` can share one end-of-day Routine (refresh data
-first, then evolve the desk).
+Routine prompts are thin pointers ("Run the X skill.") — behavior lives in
+`.claude/skills/*/SKILL.md`, which every firing loads fresh from `main`, so
+skill updates need **no Routine changes**. Fundamentals context:
+`docs/fundamentals-sources.md` (why EDGAR) and
+`docs/fundamentals-validation.md` (the accuracy gate the data passed).
+EDGAR needs **no new secrets** — its authentication is the declared
+User-Agent (`settings.edgar_user_agent`).
 
 ## The one setup every Routine needs
 
