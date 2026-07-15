@@ -36,6 +36,7 @@ const MARKER_DEFS = [
 const state = {
   symbol: null,
   range: '1y',
+  tab: 'profile',    // right-rail tab: profile (Research) | options | trades | events
   inds: new Set(['ema21', 'ema200', 'rsi']),
   markers: new Set(['trades', 'dividends', 'splits']),
   bars: null,        // /api/symbols response
@@ -43,6 +44,7 @@ const state = {
   trades: [],
   profile: null,
 };
+const RAIL_TABS = ['profile', 'options', 'trades', 'events'];
 
 let charts = null;   // { price, candle, volume, overlays:{}, rsi, macd }
 
@@ -54,11 +56,16 @@ function parseUrl() {
   if (q.get('range') && RANGES.some(r => r.value === q.get('range'))) state.range = q.get('range');
   if (q.get('ind') != null) state.inds = new Set(q.get('ind').split(',').filter(Boolean));
   if (q.get('markers') != null) state.markers = new Set(q.get('markers').split(',').filter(Boolean));
+  // deep-linkable right-rail tab: ?tab=research|options|trades|events
+  const tab = (q.get('tab') || '').toLowerCase();
+  const alias = tab === 'research' ? 'profile' : tab;
+  if (RAIL_TABS.includes(alias)) state.tab = alias;
 }
 
 function writeUrl() {
   const q = new URLSearchParams();
   if (state.range !== '1y') q.set('range', state.range);
+  if (state.tab !== 'profile') q.set('tab', state.tab);
   q.set('ind', [...state.inds].join(','));
   q.set('markers', [...state.markers].join(','));
   history.replaceState(null, '', `/symbol/${state.symbol}?${q}`);
@@ -326,10 +333,12 @@ function openTradeDrawer(t) {
 /* ── right rail ── */
 function renderRail() {
   const body = document.getElementById('sym-rail-body');
-  const active = document.querySelector('#sym-rail-tabs button.active')?.dataset.tab || 'profile';
-  if (active === 'profile') renderProfile(body);
-  else if (active === 'options') renderRailOptions(body);
-  else if (active === 'trades') renderRailTrades(body);
+  for (const b of document.querySelectorAll('#sym-rail-tabs button')) {
+    b.classList.toggle('active', b.dataset.tab === state.tab);
+  }
+  if (state.tab === 'profile') renderProfile(body);
+  else if (state.tab === 'options') renderRailOptions(body);
+  else if (state.tab === 'trades') renderRailTrades(body);
   else renderRailEvents(body);
 }
 
@@ -562,11 +571,39 @@ function initSearch() {
         onclick: () => pick(it.symbol),
       },
         h('span', { class: 's', text: it.symbol }),
-        h('span', { class: 'n', text: it.company_name || '' }),
+        h('span', { class: 'n' + (it.noteClass ? ' ' + it.noteClass : ''), text: it.note || it.company_name || '' }),
       )),
     );
   };
   const hide = () => results.classList.add('hidden');
+
+  // Empty-input suggestions: recent symbols + today's biggest movers (the
+  // desk's movers card moved here in v9.5.0 — this is where you'd act on
+  // them). Fetched once per page, silently absent on failure.
+  let moverItems = null;
+  const movers = async () => {
+    if (moverItems) return moverItems;
+    try {
+      const d = await apiGet('/api/desk/movers?top=4');
+      moverItems = [...(d.gainers || []), ...(d.losers || [])].map(r => ({
+        symbol: r.symbol,
+        note: r.change_pct != null
+          ? (r.change_pct >= 0 ? '+' : '') + fmtNum(r.change_pct, 2) + '% at the last close'
+          : '',
+        noteClass: r.change_pct >= 0 ? 't-up' : 't-down',
+      }));
+    } catch { moverItems = []; }
+    return moverItems;
+  };
+  const showIdle = async () => {
+    const rec = recents().map(s => ({ symbol: s }));
+    const mv = (await movers()).filter(m => !recents().includes(m.symbol));
+    const items = [...rec, ...mv];
+    if (input.value.trim()) return;  // user typed while we fetched
+    show(items, rec.length && mv.length ? 'Recent · then today’s biggest movers'
+      : mv.length ? 'Today’s biggest movers (last close)'
+      : rec.length ? 'Recent' : 'Type to search');
+  };
 
   const pick = (symbol) => {
     hide();
@@ -588,11 +625,11 @@ function initSearch() {
   input.addEventListener('input', () => {
     const q = input.value.trim();
     if (q.length >= 2) search(q);
-    else if (!q) show(recents().map(s => ({ symbol: s })), recents().length ? 'Recent' : 'Type to search');
+    else if (!q) showIdle();
     else hide();
   });
   input.addEventListener('focus', () => {
-    if (!input.value.trim()) show(recents().map(s => ({ symbol: s })), recents().length ? 'Recent' : 'Type to search');
+    if (!input.value.trim()) showIdle();
   });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && input.value.trim()) pick(input.value.trim().toUpperCase());
@@ -617,9 +654,9 @@ function init() {
 
   document.getElementById('sym-rail-tabs').addEventListener('click', (e) => {
     const btn = e.target.closest('button');
-    if (!btn) return;
-    for (const b of document.querySelectorAll('#sym-rail-tabs button')) b.classList.remove('active');
-    btn.classList.add('active');
+    if (!btn || !RAIL_TABS.includes(btn.dataset.tab)) return;
+    state.tab = btn.dataset.tab;
+    writeUrl();
     renderRail();
   });
   document.getElementById('trade-drawer-close').addEventListener('click', () =>

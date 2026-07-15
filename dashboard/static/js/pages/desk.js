@@ -320,6 +320,19 @@ function trendCell(st) {
 
 function equitiesTable(rows, stats) {
   stats = stats || {};
+  const divs = deskLive.divs || {};
+  const divNote = sym => {
+    const d = divs[sym];
+    if (!d || !d.next_ex_date) return null;
+    return h('div', {
+      class: 't-dim desk-pos-div',
+      title: 'This holding pays a dividend'
+        + (d.ttm_amount ? ` — about ${fmtPrice(d.ttm_amount)}/share per year` : '')
+        + '. Shown: the next date you must own it by to receive the payment. '
+        + 'Full history is on the stock\'s chart page under Events.',
+      text: 'next dividend ' + d.next_ex_date,
+    });
+  };
   return h('table', { class: 'c-table' },
     h('thead', {}, h('tr', {},
       h('th', { text: 'Stock' }), h('th', { class: 'num', text: 'Shares' }),
@@ -331,7 +344,8 @@ function equitiesTable(rows, stats) {
       h('th', { class: 'num', text: '% of account', title: 'How much of the whole account this holding represents' }),
       h('th', { class: 'num', text: 'Gain / loss', title: 'Profit or loss if sold at the current price' }))),
     h('tbody', {}, ...rows.map(p => h('tr', {},
-      h('td', {}, h('a', { href: '/symbol/' + p.symbol, class: 'c-link', text: p.symbol })),
+      h('td', {}, h('a', { href: '/symbol/' + p.symbol, class: 'c-link', text: p.symbol }),
+        divNote(p.symbol)),
       h('td', { class: 'num', text: fmtNum(p.shares, 2) }),
       h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
       h('td', { class: 'num', text: fmtPrice(p.last_price) }),
@@ -479,14 +493,21 @@ async function loadPositions() {
   const el = document.getElementById('desk-positions');
   skeleton(el);
   try {
-    const [pf, hs] = await Promise.all([
+    const [pf, hs, dv] = await Promise.all([
       apiGet('/api/desk/portfolio'),
       apiGet('/api/desk/holding-stats').catch(() => null),
+      apiGet('/api/desk/dividends').catch(() => null),
     ]);
     if (!pf.positions.length) { renderEmpty(el, 'All cash — no open positions.'); return; }
     // Cache stats + book so tape ticks can repaint with the same holding-stats
     // shape (day-change chip, 30-day trend) without another network round trip.
     deskLive.stats = (hs && hs.symbols) || {};
+    // Dividend facts fold into the holdings rows (the standalone calendar
+    // card retired in v9.5.0 — full history is on each chart page).
+    deskLive.divs = {};
+    for (const x of (dv && dv.holdings) || []) {
+      if (x.has_dividend) deskLive.divs[x.symbol] = x;
+    }
     deskLive.book = pf;
     renderPositions(el, pf, deskLive.stats);
   } catch (err) { renderError(el, err, loadPositions); }
@@ -517,7 +538,7 @@ async function loadThinking() {
     el.append(feed);
     if (data.lines.length > VISIBLE) {
       const btn = h('button', {
-        class: 'desk-opt-chainbtn', type: 'button',
+        class: 'desk-morebtn', type: 'button',
         text: 'Show all ' + data.lines.length + ' lines',
       });
       btn.addEventListener('click', () => {
@@ -643,35 +664,9 @@ async function loadDecision() {
 }
 
 /* ── backtest evidence ── */
-async function loadBacktests() {
-  const el = document.getElementById('desk-backtests');
-  skeleton(el);
-  try {
-    const rows = await apiGet('/api/desk/backtests?limit=15');
-    if (!rows.length) { renderEmpty(el, 'No backtests run yet.'); return; }
-    clear(el);
-    const table = h('table', { class: 'c-table' },
-      h('thead', {}, h('tr', {},
-        h('th', { text: 'Idea tested' }),
-        h('th', { class: 'num', text: 'Return', title: 'What the idea would have made over the test period' }),
-        h('th', { class: 'num', text: 'vs the market', title: 'How much better (+) or worse (−) than simply buying the S&P 500' }),
-        h('th', { class: 'num', text: 'Smoothness', title: 'Sharpe ratio: return relative to how bumpy the ride was — higher is better' }),
-        h('th', { class: 'num', text: 'Worst dip', title: 'The deepest peak-to-bottom drop along the way' }))),
-      h('tbody', {}, ...rows.map(r => {
-        const res = r.result || {};
-        const ex = res.excess_return_pct;
-        return h('tr', {},
-          h('td', {}, h('div', { text: r.label }), h('div', { class: 't-dim desk-bt-when', text: timeAgo(r.t) })),
-          h('td', { class: 'num', text: res.return_pct != null ? fmtNum(res.return_pct, 1) + '%' : '—' }),
-          h('td', { class: 'num ' + (ex >= 0 ? 't-up' : 't-down'), text: ex != null ? (ex >= 0 ? '+' : '') + fmtNum(ex, 1) + '%' : '—' }),
-          h('td', { class: 'num', text: res.sharpe != null ? fmtNum(res.sharpe, 2) : '—' }),
-          h('td', { class: 'num', text: res.max_drawdown_pct != null ? fmtNum(res.max_drawdown_pct, 1) + '%' : '—' }));
-      })));
-    el.append(table);
-  } catch (err) { renderError(el, err, loadBacktests); }
-}
-
-/* ── strategy lab: the nightly strategy-search leaderboard ── */
+/* ── Strategy Lab: tonight's board + recent tests, told in sentences.
+   One card, two views ("Tonight's board" / "Recent tests" seg in the card
+   header). The raw rule shorthand lives in tooltips only. ── */
 const LAB_RULE_NAMES = {
   momentum: 'Pure momentum',
   momo_trend: 'Momentum, uptrends only',
@@ -681,6 +676,7 @@ const LAB_RULE_NAMES = {
   equal_weight: 'Own everything equally',
   buyhold: 'Buy and hold',
   trend: 'Ride the trend',
+  value_momentum: 'Momentum, profitable & fairly priced only',
 };
 
 function labRuleName(rule) {
@@ -689,66 +685,155 @@ function labRuleName(rule) {
   return k ? base + ' (top ' + k + ')' : base;
 }
 
+function labUniverseText(u) {
+  const s = String(u || '');
+  if (s === 'mid200') return 'mid-sized companies (market ranks 41\u2013240 by trading volume)';
+  if (s.startsWith('top')) return 'the ' + s.slice(3) + ' most-traded stocks';
+  return s;
+}
+
+function labHowItPicks(rule, universe, schedule) {
+  const [fam, kRaw] = String(rule || '').split(':');
+  const k = kRaw || 'a few';
+  const uni = labUniverseText(universe);
+  const rhythm = schedule === 'weekly' ? 'once a week' : 'once a month';
+  const HOW = {
+    momentum: `re-picks the ${k} strongest recent risers among ${uni}, ${rhythm}`,
+    momo_trend: `re-picks the ${k} strongest risers still in long-term uptrends among ${uni}, ${rhythm}`,
+    meanrev: `buys the ${k} most beaten-down names that are still in long-term uptrends among ${uni}, ${rhythm}`,
+    breakout: `buys the ${k} names pushing closest to fresh 52-week highs among ${uni}, ${rhythm}`,
+    regime_momentum: `rides the ${k} strongest risers among ${uni}, and moves fully to cash whenever the whole market falls below its long-term trend`,
+    value_momentum: `rides the ${k} strongest risers among ${uni} \u2014 but only companies that are profitable and not expensive next to their peers, judged by their own SEC filings`,
+    equal_weight: `owns ${uni} in equal slices, rebalanced ${rhythm}`,
+  };
+  return HOW[fam] || `follows the rule \u201c${rule}\u201d on ${uni}, ${rhythm}`;
+}
+
+let labView = 'board';
+const labCache = { board: null, tests: null };
+
+function renderLabBoard(el, d) {
+  clear(el);
+  if (!d || !d.combos_tested) {
+    renderEmpty(el, 'First nightly sweep pending \u2014 the lab runs after each market close.');
+    return;
+  }
+  // The honesty line comes FIRST \u2014 winners only mean something next to
+  // the number of attempts.
+  el.append(h('p', { class: 'desk-lab-honesty t-dim', text:
+    d.combos_tested + ' strategy variations tested over the last two weeks \u2014 '
+    + d.qualified + ' qualified (beat the S&P 500 in BOTH halves of history). '
+    + 'Scores show each strategy\u2019s WORSE half; expect live results to shrink.' }));
+  if (!d.top || !d.top.length) {
+    el.append(h('p', { class: 'desk-lab-honesty', text:
+      'Nothing currently qualifies \u2014 an honest filter says no most nights.' }));
+    return;
+  }
+  for (const e of d.top) {
+    el.append(h('div', { class: 'desk-lab-entry' },
+      h('div', { class: 'desk-lab-entry-name',
+        title: 'Lab shorthand: ' + e.rule + ' on ' + e.universe + ', ' + e.schedule,
+        text: labRuleName(e.rule) }),
+      h('p', { class: 'desk-lab-entry-body' },
+        'It ' + labHowItPicks(e.rule, e.universe, e.schedule)
+          + '. Even in its weaker half of 21 years it beat the market by ',
+        h('span', { class: 'num ' + (e.score >= 0 ? 't-up' : 't-down'),
+          text: (e.score >= 0 ? '+' : '') + fmtNum(e.score, 1) + '%' }),
+        e.max_dd_out != null
+          ? ` \u2014 though the ride included a ${fmtNum(Math.abs(e.max_dd_out), 0)}% drop at its worst.`
+          : '.')));
+  }
+}
+
+function renderLabTests(el, rows) {
+  clear(el);
+  if (!rows || !rows.length) { renderEmpty(el, 'No history tests run yet.'); return; }
+  el.append(h('p', { class: 'desk-lab-honesty t-dim', text:
+    'Before risking (paper) money on an idea, the AI asks how it would have '
+    + 'done in past markets, after trading costs, versus simply buying the '
+    + 'S&P 500. Failed ideas stay on this list on purpose \u2014 they are the point.' }));
+  for (const r of rows) {
+    const res = r.result || {};
+    const ex = res.excess_return_pct;
+    const body = h('p', { class: 'desk-lab-entry-body' }, 'Tested ' + timeAgo(r.t) + '. ');
+    if (res.return_pct != null) {
+      body.append(`It would have returned ${fmtNum(res.return_pct, 1)}% over the test window`);
+      if (ex != null) {
+        body.append(' \u2014 ',
+          h('span', { class: 'num ' + (ex >= 0 ? 't-up' : 't-down'),
+            text: (ex >= 0 ? fmtNum(ex, 1) + ' points ahead of'
+                           : fmtNum(Math.abs(ex), 1) + ' points behind') }),
+          ' simply buying the S&P 500');
+      }
+      body.append(res.max_drawdown_pct != null
+        ? `, with a worst dip of ${fmtNum(Math.abs(res.max_drawdown_pct), 0)}% along the way.`
+        : '.');
+    }
+    el.append(h('div', { class: 'desk-lab-entry' },
+      h('div', { class: 'desk-lab-entry-name', text: r.label }), body));
+  }
+}
+
+function renderLab() {
+  const el = document.getElementById('desk-lab');
+  if (!el) return;
+  if (labView === 'tests') renderLabTests(el, labCache.tests);
+  else renderLabBoard(el, labCache.board);
+}
+
 async function loadLab() {
   const el = document.getElementById('desk-lab');
   if (!el) return;
   skeleton(el);
   try {
-    const d = await apiGet('/api/desk/lab');
-    clear(el);
-    if (!d || !d.combos_tested) {
-      renderEmpty(el, 'First nightly sweep pending — the lab runs after each market close.');
-      return;
-    }
-    // The honesty line comes FIRST — winners only mean something next to
-    // the number of attempts.
-    el.append(h('p', { class: 'desk-lab-honesty t-dim', text:
-      d.combos_tested + ' strategy variations tested over the last two weeks — '
-      + d.qualified + ' qualified (beat the S&P 500 in BOTH halves of history). '
-      + 'Scores show each strategy’s WORSE half; expect live results to shrink.' }));
-    if (!d.top || !d.top.length) {
-      el.append(h('p', { class: 'desk-lab-honesty', text:
-        'Nothing currently qualifies — an honest filter says no most nights.' }));
-      return;
-    }
-    const table = h('table', { class: 'c-table' },
-      h('thead', {}, h('tr', {},
-        h('th', { text: 'Strategy', title: 'The rule the lab tested, in plain terms' }),
-        h('th', { text: 'Stocks it picks from', title: 'The most-traded N stocks in the AI’s universe' }),
-        h('th', { text: 'Rhythm', title: 'How often the strategy re-picks its holdings' }),
-        h('th', { class: 'num', text: 'Edge (worse half)', title: 'How much it beat the S&P 500 by in its WEAKER half of 21 years of history — the skeptic’s number, after trading costs' }),
-        h('th', { class: 'num', text: 'Smoothness', title: 'Sharpe ratio in the recent half: return relative to how bumpy the ride was — higher is better' }),
-        h('th', { class: 'num', text: 'Worst dip', title: 'The deepest peak-to-bottom drop in the recent half' }))),
-      h('tbody', {}, ...d.top.map(e => h('tr', {},
-        h('td', {}, h('div', { text: labRuleName(e.rule) }),
-          h('div', { class: 't-dim desk-bt-when', text: e.rule })),
-        h('td', { text: String(e.universe || '').replace('top', 'top ') + ' stocks' }),
-        h('td', { text: e.schedule === 'weekly' ? 'weekly' : 'monthly' }),
-        h('td', { class: 'num ' + (e.score >= 0 ? 't-up' : 't-down'),
-          text: e.score != null ? (e.score >= 0 ? '+' : '') + fmtNum(e.score, 1) + '%' : '—' }),
-        h('td', { class: 'num', text: e.sharpe_out != null ? fmtNum(e.sharpe_out, 2) : '—' }),
-        h('td', { class: 'num', text: e.max_dd_out != null ? fmtNum(e.max_dd_out, 1) + '%' : '—' })))));
-    el.append(table);
+    const [board, tests] = await Promise.all([
+      apiGet('/api/desk/lab').catch(() => null),
+      apiGet('/api/desk/backtests?limit=12').catch(() => []),
+    ]);
+    labCache.board = board;
+    labCache.tests = tests;
+    renderLab();
   } catch (err) { renderError(el, err, loadLab); }
 }
 
-/* ── strategy journal ── */
-/* ── lessons wiki: what the AI has learned (curated, size-capped) ── */
+/* ── The AI's notebook: lessons (wiki) + diary (strategy journal).
+   One card, two views. Lessons are curated pages rewritten from measured
+   results; the diary is every approach change, in order, in plain words. ── */
 const WIKI_TITLES = {
   playbook: 'Playbook', lessons: 'Lessons', mistakes: 'Mistakes',
   'market-notes': 'Market notes',
 };
+const REGIME_TAGS = {
+  risk_on: 'learned in a rising market',
+  risk_off: 'learned in a falling market',
+  neutral: 'learned in a mixed market',
+};
 
 function wikiBlocks(body) {
-  // markdown-lite: blank-line-separated blocks; "- " blocks → bullet lists,
-  // everything else → paragraphs. All text nodes — zero innerHTML.
+  // markdown-lite: blank-line-separated blocks; "- " blocks \u2192 bullet lists,
+  // everything else \u2192 paragraphs. All text nodes \u2014 zero innerHTML.
+  // A [risk_on]-style tag anywhere in a bullet becomes a small plain-English
+  // pill instead of raw shorthand.
   const out = [];
   for (const block of String(body || '').split(/\n\s*\n/)) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
     if (!lines.length) continue;
     if (lines.every(l => l.startsWith('- '))) {
       out.push(h('ul', { class: 'desk-wiki-list' },
-        ...lines.map(l => h('li', { text: l.slice(2) }))));
+        ...lines.map(l => {
+          const item = h('li', {});
+          let text = l.slice(2);
+          const m = text.match(/\s*\[(risk_on|risk_off|neutral)\]\s*/);
+          if (m) {
+            text = (text.slice(0, m.index) + ' '
+              + text.slice(m.index + m[0].length)).trim();
+            item.append(text, ' ',
+              h('span', { class: 'c-pill neutral desk-wiki-tag', text: REGIME_TAGS[m[1]] }));
+          } else {
+            item.append(text);
+          }
+          return item;
+        })));
     } else {
       out.push(h('p', { class: 'desk-wiki-p', text: lines.join(' ') }));
     }
@@ -756,118 +841,111 @@ function wikiBlocks(body) {
   return out;
 }
 
-async function loadWiki() {
+let wikiView = 'lessons';
+const wikiCache = { pages: null, journal: null };
+
+const DIARY_KIND = {
+  pivot: 'changed its approach',
+  tweak: 'made a small adjustment',
+  note: 'made a note',
+};
+
+function renderNotebook() {
   const el = document.getElementById('desk-wiki');
   const metaEl = document.getElementById('desk-wiki-meta');
   if (!el) return;
-  skeleton(el);
-  try {
-    const data = await apiGet('/api/desk/wiki');
-    const pages = data.pages || [];
-    if (!pages.length) {
-      renderEmpty(el, 'The notebook is empty — lessons appear once real results come in.');
-      metaEl.textContent = '';
+  clear(el);
+  if (wikiView === 'diary') {
+    const journal = wikiCache.journal || [];
+    if (metaEl) metaEl.textContent = journal.length ? journal.length + ' entries' : '';
+    if (!journal.length) {
+      renderEmpty(el, 'No diary entries yet \u2014 the AI writes one every time it changes its approach.');
       return;
     }
-    metaEl.textContent = pages.length + ' page(s)';
-    clear(el);
-    for (const p of pages) {
-      el.append(h('div', { class: 'desk-wiki-page' },
-        h('div', { class: 'desk-wiki-head' },
-          h('span', { class: 'desk-wiki-title',
-            text: p.title || WIKI_TITLES[p.slug] || p.slug }),
-          pill('rev ' + p.revision, 'info'),
-          h('span', { class: 't-dim', text: timeAgo(p.updated_at) })),
-        ...wikiBlocks(p.body)));
+    for (const j of journal) {
+      el.append(h('div', { class: 'desk-diary-entry' },
+        h('div', { class: 'desk-diary-when t-dim' },
+          h('span', { text: timeAgo(j.t) + ' \u2014 the AI ' }),
+          h('span', { class: 'desk-diary-kind' + (j.kind === 'pivot' ? ' pivot' : ''),
+            text: DIARY_KIND[j.kind] || DIARY_KIND.note })),
+        h('div', { class: 'desk-diary-title', text: j.title }),
+        j.body ? h('p', { class: 'desk-diary-body t-dim', text: j.body }) : null));
     }
+    return;
+  }
+  const pages = wikiCache.pages || [];
+  if (metaEl) metaEl.textContent = pages.length ? pages.length + ' page(s)' : '';
+  if (!pages.length) {
+    renderEmpty(el, 'The notebook is empty \u2014 lessons appear once real results come in.');
+    return;
+  }
+  for (const p of pages) {
+    el.append(h('div', { class: 'desk-wiki-page' },
+      h('div', { class: 'desk-wiki-head' },
+        h('span', { class: 'desk-wiki-title',
+          text: p.title || WIKI_TITLES[p.slug] || p.slug }),
+        h('span', { class: 't-dim',
+          title: 'Rewritten ' + p.revision + ' time(s) as real results came in',
+          text: timeAgo(p.updated_at) })),
+      ...wikiBlocks(p.body)));
+  }
+}
+
+async function loadWiki() {
+  const el = document.getElementById('desk-wiki');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const [w, s] = await Promise.all([
+      apiGet('/api/desk/wiki').catch(() => null),
+      apiGet('/api/desk/strategy').catch(() => null),
+    ]);
+    wikiCache.pages = (w && w.pages) || [];
+    wikiCache.journal = (s && s.journal) || [];
+    renderNotebook();
   } catch (err) { renderError(el, err, loadWiki); }
 }
 
-async function loadJournal() {
-  const el = document.getElementById('desk-journal');
-  skeleton(el);
-  try {
-    const data = await apiGet('/api/desk/strategy');
-    const journal = data.journal || [];
-    if (!journal.length) { renderEmpty(el, 'No pivots yet — strategy is fresh.'); return; }
-    clear(el);
-    const list = h('div', { class: 'desk-journal' });
-    for (const j of journal) {
-      list.append(h('div', { class: 'desk-journal-entry' },
-        h('div', { class: 'desk-journal-head' },
-          pill(j.kind, j.kind === 'pivot' ? 'warn' : 'info'),
-          h('span', { class: 'desk-journal-title', text: j.title }),
-          h('span', { class: 't-dim', text: timeAgo(j.t) })),
-        j.body ? h('p', { class: 'desk-journal-body t-dim', text: j.body }) : null));
-    }
-    el.append(list);
-  } catch (err) { renderError(el, err, loadJournal); }
-}
-
-/* ── live tape: real-time SIP quotes over SSE ── */
+/* ── live stream consumer: real-time SIP quotes over SSE.
+   No tape card anymore (v9.5.0) — ticks feed the hero (account value,
+   index chips) and the holdings rows. Full quote detail lives on each
+   symbol's chart page. ── */
 let tapePrev = {};        // symbol -> last mid (for up/down tick coloring)
 let tapeLastEvent = 0;    // client-side staleness watchdog
+const INDEX_CHIPS = ['SPY', 'QQQ', 'IWM'];
 
 function renderTape(snap) {
-  const el = document.getElementById('desk-tape');
-  const statusEl = document.getElementById('desk-tape-status');
-  const liveDot = document.getElementById('desk-tape-live');
-  const banner = document.getElementById('desk-tape-banner');
   const quotes = snap.quotes || {};
-  const syms = Object.keys(quotes).sort();
-  if (!syms.length) {
-    renderEmpty(el, 'No live quotes yet — streamer warming up.');
-    statusEl.textContent = snap.connected ? 'connected' : 'waiting for stream';
-    liveDot.hidden = true;
-    return;
-  }
-  const anyFresh = syms.some(s => !quotes[s].stale);
-  liveDot.hidden = !(snap.connected && anyFresh);
-  statusEl.textContent = snap.connected
-    ? `${syms.length} symbols · live exchange feed`
-    : 'stream reconnecting — quotes may be stale';
-  banner.hidden = snap.connected || anyFresh;
-  if (!banner.hidden) {
-    clear(banner);
-    banner.append(h('span', { text: '⚠ Live stream interrupted — prices below are stale and nothing will trade off them. Reconnecting…' }));
-  }
+  const syms = Object.keys(quotes);
+  if (!syms.length) return;
 
-  clear(el);
-  fillOptSelect(syms);
-  const table = h('table', { class: 'c-table desk-tape-table' },
-    h('thead', {}, h('tr', {},
-      h('th', { text: 'Symbol' }),
-      h('th', { class: 'num', text: 'Bid', title: 'The best price buyers are offering right now' }),
-      h('th', { class: 'num', text: 'Ask', title: 'The best price sellers are asking right now' }),
-      h('th', { class: 'num', text: 'Mid', title: 'Halfway between bid and ask — the fair-value estimate' }),
-      h('th', { class: 'num', text: 'Last', title: 'The price of the most recent actual trade' }),
-      h('th', { class: 'num', text: 'Age', title: 'How old this quote is, in seconds' }))),
-    h('tbody', {}, ...syms.map(s => {
+  // Live index chips in the hero: the market's pulse without a card.
+  const chipsEl = document.getElementById('desk-hero-indices');
+  if (chipsEl) {
+    clear(chipsEl);
+    for (const s of INDEX_CHIPS) {
       const q = quotes[s];
-      const dir = q.mid != null && tapePrev[s] != null
-        ? (q.mid > tapePrev[s] ? 'up' : q.mid < tapePrev[s] ? 'down' : '') : '';
-      if (q.mid != null) tapePrev[s] = q.mid;
-      // Feed the live-marks fold: fresh quote → update mark; stale → drop so
-      // applyLiveMarks falls back to the last recorded price for that symbol.
-      if (q.mid != null && !q.stale) deskLive.marks[s] = q.mid;
-      else if (q.stale) delete deskLive.marks[s];
-      const ageTxt = q.age_secs == null ? '—' : q.age_secs < 2 ? 'live' : `${Math.round(q.age_secs)}s`;
-      return h('tr', { class: q.stale ? 'desk-tape-stale' : '' },
-        h('td', {}, h('a', { href: '/symbol/' + s, class: 'c-link', text: s })),
-        h('td', { class: 'num', text: q.bid != null ? fmtPrice(q.bid) : '—' }),
-        h('td', { class: 'num', text: q.ask != null ? fmtPrice(q.ask) : '—' }),
-        h('td', { class: 'num ' + (dir === 'up' ? 't-up' : dir === 'down' ? 't-down' : ''),
-          text: q.mid != null ? fmtPrice(q.mid) : '—' }),
-        h('td', { class: 'num', text: q.last != null ? fmtPrice(q.last) : '—' }),
-        h('td', { class: 'num ' + (q.stale ? 't-down' : 't-dim'), text: q.stale ? `stale ${ageTxt}` : ageTxt }));
-    })));
-  el.append(table);
+      if (!q || q.mid == null) continue;
+      const dir = tapePrev[s] != null
+        ? (q.mid > tapePrev[s] ? 't-up' : q.mid < tapePrev[s] ? 't-down' : '') : '';
+      chipsEl.append(h('span', { class: 'desk-idx-chip' + (q.stale ? ' stale' : '') },
+        h('a', { href: '/symbol/' + s, class: 'desk-idx-sym', text: s }),
+        h('span', { class: 'num ' + dir, text: fmtPrice(q.mid) })));
+    }
+  }
+  for (const s of syms) {
+    const q = quotes[s];
+    if (q.mid != null) tapePrev[s] = q.mid;
+    // Feed the live-marks fold: fresh quote → update mark; stale → drop so
+    // applyLiveMarks falls back to the last recorded price for that symbol.
+    if (q.mid != null && !q.stale) deskLive.marks[s] = q.mid;
+    else if (q.stale) delete deskLive.marks[s];
+  }
   // Fold the live mids we just captured into hero + positions rows.
   applyLiveMarks();
 }
 
 function startTape() {
-  const statusEl = document.getElementById('desk-tape-status');
   let es;
   const connect = () => {
     es = new EventSource('/api/desk/stream');
@@ -875,178 +953,17 @@ function startTape() {
       tapeLastEvent = Date.now();
       try { renderTape(JSON.parse(ev.data)); } catch (e) { /* skip bad frame */ }
     });
-    es.onerror = () => { statusEl.textContent = 'stream lost — reconnecting…'; };
+    es.onerror = () => { /* EventSource auto-reconnects; watchdog surfaces it */ };
   };
   connect();
-  // client-side watchdog: EventSource auto-reconnects, but surface the gap
+  // client-side watchdog: hide the LIVE pulse when the stream goes quiet so
+  // frozen numbers never masquerade as ticking ones.
   setInterval(() => {
     if (tapeLastEvent && Date.now() - tapeLastEvent > 6000) {
-      statusEl.textContent = 'stream lost — reconnecting…';
-      document.getElementById('desk-tape-live').hidden = true;
+      const liveEl = document.getElementById('desk-hero-live');
+      if (liveEl) liveEl.hidden = true;
     }
   }, 3000);
-}
-
-/* ── options radar: live chain summary + the growing IV bank ── */
-let optSymbol = localStorage.getItem('ef-opt-symbol') || 'SPY';
-let optSelectFilled = false;
-
-function fillOptSelect(tapeSymbols) {
-  // free-text picker: ANY optionable symbol works (the endpoint is on-demand
-  // REST); the tape just seeds the suggestion list
-  if (optSelectFilled || !tapeSymbols.length) return;
-  const input = document.getElementById('desk-opt-symbol');
-  const list = document.getElementById('desk-opt-list');
-  if (!input || !list) return;
-  clear(list);
-  for (const s of tapeSymbols.filter(s => !OCC_RE.test(s)).sort()) {
-    list.append(h('option', { value: s }));
-  }
-  input.value = optSymbol;
-  input.addEventListener('change', () => {
-    const sym = input.value.trim().toUpperCase();
-    if (!/^[A-Z]{1,6}$/.test(sym)) { input.value = optSymbol; return; }
-    input.value = sym;
-    optSymbol = sym;
-    localStorage.setItem('ef-opt-symbol', optSymbol);
-    loadOptions();
-  });
-  optSelectFilled = true;
-}
-
-function chainRows(summary, maxRows = 21) {
-  // merge calls/puts by strike, then keep the strikes nearest ATM (dense
-  // chains like SPY have 130+ strikes in ±10% — a skyscraper, not a table)
-  const byStrike = new Map();
-  for (const c of summary.calls_table || []) byStrike.set(c.strike, { c });
-  for (const p of summary.puts_table || []) {
-    byStrike.set(p.strike, { ...(byStrike.get(p.strike) || {}), p });
-  }
-  const atm = summary.atm_strike ?? summary.spot;
-  return [...byStrike.entries()]
-    .sort((a, b) => Math.abs(a[0] - atm) - Math.abs(b[0] - atm))
-    .slice(0, maxRows)
-    .sort((a, b) => a[0] - b[0]);
-}
-
-function optStat(label, value, cls, tip) {
-  return h('div', { class: 'c-stat', title: tip || null },
-    h('div', { class: 'label' + (tip ? ' desk-hint' : ''), text: label }),
-    h('div', { class: 'value ' + (cls || ''), text: value }));
-}
-
-async function loadOptions() {
-  const el = document.getElementById('desk-options');
-  const metaEl = document.getElementById('desk-opt-meta');
-  if (!el) return;
-  skeleton(el);
-  try {
-    const [s, hist] = await Promise.all([
-      apiGet('/api/desk/options/' + optSymbol),
-      apiGet('/api/desk/options/' + optSymbol + '/history').catch(() => null),
-    ]);
-    clear(el);
-    if (!s.available) {
-      renderEmpty(el, 'Options data unavailable' + (s.error ? ` (${s.error})` : '') + '.');
-      metaEl.textContent = '';
-      return;
-    }
-    metaEl.textContent = `expiry ${s.expiry} · ${s.dte} days left`;
-    const em = s.expected_move_pct != null
-      ? `±${fmtNum(s.expected_move_pct, 1)}% ($${fmtNum(s.expected_move_dollars, 2)})` : '—';
-    const stats = h('div', { class: 'pf-grid mb-16' },
-      optStat('Stock price', fmtPrice(s.spot),
-        '', 'The current market price of the stock itself'),
-      optStat('Expected swings (IV)', s.atm_iv != null ? fmtNum(s.atm_iv * 100, 1) + '%' : '—',
-        '', 'How jumpy the options market expects this stock to be — higher = bigger expected swings (and pricier options)'),
-      optStat('Expected move', em,
-        '', `The size of the price swing (up OR down) that options traders are pricing in between now and ${s.expiry}`),
-      optStat('Fear gauge', s.skew_25d != null
-        ? (s.skew_25d >= 0 ? '+' : '') + fmtNum(s.skew_25d * 100, 1) + '%'
-        : '—', s.skew_25d > 0.02 ? 't-down' : '',
-        'Put/call skew: positive = traders paying extra for downside protection (nervous); near zero = relaxed'),
-      optStat('History collected', `${(hist && hist.series ? hist.series.length : 0)} day(s)`,
-        '', 'Days of volatility history saved so far — charts get richer as this grows'));
-    el.append(stats);
-
-    const rows = chainRows(s);
-    if (rows.length) {
-      // The full chain is the one genuinely professional table on the page —
-      // opt-in behind a toggle so the default read stays plain-English.
-      const wrap = h('div', { class: 'desk-opt-chainwrap', hidden: true });
-      const btn = h('button', {
-        class: 'desk-opt-chainbtn', type: 'button',
-        text: 'Show the full option chain (pro view)',
-      });
-      btn.addEventListener('click', () => {
-        wrap.hidden = !wrap.hidden;
-        btn.textContent = wrap.hidden
-          ? 'Show the full option chain (pro view)'
-          : 'Hide the full option chain';
-      });
-      el.append(btn);
-      el.append(wrap);
-      wrap.append(h('div', {},
-        h('table', { class: 'c-table desk-opt-chain' },
-          h('thead', {}, h('tr', {},
-            h('th', { class: 'num', text: 'C bid' }), h('th', { class: 'num', text: 'C ask' }),
-            h('th', { class: 'num', text: 'C IV' }), h('th', { class: 'num', text: 'CΔ' }),
-            h('th', { class: 'num desk-opt-strike', text: 'Strike' }),
-            h('th', { class: 'num', text: 'PΔ' }), h('th', { class: 'num', text: 'P IV' }),
-            h('th', { class: 'num', text: 'P bid' }), h('th', { class: 'num', text: 'P ask' }))),
-          h('tbody', {}, ...rows.map(([strike, { c, p }]) => {
-            const atm = strike === s.atm_strike;
-            const f = (v, d = 2) => v != null ? fmtNum(v, d) : '—';
-            return h('tr', { class: atm ? 'desk-opt-atm' : '' },
-              h('td', { class: 'num', text: f(c && c.bid) }),
-              h('td', { class: 'num', text: f(c && c.ask) }),
-              h('td', { class: 'num', text: c && c.iv != null ? f(c.iv * 100, 1) + '%' : '—' }),
-              h('td', { class: 'num t-dim', text: f(c && c.delta) }),
-              h('td', { class: 'num desk-opt-strike', text: fmtNum(strike, strike % 1 ? 2 : 0) }),
-              h('td', { class: 'num t-dim', text: f(p && p.delta) }),
-              h('td', { class: 'num', text: p && p.iv != null ? f(p.iv * 100, 1) + '%' : '—' }),
-              h('td', { class: 'num', text: f(p && p.bid) }),
-              h('td', { class: 'num', text: f(p && p.ask) }));
-          })))));
-    }
-  } catch (err) { renderError(el, err, loadOptions); }
-}
-
-/* ── market movers: gainers / losers / most-active (last close) ── */
-function moverColumn(title, rows) {
-  const col = h('div', { class: 'desk-mv-col' },
-    h('div', { class: 'desk-mv-col-head', text: title }));
-  if (!rows || !rows.length) {
-    col.append(h('div', { class: 't-dim desk-mv-empty', text: '—' }));
-    return col;
-  }
-  for (const r of rows) {
-    const chg = r.change_pct;
-    const cls = chg == null ? 't-dim' : chg >= 0 ? 't-up' : 't-down';
-    const chgTxt = chg == null ? '—' : (chg >= 0 ? '+' : '') + fmtNum(chg, 2) + '%';
-    col.append(h('div', { class: 'desk-mv-row' },
-      h('a', { href: '/symbol/' + r.symbol, class: 'c-link desk-mv-sym', text: r.symbol }),
-      h('span', { class: 'desk-mv-price t-dim', text: fmtPrice(r.close) }),
-      h('span', { class: 'desk-mv-chg ' + cls, text: chgTxt })));
-  }
-  return col;
-}
-
-async function loadMovers() {
-  const el = document.getElementById('desk-movers');
-  const metaEl = document.getElementById('desk-movers-meta');
-  skeleton(el);
-  try {
-    const d = await apiGet('/api/desk/movers?top=5');
-    const empty = !d.as_of || (!(d.gainers || []).length && !(d.losers || []).length && !(d.most_active || []).length);
-    if (empty) { renderEmpty(el, 'No market data yet.'); if (metaEl) metaEl.textContent = ''; return; }
-    if (metaEl) metaEl.textContent = 'as of ' + d.as_of + ' close';
-    clear(el);
-    el.append(h('div', { class: 'desk-mv-grid' },
-      moverColumn('Top gainers', d.gainers),
-      moverColumn('Top losers', d.losers),
-      moverColumn('Most active', d.most_active)));
-  } catch (err) { renderError(el, err, loadMovers); }
 }
 
 /* ── recent fills: each trade + the live bid/ask it priced off ── */
@@ -1094,39 +1011,6 @@ async function loadFills() {
       })));
     el.append(table);
   } catch (err) { renderError(el, err, loadFills); }
-}
-
-/* ── dividend calendar: per-holding ex-dates + amounts ── */
-async function loadDividends() {
-  const el = document.getElementById('desk-dividends');
-  const metaEl = document.getElementById('desk-dividends-meta');
-  if (!el) return;
-  skeleton(el);
-  try {
-    const d = await apiGet('/api/desk/dividends');
-    const payers = (d.holdings || []).filter(x => x.has_dividend);
-    if (!payers.length) {
-      renderEmpty(el, 'None of the current holdings pay a dividend.');
-      if (metaEl) metaEl.textContent = '';
-      return;
-    }
-    if (metaEl) metaEl.textContent = payers.length + ' of ' + (d.holdings || []).length + ' holdings pay';
-    clear(el);
-    const table = h('table', { class: 'c-table' },
-      h('thead', {}, h('tr', {},
-        h('th', { text: 'Stock' }),
-        h('th', { class: 'num', text: 'Last paid', title: 'The most recent ex-dividend date — the cutoff to own the stock and receive that payment' }),
-        h('th', { class: 'num', text: 'Amount', title: 'Cash per share of the most recent dividend' }),
-        h('th', { class: 'num', text: 'Next', title: 'The next scheduled ex-dividend date, if one has been announced' }),
-        h('th', { class: 'num', text: 'Est. yearly', title: 'Estimated payout per share over a year (sum of the last four dividends)' }))),
-      h('tbody', {}, ...payers.map(x => h('tr', {},
-        h('td', {}, h('a', { href: '/symbol/' + x.symbol, class: 'c-link', text: x.symbol })),
-        h('td', { class: 'num', text: x.last_ex_date || '—' }),
-        h('td', { class: 'num', text: x.last_amount != null ? fmtPrice(x.last_amount) : '—' }),
-        h('td', { class: 'num ' + (x.next_ex_date ? 't-up' : 't-dim'), text: x.next_ex_date || '—' }),
-        h('td', { class: 'num', text: x.ttm_amount ? fmtPrice(x.ttm_amount) : '—' })))));
-    el.append(table);
-  } catch (err) { renderError(el, err, loadDividends); }
 }
 
 /* ── what's new: dashboard improvements the agent shipped ── */
@@ -1214,8 +1098,7 @@ async function loadWhatsNew() {
 async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
-    loadDecision(), loadBacktests(), loadJournal(), loadWhatsNew(),
-    loadOptions(), loadMovers(), loadDividends(), loadFills(), loadWiki(),
+    loadDecision(), loadWhatsNew(), loadFills(), loadWiki(),
     loadLab(), loadWatch(),
   ]);
 }
@@ -1306,9 +1189,27 @@ function wireAnchorNav() {
   setActive(zones[0].id);
 }
 
+/* ── card-header seg toggles (lab: board/tests, notebook: lessons/diary) ── */
+function wireSegs() {
+  const wire = (segId, apply) => {
+    const seg = document.getElementById(segId);
+    if (!seg) return;
+    seg.addEventListener('click', ev => {
+      const btn = ev.target.closest('button[data-view]');
+      if (!btn) return;
+      for (const b of seg.querySelectorAll('button')) b.classList.remove('active');
+      btn.classList.add('active');
+      apply(btn.dataset.view);
+    });
+  };
+  wire('desk-lab-seg', v => { labView = v; renderLab(); });
+  wire('desk-wiki-seg', v => { wikiView = v; renderNotebook(); });
+}
+
 wireCollapse();
 wireAnchorNav();
+wireSegs();
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadOptions(); loadWiki(); loadLab(); loadWatch(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki(); loadLab(); loadWatch(); }, 60_000);

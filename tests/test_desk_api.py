@@ -60,20 +60,31 @@ def test_desk_page_renders(client):
 
 
 def test_desk_page_information_architecture(client):
-    """v9 IA: reasoning first, learning second, markets last (collapsed);
-    the watch card exists; the overview anchor leads the nav."""
+    """v9.5 IA: two zones only (reasoning, learning) — the Markets zone is
+    gone (live prices fold into the hero's index chips, movers/options/
+    dividends live on the chart page). Lab and Notebook carry view toggles
+    that absorbed the old backtests/journal cards."""
     import re
 
     html = client.get("/desk").text
 
     reasoning = html.index('id="zone-reasoning"')
     learning = html.index('id="zone-history"')
-    markets = html.index('id="zone-markets"')
-    assert reasoning < learning < markets
+    assert reasoning < learning
+    assert 'id="zone-markets"' not in html
 
     assert 'id="desk-watch"' in html            # the attention card
     assert 'id="desk-lab"' in html              # the lab leaderboard
+    assert 'id="desk-hero-indices"' in html     # live SPY/QQQ/IWM chips
+    assert 'id="desk-lab-seg"' in html          # board / recent-tests views
+    assert 'id="desk-wiki-seg"' in html         # lessons / diary views
     assert 'data-zone="desk-hero">Overview' in html
+    assert 'data-zone="zone-markets"' not in html
+
+    # Retired standalone cards must be fully gone, not just hidden.
+    for key in ("tape", "movers", "options", "dividends", "backtests",
+                "journal"):
+        assert f'data-collapse-key="{key}"' not in html, f"{key} card lingers"
 
     def card_tag(key):
         m = re.search(r'<div class="c-card desk-card[^"]*" '
@@ -81,9 +92,8 @@ def test_desk_page_information_architecture(client):
         assert m, f"card {key} missing"
         return m.group(0)
 
-    # Commodity market cards ship collapsed; the reasoning/learning core is open.
-    for key in ("tape", "movers", "options", "dividends", "fills"):
-        assert 'data-collapsed="1"' in card_tag(key), f"{key} should be collapsed"
+    # Receipts ship collapsed; the reasoning/learning core is open.
+    assert 'data-collapsed="1"' in card_tag("fills")
     for key in ("watch", "decision", "thinking", "lab", "wiki"):
         assert 'data-collapsed="1"' not in card_tag(key), f"{key} should be open"
 

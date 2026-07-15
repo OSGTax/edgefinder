@@ -45,6 +45,8 @@
   </dl>
   <div class="desk-hero-foot">
     <div class="desk-hero-chips" id="desk-hero-chips"></div>
+    <div class="desk-hero-indices" id="desk-hero-indices"
+         title="The three big market gauges, live: SPY tracks the S&amp;P 500, QQQ the Nasdaq 100, IWM small companies."></div>
     <span class="spacer"></span>
     <button id="desk-whatsnew-btn" class="desk-wn-btn" type="button" aria-expanded="false" hidden>
       <span class="desk-wn-spark">&#9670;</span> What's New<span id="desk-whatsnew-badge" class="desk-wn-badge" hidden></span>
@@ -85,7 +87,6 @@
   <a href="#desk-hero" class="desk-anchor" data-zone="desk-hero">Overview</a>
   <a href="#zone-reasoning" class="desk-anchor" data-zone="zone-reasoning">Reasoning</a>
   <a href="#zone-history" class="desk-anchor" data-zone="zone-history">Learning</a>
-  <a href="#zone-markets" class="desk-anchor" data-zone="zone-markets">Markets</a>
 </nav>
 
 <!-- attention banner: the single newest improvement, dismissible -->
@@ -155,38 +156,29 @@
       <div class="c-card-header">
         <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
         <span>Strategy Lab</span>
+        <span class="spacer"></span>
+        <div class="c-seg desk-card-seg" id="desk-lab-seg">
+          <button data-view="board" class="active" type="button">Tonight's board</button>
+          <button data-view="tests" type="button">Recent tests</button>
+        </div>
       </div>
-      <div class="c-card-sub">Every night the AI tests dozens of strategy variations against 21 years of market history. A strategy makes this board only if it beat the S&amp;P 500 in both halves of history &mdash; and its score is its performance in the WORSE half, so lucky streaks don't rank.</div>
+      <div class="c-card-sub">Every night the AI tests dozens of strategy variations against 21 years of market history — and before betting (paper) money on any single idea, it tests that idea the same way. "Tonight's board" is what survived; "Recent tests" is the homework, including the ideas that failed.</div>
       <div class="c-card-body" id="desk-lab"></div>
     </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="wiki">
       <div class="c-card-header">
         <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>What the AI has learned</span>
+        <span>The AI's notebook</span>
         <span class="spacer"></span>
+        <div class="c-seg desk-card-seg" id="desk-wiki-seg">
+          <button data-view="lessons" class="active" type="button">Lessons</button>
+          <button data-view="diary" type="button">Diary</button>
+        </div>
         <span id="desk-wiki-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">A small notebook the AI keeps of lessons from its own wins and losses — rewritten as real results come in, never from hunches. Lightly reviewed every cycle; deeply reviewed every Friday after the close.</div>
+      <div class="c-card-sub">Lessons distilled from the AI's own wins and losses (rewritten as real results come in, never from hunches), and a diary of every time it changed its approach and why.</div>
       <div class="c-card-body" id="desk-wiki"></div>
-    </div>
-
-    <div class="c-card desk-card" data-collapse-key="backtests" data-collapsed="1">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Homework: history tests</span>
-      </div>
-      <div class="c-card-sub">Before betting (paper) money on an idea, the AI tests how it would have performed in past markets versus simply buying the S&amp;P 500.</div>
-      <div class="c-card-body" id="desk-backtests"></div>
-    </div>
-
-    <div class="c-card desk-card" data-collapse-key="journal" data-collapsed="1">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Strategy diary</span>
-      </div>
-      <div class="c-card-sub">Every time the AI changes its approach, it writes down what changed and why.</div>
-      <div class="c-card-body" id="desk-journal"></div>
     </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="fills" data-collapsed="1">
@@ -203,67 +195,9 @@
   </div>
 </section>
 
-<!-- ZONE 3: MARKETS — commodity market context; useful, but last on purpose. -->
-<section id="zone-markets" class="desk-zone">
-  <header class="desk-zone-head">
-    <h3 class="desk-zone-title">Markets</h3>
-    <p class="desk-zone-sub">The wider market: live prices, big movers, what options traders expect, and dividends on the AI's holdings. Click any section open.</p>
-  </header>
-  <div class="desk-zone-grid">
-
-    <div id="desk-tape-banner" class="desk-tape-banner desk-span-2" hidden></div>
-
-    <div class="c-card desk-card desk-span-2" data-collapse-key="tape" data-collapsed="1">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Live prices</span>
-        <span id="desk-tape-live" class="desk-live-dot" hidden></span>
-        <span class="spacer"></span>
-        <span id="desk-tape-status" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">Real-time prices straight from the exchanges — the same numbers the AI trades on. "Bid" is what buyers offer, "ask" is what sellers want.</div>
-      <div class="c-card-body" id="desk-tape"></div>
-    </div>
-
-    <div class="c-card desk-card" data-collapse-key="movers" data-collapsed="1">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Market movers</span>
-        <span class="spacer"></span>
-        <span id="desk-movers-meta" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">The biggest winners, losers, and most-traded names across the ~1,000 most-liquid stocks the AI tracks — as of the last market close.</div>
-      <div class="c-card-body" id="desk-movers"></div>
-    </div>
-
-    <div class="c-card desk-card" data-collapse-key="options" data-collapsed="1">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Options radar</span>
-        <input id="desk-opt-symbol" class="desk-opt-select" list="desk-opt-list"
-               maxlength="6" autocomplete="off" spellcheck="false"
-               placeholder="any symbol…">
-        <datalist id="desk-opt-list"></datalist>
-        <span class="spacer"></span>
-        <span id="desk-opt-meta" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">What the options market expects for a stock — how big a move traders are bracing for, and what protection costs. Type any symbol. Hover any term for a plain-English explanation.</div>
-      <div class="c-card-body" id="desk-options"></div>
-    </div>
-
-    <div class="c-card desk-card desk-span-2" data-collapse-key="dividends" data-collapsed="1">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Dividend calendar</span>
-        <span class="spacer"></span>
-        <span id="desk-dividends-meta" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">For each holding that pays a dividend: the most recent payment, the next one on the calendar, and the estimated yearly payout per share. A dividend is a cash payment a company sends shareholders.</div>
-      <div class="c-card-body" id="desk-dividends"></div>
-    </div>
-
-  </div>
-</section>
+<!-- Market context lives on the chart page now (v9.5.0): live quotes fold
+     into the hero, movers seed the chart page's symbol search, options and
+     dividends have per-stock tabs there. Every symbol above links over. -->
 
 <!-- FOOTNOTE: a quiet, always-visible reminder that this is simulated money,
      not investment advice — the one fact a first-time visitor could easily

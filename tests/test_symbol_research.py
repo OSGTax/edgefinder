@@ -110,3 +110,11 @@ def test_symbol_page_ships_research_tab(client):
     html = client.get("/symbol/ACME").text
     assert 'data-tab="profile"' in html and ">Research<" in html
     assert ">AI trades<" in html
+
+
+def test_symbol_page_tab_deep_link_renders(client):
+    """?tab=options must serve the page (the JS reads it client-side) —
+    the desk's retired options card deep-links here."""
+    r = client.get("/symbol/ACME?tab=options")
+    assert r.status_code == 200
+    assert 'data-tab="options"' in r.text

@@ -171,7 +171,6 @@
    the existing `overflow-x: auto` on `.c-card-body` becomes the actual
    scroll surface for the wide table — as it was always meant to be. */
 .desk-zone-grid > * { min-width: 0; }
-.desk-tape-banner { min-width: 0; }
 
 @media (max-width: 900px) {
   .desk-zone-grid { grid-template-columns: 1fr; gap: 12px; }
@@ -301,21 +300,13 @@
 .desk-wn-entry-title { font-weight: 600; color: var(--t-text); }
 .desk-wn-entry-detail { margin: var(--t-space-2) 0 0; line-height: 1.5; font-size: var(--t-fs-sm); }
 
-/* live tape — SSE-driven real-time quotes */
+/* live pulse (hero LIVE chip + index chips share the dot) */
 .desk-live-dot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--t-up); display: inline-block;
   animation: desk-pulse 1.6s ease-in-out infinite;
 }
 @keyframes desk-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-.desk-tape-table td, .desk-tape-table th { font-variant-numeric: tabular-nums; }
-.desk-tape-stale td { opacity: 0.55; }
-.desk-tape-banner {
-  display: flex; align-items: center; gap: var(--t-space-3);
-  padding: var(--t-space-2) var(--t-space-3); margin-bottom: var(--t-space-4);
-  background: var(--t-warn-dim); border: 1px solid var(--t-warn);
-  border-radius: var(--t-radius); color: var(--t-text);
-}
 
 /* holdings: options sub-table heading */
 .desk-subhead {
@@ -323,17 +314,6 @@
   font-weight: 700; color: var(--t-text);
   font-size: var(--t-fs-sm); text-transform: uppercase; letter-spacing: 0.06em;
 }
-
-/* options radar */
-.desk-opt-select {
-  font: inherit; font-size: var(--t-fs-sm); color: var(--t-text);
-  background: var(--t-surface-2); border: 1px solid var(--t-border);
-  border-radius: var(--t-radius-sm); padding: 2px var(--t-space-2);
-}
-.desk-opt-chainwrap { overflow-x: auto; }
-.desk-opt-chain td, .desk-opt-chain th { font-variant-numeric: tabular-nums; }
-.desk-opt-strike { font-weight: 700; color: var(--t-text); }
-.desk-opt-atm td { background: var(--t-accent-dim); }
 
 /* plain-english layer: card subtitles + hoverable term hints */
 .c-card-sub {
@@ -348,29 +328,6 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-fills-why {
   max-width: 240px; overflow: hidden; text-overflow: ellipsis;
   cursor: help; color: var(--t-text-2);
-}
-
-/* ── market movers ── */
-.desk-mv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--t-space-4); }
-.desk-mv-col { display: flex; flex-direction: column; gap: var(--t-space-1); }
-.desk-mv-col-head {
-  font-size: var(--t-fs-xs); text-transform: uppercase; letter-spacing: 0.04em;
-  color: var(--t-text-3); padding-bottom: var(--t-space-2);
-  border-bottom: 1px solid var(--t-border); margin-bottom: var(--t-space-1);
-}
-.desk-mv-row {
-  display: grid; grid-template-columns: 1fr auto auto; align-items: baseline;
-  gap: var(--t-space-3); padding: var(--t-space-1) 0;
-}
-.desk-mv-sym { font-weight: 600; }
-.desk-mv-price { font-size: var(--t-fs-sm); font-family: var(--t-font-mono); }
-.desk-mv-chg {
-  font-size: var(--t-fs-sm); font-family: var(--t-font-mono);
-  text-align: right; min-width: 4.5em;
-}
-.desk-mv-empty { padding: var(--t-space-2) 0; }
-@media (max-width: 640px) {
-  .desk-mv-grid { grid-template-columns: 1fr; gap: var(--t-space-3); }
 }
 
 /* ── holdings: sparkline trend ── */
@@ -467,10 +424,60 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-watch-text { flex: 1; min-width: 0; }
 
 /* pro-view toggles (option chain, full thinking feed) */
-.desk-opt-chainbtn {
+.desk-morebtn {
   background: none; border: 1px solid var(--t-border);
   border-radius: var(--t-radius-sm); color: var(--t-text-2);
   font: inherit; font-size: var(--t-fs-xs); cursor: pointer;
   padding: 4px 10px; margin-top: var(--t-space-2);
 }
-.desk-opt-chainbtn:hover { color: var(--t-text); border-color: var(--t-border-strong); }
+.desk-morebtn:hover { color: var(--t-text); border-color: var(--t-border-strong); }
+
+/* ── v9.5.0: calmer desk ── */
+
+/* hero: live index chips (SPY/QQQ/IWM) — the market's pulse, no card */
+.desk-hero-indices { display: flex; gap: var(--t-space-3); flex-wrap: wrap; align-items: center; }
+.desk-idx-chip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-size: var(--t-fs-sm); font-family: var(--t-font-mono);
+  padding: 2px var(--t-space-2); border: 1px solid var(--t-border);
+  border-radius: var(--t-radius-sm); background: var(--t-surface-2);
+}
+.desk-idx-chip.stale { opacity: 0.55; }
+.desk-idx-sym { color: var(--t-text-2); font-weight: 600; text-decoration: none; }
+.desk-idx-sym:hover { color: var(--t-text); }
+
+/* card-header view toggles (lab: board/tests, notebook: lessons/diary) */
+.desk-card-seg { display: inline-flex; }
+.desk-card-seg button {
+  font: inherit; font-size: var(--t-fs-xs); color: var(--t-text-3);
+  background: none; border: 1px solid var(--t-border); cursor: pointer;
+  padding: 3px 10px;
+}
+.desk-card-seg button:first-child { border-radius: var(--t-radius-sm) 0 0 var(--t-radius-sm); }
+.desk-card-seg button:last-child { border-radius: 0 var(--t-radius-sm) var(--t-radius-sm) 0; border-left: none; }
+.desk-card-seg button.active { color: var(--t-text); background: var(--t-surface-3); }
+
+/* lab + tests: stacked prose entries instead of stat tables */
+.desk-lab-entry { padding: var(--t-space-3) 0; border-bottom: 1px solid var(--t-border); }
+.desk-lab-entry:last-child { border-bottom: none; padding-bottom: 0; }
+.desk-lab-entry-name { font-weight: 700; color: var(--t-text); cursor: help; }
+.desk-lab-entry-body { margin: var(--t-space-1) 0 0; color: var(--t-text-2); line-height: 1.55; }
+
+/* notebook: diary view */
+.desk-diary-entry { padding: var(--t-space-3) 0; border-bottom: 1px solid var(--t-border); }
+.desk-diary-entry:last-child { border-bottom: none; padding-bottom: 0; }
+.desk-diary-when { font-size: var(--t-fs-sm); }
+.desk-diary-kind.pivot { color: var(--t-warn); font-weight: 600; }
+.desk-diary-title { font-weight: 600; color: var(--t-text); margin-top: 2px; }
+.desk-diary-body { margin: var(--t-space-1) 0 0; line-height: 1.5; }
+
+/* notebook: plain-English regime tag on a lesson */
+.desk-wiki-tag { font-size: var(--t-fs-xs); vertical-align: middle; }
+
+/* holdings: the per-row next-dividend note */
+.desk-pos-div { font-size: var(--t-fs-xs); cursor: help; white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .desk-hero-indices { width: 100%; }
+  .desk-card-seg button { padding: 3px 8px; }
+}
