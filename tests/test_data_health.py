@@ -33,7 +33,7 @@ def test_verdict_empty_is_red():
 
 
 def test_verdict_green_after_nightly():
-    v = coverage_verdict([(day(0), 1500)])
+    v = coverage_verdict([(day(0), 2000)])
     assert v["status"] == "green" and v["research_ok"] is True
     assert v["last_full_date"] == day(0) and v["thin_sessions"] == 0
 

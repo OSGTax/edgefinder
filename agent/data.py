@@ -296,7 +296,7 @@ def universe(top_n: int = 200, *, as_of: date | None = None) -> list[str]:
 
     pg lane uses the kept PIT ranking. rest lane ranks the latest stored
     session's dollar volume from daily_bars (the hot set already holds the
-    live top-1000/day), which is fast over the Data API and good enough for
+    live top-2000/day), which is fast over the Data API and good enough for
     the agent's hunting universe.
     """
     if _use_rest():
@@ -421,10 +421,10 @@ def regime(*, as_of: date | None = None) -> dict:
 # that: bars older than a long weekend can't be green no matter their shape.
 
 # Bars on a date for it to count as a full nightly ingest. The nightly runs
-# --top 1000 and lands ~1,020-1,035 rows (top-N + the forced keep set), so
-# 900 leaves ~10% headroom: one failed 100-name fetch batch in an otherwise
+# --top 2000 and lands ~2,020-2,035 rows (top-N + the forced keep set), so
+# 1800 leaves ~10% headroom: one failed 100-name fetch batch in an otherwise
 # successful ingest must not flip the whole date to "thin".
-FULL_COVERAGE_MIN = 900
+FULL_COVERAGE_MIN = 1800
 COVERAGE_AMBER_AGE_DAYS = 4  # newest bar older than this → at most amber
 COVERAGE_RED_AGE_DAYS = 6    # older than this → red (holiday weekend is 4)
 

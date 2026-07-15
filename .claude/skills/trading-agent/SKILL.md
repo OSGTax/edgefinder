@@ -87,7 +87,7 @@ short, candid lines; this is the live "thinking" panel the owner watches.
   from a rotted scan. Check the session first (`python -m agent.broker
   session`): if it prints `closed` or `extended` pre-market, you have the
   time — attempt ONE self-heal, `python -m agent.refresh --source
-  alpaca-market --top 1000`, then re-run preflight. **Precedence:** this
+  alpaca-market --top 2000`, then re-run preflight. **Precedence:** this
   self-heal runs BEFORE the closed-session stop rule below — heal first,
   then record the no-op line and stop as usual. During regular hours, just
   flag it. Never silently trade around stale data. (If `research_ok` is

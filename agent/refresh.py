@@ -16,7 +16,7 @@ grow-only R2 archive.
 
 CLI:
   python -m agent.refresh                              # cheap live-universe top-up
-  python -m agent.refresh --source alpaca-market --top 1000
+  python -m agent.refresh --source alpaca-market --top 2000
   python -m agent.refresh --source alpaca-market --optionable --dry-run
 """
 
@@ -464,7 +464,7 @@ def _write_bars_with_retry(store, sym: str, rows: list[dict], start_iso: str,
     return False
 
 
-def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
+def refresh_alpaca_market(*, top_n: int = 2000, max_days: int = 400,
                           min_price: float = 1.0, max_price: float = 100_000.0,
                           optionable_only: bool = False, lookback_days: int = 7,
                           dry_run: bool = False) -> dict:
@@ -661,7 +661,7 @@ def main(argv: list[str] | None = None) -> None:
                    help="alpaca = live-universe top-up (default, cheap/hourly); "
                         "alpaca-market = full-market rank + top-N ingest (nightly)")
     p.add_argument("--max-days", type=int, default=7)
-    p.add_argument("--top", type=int, default=1000)
+    p.add_argument("--top", type=int, default=2000)
     p.add_argument("--optionable", action="store_true",
                    help="alpaca-market: restrict the catalog to optionable names")
     p.add_argument("--min-price", type=float, default=1.0)

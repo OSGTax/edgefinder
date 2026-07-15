@@ -1,7 +1,7 @@
 """Bar access for the dashboard's symbol charts — the DB/R2 seam.
 
 Two-tier storage (v5.35): the DB holds protected ETFs full-history plus a
-trailing ~365d top-1000 window; the full market history lives in the R2
+trailing ~365d top-2000 window; the full market history lives in the R2
 Parquet store. This service picks the right source per request, applies
 split adjustment uniformly (the R2 loader returns raw frames), falls back
 to the DB (flagged ``truncated``) when R2 is unavailable, and caches

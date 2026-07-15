@@ -19,7 +19,7 @@ safe to re-run.
 
 ### 1. Ingest the top-N by dollar volume
 ```
-python -m agent.refresh --source alpaca-market --top 1000
+python -m agent.refresh --source alpaca-market --top 2000
 ```
 This enumerates Alpaca's whole tradable catalog (~13k), ranks by dollar volume,
 and keeps fresh daily-bar history for the top-N **plus** benchmarks / held /
