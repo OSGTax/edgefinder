@@ -65,7 +65,14 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: "/trading-agent"
-          claude_args: "--max-turns 150"
+          # agent mode denies ALL tools unless granted — without this list the
+          # cycle "succeeds" in ~12s having been refused every Bash call
+          # (observed run 29509107336: 5 turns, 4 permission denials, no fills).
+          # No Edit/Write: the trading skill's only write path is the agent
+          # CLIs; the runner must not be able to modify the checkout.
+          claude_args: >-
+            --max-turns 150
+            --allowedTools "Skill,Bash,Read,Glob,Grep,WebFetch,TodoWrite"
         env:
           EDGEFINDER_DB_TRANSPORT: rest
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
