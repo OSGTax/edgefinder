@@ -28,3 +28,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: "State the current UTC time and this repository's name, then stop. Do not read, modify, or execute anything else."
           claude_args: "--max-turns 2"
+          # Diagnostic only (this is a public repo): the inert prompt makes
+          # the transcript harmless, and we need the real auth error text.
+          # Remove once the smoke test passes.
+          show_full_output: "true"
