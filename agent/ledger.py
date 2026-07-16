@@ -22,6 +22,7 @@ CLI (the agent calls these via Bash; all output is JSON):
       --rationale "momentum breakout" --run-id 2026-07-07T14:30
   python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 ...
   python -m agent.ledger mark
+  python -m agent.ledger grade      # machine facts per pick → desk_outcomes
 """
 
 from __future__ import annotations
@@ -60,10 +61,42 @@ MAX_SPREAD_CRYPTO = 0.03
 # Quote-freshness at fill time — reject if the quote timestamp is older than
 # this many seconds. OPRA quotes update less often than SIP; the option cap is
 # looser to match reality (thin contracts genuinely quote once per minute).
-# Crypto quotes tick continuously, so the equity cap fits.
+# Crypto quotes tick continuously, so the equity cap fits. A quote whose
+# timestamp is missing or unparseable FAILS CLOSED — an age we cannot measure
+# is an age we must assume is bad.
 MAX_QUOTE_AGE_SEC_EQ = 30.0
 MAX_QUOTE_AGE_SEC_OPT = 120.0
 MAX_QUOTE_AGE_SEC_CRYPTO = 30.0
+# Live-fill friction gates (EQUITIES only — options liquidity is the chain's
+# problem, already judged by the OPRA spread/staleness caps above, and crypto
+# pairs have no daily_bars history to gate against):
+# - LAST-CLOSE SANITY: the live price must sit within LIVE_CLOSE_BAND of the
+#   latest STORED daily close or the fill refuses — a symbol mixup, a garbled
+#   feed, or a tape event that deserves a deliberate decision, not a reflex
+#   fill. Override with --allow-price-deviation when the move is real and
+#   intended; a name with no stored close (new listing) warns and allows.
+# - ADV SIZE GATE: one order may take at most ADV_MAX_NOTIONAL_PCT of the
+#   ADV_SESSIONS-session average dollar volume — a $50k fill in a name that
+#   trades $1M/day would never fill at the touch in the real world, and paper
+#   alpha earned that way is fiction. Override with --allow-illiquid, on the
+#   record; short/missing history (fewer than ADV_MIN_SESSIONS stored bars)
+#   warns and allows.
+LIVE_CLOSE_BAND = 0.20
+ADV_SESSIONS = 20
+ADV_MIN_SESSIONS = 10
+ADV_MAX_NOTIONAL_PCT = 0.01
+# Options pay a flat per-contract fee (OPRA/regulatory + commission) on every
+# fill booked through record_trade: BUY dollars = gross + fee, SELL dollars =
+# gross − fee (floored at 0), with the fee stamped inside fill_quote. The
+# per-share ``price`` stays the quote price — the fee lives in ``dollars``,
+# so cash replay from the ledger stays exact. Settlement and corp-action rows
+# bypass record_trade on purpose: they are accounting events, not orders, and
+# stay fee-free.
+OPTION_FEE_PER_CONTRACT = 0.65
+# Marks: when more than this % of position value is marked at COST BASIS
+# (no live quote, no stored close), the equity snapshot is flagged degraded —
+# still written (an outage must not stop the curve), but loudly visible.
+MARK_DEGRADED_COST_PCT = 20.0
 
 
 def _mult(symbol: str) -> int:
@@ -191,7 +224,9 @@ def _realized_pnl(trades: list[dict]):
     Split-adjustment rows are unit-count changes, not trades: they move
     shares with cost untouched and book ZERO realized P&L (dividend rows
     carry 0 shares, so they naturally book zero here too — dividend cash
-    lands in the book's equity, not in per-symbol realized P&L).
+    lands in the book's equity, not in per-symbol realized P&L). Option
+    per-contract fees live in ``dollars``/cash only, never in ``price``, so
+    realized P&L here is gross of fees; the equity curve nets them via cash.
     """
     from agent import occ  # noqa: F401 — via _mult
 
@@ -728,6 +763,13 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
     held quantity); a BUY is refused if it would overdraw cash. Price sanity:
     with a ``fill_quote`` the price must sit essentially ON the quote
     (LIVE_BAND outside [bid, ask]); without one, the legacy close-band applies.
+
+    OPTION FEES: every option fill pays OPTION_FEE_PER_CONTRACT × contracts —
+    added to a BUY's dollars, subtracted from a SELL's (floored at 0) — and
+    the fee breakdown is stamped inside ``fill_quote``. ``price`` stays the
+    per-share quote price; only ``dollars`` (and therefore cash) carries the
+    fee, so the ledger replay stays exact. Settlement/corp-action rows book
+    directly (not through here) and are fee-free by design.
     """
     from agent import occ
 
@@ -800,21 +842,32 @@ def record_trade(store=None, *, symbol: str, side: str, shares: float, price: fl
                 return {"ok": False, "error": err}
 
     gross = round(shares * price * mult, 2)
+    fee = 0.0
+    if is_opt:
+        fee = round(OPTION_FEE_PER_CONTRACT * shares, 2)
+        fill_quote = {**(fill_quote or {}),
+                      "fee": {"per_contract": OPTION_FEE_PER_CONTRACT,
+                              "contracts": shares, "total": fee}}
+    dollars = (round(gross + fee, 2) if side == "BUY"
+               else max(0.0, round(gross - fee, 2)))
     if side == "BUY":
         spendable = round(cash_now - _csp_reserved(positions), 2)
-        if gross > spendable + 1e-6:
+        if dollars > spendable + 1e-6:
             return {"ok": False, "error": "insufficient free cash for buy",
-                    "needed": gross, "cash": cash_now, "free_cash": spendable}
+                    "needed": dollars, "cash": cash_now, "free_cash": spendable}
 
     store.insert("desk_trades", {
         "account": account, "run_id": run_id, "symbol": symbol, "side": side,
-        "shares": shares, "price": round(price, 4), "dollars": gross,
+        "shares": shares, "price": round(price, 4), "dollars": dollars,
         "rationale": rationale, "fill_quote": fill_quote,
         "ts": _utcnow()}, returning=False)
     rebuild_positions(store, account)
-    return {"ok": True, "symbol": symbol, "side": side, "shares": shares,
-            "price": round(price, 4), "dollars": gross, "multiplier": mult,
-            "fill_quote": fill_quote, "cash_after": cash(store, account)}
+    out = {"ok": True, "symbol": symbol, "side": side, "shares": shares,
+           "price": round(price, 4), "dollars": dollars, "multiplier": mult,
+           "fill_quote": fill_quote, "cash_after": cash(store, account)}
+    if is_opt:
+        out["fee"] = fee
+    return out
 
 
 def _live_quote(symbol: str) -> dict:
@@ -867,16 +920,56 @@ def _quote_age_sec(t) -> float | None:
     return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
+def _latest_stored_close(store, symbol: str) -> float | None:
+    """The most recent daily close STORED for ``symbol`` — a plain
+    order-by-date select on daily_bars, transport-safe on both lanes (unlike
+    ``_latest_close``, which routes through the indicator engine). None when
+    the symbol has no bars (new listing) or the read fails."""
+    try:
+        rows = store.select("daily_bars", columns="date,close",
+                            filters={"symbol": symbol},
+                            order=[("date", "desc")], limit=1)
+    except Exception:  # noqa: BLE001 — no close row → the caller warns+allows
+        return None
+    if rows and rows[0].get("close"):
+        px = float(rows[0]["close"])
+        return px if px > 0 else None
+    return None
+
+
+def _avg_dollar_volume(store, symbol: str) -> tuple[float | None, int]:
+    """(20-session average dollar volume, sessions found) from daily_bars —
+    close × volume over the latest ADV_SESSIONS stored bars. Returns
+    ``(None, n)`` when fewer than ADV_MIN_SESSIONS bars exist (new listing /
+    symbol outside the hot set) so the gate warns and allows instead of
+    blocking a name we simply haven't ingested. Same math as the market
+    tools' dollar-volume ranking, computed locally on the ledger's own
+    transport seam."""
+    try:
+        rows = store.select("daily_bars", columns="date,close,volume",
+                            filters={"symbol": symbol},
+                            order=[("date", "desc")], limit=ADV_SESSIONS)
+    except Exception:  # noqa: BLE001 — unreadable history → warn-and-allow
+        return None, 0
+    vals = [float(r["close"]) * float(r.get("volume") or 0.0)
+            for r in rows if r.get("close")]
+    if len(vals) < ADV_MIN_SESSIONS:
+        return None, len(vals)
+    return sum(vals) / len(vals), len(vals)
+
+
 def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None,
               notional: float | None = None, rationale: str | None = None,
               run_id: str | None = None, slippage_bp: float = SLIPPAGE_BP,
+              allow_price_deviation: bool = False, allow_illiquid: bool = False,
               account: str = ACCOUNT) -> dict:
     """Book a fill AT THE LIVE QUOTE — the only execution path the agent uses.
 
     Reads the real-time SIP quote, prices the correct side (BUY at ask,
     SELL at bid, ± slippage), stamps the quote snapshot on the fill, and
     refuses to book when the market is closed, the quote is degenerate, or
-    the quote is stale. Extended hours are allowed for equities with tighter
+    the quote is stale (a quote whose timestamp cannot be parsed FAILS
+    CLOSED). Extended hours are allowed for equities with tighter
     spread guards; options are refused outside RTH (OPRA book is genuinely
     bad pre-open/post-close). NOTE: a post-close (after-hours) extended BUY
     cannot be exited until the NEXT session's tape — an overnight hold by
@@ -885,6 +978,19 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     24/7 and skip the RTH/close-soon gates; their spread cap is 3% and no
     options structure is possible.  Exactly one of ``shares`` / ``notional``
     sizes the order (fractional ok — required for high-priced crypto).
+
+    EQUITY FRICTION GATES (see the constants block): the priced fill must
+    sit within LIVE_CLOSE_BAND of the latest stored daily close
+    (``allow_price_deviation`` overrides; no stored close warns and allows)
+    and the order notional may take at most ADV_MAX_NOTIONAL_PCT of the
+    20-session average dollar volume (``allow_illiquid`` overrides; short
+    history warns and allows). Both gates apply to BUYs and SELLs alike —
+    dumping into no bid is as fictional as buying at the touch — so a
+    hard-stop exit can land ``exec_failed`` on a name that outgrew the
+    liquidity cap: visible in watch-list, handled by the next cycle (which
+    may pass the override deliberately). Options and crypto skip both gates:
+    options liquidity is judged on the chain itself (OPRA spread/staleness
+    caps), and crypto has no daily_bars history to gate against.
     """
     from agent import broker, occ
 
@@ -931,17 +1037,23 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
                 f"degenerate quote (crossed or >{max_spread:.0%} spread)",
                 "bid": bid, "ask": ask, "session": sess}
 
-    # Quote-freshness — the missing defense against a feed stuck open on an
-    # old print. Only rejects when we can actually measure it; a quote without
-    # a timestamp is unusual (SDK always sets one) but not an outright reject.
+    # Quote-freshness — the defense against a feed stuck open on an old
+    # print. FAIL-CLOSED: a quote whose timestamp is missing or unparseable
+    # has an age we cannot measure, and an unmeasurable age must be assumed
+    # bad — never a free pass around the staleness cap.
     age = _quote_age_sec(q.get("t"))
+    if age is None:
+        return {"ok": False, "error":
+                "quote timestamp missing/unparseable — cannot verify "
+                "freshness, refusing to fill",
+                "bid": bid, "ask": ask, "session": sess}
     if is_cx:
         max_age = MAX_QUOTE_AGE_SEC_CRYPTO
     elif is_opt:
         max_age = MAX_QUOTE_AGE_SEC_OPT
     else:
         max_age = MAX_QUOTE_AGE_SEC_EQ
-    if age is not None and age > max_age:
+    if age > max_age:
         return {"ok": False, "error":
                 f"stale quote ({age:.0f}s old, cap {max_age:.0f}s) — feed hiccup?",
                 "bid": bid, "ask": ask, "session": sess}
@@ -955,6 +1067,51 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
             return {"ok": False, "error": "notional too small for one contract",
                     "contract_cost": per_unit}
 
+    # Equity friction gates — an INDEPENDENT price reference (yesterday's
+    # stored close) and a size-vs-liquidity check. The in-quote band inside
+    # record_trade checks the price against the very quote it was computed
+    # from, which a wrong quote passes trivially; these gates are the checks
+    # a wrong quote or an unfillable size actually fails.
+    warnings: list[str] = []
+    if not (is_opt or is_cx):
+        last_close = _latest_stored_close(store, symbol)
+        if last_close is None:
+            warnings.append(f"no stored daily close for {symbol} (new listing "
+                            "or outside the hot set) — last-close sanity gate "
+                            "skipped")
+        else:
+            dev = abs(price / last_close - 1.0)
+            if dev > LIVE_CLOSE_BAND and not allow_price_deviation:
+                return {"ok": False, "error":
+                        f"price {price:g} is {dev:.1%} from the latest stored "
+                        f"close {last_close:g} (band {LIVE_CLOSE_BAND:.0%}) — "
+                        "a real move this big deserves a deliberate override "
+                        "(--allow-price-deviation), not a reflex fill",
+                        "price": price, "latest_close": round(last_close, 4),
+                        "deviation": round(dev, 4), "band": LIVE_CLOSE_BAND}
+            if dev > LIVE_CLOSE_BAND:
+                warnings.append(f"price deviation {dev:.1%} vs close "
+                                f"{last_close:g} allowed by override")
+        order_notional = shares * price
+        adv, adv_sessions = _avg_dollar_volume(store, symbol)
+        if adv is None:
+            warnings.append(f"only {adv_sessions} stored session(s) for "
+                            f"{symbol} — ADV size gate skipped")
+        elif order_notional > ADV_MAX_NOTIONAL_PCT * adv:
+            if not allow_illiquid:
+                return {"ok": False, "error":
+                        f"order notional ${order_notional:,.0f} exceeds "
+                        f"{ADV_MAX_NOTIONAL_PCT:.0%} of {symbol}'s "
+                        f"{adv_sessions}-session average dollar volume "
+                        f"(${adv:,.0f}) — this size would not fill at the "
+                        "touch; downsize or override with --allow-illiquid",
+                        "notional": round(order_notional, 2),
+                        "adv": round(adv, 2),
+                        "max_pct": ADV_MAX_NOTIONAL_PCT}
+            warnings.append(f"notional ${order_notional:,.0f} > "
+                            f"{ADV_MAX_NOTIONAL_PCT:.0%} of ADV "
+                            f"(${adv:,.0f}) allowed by override")
+
     if is_opt:
         src = "alpaca_opra_rest"
     elif is_cx:
@@ -963,9 +1120,12 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
         src = "alpaca_sip_rest"
     snapshot = {"bid": bid, "ask": ask, "mid": q.get("mid"), "t": q.get("t"),
                 "src": src, "slippage_bp": slippage_bp, "session": sess}
-    return record_trade(store, symbol=symbol, side=side, shares=shares,
-                        price=price, rationale=rationale, run_id=run_id,
-                        fill_quote=snapshot, account=account)
+    res = record_trade(store, symbol=symbol, side=side, shares=shares,
+                       price=price, rationale=rationale, run_id=run_id,
+                       fill_quote=snapshot, account=account)
+    if warnings:
+        res.setdefault("warnings", []).extend(warnings)
+    return res
 
 
 def _latest_close(symbol: str) -> float | None:
@@ -1028,7 +1188,10 @@ def _book_settlement(store, *, symbol: str, side: str, qty: float, price: float,
     """Directly book a settlement row (bypasses the live-quote guards — expiry
     settles at intrinsic value, which may legitimately be 0). ``basis`` says
     which price settled it: 'expiry_close' (the honest default) or
-    'runtime_price' (fallback when the expiry-day bar is missing)."""
+    'runtime_price' (fallback when the expiry-day bar is missing).
+    Settlement rows are FEE-FREE by design: expiry settlement is an
+    accounting event, not an order (the per-contract fee lives only on fills
+    booked through record_trade)."""
     store.insert("desk_trades", {
         "account": account, "run_id": "settlement", "symbol": symbol,
         "side": side, "shares": qty, "price": round(price, 4),
@@ -1399,33 +1562,85 @@ def mark(store=None, *, prices: dict[str, float] | None = None,
 
     Prefers LIVE SIP mids (even after hours — the last quote is still the best
     mark); falls back to the latest close per symbol only when live quotes are
-    unavailable."""
+    unavailable, then to COST BASIS as the last resort.
+
+    PROVENANCE: every snapshot records which tier marked each position in
+    ``desk_equity.mark_meta`` — ``{"sources": {live, close, cost},
+    "cost_marked": [...], "cost_marked_value_pct": x}``. A cost-basis mark is
+    fake-flat P&L, and a snapshot written during a data outage used to embed
+    that silently forever. When cost-marked value exceeds
+    MARK_DEGRADED_COST_PCT of position value the meta carries
+    ``"degraded": true`` — the snapshot still writes (an outage must not
+    stop the equity curve; visibility is the fix) and the CLI warns loudly.
+    Caller-supplied ``prices`` count as live (they are explicit marks)."""
     store = store or _store()
     positions = rebuild_positions(store, account)
+    src: dict[str, str] = {}
     if prices is None:
         prices = _live_mids(list(positions))
+        src = {s: "live" for s in prices}
         for sym, px in _latest_closes([s for s in positions if s not in prices]).items():
             prices.setdefault(sym, px)
+            src.setdefault(sym, "close")
+    else:
+        src = {s: "live" for s in prices}
     now = _utcnow()
     pos_value = 0.0
+    counts = {"live": 0, "close": 0, "cost": 0}
+    cost_marked: list[str] = []
+    cost_value = total_value = 0.0
     for sym, p in positions.items():
+        tier = src.get(sym, "live") if prices.get(sym) else "cost"
         px = prices.get(sym) or p["avg_price"]
         px = round(float(px), 4)
-        pos_value += p["shares"] * px * _mult(sym)  # signed; options ×100
+        mv = p["shares"] * px * _mult(sym)  # signed; options ×100
+        pos_value += mv
+        total_value += abs(mv)
+        counts[tier] += 1
+        if tier == "cost":
+            cost_marked.append(sym)
+            cost_value += abs(mv)
         store.update("desk_positions", {"account": account, "symbol": sym},
                      {"last_price": px, "marked_at": now}, returning=False)
+    cost_pct = round(cost_value / total_value * 100, 2) if total_value else 0.0
+    mark_meta: dict = {"sources": counts, "cost_marked": sorted(cost_marked),
+                       "cost_marked_value_pct": cost_pct}
+    if cost_pct > MARK_DEGRADED_COST_PCT:
+        mark_meta["degraded"] = True
     c = cash(store, account)
     equity = round(c + pos_value, 2)
     store.insert("desk_equity", {
         "account": account, "ts": now, "cash": c,
         "positions_value": round(pos_value, 2), "equity": equity,
         "return_pct": round((equity - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 4),
+        "mark_meta": mark_meta,
     }, returning=False)
     return state(store, account)
 
 
+def _latest_mark_meta(store, account: str = ACCOUNT) -> dict | None:
+    """The latest equity snapshot's mark provenance (None before any mark,
+    or for snapshots that predate the mark_meta column). Transports may hand
+    JSON back as text — parse defensively, same as ``_fq``."""
+    try:
+        rows = store.select("desk_equity", filters={"account": account},
+                            order=[("ts", "desc"), ("id", "desc")], limit=1)
+    except Exception:  # noqa: BLE001 — provenance is a bonus, never a crash
+        return None
+    if not rows:
+        return None
+    meta = rows[0].get("mark_meta")
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = None
+    return meta if isinstance(meta, dict) else None
+
+
 def state(store=None, account: str = ACCOUNT) -> dict:
-    """Full account snapshot: cash, positions (marked), equity, P&L."""
+    """Full account snapshot: cash, positions (marked), equity, P&L — plus
+    the latest mark's provenance summary (``mark_meta``, see ``mark``)."""
     store = store or _store()
     positions = store.select("desk_positions", filters={"account": account})
     c = cash(store, account)
@@ -1452,7 +1667,157 @@ def state(store=None, account: str = ACCOUNT) -> dict:
         "total_pnl": round(equity - STARTING_CAPITAL, 2),
         "total_return_pct": round((equity - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 4),
         "positions": sorted(pos_list, key=lambda r: -r["market_value"]),
+        "mark_meta": _latest_mark_meta(store, account),
     }
+
+
+# ── the learning loop: machine-graded pick facts (desk_outcomes) ──
+
+
+def _parse_kill(kill) -> float | None:
+    """A pick's ``kill`` as a price level, when it parses unambiguously.
+
+    Kills are free text by design ("closes below $385", "thesis breaks on a
+    guidance cut"). A bare numeric kill is the level; in text, a single
+    $-prefixed number wins (so "$385 within 10 sessions" still parses), else
+    a single bare number; zero or several candidates is honest ambiguity →
+    None, and kill_breached stays null rather than guessing."""
+    if isinstance(kill, (int, float)) and not isinstance(kill, bool):
+        return float(kill) if kill > 0 else None
+    if not isinstance(kill, str):
+        return None
+    import re
+
+    nums = re.findall(r"\$\s*(\d[\d,]*(?:\.\d+)?)", kill)
+    if len(nums) != 1:
+        nums = re.findall(r"\d[\d,]*(?:\.\d+)?", kill)
+    if len(nums) != 1:
+        return None
+    try:
+        v = float(nums[0].replace(",", ""))
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
+def _kill_breached(store, symbol: str, level: float, start_date: str,
+                   end_date: str,
+                   split_events: list[tuple[str, float]] | None = None
+                   ) -> bool | None:
+    """Did any stored daily close between entry and grade date touch the
+    kill? Long-book semantics: a kill is a BELOW level and touch counts
+    (close <= level), mirroring the tripwire sweep's at-or-below trip rule.
+    The kill was stated on the ENTRY-day price basis, so a booked split
+    between entry and a close rebases the level with the tape
+    (``split_events`` are the ledger's own booked split rows). None when no
+    closes are stored in the window — nothing to judge, never a fake no."""
+    from datetime import date as _date
+
+    try:
+        rows = store.select(
+            "daily_bars", columns="date,close",
+            filters={"symbol": symbol,
+                     "date": [("gte", _date.fromisoformat(start_date[:10])),
+                              ("lte", _date.fromisoformat(end_date[:10]))]},
+            order=[("date", "asc")])
+    except Exception:  # noqa: BLE001 — unreadable history → null, not a guess
+        return None
+    closes = [(str(r["date"])[:10], float(r["close"]))
+              for r in rows if r.get("close")]
+    if not closes:
+        return None
+    for d, c in closes:
+        f = 1.0
+        for ed, x in (split_events or []):
+            if start_date[:10] < ed <= d:
+                f *= x
+        if c <= level / f:
+            return True
+    return False
+
+
+def grade(store=None, *, days: int = 30, run_id: str | None = None,
+          account: str = ACCOUNT) -> dict:
+    """Materialize per-pick MACHINE FACTS into ``desk_outcomes`` — the
+    learning loop's durable scoreboard, run before every reflection so
+    grading starts from numbers, not memory.
+
+    One row per (account, run_id, symbol), UPDATED IN PLACE on re-grade
+    (``grade_date`` tracks the latest pass) — boring and transport-safe, and
+    the reflection agent's ``verdict``/``verdict_note`` survive re-grading
+    because grade never touches those two columns (``agent.brain verdict``
+    is their only writer). Facts come from ``outcomes()`` — already
+    split-aware and TR-SPY-benchmarked, with BOOK stances excluded and
+    settlement/hard-stop rows bucketed out of runs — so only picks with
+    entry (BUY) fills in their own run are graded: a hold/trim/exit pick
+    books no entry and has no per-pick entry fact to grade.
+
+    Per row: entry_avg_px and mark_px (basis 'exit' for round trips closed
+    in-run, else 'mark'), since_pct / spy_pct / alpha_pct, horizon_days and
+    horizon_elapsed (completed SPY sessions since the decision vs the
+    horizon), kill_level (parsed from the pick's free-text kill when
+    unambiguous — see ``_parse_kill``) and kill_breached (see
+    ``_kill_breached``), status open|closed."""
+    from datetime import date as _date
+
+    store = store or _store()
+    out = outcomes(store, days=days, run_id=run_id, account=account)
+    split_events = _booked_split_events(_trades(store, account))
+    today = _et_date(_utcnow()) or str(_utcnow().date())
+    now = _utcnow()
+    graded: list[dict] = []
+    for run in out["runs"]:
+        rid = run["run_id"]
+        run_date = _et_date(run.get("ts"))
+        sessions = run.get("spy_window_sessions") or 0
+        for p in run["picks"]:
+            entry = p.get("entry_avg_px")
+            if entry is None:
+                continue
+            sym = p["symbol"]
+            closed = p.get("closed_return_pct")
+            since = closed if closed is not None else p.get("since_this_run_pct")
+            status = ("closed" if (closed is not None
+                                   or p.get("open_now") is None) else "open")
+            h = p.get("horizon_days")
+            h = (int(h) if isinstance(h, (int, float))
+                 and not isinstance(h, bool) else None)
+            kill_level = _parse_kill(p.get("kill"))
+            breached = None
+            if kill_level is not None and run_date:
+                breached = _kill_breached(store, sym, kill_level, run_date,
+                                          today, split_events.get(sym))
+            values = {
+                "grade_date": _date.fromisoformat(today),
+                "entry_avg_px": round(entry, 4),
+                "mark_px": (round(entry * (1 + since / 100), 4)
+                            if since is not None else None),
+                "mark_basis": "exit" if closed is not None else "mark",
+                "since_pct": since,
+                "spy_pct": p.get("spy_same_window_pct"),
+                "alpha_pct": p.get("alpha_pct"),
+                "horizon_days": h,
+                "horizon_elapsed": (sessions >= h) if h else None,
+                "kill_level": kill_level, "kill_breached": breached,
+                "status": status, "graded_at": now}
+            existing = store.select(
+                "desk_outcomes",
+                filters={"account": account, "run_id": rid, "symbol": sym},
+                limit=1)
+            if existing:
+                store.update("desk_outcomes", {"id": existing[0]["id"]},
+                             values, returning=False)
+            else:
+                store.insert("desk_outcomes",
+                             {"account": account, "run_id": rid, "symbol": sym,
+                              **values}, returning=False)
+            graded.append({"run_id": rid, "symbol": sym, "status": status,
+                           "since_pct": since,
+                           "alpha_pct": p.get("alpha_pct"),
+                           "horizon_elapsed": (sessions >= h) if h else None,
+                           "kill_level": kill_level,
+                           "kill_breached": breached})
+    return {"ok": True, "as_of": today, "graded": len(graded), "rows": graded}
 
 
 def save_backtest(label: str, result: dict, *, run_id: str | None = None,
@@ -1468,6 +1833,20 @@ def save_backtest(label: str, result: dict, *, run_id: str | None = None,
     return int(rows[0]["id"]) if rows else 0
 
 
+def _warn_if_degraded(st: dict) -> None:
+    """A loud stderr warning when the latest mark is running on cost basis —
+    stdout stays clean JSON for the caller."""
+    import sys
+
+    meta = st.get("mark_meta") or {}
+    if meta.get("degraded"):
+        print("WARNING: MARKS DEGRADED — "
+              f"{meta.get('cost_marked_value_pct')}% of position value is "
+              f"marked at COST BASIS ({', '.join(meta.get('cost_marked') or [])}"
+              "); the equity point is fake-flat for those names. Fix the "
+              "quote/close feed before trusting P&L.", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -1480,6 +1859,11 @@ def main(argv: list[str] | None = None) -> None:
                         help="how past picks aged vs what was said (reflection input)")
     oc.add_argument("--days", type=int, default=30)
     oc.add_argument("--run-id", default=None)
+    gd = sub.add_parser("grade",
+                        help="materialize machine-graded pick facts into "
+                             "desk_outcomes (run before reflection)")
+    gd.add_argument("--days", type=int, default=30)
+    gd.add_argument("--run-id", default=None)
     fil = sub.add_parser("fill", help="book a fill AT THE LIVE QUOTE (the agent's path)")
     fil.add_argument("--symbol", required=True)
     fil.add_argument("--side", required=True, choices=["buy", "sell", "BUY", "SELL"])
@@ -1488,6 +1872,12 @@ def main(argv: list[str] | None = None) -> None:
     fil.add_argument("--rationale", default=None)
     fil.add_argument("--run-id", default=None)
     fil.add_argument("--slippage-bp", default=SLIPPAGE_BP, type=float)
+    fil.add_argument("--allow-price-deviation", action="store_true",
+                     help="override the last-close sanity band (>20% from the "
+                          "stored close) — use only for a real, named move")
+    fil.add_argument("--allow-illiquid", action="store_true",
+                     help="override the ADV size gate (notional >1% of the "
+                          "20-session average dollar volume)")
     rec = sub.add_parser("record", help="legacy explicit-price fill (tests/backfills)")
     rec.add_argument("--symbol", required=True)
     rec.add_argument("--side", required=True, choices=["BUY", "SELL"])
@@ -1500,19 +1890,28 @@ def main(argv: list[str] | None = None) -> None:
 
     store = _store()
     if args.cmd == "state":
-        print(json.dumps(state(store), indent=2))
+        out = state(store)
+        _warn_if_degraded(out)
+        print(json.dumps(out, indent=2))
     elif args.cmd == "mark":
-        print(json.dumps(mark(store), indent=2))
+        out = mark(store)
+        _warn_if_degraded(out)
+        print(json.dumps(out, indent=2))
     elif args.cmd == "settle":
         print(json.dumps(settle(store), indent=2))
     elif args.cmd == "outcomes":
         print(json.dumps(outcomes(store, days=args.days, run_id=args.run_id),
                          indent=2))
+    elif args.cmd == "grade":
+        print(json.dumps(grade(store, days=args.days, run_id=args.run_id),
+                         indent=2))
     elif args.cmd == "fill":
         print(json.dumps(live_fill(
             store, symbol=args.symbol, side=args.side, shares=args.shares,
             notional=args.notional, rationale=args.rationale, run_id=args.run_id,
-            slippage_bp=args.slippage_bp), indent=2))
+            slippage_bp=args.slippage_bp,
+            allow_price_deviation=args.allow_price_deviation,
+            allow_illiquid=args.allow_illiquid), indent=2))
     elif args.cmd == "record":
         print(json.dumps(record_trade(
             store, symbol=args.symbol, side=args.side, shares=args.shares,

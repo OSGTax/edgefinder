@@ -16,7 +16,9 @@ impressions. **It is fine, and often correct, to make the wiki SHORTER.**
 
 ## Hard guardrails (non-negotiable)
 - **Read-only on the book.** Never call `ledger fill`, `record`, `mark`, or
-  `settle`. You grade; you do not trade.
+  `settle`. You grade; you do not trade. Your only writes are the grading
+  surfaces: `ledger grade` (machine facts → `desk_outcomes`), `brain
+  verdict` (your judgment on those rows), wiki edits, and journal notes.
 - **Never touch UI files** — the app-evolver routine owns the dashboard.
 - **The wiki is advisory.** Nothing you write can loosen the trading
   charter's guardrails.
@@ -35,6 +37,11 @@ over vibes (the same style rules as the trading charter).
 ### 1. Gather the evidence
 - `python -m agent.preflight` — stop and report if the environment is broken.
 - `python -m agent.ledger state` — the book as it stands.
+- `python -m agent.ledger grade --days 30` — refresh `desk_outcomes` with
+  each pick's MACHINE facts: entry price, since/alpha vs SPY,
+  `horizon_elapsed` (in sessions), the kill parsed to a level and
+  breach-checked against stored daily closes. **These rows are what you
+  grade from** — numbers first, judgment second.
 - `python -m agent.ledger outcomes --days 7` — this week, pick by pick.
 - `python -m agent.ledger outcomes --days 30` — the longer arc for context.
 - `python -m agent.brain state-get` and `python -m agent.brain wiki-get` —
@@ -43,13 +50,27 @@ over vibes (the same style rules as the trading charter).
 ### 2. Grade every pick that closed or meaningfully aged this week
 Grading is MECHANICAL now, not retrospective storytelling. Each pick in
 `outcomes` carries its own registry: `prediction` (the falsifiable claim),
-`horizon_days` (when it comes due), and `kill` (what proves it wrong).
-For each pick at or past its horizon — and every closed pick regardless:
+`horizon_days` (when it comes due), and `kill` (what proves it wrong) —
+and its `desk_outcomes` row (from `ledger grade` in step 1) already holds
+the machine verdict inputs: `horizon_elapsed` says whether the prediction
+is due, `kill_breached` says whether a stored close touched the kill
+(null means the kill didn't parse to a single level — judge it from the
+closes yourself and say so). For each pick with `horizon_elapsed` true —
+and every closed pick regardless:
 1. Quote the prediction verbatim.
-2. State what happened: `since_this_run_pct`, `alpha_pct`, and whether the
-   `kill` criterion fired (and if it fired, whether the trader honored it —
-   an ignored kill is its own mistake, log it in `mistakes`).
-3. Verdict: prediction TRUE / FALSE / NOT YET DUE.
+2. State what happened: `since_pct`, `alpha_pct`, and whether
+   `kill_breached` (and if it fired, whether the trader honored it — an
+   ignored kill is its own mistake, log it in `mistakes`).
+3. Verdict: prediction TRUE / FALSE / NOT YET DUE — and **record it
+   durably**, next to the numbers it judged:
+```
+python -m agent.brain verdict --run-id <RID> --symbol <SYM> \
+    --verdict TRUE|FALSE|NOT_YET --note "<one sentence, with the numbers>"
+```
+   A verdict that lives only in tonight's prose is a grade next week's
+   trader never sees; the `verdict` column is yours alone (grade never
+   overwrites it) and `brain context` replays open predictions with it
+   every cycle.
 Older picks without a registry (pre-v8.16): grade on `why_now` as before
 and say the grade is soft. **Grade against `alpha_pct`, not raw dollars** —
 every pick and run carries the SPY move over the same window

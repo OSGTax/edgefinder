@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     Float,
@@ -58,7 +59,10 @@ class DeskTrade(Base):
     side: Mapped[str] = mapped_column(String(4))  # BUY | SELL
     shares: Mapped[float] = mapped_column(Float)  # fractional shares (v7)
     price: Mapped[float] = mapped_column(Float)  # fill price after costs
-    dollars: Mapped[float] = mapped_column(Float)  # signed-agnostic gross = shares*price
+    # signed-agnostic cash moved = shares*price*mult ± option fees (option
+    # fills carry a flat per-contract fee inside dollars; fill_quote.fee is
+    # the receipt — see agent.ledger.record_trade)
+    dollars: Mapped[float] = mapped_column(Float)
     rationale: Mapped[str | None] = mapped_column(Text)
     # The live-quote snapshot the fill priced off: {bid, ask, mid, t, src}.
     # The honesty contract's receipt — every live fill carries one.
@@ -102,6 +106,15 @@ class DeskEquity(Base):
     positions_value: Mapped[float] = mapped_column(Float)
     equity: Mapped[float] = mapped_column(Float)
     return_pct: Mapped[float] = mapped_column(Float)
+    # Mark provenance: {"sources": {live, close, cost}, "cost_marked": [...],
+    # "cost_marked_value_pct": x, "degraded": true?} — which pricing tier
+    # marked each position, so a snapshot written during a quote/data outage
+    # (cost-basis marks = fake-flat P&L) is visibly flagged, never silently
+    # embedded in the curve forever. NOTE: a dev database created before this
+    # column will error reading desk_equity via the ORM — rerun
+    # scripts/setup_db.py (prod self-heals via the idempotent ALTER in
+    # DESK_TABLE_DDL on deploy).
+    mark_meta: Mapped[dict | None] = mapped_column(JSON)
 
 
 # ── desk_strategy_state — the agent's current, evolving strategy ──
@@ -390,6 +403,50 @@ class DeskWake(Base):
     honored_run_id: Mapped[str | None] = mapped_column(String(40))
 
 
+# ── desk_outcomes — machine-graded pick facts (the learning loop's ledger) ──
+
+
+class DeskOutcome(Base):
+    """One pick's machine-graded outcome facts — the durable scoreboard the
+    reflection agent grades FROM instead of re-deriving (or vibing) each week.
+
+    Written by ``agent.ledger grade``: one row per (account, run_id, symbol),
+    UPDATED IN PLACE on each grading pass (``grade_date`` tracks the latest)
+    — machine facts only. The two judgment columns — ``verdict``
+    (TRUE|FALSE|NOT_YET) and ``verdict_note`` — are filled ONLY by the
+    reflection agent via ``agent.brain verdict`` and survive re-grading
+    (grade never touches them). BOOK stances, settlement rows, and hard-stop
+    exits are never graded here (no per-pick entry to grade).
+    """
+
+    __tablename__ = "desk_outcomes"
+    __table_args__ = (
+        UniqueConstraint("account", "run_id", "symbol",
+                         name="uq_desk_outcome_pick"),
+        Index("idx_desk_outcomes_run", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    grade_date: Mapped[date] = mapped_column(Date)  # latest grading pass (ET)
+    entry_avg_px: Mapped[float | None] = mapped_column(Float)
+    mark_px: Mapped[float | None] = mapped_column(Float)
+    mark_basis: Mapped[str | None] = mapped_column(String(12))  # mark | exit
+    since_pct: Mapped[float | None] = mapped_column(Float)
+    spy_pct: Mapped[float | None] = mapped_column(Float)   # TR SPY, same window
+    alpha_pct: Mapped[float | None] = mapped_column(Float)  # null for options
+    horizon_days: Mapped[int | None] = mapped_column(Integer)
+    horizon_elapsed: Mapped[bool | None] = mapped_column(Boolean)  # in sessions
+    kill_level: Mapped[float | None] = mapped_column(Float)  # null: free text
+    kill_breached: Mapped[bool | None] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(String(8))  # open | closed
+    verdict: Mapped[str | None] = mapped_column(String(12))  # reflection only
+    verdict_note: Mapped[str | None] = mapped_column(Text)   # reflection only
+    graded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -426,8 +483,11 @@ DESK_TABLE_DDL: list[str] = [
         cash FLOAT NOT NULL,
         positions_value FLOAT NOT NULL,
         equity FLOAT NOT NULL,
-        return_pct FLOAT NOT NULL
+        return_pct FLOAT NOT NULL,
+        mark_meta JSON
     )""",
+    # Additive upgrade for desk_equity tables created before mark provenance.
+    "ALTER TABLE desk_equity ADD COLUMN IF NOT EXISTS mark_meta JSON",
     "CREATE INDEX IF NOT EXISTS idx_desk_equity_account_ts ON desk_equity (account, ts)",
     """CREATE TABLE IF NOT EXISTS desk_strategy_state (
         id SERIAL PRIMARY KEY,
@@ -571,6 +631,30 @@ DESK_TABLE_DDL: list[str] = [
     "ALTER TABLE desk_wakes ADD COLUMN IF NOT EXISTS honored_run_id VARCHAR(40)",
     "CREATE INDEX IF NOT EXISTS idx_desk_wakes_at ON desk_wakes (account, at)",
     "ALTER TABLE desk_wakes ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_outcomes (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        run_id VARCHAR(40) NOT NULL,
+        symbol VARCHAR(24) NOT NULL,
+        grade_date DATE NOT NULL,
+        entry_avg_px FLOAT,
+        mark_px FLOAT,
+        mark_basis VARCHAR(12),
+        since_pct FLOAT,
+        spy_pct FLOAT,
+        alpha_pct FLOAT,
+        horizon_days INTEGER,
+        horizon_elapsed BOOLEAN,
+        kill_level FLOAT,
+        kill_breached BOOLEAN,
+        status VARCHAR(8) NOT NULL,
+        verdict VARCHAR(12),
+        verdict_note TEXT,
+        graded_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_desk_outcome_pick UNIQUE (account, run_id, symbol)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_outcomes_run ON desk_outcomes (run_id)",
+    "ALTER TABLE desk_outcomes ENABLE ROW LEVEL SECURITY",
     # fundamentals_pit is a MARKET-DATA table (edgefinder/db/models.py), not a
     # desk_* one, but new tables reach prod through this idempotent list —
     # same precedent as desk_briefs. Written only by agent.edgar.

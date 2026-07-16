@@ -6,6 +6,7 @@ stream its thinking for the live feed, and (d) save the run's decision +
 watchlist. Persistence goes through ``agent.store`` (pg or rest transport).
 
 CLI:
+  python -m agent.brain context   # the cycle's working memory in ONE read
   python -m agent.brain state-get
   python -m agent.brain state-set --name "trend+momentum" --thesis "..." \
       --rules-file rules.json --params-file params.json --bump
@@ -13,6 +14,8 @@ CLI:
   python -m agent.brain think --run-id R --phase research --text "..."
   python -m agent.brain decision --run-id R --regime risk_on --summary "..." \
       --weights-file w.json --picks-file picks.json --watchlist-file wl.json
+  python -m agent.brain verdict --run-id R --symbol NVDA --verdict TRUE \
+      --note "..."                # reflection agent only (desk_outcomes)
 """
 
 from __future__ import annotations
@@ -576,6 +579,213 @@ def set_wiki(store=None, *, slug: str, body: str, title: str | None = None,
             "chars": len(body), "total_chars": total}
 
 
+# ── the learning loop: verdicts + the cycle's working memory ────
+#
+# `agent.ledger grade` writes MACHINE FACTS into desk_outcomes; the weekly
+# reflection judges them and records its verdict here — LLM judgment stored
+# durably next to the numbers it judged, instead of evaporating into prose.
+# `context` is the other half of the loop: ONE read that puts the wiki,
+# brief, strategy, open predictions (with their graded facts), recent
+# outcomes, and tripped wires in front of every cycle — so the loop closes
+# by construction, not by an LLM remembering to run six tools.
+
+VERDICTS = ("TRUE", "FALSE", "NOT_YET")
+
+
+def set_verdict(store=None, *, run_id: str, symbol: str, verdict: str,
+                note: str | None = None, account: str = "agent") -> dict:
+    """Record the reflection agent's judgment on one graded pick.
+
+    The ONLY writer of ``desk_outcomes.verdict`` / ``verdict_note`` —
+    ``agent.ledger grade`` writes the machine facts and never touches these
+    two columns, so a verdict survives re-grading. The row must exist:
+    grade first, judge second."""
+    store = store or _store()
+    v = (verdict or "").strip().upper().replace("-", "_").replace(" ", "_")
+    if v not in VERDICTS:
+        return {"ok": False,
+                "error": f"verdict must be one of {'/'.join(VERDICTS)}"}
+    symbol = (symbol or "").strip().upper()
+    rows = store.select("desk_outcomes",
+                        filters={"account": account, "run_id": run_id,
+                                 "symbol": symbol}, limit=1)
+    if not rows:
+        return {"ok": False, "error":
+                f"no graded outcome row for run {run_id!r} / {symbol} — run "
+                "`python -m agent.ledger grade` first (machine facts before "
+                "judgment)"}
+    store.update("desk_outcomes", {"id": rows[0]["id"]},
+                 {"verdict": v, "verdict_note": note}, returning=False)
+    return {"ok": True, "run_id": run_id, "symbol": symbol, "verdict": v,
+            "note": note}
+
+
+CONTEXT_CLIP = 400           # chars per free-text field
+CONTEXT_THESIS_CLIP = 2000   # the living thesis gets more room
+CONTEXT_MAX_RUNS = 15        # outcome runs included
+CONTEXT_MAX_PREDICTIONS = 20
+
+
+def _clip(text, n: int = CONTEXT_CLIP):
+    if not isinstance(text, str) or len(text) <= n:
+        return text
+    return text[: n - 1] + "…"
+
+
+def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
+    """The cycle's WORKING MEMORY in one read — the mandatory first call.
+
+    Read-only aggregation, no new state: the account header (with mark
+    provenance), last night's brief (read from desk_briefs exactly as
+    ``agent.market brief`` does), the whole lessons wiki (already size-
+    capped), the living strategy, every open prediction joined to its latest
+    machine-graded desk_outcomes facts, a condensed outcomes summary over
+    ``days``, tripped/exec_failed tripwires, and due/missed wake-plans.
+    Bounded on purpose — free text is clipped and lists capped, so this
+    stays a working set, not a dump; drill into any section with the
+    individual tools. A dead section lands in ``errors`` instead of killing
+    the read (same convention as the brief builder)."""
+    from agent import ledger
+
+    store = store or _store()
+    errors: dict[str, str] = {}
+
+    def _safe(name, fn, default):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001 — one dead section ≠ no context
+            errors[name] = f"{type(exc).__name__}: {exc}"
+            return default
+
+    st = _safe("account", lambda: ledger.state(store, account), {})
+    account_out = {
+        "cash": st.get("cash"), "equity": st.get("equity"),
+        "total_pnl": st.get("total_pnl"),
+        "total_return_pct": st.get("total_return_pct"),
+        "mark_meta": st.get("mark_meta"),
+        "positions": [{k: p.get(k) for k in
+                       ("symbol", "shares", "avg_price", "last_price",
+                        "unrealized_pnl", "weight")}
+                      for p in st.get("positions") or []]}
+
+    def _brief():
+        from agent import market
+
+        return market.get_brief()
+
+    brief = _safe("brief", _brief, {"exists": False})
+
+    wiki = _safe("wiki", lambda: get_wiki(store, account=account), {})
+    strategy = _safe("strategy", lambda: get_state(store, account), {})
+    if strategy.get("thesis"):
+        strategy = {**strategy, "thesis": _clip(strategy["thesis"],
+                                                CONTEXT_THESIS_CLIP)}
+
+    def _open_predictions():
+        decisions = store.select("desk_decisions", filters={"account": account},
+                                 order=[("ts", "desc")], limit=40)
+        graded: dict[tuple, dict] = {}
+        for r in store.select("desk_outcomes", filters={"account": account},
+                              order=[("id", "desc")], limit=200):
+            graded.setdefault((r["run_id"], r["symbol"]), r)
+        preds: list[dict] = []
+        for d in decisions:
+            for p in (d.get("picks") or []):
+                sym = str(p.get("symbol") or "").upper()
+                action = str(p.get("action") or "").lower()
+                if sym == "BOOK" or action not in ("buy", "add") \
+                        or not p.get("prediction"):
+                    continue
+                oc = graded.get((d["run_id"], sym))
+                if oc and oc.get("status") == "closed" and oc.get("verdict"):
+                    continue  # resolved AND judged — history, not working memory
+                facts = None
+                if oc:
+                    facts = {k: (str(v) if hasattr(v, "isoformat") else v)
+                             for k, v in oc.items()
+                             if k in ("grade_date", "entry_avg_px", "mark_px",
+                                      "mark_basis", "since_pct", "spy_pct",
+                                      "alpha_pct", "horizon_days",
+                                      "horizon_elapsed", "kill_level",
+                                      "kill_breached", "status", "verdict")}
+                preds.append({"run_id": d["run_id"],
+                              "ts": str(d.get("ts") or ""), "symbol": sym,
+                              "action": action,
+                              "prediction": _clip(p.get("prediction")),
+                              "horizon_days": p.get("horizon_days"),
+                              "kill": _clip(p.get("kill"), 200),
+                              "outcome": facts})
+                if len(preds) >= CONTEXT_MAX_PREDICTIONS:
+                    return preds
+        return preds
+
+    open_predictions = _safe("open_predictions", _open_predictions, [])
+
+    def _outcomes():
+        oc = ledger.outcomes(store, days=days, account=account)
+        runs = [{"run_id": r["run_id"], "ts": r["ts"],
+                 "summary": _clip(r.get("summary")),
+                 "spy_same_window_pct": r.get("spy_same_window_pct"),
+                 "spy_window_sessions": r.get("spy_window_sessions"),
+                 "run_realized_pnl": r.get("run_realized_pnl"),
+                 "picks": [{k: p.get(k) for k in
+                            ("symbol", "action", "since_this_run_pct",
+                             "closed_return_pct", "alpha_pct", "realized_pnl")}
+                           for p in r.get("picks") or []]}
+                for r in (oc.get("runs") or [])[:CONTEXT_MAX_RUNS]]
+        return {"days": days, "book": oc.get("book"),
+                "settlement": oc.get("settlement"),
+                "hardstop": oc.get("hardstop"),
+                "unattributed_trades": oc.get("unattributed_trades"),
+                "runs": runs}
+
+    outcomes_out = _safe("outcomes", _outcomes, {})
+
+    def _watches():
+        wl = watch_list(store, account=account)
+        return {"tripped": wl.get("tripped") or [],
+                "armed": [{k: w.get(k) for k in
+                           ("id", "symbol", "kind", "level", "reason", "until")}
+                          for w in wl.get("armed") or []]}
+
+    watches = _safe("watches", _watches, {})
+
+    def _wakes():
+        out = wake_due(store, account=account)
+        now = _utcnow()
+        upcoming = []
+        for r in store.select("desk_wakes", filters={"account": account},
+                              order=[("at", "desc")], limit=30):
+            if r.get("honored_run_id"):
+                continue
+            at = r["at"]
+            if isinstance(at, str):
+                try:
+                    at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+                    at = (at.astimezone(timezone.utc).replace(tzinfo=None)
+                          if at.tzinfo else at)
+                except ValueError:
+                    continue
+            if at > now:
+                upcoming.append({"id": r["id"], "at": str(at),
+                                 "reason": _clip(r.get("reason"), 200)})
+        out["upcoming"] = upcoming  # planned, not yet due — the next look
+        return out
+
+    wakes = _safe("wakes", _wakes, {})
+
+    return {"as_of": str(_utcnow()),
+            "note": "the cycle's working memory in one read — account header,"
+                    " brief, wiki, strategy, open predictions with their"
+                    " machine-graded facts, recent outcomes, tripped wires,"
+                    " due wakes. Free text is clipped; drill in with the"
+                    " individual tools.",
+            "account": account_out, "brief": brief, "wiki": wiki,
+            "strategy": strategy, "open_predictions": open_predictions,
+            "outcomes": outcomes_out, "watches": watches, "wakes": wakes,
+            "errors": errors}
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -649,6 +859,22 @@ def main(argv: list[str] | None = None) -> None:
     wh.add_argument("--id", type=int, required=True, dest="wake_id")
     wh.add_argument("--run-id", required=True)
 
+    vd = sub.add_parser("verdict",
+                        help="record the reflection agent's judgment on a "
+                             "graded pick (desk_outcomes)")
+    vd.add_argument("--run-id", required=True)
+    vd.add_argument("--symbol", required=True)
+    vd.add_argument("--verdict", required=True,
+                    choices=["TRUE", "FALSE", "NOT_YET"])
+    vd.add_argument("--note", default=None,
+                    help="the judgment in one or two sentences, with numbers")
+
+    cx = sub.add_parser("context",
+                        help="the cycle's working memory in one read "
+                             "(the MANDATORY first call of every cycle)")
+    cx.add_argument("--days", type=int, default=14,
+                    help="outcomes window for the summary section")
+
     de = sub.add_parser("decision")
     de.add_argument("--run-id", required=True)
     de.add_argument("--regime", default=None)
@@ -688,6 +914,13 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(set_wiki(
             store, slug=args.slug, body=body, title=args.title,
             reason=args.reason, run_id=args.run_id), indent=2))
+    elif args.cmd == "verdict":
+        print(json.dumps(set_verdict(store, run_id=args.run_id,
+                                     symbol=args.symbol, verdict=args.verdict,
+                                     note=args.note), indent=2))
+    elif args.cmd == "context":
+        print(json.dumps(context(store, days=args.days), indent=2,
+                         default=str))
     elif args.cmd == "decision":
         print(json.dumps(save_decision(
             store, run_id=args.run_id, regime=args.regime, summary=args.summary,

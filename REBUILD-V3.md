@@ -12,7 +12,7 @@ An **autonomous AI paper-trading desk**, private to the owner:
   Alpaca's account. `desk_trades` is append-only and authoritative for cash.
 - **Priced by live Alpaca SIP data** (Algo Trader Plus): a Render-hosted
   WebSocket streams real-time quotes to the `/desk` page and to the tools.
-- **An hourly AI brain** (Claude Code Routine running
+- **An agent-paced AI brain** (Claude Code Routine running
   `.claude/skills/trading-agent/SKILL.md`) that observes, researches,
   decides, and books fills into the ledger **at the live quote**.
 - **Self-evolving**: the agent owns its strategy (versioned in
@@ -24,7 +24,13 @@ An **autonomous AI paper-trading desk**, private to the owner:
 1. **Every fill prices off the live quote at the decision moment** — buys at
    the live ask, sells at the live bid (±1 bp slippage), with the quote
    snapshot `{bid, ask, ts}` stamped on the fill row. Never a daily close,
-   never a past price, never an invented price.
+   never a past price, never an invented price. Extended equity sessions
+   (pre-market / after-hours) are fair game under a tighter 2% spread cap —
+   a post-close buy is an overnight hold by construction, priced eyes-open.
+   Fills also clear friction gates: a quote with an unverifiable timestamp
+   fails closed, a price >20% off the latest stored close needs an explicit
+   override, an order may take at most 1% of 20-session average dollar
+   volume, and option fills pay a flat $0.65/contract fee.
 2. **Verifiable in real time**: the owner can cross-check any quote on
    `/desk` and any fill price against Alpaca's own dashboard or any ticker.
 3. **Paper only. Equities long-only. Options DEFINED-RISK only** (owner
@@ -34,8 +40,25 @@ An **autonomous AI paper-trading desk**, private to the owner:
    CSP cash reserved and untouchable, spread coverage checked, shares
    backing covered calls unsellable, expiry settled honestly
    (`agent.ledger settle`, run every cycle). A rejection is final.
+   Expired options settle at the EXPIRY-DAY close (the basis stamped on
+   every settlement row), and equity splits/dividends land as explicit
+   0-price corp-action ledger rows — the book never fabricates or forgets
+   a corporate action.
 4. **Alpaca is DATA ONLY** — `agent/broker.py` has no write methods, by
    design. Orders are never submitted to Alpaca; the book is ours.
+5. **Crypto is authorized, eyes open**: Alpaca pairs (BTC/USD, ETH/USD, …)
+   trade 24/7 with no session gate and a 3% spread cap — but crypto is a
+   data-supported asset class OUTSIDE the backtest loop: no lab sweep, no
+   brief coverage, no SPY-relative benchmark speaks for it, and hard stops
+   are NOT available (the streamer sweeps the equity SIP tape only). The
+   contract states that limitation rather than pretending rules exist;
+   size crypto accordingly.
+6. **The scoreboard cannot flatter**: SPY comparisons are TOTAL RETURN on
+   both sides (lab and ledger), every equity snapshot records its mark
+   provenance (live / close / cost — degraded marks are flagged, never
+   hidden), every buy/add pick must register a falsifiable prediction +
+   horizon + kill before the decision will save, and opt-in hard stops
+   execute through the same fill gates as any trade.
 
 ## Runtime layout
 
@@ -43,7 +66,7 @@ An **autonomous AI paper-trading desk**, private to the owner:
 |---|---|---|
 | Quote streamer | Render (always-on) | One Alpaca SIP WebSocket → in-memory cache → SSE to `/desk` (`/api/desk/stream`) |
 | Desk page | Render | Live ticks, book, thinking feed, decisions, journal, What's New |
-| Trading brain | Claude Code Routine, hourly in market hours | Runs the trading-agent skill; fills via `agent.ledger fill` |
+| Trading brain | Claude Code Routine, **agent-paced** (each run requests its next; the owner fires it — wake-budget capped) | Runs the trading-agent skill; fills via `agent.ledger fill` |
 | App evolver | Claude Code Routine, nightly | One small announced UI improvement (`app-evolver` skill) |
 | Book + state | Supabase (`desk_*`) | Ledger (source of truth), strategy, journal, thinking, changelog |
 | Deep history | Cloudflare R2 (21y parquet, frozen 2026-06-18) + `daily_bars` | Backtests/grounding via `agent.backtest_tool`; topped up from Alpaca daily bars for the active universe |

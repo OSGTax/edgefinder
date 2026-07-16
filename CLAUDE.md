@@ -18,6 +18,12 @@ rules). The agent's operating manual is
    `{bid, ask, mid, t}` stamped on the fill row (`fill_quote`). Never a daily
    close, never a past price, never an invented price. `agent.ledger fill`
    refuses to book when the market is closed or the quote fails sanity.
+   Extended equity sessions (pre/post market) are allowed under a tighter 2%
+   spread cap — a post-close BUY is an overnight hold by construction. Fills
+   also clear friction gates: a quote with an unverifiable timestamp fails
+   closed; a price >20% off the latest stored close, or an order over 1% of
+   20-session average dollar volume, needs an explicit override flag; and
+   option fills pay a flat $0.65/contract fee (settlement rows stay fee-free).
 2. **Alpaca is DATA-ONLY.** `agent/broker.py` has no write methods, by
    design — orders are never submitted to Alpaca; the book is ours
    (`desk_*` tables).
@@ -25,10 +31,21 @@ rules). The agent's operating manual is
    calls/puts, covered calls, cash-secured puts, vertical spreads). The
    ledger enforces every rule — naked short calls rejected, CSP cash
    reserved, spread coverage checked, covered-call shares unsellable, expiry
-   settled honestly (`agent.ledger settle`). A rejection is final.
+   settled honestly at the EXPIRY-DAY close (`agent.ledger settle`, which
+   also books equity splits/dividends as explicit corp-action rows). A
+   rejection is final. **Crypto is authorized** as a data-supported asset
+   class outside the backtest loop — 24/7, no session gate, 3% spread cap,
+   hard stops NOT available, and no lab/brief/benchmark evidence covers it;
+   that limitation is stated, never papered over.
 4. **Sacred, never drop/clear:** the market-data tables (`daily_bars`,
    `dividends`, `ticker_splits`, `fundamentals_snapshots`, `ticker_news`,
    `index_daily`) and the R2 parquet archive. Irreplaceable.
+5. **The scoreboard cannot flatter:** SPY comparisons are TOTAL RETURN on
+   both sides (lab and ledger), every equity snapshot records its mark
+   provenance (live/close/cost — degraded marks flagged, never hidden),
+   every buy/add pick must register a falsifiable prediction + horizon +
+   kill before the decision saves, and opt-in hard stops sell through the
+   same fill gates as any trade.
 
 ## Runtime layout
 
@@ -112,7 +129,10 @@ One Supabase Postgres database, two namespaces:
   always-on streamer sweeps against the live tape), `desk_wakes` (the
   budget ledger for self-scheduled check-ins — the brain owns its own
   attention: heartbeat cron as the floor, `brain wake-plan` + one-shot
-  triggers for extra focused wakes, max 20/ET-day, 15-min gap).
+  triggers for extra focused wakes, max 20/ET-day, 15-min gap),
+  `desk_outcomes` (machine-graded pick facts written by `agent.ledger
+  grade`; the weekly reflection's verdicts live here via `agent.brain
+  verdict`, next to the numbers they judged).
 - **Kept market-data tables** (`edgefinder/db/models.py`, read-only inputs):
   `daily_bars` (raw bars; splits applied at load), `index_daily` (FROZEN at
   the 2026-06 cutover — SPY benchmarks read `daily_bars` instead),
@@ -166,8 +186,9 @@ pip install -e ".[dev]"            # Render uses ".[live]"; Routines run scripts
 python -m agent.preflight          # DB reachable + data fresh? run before anything
 
 # The agent's own tools (JSON out) — the skill drives these via Bash
+python -m agent.brain context                     # the cycle's working memory in ONE read
 python -m agent.ledger state                      # cash, positions, equity, P&L
-python -m agent.market brief                      # the nightly research pack (read FIRST)
+python -m agent.market brief                      # the nightly research pack
 python -m agent.market regime                     # SPY/QQQ/IWM trend + regime tag
 python -m agent.market universe --top 40          # most-liquid names
 python -m agent.broker quote --symbols NVDA,SPY   # LIVE bid/ask
@@ -180,6 +201,7 @@ python -m agent.lab leaderboard              # current honest winners
 python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 \
     --rationale "..." --run-id 2026-07-07T14:30   # books at the LIVE quote
 python -m agent.ledger outcomes --days 14         # picks vs predictions vs SPY (alpha)
+python -m agent.ledger grade                      # machine facts per pick → desk_outcomes
 
 # Dashboard
 uvicorn dashboard.app:app --reload   # http://localhost:8000/ → /desk

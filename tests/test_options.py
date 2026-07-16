@@ -63,12 +63,18 @@ def test_occ_roundtrip_and_describe():
 
 def test_long_call_multiplier_and_cash(store):
     from agent import ledger
+    FEE = ledger.OPTION_FEE_PER_CONTRACT
     sym = C("NVDA", 200)
     r = ledger.record_trade(store, symbol=sym, side="BUY", shares=2,
                             price=5.50, fill_quote=q(5.40, 5.50))
     assert r["ok"] and r["multiplier"] == 100
-    assert r["dollars"] == 2 * 5.50 * 100 == 1100.0
-    assert ledger.cash(store) == 100_000.0 - 1100.0
+    # C1d: a BUY's dollars = gross + per-contract fee; the fee is stamped on
+    # the fill_quote as the receipt, and cash replays it exactly.
+    assert r["dollars"] == 2 * 5.50 * 100 + 2 * FEE
+    assert r["fee"] == 2 * FEE
+    assert r["fill_quote"]["fee"] == {"per_contract": FEE, "contracts": 2,
+                                      "total": 2 * FEE}
+    assert ledger.cash(store) == 100_000.0 - 1100.0 - 2 * FEE
     # whole contracts only
     bad = ledger.record_trade(store, symbol=sym, side="BUY", shares=1.5,
                               price=5.50, fill_quote=q(5.40, 5.50))
@@ -92,7 +98,8 @@ def test_naked_short_call_rejected_covered_allowed(store):
     assert not two["ok"]
     one = ledger.record_trade(store, symbol=sym, side="SELL", shares=1,
                               price=5.0, fill_quote=q(4.9, 5.0))
-    assert one["ok"] and one["dollars"] == 500.0
+    # a SELL's dollars = gross − per-contract fee
+    assert one["ok"] and one["dollars"] == 500.0 - ledger.OPTION_FEE_PER_CONTRACT
     pos = {r["symbol"]: r["shares"] for r in store.select("desk_positions")}
     assert pos[sym] == -1  # short leg carried as negative contracts
     # selling the shares out from under the call is refused
@@ -103,13 +110,14 @@ def test_naked_short_call_rejected_covered_allowed(store):
 
 def test_cash_secured_put_reservation(store):
     from agent import ledger
+    FEE = ledger.OPTION_FEE_PER_CONTRACT
     sym = P("SPY", 700)  # secures 70,000
     r = ledger.record_trade(store, symbol=sym, side="SELL", shares=1,
                             price=10.0, fill_quote=q(9.9, 10.0))
     assert r["ok"]
-    # premium landed, but 70k is reserved
-    assert ledger.cash(store) == 100_000.0 + 1000.0
-    assert ledger.free_cash(store) == 101_000.0 - 70_000.0
+    # premium landed (net of the contract fee), but 70k is reserved
+    assert ledger.cash(store) == 100_000.0 + 1000.0 - FEE
+    assert ledger.free_cash(store) == pytest.approx(101_000.0 - FEE - 70_000.0)
     # a second one (140k total) exceeds cash → rejected
     r2 = ledger.record_trade(store, symbol=sym, side="SELL", shares=1,
                              price=10.0, fill_quote=q(9.9, 10.0))
@@ -296,8 +304,9 @@ def test_state_and_mark_apply_multiplier(store, monkeypatch):
     row = next(p for p in st["positions"] if p["symbol"] == sym)
     assert row["market_value"] == 2 * 6.0 * 100 == 1200.0
     assert row["unrealized_pnl"] == 2 * (6.0 - 5.0) * 100 == 200.0
-    # equity = cash (100k - 1000 premium) + option value (1200)
-    assert st["equity"] == 100_000.0 - 1000.0 + 1200.0
+    # equity = cash (100k - 1000 premium - fees) + option value (1200)
+    assert st["equity"] == (100_000.0 - 1000.0
+                            - 2 * ledger.OPTION_FEE_PER_CONTRACT + 1200.0)
     # a short leg marks negative
     ledger.record_trade(store, symbol="NVDA", side="BUY", shares=100,
                         price=195.0, fill_quote=q(194.9, 195.0))

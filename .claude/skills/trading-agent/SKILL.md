@@ -111,6 +111,14 @@ short, candid lines; this is the live "thinking" panel the owner watches.
   daily bars for your universe (keeps indicators/backtests current).
 
 ### 1. Observe (phase: observe)
+- `python -m agent.brain context` — **the MANDATORY first read of every
+  cycle.** One call returns your whole working memory: the account header
+  (with mark provenance), last night's brief, your lessons wiki, the living
+  strategy, every open prediction joined to its machine-graded facts
+  (`desk_outcomes`), a condensed outcomes summary, tripped wires, and due
+  wake-plans. Start from this so nothing you once predicted or armed gets
+  forgotten; the tools below stay available for drilling into any one
+  section, not for reassembling what context already handed you.
 - `python -m agent.brain watch-list` — **tripped tripwires FIRST**: each one
   is a level you told the streamer to watch because it mattered; address it
   (or explicitly stand down, in a thinking note) before anything else. Then
@@ -289,6 +297,11 @@ python -m agent.brain decision --run-id <RID> --regime risk_on \
 ```
 
 ### 7. Reflect (phase: reflect) — glance back; most cycles write NOTHING
+- `python -m agent.ledger grade` — materialize each pick's machine facts
+  (entry, since/alpha vs SPY, horizon-elapsed in sessions, kill parsed +
+  breach-checked) into `desk_outcomes`. Cheap and idempotent — run it here
+  so Friday's reflection grades from stored numbers, not from memory or
+  prose. Grade writes facts only; verdicts belong to the reflection agent.
 - `python -m agent.ledger outcomes --days 14` — how your past picks aged vs
   what you said when you made them (realized + open P&L per run and name;
   `since_this_run_pct` is exact per pick; round trips closed in one run get

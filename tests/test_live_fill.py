@@ -250,6 +250,180 @@ def test_record_trade_options_band_wider(store):
     assert not off["ok"] and "off the live quote" in off["error"]
 
 
+# ── C1: friction + sanity gates on the live-fill path ────────
+
+
+def _seed_bars(store, symbol, closes_volumes):
+    """Seed (close, volume) daily bars ending yesterday, oldest first."""
+    from datetime import date, timedelta
+    d = date.today() - timedelta(days=len(closes_volumes))
+    for close, vol in closes_volumes:
+        d += timedelta(days=1)
+        store.insert("daily_bars", {"symbol": symbol, "date": d, "open": close,
+                                    "high": close, "low": close, "close": close,
+                                    "volume": vol, "source": "test"},
+                     returning=False)
+
+
+@pytest.fixture()
+def store_bars(store):
+    """The fill-test store with the market-data tables also created."""
+    from edgefinder.db.engine import Base, get_engine
+    import edgefinder.db.models  # noqa: F401 — daily_bars
+    Base.metadata.create_all(get_engine())
+    return store
+
+
+def test_live_fill_rejects_price_far_from_stored_close(store_bars, monkeypatch):
+    """C1a: the quote says 130 but the stored close says 90 — a 44% jump is
+    either a bad feed or a move that deserves a deliberate override, not a
+    reflex fill. The independent close reference is the check the in-quote
+    band (which prices off the same quote) can never fail."""
+    from agent import ledger
+    _seed_bars(store_bars, "NVDA", [(90.0, 5_000_000)] * 20)
+    _patch_broker(monkeypatch, FakeBroker())         # 130.0/130.2 quote
+    r = ledger.live_fill(store_bars, symbol="NVDA", side="buy", shares=1)
+    assert not r["ok"] and "latest stored close" in r["error"]
+    assert r["latest_close"] == 90.0 and r["band"] == ledger.LIVE_CLOSE_BAND
+    # the opt-in override books it, with the override on the record
+    ok = ledger.live_fill(store_bars, symbol="NVDA", side="buy", shares=1,
+                          allow_price_deviation=True)
+    assert ok["ok"], ok
+    assert any("override" in w for w in ok["warnings"])
+
+
+def test_live_fill_no_stored_close_warns_and_allows(store_bars, monkeypatch):
+    """C1a: a new listing has no close row — warn, never block."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker())
+    r = ledger.live_fill(store_bars, symbol="NVDA", side="buy", shares=1)
+    assert r["ok"], r
+    assert any("no stored daily close" in w for w in r["warnings"])
+
+
+def test_live_fill_rejects_unparseable_quote_timestamp(store, monkeypatch):
+    """C1b: an age we cannot measure FAILS CLOSED — previously a quote with
+    a garbled timestamp walked straight past the staleness cap."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker(quote_t="not-a-timestamp"))
+    r = ledger.live_fill(store, symbol="NVDA", side="buy", shares=1)
+    assert not r["ok"] and "timestamp missing/unparseable" in r["error"]
+
+
+def test_live_fill_adv_size_gate(store_bars, monkeypatch):
+    """C1c: an order may take at most 1% of the 20-session average dollar
+    volume — ADV here is 130 × 10k = $1.3M/day, so the cap is $13k."""
+    from agent import ledger
+    _seed_bars(store_bars, "NVDA", [(130.0, 10_000)] * 20)
+    _patch_broker(monkeypatch, FakeBroker())         # quote ≈ stored close
+    big = ledger.live_fill(store_bars, symbol="NVDA", side="buy",
+                           notional=20_000)
+    assert not big["ok"] and "average dollar volume" in big["error"]
+    assert big["adv"] == pytest.approx(1_300_000.0)
+    # inside the cap books clean, with no warnings
+    ok = ledger.live_fill(store_bars, symbol="NVDA", side="buy", notional=5_000)
+    assert ok["ok"] and "warnings" not in ok
+    # the override books the oversize, on the record
+    forced = ledger.live_fill(store_bars, symbol="NVDA", side="buy",
+                              notional=20_000, allow_illiquid=True)
+    assert forced["ok"]
+    assert any("ADV" in w or "override" in w for w in forced["warnings"])
+
+
+def test_live_fill_adv_gate_short_history_warns_and_allows(store_bars, monkeypatch):
+    from agent import ledger
+    _seed_bars(store_bars, "NVDA", [(130.0, 100)] * 5)  # < ADV_MIN_SESSIONS
+    _patch_broker(monkeypatch, FakeBroker())
+    r = ledger.live_fill(store_bars, symbol="NVDA", side="buy", notional=20_000)
+    assert r["ok"], r
+    assert any("ADV size gate skipped" in w for w in r["warnings"])
+
+
+def test_live_fill_gates_skip_options_and_crypto(store, monkeypatch):
+    """C1a/c: options liquidity is the chain's problem (OPRA spread and
+    staleness caps); crypto has no daily_bars history — neither asset class
+    hits the equity friction gates."""
+    from agent import ledger, occ
+    from datetime import date, timedelta
+    _patch_broker(monkeypatch, FakeBroker(open_=False, session_="closed",
+                                          bid=60_000.0, ask=60_050.0))
+    r = ledger.live_fill(store, symbol="BTC/USD", side="buy", notional=1000)
+    assert r["ok"] and "warnings" not in r
+    sym = occ.build("NVDA", date.today() + timedelta(days=45), "C", 200)
+    _patch_broker(monkeypatch, FakeBroker(bid=5.4, ask=5.5))
+    ro = ledger.live_fill(store, symbol=sym, side="buy", shares=1)
+    assert ro["ok"] and "warnings" not in ro
+
+
+def test_option_live_fill_fee_and_cash_replay(store, monkeypatch):
+    """C1d: option fills pay a flat per-contract fee inside ``dollars`` (BUY
+    adds, SELL subtracts, price untouched) and the replayed cash from the
+    ledger matches the fill's own cash_after exactly — fee invariance."""
+    from agent import ledger, occ
+    from datetime import date, timedelta
+    FEE = ledger.OPTION_FEE_PER_CONTRACT
+    sym = occ.build("NVDA", date.today() + timedelta(days=45), "C", 200)
+    _patch_broker(monkeypatch, FakeBroker(bid=5.0, ask=5.1))
+    buy = ledger.live_fill(store, symbol=sym, side="buy", shares=2)
+    assert buy["ok"], buy
+    assert buy["price"] == round(5.1 * 1.0001, 4)      # fee never in price
+    assert buy["dollars"] == round(2 * buy["price"] * 100 + 2 * FEE, 2)
+    assert buy["fill_quote"]["fee"]["total"] == 2 * FEE
+    assert buy["cash_after"] == ledger.cash(store)     # replay invariance
+    sell = ledger.live_fill(store, symbol=sym, side="sell", shares=2)
+    assert sell["ok"], sell
+    assert sell["dollars"] == round(2 * sell["price"] * 100 - 2 * FEE, 2)
+    assert sell["cash_after"] == ledger.cash(store)
+    assert ledger.cash(store) == pytest.approx(
+        100_000.0 - buy["dollars"] + sell["dollars"])
+
+
+def test_option_sell_fee_floors_at_zero(store):
+    """C1d: a near-worthless sell can't go cash-negative on the fee."""
+    from agent import ledger, occ
+    from datetime import date, timedelta
+    sym = occ.build("NVDA", date.today() + timedelta(days=45), "C", 200)
+    fq = {"bid": 0.01, "ask": 0.02, "mid": 0.015, "t": "x", "src": "test"}
+    buy = ledger.record_trade(store, symbol=sym, side="BUY", shares=1,
+                              price=0.02, fill_quote=fq)
+    assert buy["ok"]
+    sell = ledger.record_trade(store, symbol=sym, side="SELL", shares=1,
+                               price=0.01, fill_quote=fq)  # gross $1 < 2×fee? no: 1 − 0.65
+    assert sell["ok"] and sell["dollars"] == max(
+        0.0, round(1.0 - ledger.OPTION_FEE_PER_CONTRACT, 2))
+    # a truly worthless exit (settlement handles 0-price, but the floor is
+    # the arithmetic guarantee): gross $0.5 − $0.65 fee → 0, never negative
+    buy2 = ledger.record_trade(store, symbol=sym, side="BUY", shares=1,
+                               price=0.02, fill_quote=fq)
+    assert buy2["ok"]
+    fq2 = {"bid": 0.005, "ask": 0.02, "mid": 0.012, "t": "x", "src": "test"}
+    tiny = ledger.record_trade(store, symbol=sym, side="SELL", shares=1,
+                               price=0.005, fill_quote=fq2)
+    assert tiny["ok"] and tiny["dollars"] == 0.0
+
+
+def test_settlement_rows_stay_fee_free(store, monkeypatch):
+    """C1d: expiry settlement is an accounting event, not an order — its
+    rows carry exact intrinsic dollars with no fee."""
+    from agent import ledger, occ
+    from datetime import date, timedelta
+    past = date.today() - timedelta(days=3)
+    sym = occ.build("NVDA", past, "C", 180)
+    store.insert("desk_trades", {"account": "agent", "symbol": sym,
+                                 "side": "BUY", "shares": 1, "price": 5.0,
+                                 "dollars": 500.0, "run_id": "T",
+                                 "ts": ledger._utcnow()}, returning=False)
+    ledger.rebuild_positions(store)
+    monkeypatch.setattr(ledger, "_live_mids", lambda syms: {"NVDA": 195.0})
+    monkeypatch.setattr(ledger, "_latest_close", lambda s: 195.0)
+    monkeypatch.setattr(ledger, "_bar_close_on", lambda *a, **k: None)
+    ledger.settle(store)
+    row = store.select("desk_trades",
+                       filters={"symbol": sym, "run_id": "settlement"})[0]
+    assert row["dollars"] == 1500.0                    # intrinsic × 100, no fee
+    assert "fee" not in (row["fill_quote"] or {})
+
+
 def test_broker_session_helper_states(monkeypatch):
     """Broker.session() returns regular/extended/closed from clock + ET wall."""
     from datetime import datetime, timezone, timedelta
