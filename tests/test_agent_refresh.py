@@ -363,7 +363,7 @@ def test_write_bars_replaces_exactly_payload_dates(store):
     ], returning=False)
     payload = [_bar_row("AAA", d + timedelta(days=2), close=12.0),
                _bar_row("AAA", d + timedelta(days=3), close=13.0)]
-    assert _write_bars_with_retry(store, "AAA", payload) is True
+    assert _write_bars_with_retry(store, "AAA", payload) == (2, 0)
     rows = {str(r["date"])[:10]: r["close"]
             for r in store.select("daily_bars", filters={"symbol": "AAA"})}
     assert rows == {"2026-06-01": 10.0, "2026-06-02": 11.0,   # untouched
@@ -440,12 +440,120 @@ def test_retry_after_partial_insert_survives_duplicate_keys(store, monkeypatch):
 
     payload = [_bar_row("CCC", date(2026, 6, 1), close=1.0),
                _bar_row("CCC", date(2026, 6, 2), close=2.0)]
+    # (1, 1): one fresh insert + one payload row retained from the partial
+    # first attempt — the dupe-skip converged, and the miss is surfaced
     assert _write_bars_with_retry(_PartialThenDeadDeletes(store), "CCC",
-                                  payload) is True
+                                  payload) == (1, 1)
     rows = store.select("daily_bars", filters={"symbol": "CCC"})
     assert sorted(str(x["date"])[:10] for x in rows) == \
         ["2026-06-01", "2026-06-02"]
     assert len(rows) == 2  # each date exactly once
+
+
+def _fake_bars_broker(bars_by_symbol):
+    """A broker whose data client answers every history batch with the canned
+    per-symbol bar lists (SimpleNamespace bars, like alpaca-py returns)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(data=SimpleNamespace(
+        get_stock_bars=lambda req: SimpleNamespace(data=bars_by_symbol)))
+
+
+def _fake_bar(d, close=1.0):
+    from datetime import datetime as _dt, time as _time
+    from types import SimpleNamespace
+
+    return SimpleNamespace(timestamp=_dt.combine(d, _time(5, 0)), open=close,
+                           high=close, low=close, close=close, volume=10.0,
+                           trade_count=1)
+
+
+def test_zombie_dates_detected_and_counted_never_deleted(store, caplog):
+    """M2: exact-date deletes never prune a date the vendor RETRACTED — the
+    ingest must log + count such zombies after a successful write, and must
+    NOT delete them (a fetch hiccup can't be data destruction on the sacred
+    table)."""
+    import logging
+
+    import agent.refresh as r
+
+    zombie_day = date.today() - timedelta(days=3)
+    payload_day = date.today() - timedelta(days=1)
+    store.insert("daily_bars", [_bar_row("AAA", zombie_day, close=7.77)],
+                 returning=False)
+    b = _fake_bars_broker({"AAA": [_fake_bar(payload_day, close=2.0)]})
+    with caplog.at_level(logging.WARNING, logger="agent.refresh"):
+        out = r._ingest_history_batched(store, b, ["AAA"], max_days=30)
+    assert out["bars_upserted"] == 1 and out["holes"] == 0
+    assert out["zombie_dates"] == 1 and out["zombie_symbols"] == ["AAA"]
+    assert f"ZOMBIE dates for AAA: ['{zombie_day}']" in caplog.text
+    # detection only: the retracted-date row is untouched
+    rows = store.select("daily_bars",
+                        filters={"symbol": "AAA", "date": zombie_day})
+    assert len(rows) == 1 and rows[0]["close"] == 7.77
+
+
+def test_no_zombies_when_payload_covers_the_window(store):
+    """The steady state is silent: every DB date in the window re-fetched →
+    zero zombies, zero stale_retained."""
+    import agent.refresh as r
+
+    d = date.today() - timedelta(days=1)
+    store.insert("daily_bars", [_bar_row("AAA", d, close=2.0)], returning=False)
+    b = _fake_bars_broker({"AAA": [_fake_bar(d, close=2.5)]})
+    out = r._ingest_history_batched(store, b, ["AAA"], max_days=30)
+    assert out["zombie_dates"] == 0 and out["zombie_symbols"] == []
+    assert out["stale_retained"] == 0 and out["bars_upserted"] == 1
+
+
+def test_delete_ineffective_surfaces_stale_retained(store, caplog):
+    """L1: rows still present immediately after their dates were deleted mean
+    the delete silently did nothing — warn, count them as stale_retained, and
+    keep bars_upserted honest (real inserts, not payload size)."""
+    import logging
+
+    import agent.refresh as r
+
+    class _DeadDeletes(_WrapStore):
+        def delete(self, table, filters):
+            return None  # silently ineffective — the failure mode under test
+
+    d1 = date.today() - timedelta(days=2)
+    d2 = date.today() - timedelta(days=1)
+    store.insert("daily_bars", [_bar_row("AAA", d1, close=99.0)],
+                 returning=False)
+    b = _fake_bars_broker({"AAA": [_fake_bar(d1, close=12.0),
+                                   _fake_bar(d2, close=13.0)]})
+    with caplog.at_level(logging.WARNING, logger="agent.refresh"):
+        out = r._ingest_history_batched(_DeadDeletes(store), b, ["AAA"],
+                                        max_days=30)
+    assert out["bars_upserted"] == 1      # only the row that really inserted
+    assert out["stale_retained"] == 1     # the one the dead delete kept
+    assert out["holes"] == 0 and out["zombie_dates"] == 0
+    assert "DELETE INEFFECTIVE for AAA" in caplog.text
+    rows = {str(x["date"])[:10]: x["close"]
+            for x in store.select("daily_bars", filters={"symbol": "AAA"})}
+    assert rows == {str(d1): 99.0, str(d2): 13.0}  # stale row visibly retained
+
+
+def test_hourly_summary_names_hole_symbols(store, monkeypatch):
+    """L5: the hourly top-up summary names the hole symbols (same 25-cap list
+    the nightly carries), not just their count."""
+    import agent.broker as broker
+    import agent.refresh as r
+
+    monkeypatch.setattr(broker, "enabled", lambda: True)
+    monkeypatch.setattr(broker, "Broker", lambda: object())
+    monkeypatch.setattr(r, "_ingest_history_batched",
+                        lambda store, b, syms, *, max_days, chunk=100: {
+                            "bars_upserted": 5, "batches": 1, "errors": 1,
+                            "holes": 1, "hole_symbols": ["BBB"]})
+    monkeypatch.setattr(r, "_iv_snapshots_alpaca", lambda store, b, syms: {})
+    monkeypatch.setattr(r, "_news_alpaca", lambda store, syms, **kw: {})
+    monkeypatch.setattr(r, "_corp_actions_alpaca", lambda store, syms, **kw: {})
+    monkeypatch.setattr(r, "_r2_merge_sync", lambda syms, **kw: "skipped")
+    out = r.refresh_alpaca(symbols=["AAA", "BBB"])
+    assert out["bar_holes"] == 1 and out["hole_symbols"] == ["BBB"]
 
 
 # ── F18: the R2 archive never keeps a partial intraday bar ──
@@ -581,40 +689,69 @@ def test_r2_sync_legacy_manifest_without_fingerprint(store, r2):
     assert m["db_max"] == str(d3) and m["db_fp"] == [3.0, 100.0]
 
 
-def test_market_closed_now_fail_closed():
+def test_todays_session_over_truth_table(monkeypatch):
+    """M1: the include-today archive gate keys off the trading CALENDAR
+    (today's session has ended), not the wall-clock session tag — the fixed
+    00:45 UTC nightly lands at 19:45 ET all winter, when session() still
+    reads 'extended' until 20:00, which made the gate a seasonal no-op."""
+    from datetime import datetime as _dt
     from types import SimpleNamespace
 
-    from agent.refresh import _market_closed_now
+    import agent.refresh as r
 
-    def _b(sess):
-        def _session():
-            if isinstance(sess, Exception):
-                raise sess
-            return sess
-        return SimpleNamespace(session=_session)
+    def _b(cal):
+        def _cal_day(day):
+            if isinstance(cal, Exception):
+                raise cal
+            return cal
+        return SimpleNamespace(calendar_day=_cal_day)
 
-    assert _market_closed_now(_b("closed")) is True
-    assert _market_closed_now(_b("extended")) is False   # post-close ≠ closed
-    assert _market_closed_now(_b("regular")) is False
-    assert _market_closed_now(_b(RuntimeError("clock down"))) is False
+    def _at(hh, mm):
+        monkeypatch.setattr(r, "_now_et", lambda: _dt(2026, 1, 14, hh, mm))
+
+    day = date(2026, 1, 14)  # a Wednesday under EST (winter)
+    cal = {"date": str(day), "open": _dt(2026, 1, 14, 9, 30),
+           "close": _dt(2026, 1, 14, 16, 0)}
+    _at(19, 45)  # the winter nightly landing: post-close, before 20:00
+    assert r._todays_session_over(_b(cal)) is True   # was False pre-fix
+    _at(16, 0)   # exactly at the close — the session has ended
+    assert r._todays_session_over(_b(cal)) is True
+    _at(14, 0)   # mid-session — today's bar is still in progress
+    assert r._todays_session_over(_b(cal)) is False
+    _at(4, 30)   # pre-market
+    assert r._todays_session_over(_b(cal)) is False
+    _at(19, 45)
+    assert r._todays_session_over(_b(None)) is True  # weekend/holiday: no session
+    assert r._todays_session_over(
+        _b(RuntimeError("calendar down"))) is False  # fail-closed on errors
+    # half-day: the calendar's 13:00 close decides, not a hardcoded 16:00
+    half = {"date": str(day), "open": _dt(2026, 1, 14, 9, 30),
+            "close": _dt(2026, 1, 14, 13, 0)}
+    _at(13, 30)
+    assert r._todays_session_over(_b(half)) is True
+    _at(12, 0)
+    assert r._todays_session_over(_b(half)) is False
 
 
-def test_nightly_passes_session_gated_today_flag(monkeypatch):
-    """refresh_alpaca_market forwards include_today_et from the session check:
-    today's bar joins the archive only on a genuinely closed session."""
+def test_nightly_passes_calendar_gated_today_flag(monkeypatch):
+    """refresh_alpaca_market forwards include_today_et from the CALENDAR
+    check: today's bar joins the archive once today's ET session has ended
+    (including the 19:45-ET winter landing), never mid-session."""
+    from datetime import datetime as _dt
+
     import agent.broker as broker
     import agent.edgar as edgar
     import agent.refresh as r
 
     class _MarketBroker:
-        def __init__(self, sess):
-            self._sess = sess
+        def __init__(self, cal):
+            self._cal = cal
 
         def list_assets(self, optionable=False):
             return [{"symbol": "AAA"}]
 
-        def session(self):
-            return self._sess
+        def calendar_day(self, day):
+            return self._cal
 
     monkeypatch.setattr(broker, "enabled", lambda: True)
     monkeypatch.setattr(r, "_alpaca_latest_daily",
@@ -634,9 +771,12 @@ def test_nightly_passes_session_gated_today_flag(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(r, "_r2_merge_sync", fake_sync)
-    for sess, expect in (("closed", True), ("regular", False)):
-        monkeypatch.setattr(broker, "Broker",
-                            lambda s=sess: _MarketBroker(s))
+    cal = {"date": "2026-01-14", "open": _dt(2026, 1, 14, 9, 30),
+           "close": _dt(2026, 1, 14, 16, 0)}
+    for now, expect in ((_dt(2026, 1, 14, 19, 45), True),   # EST nightly
+                        (_dt(2026, 1, 14, 14, 0), False)):  # midday manual run
+        monkeypatch.setattr(r, "_now_et", lambda now=now: now)
+        monkeypatch.setattr(broker, "Broker", lambda c=cal: _MarketBroker(c))
         r.refresh_alpaca_market(top_n=1)
         assert captured["include_today_et"] is expect
 

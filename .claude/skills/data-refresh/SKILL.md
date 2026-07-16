@@ -120,9 +120,13 @@ PY
 
 ## Owner setup (one-time — cannot be done from a sandbox)
 Create the Routine at **claude.ai/code/routines** on this repo:
-- **Cron:** `45 0 * * 2-6` — **UTC** (8:45 PM ET Mon–Fri, after the U.S.
-  close; the Strategy Lab Routine follows at `0 2 * * 2-6` UTC so it sweeps
-  on tonight's fresh data).
+- **Cron:** `45 0 * * 2-6` — **UTC**. A fixed UTC cron drifts with DST:
+  this lands at **8:45 PM ET in summer (EDT) but 7:45 PM ET in winter
+  (EST)** — either way after the U.S. close, Mon–Fri. That is fine: the
+  archive's include-today gate keys off the trading **calendar** (has
+  today's ET session ended?), not the wall clock, so tonight's final bar
+  joins R2 in both seasons. The Strategy Lab Routine follows at
+  `0 2 * * 2-6` UTC so it sweeps on tonight's fresh data.
 - **Prompt:** `Run the data-refresh skill.`
 - **Env:** the session needs the Supabase (DB) + Alpaca + R2_* credentials
   available (same env as the trading Routine). SEC EDGAR needs no secret —

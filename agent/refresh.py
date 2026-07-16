@@ -132,7 +132,10 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
                      "bars_upserted": bar_stats.get("bars_upserted", 0),
                      "bar_batches": bar_stats.get("batches", 0),
                      "bar_errors": bar_stats.get("errors", 0),
-                     "bar_holes": bar_stats.get("holes", 0)}
+                     "bar_holes": bar_stats.get("holes", 0),
+                     # parity with the nightly: name the holes (capped at 25),
+                     # don't just count them
+                     "hole_symbols": bar_stats.get("hole_symbols", [])}
 
     # options IV data bank: one snapshot per underlying per day (first refresh
     # of the day wins; reruns are no-ops; RTH-only — the session gate lives in
@@ -508,7 +511,9 @@ def _ingest_history_batched(store, b, symbols: list[str], *, max_days: int,
 
     start = date.today() - timedelta(days=max_days)
     summary: dict = {"symbols": len(symbols), "bars_upserted": 0, "batches": 0,
-                     "errors": 0, "holes": 0, "hole_symbols": []}
+                     "errors": 0, "holes": 0, "hole_symbols": [],
+                     "stale_retained": 0,
+                     "zombie_dates": 0, "zombie_symbols": []}
     for i in range(0, len(symbols), chunk):
         batch = symbols[i:i + chunk]
         try:
@@ -533,13 +538,23 @@ def _ingest_history_batched(store, b, symbols: list[str], *, max_days: int,
             # Isolate + retry each symbol's write: a single transient store/proxy
             # error (e.g. "connection reset by peer" over the REST lane) must not
             # abort a 500-name ingest. Re-runs are idempotent (delete-then-insert).
-            if _write_bars_with_retry(store, sym, rows):
-                summary["bars_upserted"] += len(rows)
-            else:
+            counts = _write_bars_with_retry(store, sym, rows)
+            if counts is None:
                 summary["errors"] += 1
                 summary["holes"] += 1  # this symbol's payload window is suspect
                 if len(summary["hole_symbols"]) < 25:  # keep the summary readable
                     summary["hole_symbols"].append(sym)
+                continue
+            inserted, skipped = counts
+            summary["bars_upserted"] += inserted  # real inserts, not payload size
+            summary["stale_retained"] += skipped  # delete-ineffective rows kept
+            # Exact-date deletes never prune dates the vendor RETRACTED —
+            # report them so they can't rot in the sacred table silently.
+            zombies = _zombie_dates(store, sym, rows, start)
+            if zombies:
+                summary["zombie_dates"] += len(zombies)
+                if len(summary["zombie_symbols"]) < ZOMBIE_SYMBOLS_MAX:
+                    summary["zombie_symbols"].append(sym)
     return summary
 
 
@@ -557,7 +572,7 @@ def _delete_bar_dates(store, sym: str, dates: list[str]) -> None:
 
 
 def _write_bars_with_retry(store, sym: str, rows: list[dict],
-                           attempts: int = 3) -> bool:
+                           attempts: int = 3) -> tuple[int, int] | None:
     """Idempotent per-symbol upsert with a bounded blast radius: delete ONLY
     the exact dates present in the payload, then insert (duplicate-skipping),
     with a short retry on transient store/network errors.
@@ -570,39 +585,87 @@ def _write_bars_with_retry(store, sym: str, rows: list[dict],
     about to be replaced anyway; rows outside the payload survive every
     failure mode, and the duplicate-skipping insert lets a retry after a
     partial insert converge instead of dying on the rows that already landed.
-    Returns True on success."""
+
+    Returns ``(inserted, skipped)`` on success, None on failure. A non-zero
+    ``skipped`` means rows were still present IMMEDIATELY after their dates
+    were deleted — an ineffective delete (or a concurrent writer): the data
+    converges to the payload's dates either way, but any stale row content
+    under a skipped date was RETAINED, so it is warned + surfaced instead of
+    hidden inside a fake bars_upserted count."""
     import time
 
     dates = sorted({str(r["date"])[:10] for r in rows})
 
-    def _once():
+    def _once() -> tuple[int, int]:
         _delete_bar_dates(store, sym, dates)
-        _insert_skip_dupes(store, "daily_bars", rows)
+        return _insert_skip_dupes(store, "daily_bars", rows)
 
     last_exc: Exception | None = None
+    counts: tuple[int, int] | None = None
     for i in range(attempts):
         try:
-            _once()
-            return True
+            counts = _once()
+            break
         except Exception as exc:  # noqa: BLE001 — transient network/proxy errors
             last_exc = exc
             if i < attempts - 1:
                 time.sleep(0.5 * (i + 1))
-    # Last chance: prove the store is reachable with a cheap read, then try
-    # once more — a REST-lane blip that cleared mid-backoff must not cost the
-    # symbol its refresh.
+    if counts is None:
+        # Last chance: prove the store is reachable with a cheap read, then try
+        # once more — a REST-lane blip that cleared mid-backoff must not cost
+        # the symbol its refresh.
+        try:
+            store.select("daily_bars", columns="date", limit=1)
+            counts = _once()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+    if counts is None:
+        logger.error(
+            "HOLE: bar write failed for %s (%s..%s, %d rows) after %d attempts "
+            "+ a connectivity recheck: %s — this symbol's payload dates may be "
+            "missing until the next ingest re-covers them",
+            sym, dates[0], dates[-1], len(rows), attempts, last_exc)
+        return None
+    inserted, skipped = counts
+    if skipped:
+        logger.warning(
+            "DELETE INEFFECTIVE for %s: %d of %d payload rows were still "
+            "present immediately after deleting their dates — stale rows "
+            "retained; only %d fresh rows actually inserted",
+            sym, skipped, len(rows), inserted)
+    return counts
+
+
+# Zombie detection is REPORT-ONLY by design: daily_bars is sacred (CLAUDE.md)
+# and a transient vendor-fetch hiccup (truncated payload, one bad page) must
+# never trigger automatic data destruction. A date Alpaca retracted therefore
+# survives in the DB until a human (or the agent, deliberately) removes it —
+# this check makes those rows VISIBLE instead of permanent and silent.
+ZOMBIE_SYMBOLS_MAX = 25  # cap the summary list, like hole_symbols
+
+
+def _zombie_dates(store, sym: str, rows: list[dict], start: date) -> list[str]:
+    """DB dates for ``sym`` inside the fetched window (``start``..today) that
+    the vendor payload did NOT carry — dates Alpaca has since RETRACTED (or a
+    truncated fetch). Detection only, never deletion (see note above). One
+    bounded range read per successfully written symbol; best-effort — a
+    failed read never fails the ingest."""
+    payload = {str(r["date"])[:10] for r in rows}
     try:
-        store.select("daily_bars", columns="date", limit=1)
-        _once()
-        return True
-    except Exception as exc:  # noqa: BLE001
-        last_exc = exc
-    logger.error(
-        "HOLE: bar write failed for %s (%s..%s, %d rows) after %d attempts "
-        "+ a connectivity recheck: %s — this symbol's payload dates may be "
-        "missing until the next ingest re-covers them",
-        sym, dates[0], dates[-1], len(rows), attempts, last_exc)
-    return False
+        db_rows = store.select("daily_bars", columns="date",
+                               filters={"symbol": sym, "date": ("gte", start)},
+                               limit=100000)
+    except Exception as exc:  # noqa: BLE001 — detection must not cost the run
+        logger.debug("zombie check failed for %s: %s", sym, exc)
+        return []
+    zombies = sorted({str(r["date"])[:10] for r in db_rows} - payload)
+    if zombies:
+        logger.warning(
+            "ZOMBIE dates for %s: %s — present in daily_bars but absent from "
+            "the vendor payload for the same window; NOT auto-deleted (sacred "
+            "table) — if the retraction is real, remove them deliberately",
+            sym, zombies)
+    return zombies
 
 
 def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
@@ -659,10 +722,11 @@ def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
     # behind still renders a stale right edge at the default range. Change-
     # detected per symbol (unchanged names cost one tiny query), so this is
     # cheap when already current. Today's (ET) bar joins the grow-only archive
-    # only when today's session is fully CLOSED — the nightly post-close path;
+    # only once today's CALENDAR session has ended (post-16:00-close — the
+    # daily bar is final then, whatever the extended-hours wall clock says);
     # an intraday manual run archives up to yesterday, exactly like the hourly.
     summary["r2_sync"] = _r2_merge_sync(universe,
-                                        include_today_et=_market_closed_now(b))
+                                        include_today_et=_todays_session_over(b))
     # SEC EDGAR fundamentals for the same universe (isolated pass, like the
     # news/corp-actions passes on the hourly path): first run per symbol is a
     # full 2009+ backfill (companyfacts returns whole history in one call),
@@ -704,23 +768,43 @@ def merge_bar_frames(r2_rows, db_rows):
     return out.reset_index(drop=True)
 
 
-def _today_et() -> date:
-    """Today's calendar date in US Eastern — the trading day the tape is on."""
+def _now_et() -> datetime:
+    """Now as a NAIVE US-Eastern datetime — directly comparable to the
+    trading calendar's naive ET open/close (see broker.calendar_day)."""
     from zoneinfo import ZoneInfo
 
-    return datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
+    return datetime.now(timezone.utc).astimezone(
+        ZoneInfo("America/New_York")).replace(tzinfo=None)
 
 
-def _market_closed_now(b) -> bool:
-    """True only when the equity session is fully CLOSED (weekend, holiday,
-    overnight past 20:00 ET) — NOT merely outside regular hours. Fail-closed:
-    an unreachable clock reads as not-closed, so today's bar is withheld from
-    the grow-only archive rather than risked into it."""
+def _today_et() -> date:
+    """Today's calendar date in US Eastern — the trading day the tape is on."""
+    return _now_et().date()
+
+
+def _todays_session_over(b) -> bool:
+    """True when today's ET CALENDAR session is over: the market has no
+    session today (weekend/holiday), or now is at/past today's actual close
+    (16:00 ET, 13:00 on half-days — the calendar row knows).
+
+    Deliberately NOT ``b.session() == "closed"``: session() reads "extended"
+    until 20:00 ET, and the nightly Routine's fixed 00:45 UTC cron lands at
+    19:45 ET all winter (EST) — a wall-clock gate made the include-today
+    archive push a seasonal no-op, pinning the R2 right edge at T-1 every
+    night from November to March. Today's DAILY bar is final once the
+    calendar session ends; after-hours trading never reopens it. Fail-closed:
+    an unreachable calendar reads as not-over, so today's bar is withheld
+    from the grow-only archive rather than risked into it."""
+    now_et = _now_et()
     try:
-        return b.session() == "closed"
-    except Exception as exc:  # noqa: BLE001 — unknown session → not closed
-        logger.warning("session check failed (%s) — treating as not closed", exc)
+        cal = b.calendar_day(now_et.date())
+    except Exception as exc:  # noqa: BLE001 — unknown calendar → not over
+        logger.warning("calendar check failed (%s) — treating today's session "
+                       "as not over; today's bar stays out of the archive", exc)
         return False
+    if cal is None:
+        return True  # weekend/holiday — no session today at all
+    return now_et >= cal["close"]
 
 
 def _r2_merge_sync(symbols: list[str], *, include_today_et: bool = False):

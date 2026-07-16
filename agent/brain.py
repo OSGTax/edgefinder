@@ -21,7 +21,10 @@ CLI:
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -566,22 +569,38 @@ def set_wiki(store=None, *, slug: str, body: str, title: str | None = None,
                             filters={"account": account, "slug": slug}, limit=1)
     if existing:
         prev = existing[0]
-        revision = (prev.get("revision") or 1) + 1
+        prev_rev = prev.get("revision") or 1
+        revision = prev_rev + 1
         # Bank the OUTGOING revision BEFORE replacing it — the whole point of
         # the history table. If the archive write fails, the edit does not
         # proceed: an in-place rewrite that silently skipped the archive would
         # be exactly the evidence destruction this exists to prevent.
+        # Retry-safe: a prior attempt that banked the row but died before the
+        # page write must not bank (slug, revision) twice — if the newest
+        # archived row already carries this revision, skip the re-bank.
         try:
-            store.insert("desk_wiki_history", {
-                "account": account, "slug": slug,
-                "revision": prev.get("revision") or 1,
-                "title": prev.get("title"), "body": prev.get("body") or "",
-                "updated_at": prev.get("updated_at"),
-                "updated_run_id": prev.get("updated_run_id")}, returning=False)
+            newest = store.select("desk_wiki_history", columns="revision",
+                                  filters={"account": account, "slug": slug},
+                                  order=[("id", "desc")], limit=1)
+            if newest and (newest[0].get("revision") or 0) == prev_rev:
+                logger.info("wiki/%s r%s already banked — retry after a "
+                            "failed page write; skipping the re-bank",
+                            slug, prev_rev)
+            else:
+                store.insert("desk_wiki_history", {
+                    "account": account, "slug": slug, "revision": prev_rev,
+                    "title": prev.get("title"), "body": prev.get("body") or "",
+                    "updated_at": prev.get("updated_at"),
+                    "updated_run_id": prev.get("updated_run_id")},
+                    returning=False)
         except Exception as exc:  # noqa: BLE001 — classify, re-raise others
+            from agent.store import is_missing_table_error
+
             # Pre-deploy grace, same convention as set_verdict: a missing
-            # table gets an actionable message, not a stack trace.
-            if "desk_wiki_history" in str(exc):
+            # table gets an actionable message, not a stack trace. Classified
+            # by type/code — a transient connection error whose str() merely
+            # MENTIONS the table (SQLAlchemy embeds the SQL) re-raises.
+            if is_missing_table_error(exc):
                 return {"ok": False, "error":
                         "desk_wiki_history is unreachable — schema not "
                         "migrated; deploy (render_start runs the idempotent "
@@ -677,9 +696,13 @@ def set_verdict(store=None, *, run_id: str, symbol: str, verdict: str,
                             filters={"account": account, "run_id": run_id,
                                      "symbol": symbol}, limit=1)
     except Exception as exc:  # noqa: BLE001 — classify, re-raise others
+        from agent.store import is_missing_table_error
+
         # Pre-deploy grace: a missing desk_outcomes table gets an actionable
-        # message, not a stack trace mid-reflection.
-        if "desk_outcomes" in str(exc):
+        # message, not a stack trace mid-reflection. Classified by type/code
+        # — a transient connection error whose str() merely mentions the
+        # table (SQLAlchemy embeds the SQL) re-raises instead.
+        if is_missing_table_error(exc):
             return {"ok": False, "error":
                     "desk_outcomes is unreachable — schema not migrated; "
                     "deploy (render_start runs the idempotent DDL) or run "

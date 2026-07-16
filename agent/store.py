@@ -187,6 +187,53 @@ def is_duplicate_key_error(exc: Exception) -> bool:
     return "unique" in msg or "duplicate" in msg
 
 
+def is_missing_table_error(exc: Exception) -> bool:
+    """True when ``exc`` says the target TABLE does not exist (schema not
+    migrated), however the active transport surfaces it.
+
+    Classified by exception TYPE + error CODE, never by searching str(exc)
+    for the table name — SQLAlchemy embeds the failed SQL (and therefore the
+    table name) in every error string, so a transient connection blip during
+    ``SELECT ... FROM desk_outcomes`` would string-match and be misdiagnosed
+    as "run the DDL". Transient errors must return False and re-raise at the
+    call site.
+
+    pg   — SQLAlchemy ``ProgrammingError`` wrapping Postgres UndefinedTable
+           (SQLSTATE 42P01: psycopg2 ``pgcode`` / psycopg3 ``sqlstate``), or
+           SQLite's ``OperationalError`` whose DRIVER message is
+           "no such table" (SQLite has no error codes; the driver message —
+           not the SQL-bearing wrapper string — is the signal).
+    rest — PostgREST reports a table missing from its schema cache as
+           ``PGRST205`` (HTTP 404, "Could not find the table ..."), or
+           proxies the raw Postgres ``42P01`` code in the body — mirrors how
+           ``is_duplicate_key_error`` handles both transports.
+    """
+    from agent.rest import RestError
+
+    if isinstance(exc, RestError):
+        body = (exc.body or "").lower()
+        return ("pgrst205" in body or "42p01" in body
+                or (exc.status == 404 and "could not find the table" in body))
+    import sqlite3
+    if isinstance(exc, sqlite3.OperationalError):  # raw, unwrapped driver error
+        return "no such table" in str(exc).lower()
+    try:
+        from sqlalchemy.exc import OperationalError, ProgrammingError
+    except ImportError:  # pragma: no cover — REST-only host without SQLAlchemy
+        return False
+    orig = getattr(exc, "orig", None)
+    if isinstance(exc, ProgrammingError):
+        code = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+        return code == "42P01"
+    if isinstance(exc, OperationalError):
+        # SQLite reports a missing table here; match the driver's own message
+        # (``orig``), NOT the wrapper string that embeds the SQL. A Postgres
+        # connection failure is also an OperationalError but never carries
+        # this phrase.
+        return "no such table" in str(orig or "").lower()
+    return False
+
+
 @lru_cache(maxsize=1)
 def get_store():
     """The process-wide store for the active transport."""

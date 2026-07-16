@@ -413,6 +413,24 @@ def test_grade_and_verdict_missing_table_exit_actionably(store):
     assert not v["ok"] and "not migrated" in v["error"]
 
 
+def test_grade_and_verdict_transient_error_reraises(store):
+    """M3: a transient connection error whose message merely MENTIONS
+    desk_outcomes (SQLAlchemy embeds the SQL in str(exc)) must re-raise —
+    the old string-match misdiagnosed every blip as 'schema not migrated'."""
+    from agent import ledger
+    from agent.brain import set_verdict
+
+    class _Blip:
+        def select(self, *a, **kw):
+            raise RuntimeError(
+                'connection reset during "SELECT * FROM desk_outcomes"')
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        ledger.grade(_Blip(), days=30)
+    with pytest.raises(RuntimeError, match="connection reset"):
+        set_verdict(_Blip(), run_id="X", symbol="XYZ", verdict="TRUE")
+
+
 def test_grade_excludes_book_settlement_hardstop_and_no_fill_picks(store):
     from agent import ledger
 

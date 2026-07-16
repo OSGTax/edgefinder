@@ -177,3 +177,85 @@ def test_wiki_history_read_path(store):
     assert not missing["ok"] and "no archived revision" in missing["error"]
     bad = get_wiki_history(store, slug="nope")
     assert not bad["ok"] and "unknown wiki slug" in bad["error"]
+
+
+class _WrapStore:
+    """Delegating store wrapper for fault injection."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_history_bank_not_duplicated_on_retry(store, caplog):
+    """L3: bank succeeds → page write fails → the RETRY must not bank the same
+    (slug, revision) again — the newest archived row already carrying this
+    revision skips the re-bank."""
+    import logging
+
+    from agent.brain import set_wiki
+
+    class _FailPageWriteOnce(_WrapStore):
+        tripped = False
+
+        def update(self, table, filters, values, *, returning=True):
+            if table == "desk_wiki" and not self.tripped:
+                self.tripped = True
+                raise ConnectionError("reset after the history bank")
+            return self._inner.update(table, filters, values,
+                                      returning=returning)
+
+    assert set_wiki(store, slug="lessons", body="v1", run_id="R1")["ok"]
+    flaky = _FailPageWriteOnce(store)
+    with pytest.raises(ConnectionError):
+        set_wiki(flaky, slug="lessons", body="v2", run_id="R2")
+    hist = store.select("desk_wiki_history", filters={"slug": "lessons"})
+    assert [h["revision"] for h in hist] == [1]      # banked exactly once
+
+    with caplog.at_level(logging.INFO, logger="agent.brain"):
+        r = set_wiki(flaky, slug="lessons", body="v2", run_id="R2")
+    assert r["ok"] and r["revision"] == 2
+    assert "already banked" in caplog.text
+    hist = store.select("desk_wiki_history", filters={"slug": "lessons"})
+    assert [h["revision"] for h in hist] == [1]      # STILL exactly once
+    live = store.select("desk_wiki", filters={"slug": "lessons"})
+    assert live[0]["body"] == "v2" and live[0]["revision"] == 2
+
+    # the dedup never suppresses a REAL subsequent edit's bank
+    assert set_wiki(store, slug="lessons", body="v3", run_id="R3")["ok"]
+    hist = store.select("desk_wiki_history", filters={"slug": "lessons"},
+                        order=[("revision", "asc")])
+    assert [h["revision"] for h in hist] == [1, 2]
+
+
+def test_set_wiki_missing_history_table_exits_actionably(store):
+    """Pre-deploy grace: a DB without desk_wiki_history gets an actionable
+    message, not a stack trace — now classified by type/code, not str()."""
+    from agent.brain import set_wiki
+    from edgefinder.db.engine import Base, get_engine
+
+    assert set_wiki(store, slug="lessons", body="v1")["ok"]
+    Base.metadata.tables["desk_wiki_history"].drop(get_engine())
+    r = set_wiki(store, slug="lessons", body="v2")
+    assert not r["ok"] and "not migrated" in r["error"]
+
+
+def test_set_wiki_transient_history_error_reraises(store):
+    """M3: a transient error that merely MENTIONS desk_wiki_history (SQLAlchemy
+    embeds the SQL in str(exc)) must re-raise, not be misdiagnosed as an
+    unmigrated schema."""
+    from agent.brain import set_wiki
+
+    assert set_wiki(store, slug="lessons", body="v1")["ok"]
+
+    class _Blip(_WrapStore):
+        def select(self, table, **kw):
+            if table == "desk_wiki_history":
+                raise RuntimeError('connection reset during "SELECT revision '
+                                   'FROM desk_wiki_history"')
+            return self._inner.select(table, **kw)
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        set_wiki(_Blip(store), slug="lessons", body="v2")

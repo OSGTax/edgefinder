@@ -2025,7 +2025,11 @@ def grade(store=None, *, days: int = 30, run_id: str | None = None,
     try:
         store.select("desk_outcomes", filters={"account": account}, limit=1)
     except Exception as exc:  # noqa: BLE001 — classify, then re-raise others
-        if "desk_outcomes" in str(exc):
+        from agent.store import is_missing_table_error
+
+        # Classified by type/code — a transient connection error whose str()
+        # merely mentions the table (SQLAlchemy embeds the SQL) re-raises.
+        if is_missing_table_error(exc):
             return {"ok": False, "error":
                     "desk_outcomes is unreachable — schema not migrated; "
                     "deploy (render_start runs the idempotent DDL) or run "

@@ -243,6 +243,66 @@ def test_is_duplicate_key_error_covers_both_transports():
     assert not is_duplicate_key_error(RuntimeError("connection reset"))
 
 
+def test_is_missing_table_error_classifies_by_code_not_string():
+    """M3: 'schema not migrated' is diagnosed by exception TYPE + error CODE.
+    SQLAlchemy embeds the failed SQL in str(exc), so ANY exception raised
+    while querying desk_outcomes contains the table name — a transient
+    connection blip must never be misdiagnosed as a missing table."""
+    import sqlite3
+
+    from sqlalchemy.exc import OperationalError, ProgrammingError
+
+    from agent.rest import RestError
+    from agent.store import is_missing_table_error
+
+    # rest: PostgREST schema-cache miss (PGRST205, HTTP 404) + a proxied raw
+    # Postgres 42P01 body
+    assert is_missing_table_error(RestError(404, (
+        '{"code":"PGRST205","message":"Could not find the table '
+        "'public.desk_wiki_history' in the schema cache\"}")))
+    assert is_missing_table_error(RestError(
+        400, '{"code":"42P01","message":"relation \\"desk_outcomes\\" '
+             'does not exist"}'))
+    # rest negatives: a plain 404, and an unrelated error MENTIONING the table
+    assert not is_missing_table_error(RestError(404, '{"message":"Not Found"}'))
+    assert not is_missing_table_error(RestError(
+        503, '{"message":"upstream timeout querying desk_outcomes"}'))
+
+    # pg: UndefinedTable carries SQLSTATE 42P01 (psycopg2 .pgcode / psycopg3
+    # .sqlstate) on the wrapped driver error
+    class _Pg2Err(Exception):
+        pgcode = "42P01"
+
+    class _Pg3Err(Exception):
+        sqlstate = "42P01"
+
+    assert is_missing_table_error(ProgrammingError(
+        "SELECT * FROM desk_outcomes", {},
+        _Pg2Err('relation "desk_outcomes" does not exist')))
+    assert is_missing_table_error(ProgrammingError(
+        "SELECT * FROM desk_outcomes", {},
+        _Pg3Err('relation "desk_outcomes" does not exist')))
+
+    # sqlite: OperationalError with the driver's "no such table" message,
+    # wrapped by SQLAlchemy or raw
+    assert is_missing_table_error(OperationalError(
+        "SELECT * FROM desk_wiki_history", {},
+        sqlite3.OperationalError("no such table: desk_wiki_history")))
+    assert is_missing_table_error(
+        sqlite3.OperationalError("no such table: desk_wiki_history"))
+
+    # THE misdiagnosis this replaces: a connection error whose wrapper string
+    # embeds SQL naming the table is NOT a missing table
+    blip = OperationalError("SELECT * FROM desk_wiki_history WHERE slug = ?",
+                            {}, Exception("connection reset by peer"))
+    assert "desk_wiki_history" in str(blip)  # the trap the old string-match hit
+    assert not is_missing_table_error(blip)
+    assert not is_missing_table_error(ProgrammingError(
+        "SELECT * FROM desk_outcomes", {}, Exception("some other error")))
+    assert not is_missing_table_error(RuntimeError(
+        'server closed the connection during "SELECT * FROM desk_outcomes"'))
+
+
 def test_rest_select_paginates_past_server_cap(monkeypatch):
     """Regression (P2 verifier): PostgREST caps responses (Supabase: 1000);
     select must page with offset instead of silently truncating."""
