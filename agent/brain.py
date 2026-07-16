@@ -606,9 +606,19 @@ def set_verdict(store=None, *, run_id: str, symbol: str, verdict: str,
         return {"ok": False,
                 "error": f"verdict must be one of {'/'.join(VERDICTS)}"}
     symbol = (symbol or "").strip().upper()
-    rows = store.select("desk_outcomes",
-                        filters={"account": account, "run_id": run_id,
-                                 "symbol": symbol}, limit=1)
+    try:
+        rows = store.select("desk_outcomes",
+                            filters={"account": account, "run_id": run_id,
+                                     "symbol": symbol}, limit=1)
+    except Exception as exc:  # noqa: BLE001 — classify, re-raise others
+        # Pre-deploy grace: a missing desk_outcomes table gets an actionable
+        # message, not a stack trace mid-reflection.
+        if "desk_outcomes" in str(exc):
+            return {"ok": False, "error":
+                    "desk_outcomes is unreachable — schema not migrated; "
+                    "deploy (render_start runs the idempotent DDL) or run "
+                    "scripts/setup_db.py", "detail": str(exc)[:200]}
+        raise
     if not rows:
         return {"ok": False, "error":
                 f"no graded outcome row for run {run_id!r} / {symbol} — run "
@@ -624,12 +634,42 @@ CONTEXT_CLIP = 400           # chars per free-text field
 CONTEXT_THESIS_CLIP = 2000   # the living thesis gets more room
 CONTEXT_MAX_RUNS = 15        # outcome runs included
 CONTEXT_MAX_PREDICTIONS = 20
+# Brief sections are clipped HERE, not trusted to the brief builder —
+# context's boundedness must not depend on another routine's output size.
+CONTEXT_BRIEF_ROSTER = 15    # trend_roster rows
+CONTEXT_BRIEF_SCREEN = 10    # rows per screens list
+CONTEXT_BRIEF_HEADLINES = 10  # headline symbols
 
 
 def _clip(text, n: int = CONTEXT_CLIP):
     if not isinstance(text, str) or len(text) <= n:
         return text
     return text[: n - 1] + "…"
+
+
+def _clip_brief(brief: dict) -> dict:
+    """Bound the brief's list-heavy sections for the context read (L5): cap
+    the trend roster, each screens list, and the headline symbols. The full
+    brief stays one `agent.market brief` call away — this is working memory,
+    not the archive."""
+    payload = brief.get("payload")
+    if not isinstance(payload, dict):
+        return brief
+    payload = dict(payload)
+    roster = payload.get("trend_roster")
+    if isinstance(roster, list) and len(roster) > CONTEXT_BRIEF_ROSTER:
+        payload["trend_roster"] = roster[:CONTEXT_BRIEF_ROSTER]
+        payload["trend_roster_clipped"] = len(roster)
+    screens = payload.get("screens")
+    if isinstance(screens, dict):
+        payload["screens"] = {
+            k: (v[:CONTEXT_BRIEF_SCREEN] if isinstance(v, list) else v)
+            for k, v in screens.items()}
+    heads = payload.get("headlines")
+    if isinstance(heads, dict) and len(heads) > CONTEXT_BRIEF_HEADLINES:
+        payload["headlines"] = dict(list(heads.items())[:CONTEXT_BRIEF_HEADLINES])
+        payload["headlines_clipped"] = len(heads)
+    return {**brief, "payload": payload}
 
 
 def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
@@ -671,7 +711,7 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
     def _brief():
         from agent import market
 
-        return market.get_brief()
+        return _clip_brief(market.get_brief())
 
     brief = _safe("brief", _brief, {"exists": False})
 

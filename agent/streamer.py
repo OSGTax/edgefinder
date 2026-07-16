@@ -230,7 +230,9 @@ async def run_stream() -> None:
 # evaluates them against the in-memory tape every few seconds and marks
 # trips/expiries in the DB. One kind — the opt-in 'hard_stop' — goes further
 # and EXECUTES a full-position sell through the ledger's normal live-fill
-# gates; plain above/below wires only ever flip status (default-off by
+# gates (with the two entry-friction bands explicitly overridden and the
+# override stamped on the fill — see execute_hard_stop); plain above/below
+# wires only ever flip status (default-off by
 # design: nothing trades unless the brain explicitly armed a hard stop on
 # that position). FULLY isolated from the socket loop: it runs as its own
 # task, every DB touch is wrapped, and any failure degrades to "wires get
@@ -335,7 +337,16 @@ def execute_hard_stop(store, watch: dict, tripped_price: float,
                       now: datetime | None = None) -> dict:
     """Execute ONE tripped hard_stop: a FULL-POSITION SELL through the
     ledger's normal live-fill path — every gate stays in force (session,
-    spread, quote staleness, long-only).
+    spread, quote staleness, long-only) EXCEPT the two entry-friction
+    bands, which a protective exit overrides EXPLICITLY:
+    ``allow_price_deviation`` (a >20% gap vs the stored close is the
+    canonical stop scenario — an earnings crash must not veto its own
+    stop) and ``allow_illiquid`` (a full-position exit may legitimately
+    exceed the ADV entry cap; refusing to sell what we already own would
+    invert the protection). Honesty is preserved by the receipt, not by
+    refusing the exit: both overrides land as ``warnings`` inside the
+    persisted ``fill_quote``, so the row shows a gated-but-overridden
+    protective exit.
 
     Concurrency-safe by construction:
     1. CLAIM — an atomic compare-and-swap flips the wire armed→executing
@@ -405,6 +416,10 @@ def execute_hard_stop(store, watch: dict, tripped_price: float,
         return {"ok": False, "status": "stale", "error": why}
     r = ledger.live_fill(
         store, symbol=sym, side="SELL", shares=shares, run_id=run_id,
+        # Protective-exit overrides (H1/H2): the close-band and ADV gates
+        # veto ENTRIES; a stop that fires INTO the gap it protects against
+        # must not be vetoed by it. Stamped on the fill's receipt.
+        allow_price_deviation=True, allow_illiquid=True,
         rationale=(f"HARD STOP: full exit of {shares:g} {sym} — live mid "
                    f"{tripped_price:g} hit the armed stop at "
                    f"{float(watch.get('level') or 0):g} "

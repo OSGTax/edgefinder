@@ -119,26 +119,25 @@ short, candid lines; this is the live "thinking" panel the owner watches.
   wake-plans. Start from this so nothing you once predicted or armed gets
   forgotten; the tools below stay available for drilling into any one
   section, not for reassembling what context already handed you.
-- `python -m agent.brain watch-list` — **tripped tripwires FIRST**: each one
-  is a level you told the streamer to watch because it mattered; address it
-  (or explicitly stand down, in a thinking note) before anything else. Then
-  note what's still armed and clear what no longer matters.
-- `python -m agent.market brief` — **read before any research**: last night's
-  pack (regime, ranked universe, movers, trend roster with indicators,
-  headlines, data-coverage verdict) in one call. Built nightly by the
-  data-refresh routine so you spend your context deciding, not gathering —
-  skip the separate `regime`/`universe` calls when the brief is fresh. If
-  `exists` is false or `stale` is true, fall back to the individual scans
-  below and say so in a thinking note.
-- `python -m agent.ledger state` — cash, positions, equity, P&L.
-- `python -m agent.brain state-get` — your current strategy (thesis/rules/params).
-- `python -m agent.brain wiki-get` — your lessons wiki (playbook, lessons,
-  mistakes, market notes), distilled from your own MEASURED results. Read it
-  before deciding — it is your accumulated experience.
-- `python -m agent.market regime` — only when the brief is missing/stale.
+- **Act on what context surfaced.** Tripped tripwires come back in its
+  `watches` section — each one is a level you told the streamer to watch
+  because it mattered; address it (or explicitly stand down, in a thinking
+  note) before anything else, and clear wires that no longer matter.
+- **Drill in only where context flags something** — the individual tools
+  exist for depth on ONE section, not for re-reading what context already
+  handed you:
+  - `python -m agent.brain watch-list` when a wire needs its full
+    armed/tripped detail;
+  - `python -m agent.market brief` for the uncut research pack (context
+    clips the roster/screens/headline lists); `python -m agent.market
+    regime` only when the brief is missing or stale — and say so;
+  - `python -m agent.ledger state` / `brain state-get` / `brain wiki-get`
+    when the account header, strategy, or a wiki page needs more than the
+    context summary showed.
 - `python -m agent.broker quote --symbols <held + candidates>` — **LIVE
-  prices** (bid/ask/mid, real-time SIP). This is what you trade on. The brief
-  is last night's picture; the tape is NOW — when they disagree, the tape wins.
+  prices** (bid/ask/mid, real-time SIP) — the one read context cannot give
+  you. This is what you trade on. The brief is last night's picture; the
+  tape is NOW — when they disagree, the tape wins.
 Narrate: how is the book doing, is the strategy working, what is the market
 doing RIGHT NOW (live quotes vs yesterday's closes tells you today's move).
 
@@ -269,7 +268,9 @@ Write the run's dossier so the desk page renders it. Small JSON files:
   - `prediction` — one falsifiable sentence about what happens and why
     ("AVGO reclaims $410 within 10 sessions on AI-capex follow-through"),
     not a vibe ("looks strong").
-  - `horizon_days` — when the prediction is due to be graded.
+  - `horizon_days` — when the prediction is due, in **TRADING SESSIONS**
+    (not calendar days): grading counts completed SPY sessions since the
+    decision, so "10" means ten market days, two calendar weeks.
   - `kill` — the exit criterion that proves you wrong ("closes below
     $385"). Honor your own kills in later cycles — a kill you ignore is
     a lesson you chose not to learn.
@@ -347,7 +348,10 @@ python -m agent.brain watch-set --symbol AMD --below 540 \
   wire on a long EQUITY position you hold and the streamer itself sells
   the WHOLE position when the live mid touches the level — through the
   ledger's normal fill gates (session, spread, staleness), one attempt
-  only. Equity shares only: crypto pairs are refused at arm time (the
+  only. The entry-friction bands (last-close deviation, ADV size) are
+  overridden explicitly for this protective exit and the override is
+  stamped on the fill's receipt — a stop that fires into the very gap it
+  protects against must not be vetoed by an entry gate. Equity shares only: crypto pairs are refused at arm time (the
   sweep watches the equity SIP tape and crypto quotes never enter it, so
   that stop could never trip), as are shares backing covered calls (leg
   out of the calls first) and stops with no live/last reference price.

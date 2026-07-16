@@ -40,8 +40,13 @@ over vibes (the same style rules as the trading charter).
 - `python -m agent.ledger grade --days 30` — refresh `desk_outcomes` with
   each pick's MACHINE facts: entry price, since/alpha vs SPY,
   `horizon_elapsed` (in sessions), the kill parsed to a level and
-  breach-checked against stored daily closes. **These rows are what you
-  grade from** — numbers first, judgment second.
+  breach-checked against stored daily closes. Closed rows carry
+  `exit_kind` (same_run | cross_run | hardstop | settlement) with a real
+  exit price and realized P&L — stop-outs and cross-run exits are graded,
+  not null; a row with `degraded` true had its mark priced at cost basis,
+  so its since/alpha are honestly null this pass. **These rows are what
+  you grade from** — numbers first, judgment second. (`--days` bounds
+  closed-row re-grades only; every still-open pick refreshes regardless.)
 - `python -m agent.ledger outcomes --days 7` — this week, pick by pick.
 - `python -m agent.ledger outcomes --days 30` — the longer arc for context.
 - `python -m agent.brain state-get` and `python -m agent.brain wiki-get` —
@@ -54,8 +59,9 @@ Grading is MECHANICAL now, not retrospective storytelling. Each pick in
 and its `desk_outcomes` row (from `ledger grade` in step 1) already holds
 the machine verdict inputs: `horizon_elapsed` says whether the prediction
 is due, `kill_breached` says whether a stored close touched the kill
-(null means the kill didn't parse to a single level — judge it from the
-closes yourself and say so). For each pick with `horizon_elapsed` true —
+(null means the kill didn't parse to a single PLAUSIBLE level —
+percentages, indicator lengths, and levels far from entry are refused,
+never guessed at — judge it from the closes yourself and say so). For each pick with `horizon_elapsed` true —
 and every closed pick regardless:
 1. Quote the prediction verbatim.
 2. State what happened: `since_pct`, `alpha_pct`, and whether
@@ -81,7 +87,10 @@ number for closed picks. **Respect maturity:** null alpha = too young to
 benchmark (not zero); `spy_window_sessions` < 2 = inside benchmark noise —
 defer the verdict to next week rather than minting a lesson from noise.
 Options carry null alpha by design; grade them on realized dollars +
-thesis. Assign one grade, with both numbers next to it:
+thesis — those dollars are truthfully NET of the per-contract fee (the
+pick's entry basis and realized P&L come from the fills' fee-inclusive
+`dollars`, so a thin premium win that the fee ate grades as the wash it
+was). Assign one grade, with both numbers next to it:
 - **Right for the right reason** — thesis played out as described.
 - **Right for the wrong reason** — made money, but not how you said. Luck
   is not skill; say so. (Positive P&L with negative alpha lands here too:

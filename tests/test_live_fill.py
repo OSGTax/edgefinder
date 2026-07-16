@@ -292,6 +292,45 @@ def test_live_fill_rejects_price_far_from_stored_close(store_bars, monkeypatch):
     assert any("override" in w for w in ok["warnings"])
 
 
+def test_live_fill_close_band_degrades_on_stale_reference(store_bars, monkeypatch):
+    """H2b: the band's reference must itself be fresh — when the latest
+    stored close is older than CLOSE_BAND_STALE_SESSIONS (a dead ingest),
+    the band degrades to warn-and-allow instead of bricking trading, and
+    the degrade lands on the persisted fill receipt."""
+    from datetime import date, timedelta
+
+    from agent import ledger
+    # 20 bars at 90 ending ~3 weeks ago: >5 weekday sessions stale
+    d = date.today() - timedelta(days=40)
+    for i in range(20):
+        store_bars.insert("daily_bars", {
+            "symbol": "NVDA", "date": d + timedelta(days=i), "open": 90.0,
+            "high": 90.0, "low": 90.0, "close": 90.0, "volume": 5_000_000,
+            "source": "test"}, returning=False)
+    _patch_broker(monkeypatch, FakeBroker())  # 130.0/130.2 → 44% off 90
+    r = ledger.live_fill(store_bars, symbol="NVDA", side="buy", shares=1)
+    assert r["ok"], r
+    assert any("degraded to warn-and-allow" in w for w in r["warnings"])
+    assert any("allowed" in w for w in r["warnings"])
+    # the warnings are the receipt — they persist inside fill_quote
+    row = store_bars.select("desk_trades", filters={"symbol": "NVDA"})[0]
+    assert any("degraded" in w for w in row["fill_quote"]["warnings"])
+
+
+def test_live_fill_override_warnings_persist_on_the_row(store_bars, monkeypatch):
+    """H1a: an override isn't just in the return value — the persisted
+    fill_quote carries it, so the ledger row itself shows a
+    gated-but-overridden fill."""
+    from agent import ledger
+    _seed_bars(store_bars, "NVDA", [(90.0, 5_000_000)] * 20)  # fresh close
+    _patch_broker(monkeypatch, FakeBroker())                  # 44% deviation
+    ok = ledger.live_fill(store_bars, symbol="NVDA", side="buy", shares=1,
+                          allow_price_deviation=True)
+    assert ok["ok"], ok
+    row = store_bars.select("desk_trades", filters={"symbol": "NVDA"})[0]
+    assert any("override" in w for w in row["fill_quote"]["warnings"])
+
+
 def test_live_fill_no_stored_close_warns_and_allows(store_bars, monkeypatch):
     """C1a: a new listing has no close row — warn, never block."""
     from agent import ledger

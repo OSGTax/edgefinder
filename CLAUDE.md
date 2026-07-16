@@ -24,6 +24,10 @@ rules). The agent's operating manual is
    closed; a price >20% off the latest stored close, or an order over 1% of
    20-session average dollar volume, needs an explicit override flag; and
    option fills pay a flat $0.65/contract fee (settlement rows stay fee-free).
+   The bands veto ENTRIES: protective exits (hard stops) traverse the same
+   gates with both overrides passed explicitly and stamped on the fill's
+   receipt — honesty by the receipt, never by refusing the exit. Missing,
+   short, or stale (>5 sessions) reference history warns and allows.
 2. **Alpaca is DATA-ONLY.** `agent/broker.py` has no write methods, by
    design — orders are never submitted to Alpaca; the book is ours
    (`desk_*` tables).
@@ -42,10 +46,11 @@ rules). The agent's operating manual is
    `index_daily`) and the R2 parquet archive. Irreplaceable.
 5. **The scoreboard cannot flatter:** SPY comparisons are TOTAL RETURN on
    both sides (lab and ledger), every equity snapshot records its mark
-   provenance (live/close/cost — degraded marks flagged, never hidden),
-   every buy/add pick must register a falsifiable prediction + horizon +
-   kill before the decision saves, and opt-in hard stops sell through the
-   same fill gates as any trade.
+   provenance (live/close/cost — degraded marks recorded on every snapshot;
+   desk surface in a later phase), every buy/add pick must register a
+   falsifiable prediction + horizon + kill before the decision saves, and
+   opt-in hard stops sell through the same fill gates as any trade (the
+   entry-friction bands overridden explicitly, on the receipt).
 
 ## Runtime layout
 

@@ -82,6 +82,11 @@ MAX_QUOTE_AGE_SEC_CRYPTO = 30.0
 #   record; short/missing history (fewer than ADV_MIN_SESSIONS stored bars)
 #   warns and allows.
 LIVE_CLOSE_BAND = 0.20
+# The close-band's reference must itself be fresh: when the latest stored
+# daily close is older than this many sessions (weekday count off the bar
+# date), the band degrades to WARN-AND-ALLOW — a data-ingest outage must not
+# brick trading behind a reference price nobody is updating.
+CLOSE_BAND_STALE_SESSIONS = 5
 ADV_SESSIONS = 20
 ADV_MIN_SESSIONS = 10
 ADV_MAX_NOTIONAL_PCT = 0.01
@@ -484,8 +489,29 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                    for f in raw_fills] if evs else fills
             buys = [f for f in adj if f["side"] == "BUY"]
             sells = [f for f in adj if f["side"] == "SELL"]
+            is_opt = occ.is_option(sym)
             entry_avg = (sum(f["shares"] * f["price"] for f in buys)
                          / sum(f["shares"] for f in buys)) if buys else None
+            # OPTION picks (M3) grade off the fee-inclusive ``dollars`` on
+            # the fills, not price×shares: every option fill pays a
+            # per-contract fee inside dollars, and a return computed gross
+            # of it flatters cheap contracts. entry_avg becomes the
+            # fee-inclusive per-share cost, so since/closed percentages are
+            # net-of-fee by construction (equities unchanged — no fees in
+            # their dollars). Options have no split adjustments, so raw
+            # fills are already on the current basis.
+            buy_units = sold_units = buy_dollars = sell_dollars = 0.0
+            if is_opt and buys:
+                buy_units = sum(float(f["shares"]) for f in raw_fills
+                                if f["side"] == "BUY")
+                buy_dollars = sum(float(f["dollars"]) for f in raw_fills
+                                  if f["side"] == "BUY")
+                sold_units = sum(float(f["shares"]) for f in raw_fills
+                                 if f["side"] == "SELL")
+                sell_dollars = sum(float(f["dollars"]) for f in raw_fills
+                                   if f["side"] == "SELL")
+                if buy_units > 0 and buy_dollars > 0:
+                    entry_avg = buy_dollars / (buy_units * MULTIPLIER)
             pos = positions.get(sym)
             mark = (pos.get("last_price") or pos.get("avg_price")) if pos else None
             open_now = None
@@ -505,12 +531,24 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
             bought = sum(f["shares"] for f in buys)
             sold = sum(f["shares"] for f in sells)
             if buys and sells and abs(bought - sold) <= EPS_SHARES:
-                sell_avg = sum(f["shares"] * f["price"] for f in sells) / sold
-                closed_pct = round((sell_avg - entry_avg) / entry_avg * 100, 2)
+                if is_opt and buy_dollars > 0:
+                    # fee-inclusive round trip: dollars in vs dollars out
+                    closed_pct = round((sell_dollars - buy_dollars)
+                                       / buy_dollars * 100, 2)
+                else:
+                    sell_avg = sum(f["shares"] * f["price"] for f in sells) / sold
+                    closed_pct = round((sell_avg - entry_avg) / entry_avg * 100, 2)
                 exit_date = _et_date(raw_fills[-1].get("ts"))
                 if run_date and exit_date:
                     exit_spy_pct = _spy_window_pct(spy, run_date, exit_date)
-            is_opt = occ.is_option(sym)
+            # per-pick realized: options net of fees via dollars (partial
+            # sells prorate the fee-inclusive cost basis); equities keep the
+            # closing-run avg-cost attribution.
+            realized = round(by_run_symbol.get((rid, sym), 0.0), 2)
+            if (is_opt and buy_units > 0 and buy_dollars > 0
+                    and 0 < sold_units <= buy_units + EPS_SHARES):
+                realized = round(sell_dollars
+                                 - (sold_units / buy_units) * buy_dollars, 2)
             live_pct = closed_pct if closed_pct is not None else since_pct
             spy_pct = exit_spy_pct if closed_pct is not None else run_spy_pct
             # Options: premium %-moves carry leverage and theta — subtracting
@@ -526,7 +564,7 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                 "prediction": p.get("prediction"),
                 "horizon_days": p.get("horizon_days"), "kill": p.get("kill"),
                 "fills": fills, "entry_avg_px": round(entry_avg, 4) if entry_avg else None,
-                "realized_pnl": round(by_run_symbol.get((rid, sym), 0.0), 2),
+                "realized_pnl": realized,
                 "open_now": open_now, "since_this_run_pct": since_pct,
                 "closed_return_pct": closed_pct,
                 "spy_same_window_pct": spy_pct, "alpha_pct": alpha})
@@ -613,6 +651,12 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                           "do not grade it as skill. Options carry alpha_pct = "
                           "null by design: premium %-moves embed leverage/"
                           "theta; grade them on realized dollars and thesis. "
+                          "OPTION pick numbers are NET OF FEES: entry_avg_px "
+                          "is the fee-inclusive per-share cost from the "
+                          "fills' dollars, so since/closed percentages and "
+                          "the pick's realized_pnl include the per-contract "
+                          "fee (per-symbol totals and run_realized_pnl stay "
+                          "gross — fees net out in cash). "
                           "Hard-stop exits (run_id 'hardstop:<id>') are "
                           "bucketed under 'hardstop', like settlement. A long "
                           "book's raw P&L is mostly market beta, so grade "
@@ -920,21 +964,45 @@ def _quote_age_sec(t) -> float | None:
     return (datetime.now(timezone.utc) - dt).total_seconds()
 
 
-def _latest_stored_close(store, symbol: str) -> float | None:
-    """The most recent daily close STORED for ``symbol`` — a plain
-    order-by-date select on daily_bars, transport-safe on both lanes (unlike
-    ``_latest_close``, which routes through the indicator engine). None when
-    the symbol has no bars (new listing) or the read fails."""
+def _latest_stored_close(store, symbol: str) -> tuple[float | None, str | None]:
+    """``(close, bar_date)`` of the most recent daily close STORED for
+    ``symbol`` — a plain order-by-date select on daily_bars, transport-safe
+    on both lanes (unlike ``_latest_close``, which routes through the
+    indicator engine). ``(None, None)`` when the symbol has no bars (new
+    listing) or the read fails. The bar date rides along so the caller can
+    judge whether the reference itself is stale (see live_fill's
+    warn-and-allow degrade)."""
     try:
         rows = store.select("daily_bars", columns="date,close",
                             filters={"symbol": symbol},
                             order=[("date", "desc")], limit=1)
     except Exception:  # noqa: BLE001 — no close row → the caller warns+allows
-        return None
+        return None, None
     if rows and rows[0].get("close"):
         px = float(rows[0]["close"])
-        return px if px > 0 else None
-    return None
+        if px > 0:
+            return px, str(rows[0].get("date"))[:10]
+    return None, None
+
+
+def _weekday_sessions_since(bar_date: str | None, today) -> int:
+    """Approximate TRADING SESSIONS elapsed strictly after ``bar_date`` up to
+    ``today``: weekdays (Mon–Fri) counted, exchange holidays NOT subtracted —
+    around a holiday this over-counts by one and degrades the close band a
+    session early, which errs toward allowing (the honest direction for an
+    outage guard). An unparseable bar date counts as maximally stale."""
+    from datetime import date as _date, timedelta as _td
+
+    try:
+        d = _date.fromisoformat(str(bar_date)[:10])
+    except (TypeError, ValueError):
+        return 10_000
+    n = 0
+    while d < today:
+        d += _td(days=1)
+        if d.weekday() < 5:
+            n += 1
+    return n
 
 
 def _avg_dollar_volume(store, symbol: str) -> tuple[float | None, int]:
@@ -981,16 +1049,25 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
 
     EQUITY FRICTION GATES (see the constants block): the priced fill must
     sit within LIVE_CLOSE_BAND of the latest stored daily close
-    (``allow_price_deviation`` overrides; no stored close warns and allows)
-    and the order notional may take at most ADV_MAX_NOTIONAL_PCT of the
-    20-session average dollar volume (``allow_illiquid`` overrides; short
-    history warns and allows). Both gates apply to BUYs and SELLs alike —
-    dumping into no bid is as fictional as buying at the touch — so a
-    hard-stop exit can land ``exec_failed`` on a name that outgrew the
-    liquidity cap: visible in watch-list, handled by the next cycle (which
-    may pass the override deliberately). Options and crypto skip both gates:
-    options liquidity is judged on the chain itself (OPRA spread/staleness
-    caps), and crypto has no daily_bars history to gate against.
+    (``allow_price_deviation`` overrides; no stored close warns and allows,
+    and a reference close older than CLOSE_BAND_STALE_SESSIONS degrades the
+    band to warn-and-allow — a data outage must not brick trading) and the
+    order notional may take at most ADV_MAX_NOTIONAL_PCT of the 20-session
+    average dollar volume (``allow_illiquid`` overrides; short history warns
+    and allows). Both gates apply to BUYs and SELLs alike — dumping into no
+    bid is as fictional as buying at the touch. Options and crypto skip both
+    gates: options liquidity is judged on the chain itself (OPRA spread/
+    staleness caps), and crypto has no daily_bars history to gate against.
+
+    DESIGN NOTE — gates vs protective exits: these bands exist to veto
+    ENTRIES (a reflex buy into a garbled quote, a size that could never
+    fill). A PROTECTIVE EXIT — the streamer's hard stop — traverses the
+    same gates but passes BOTH overrides explicitly: the canonical stop
+    scenario (a >20% earnings gap) and a full-position exit over the ADV
+    cap must never be vetoed by the very gates meant to protect entries.
+    Honesty is preserved by the receipt, not by refusing the exit — every
+    override and skipped/degraded gate lands as ``warnings`` inside the
+    persisted ``fill_quote``.
     """
     from agent import broker, occ
 
@@ -1074,14 +1151,30 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     # a wrong quote or an unfillable size actually fails.
     warnings: list[str] = []
     if not (is_opt or is_cx):
-        last_close = _latest_stored_close(store, symbol)
+        last_close, close_date = _latest_stored_close(store, symbol)
         if last_close is None:
             warnings.append(f"no stored daily close for {symbol} (new listing "
                             "or outside the hot set) — last-close sanity gate "
                             "skipped")
         else:
+            from datetime import date as _date
+
+            today = _date.fromisoformat(
+                _et_date(_utcnow()) or str(_utcnow().date()))
+            stale_sessions = _weekday_sessions_since(close_date, today)
             dev = abs(price / last_close - 1.0)
-            if dev > LIVE_CLOSE_BAND and not allow_price_deviation:
+            if stale_sessions > CLOSE_BAND_STALE_SESSIONS:
+                # the reference itself is stale — a data-ingest outage must
+                # not brick trading behind a close nobody is updating
+                warnings.append(
+                    f"latest stored close for {symbol} is ~{stale_sessions} "
+                    f"sessions old (bar date {close_date}) — last-close "
+                    "band degraded to warn-and-allow")
+                if dev > LIVE_CLOSE_BAND:
+                    warnings.append(f"price deviation {dev:.1%} vs stale "
+                                    f"close {last_close:g} allowed "
+                                    "(degraded band)")
+            elif dev > LIVE_CLOSE_BAND and not allow_price_deviation:
                 return {"ok": False, "error":
                         f"price {price:g} is {dev:.1%} from the latest stored "
                         f"close {last_close:g} (band {LIVE_CLOSE_BAND:.0%}) — "
@@ -1089,7 +1182,7 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
                         "(--allow-price-deviation), not a reflex fill",
                         "price": price, "latest_close": round(last_close, 4),
                         "deviation": round(dev, 4), "band": LIVE_CLOSE_BAND}
-            if dev > LIVE_CLOSE_BAND:
+            elif dev > LIVE_CLOSE_BAND:
                 warnings.append(f"price deviation {dev:.1%} vs close "
                                 f"{last_close:g} allowed by override")
         order_notional = shares * price
@@ -1120,6 +1213,11 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
         src = "alpaca_sip_rest"
     snapshot = {"bid": bid, "ask": ask, "mid": q.get("mid"), "t": q.get("t"),
                 "src": src, "slippage_bp": slippage_bp, "session": sess}
+    if warnings:
+        # the receipt, not just the return value: overridden/degraded gates
+        # must be visible on the persisted row (H1 — a protective exit that
+        # crossed a band shows it crossed the band)
+        snapshot["warnings"] = list(warnings)
     res = record_trade(store, symbol=symbol, side=side, shares=shares,
                        price=price, rationale=rationale, run_id=run_id,
                        fill_quote=snapshot, account=account)
@@ -1609,12 +1707,29 @@ def mark(store=None, *, prices: dict[str, float] | None = None,
         mark_meta["degraded"] = True
     c = cash(store, account)
     equity = round(c + pos_value, 2)
-    store.insert("desk_equity", {
+    snap = {
         "account": account, "ts": now, "cash": c,
         "positions_value": round(pos_value, 2), "equity": equity,
         "return_pct": round((equity - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 4),
         "mark_meta": mark_meta,
-    }, returning=False)
+    }
+    try:
+        store.insert("desk_equity", snap, returning=False)
+    except Exception as exc:  # noqa: BLE001 — classify, then re-raise others
+        # Pre-deploy grace: a DB that predates the mark_meta column must not
+        # crash the mark mid-write — the equity point matters more than its
+        # provenance for the one deploy where they disagree.
+        if "mark_meta" not in str(exc):
+            raise
+        import sys
+
+        print("WARNING: desk_equity has no mark_meta column (schema not "
+              "migrated) — snapshot written WITHOUT provenance; deploy "
+              "(render_start runs the idempotent ALTER) or run "
+              "scripts/setup_db.py", file=sys.stderr)
+        store.insert("desk_equity",
+                     {k: v for k, v in snap.items() if k != "mark_meta"},
+                     returning=False)
     return state(store, account)
 
 
@@ -1674,30 +1789,63 @@ def state(store=None, account: str = ACCOUNT) -> dict:
 # ── the learning loop: machine-graded pick facts (desk_outcomes) ──
 
 
-def _parse_kill(kill) -> float | None:
+def _plausible_kill(level: float | None,
+                    entry_px: float | None) -> float | None:
+    """Long-only stop plausibility: a kill is an exit level on a long
+    position, so with the pick's entry price known, a parsed level outside
+    [0.2×, 2×] of entry is a parse ARTIFACT (a year, a share count, a price
+    target for a different unit), not a stop — return None and let the
+    reflection judge the free text itself. Without an entry price there is
+    nothing to check against, so the level passes through."""
+    if level is None or level <= 0:
+        return None
+    if entry_px and entry_px > 0 \
+            and not (0.2 * entry_px <= level <= 2.0 * entry_px):
+        return None
+    return level
+
+
+def _parse_kill(kill, entry_px: float | None = None) -> float | None:
     """A pick's ``kill`` as a price level, when it parses unambiguously.
 
     Kills are free text by design ("closes below $385", "thesis breaks on a
     guidance cut"). A bare numeric kill is the level; in text, a single
     $-prefixed number wins (so "$385 within 10 sessions" still parses), else
-    a single bare number; zero or several candidates is honest ambiguity →
-    None, and kill_breached stays null rather than guessing."""
+    a single bare number — AFTER excluding numbers that are provably not
+    price levels:
+    - percentages ("drops 8% in a day" — 8 is a move size, not a level);
+    - numbers glued to indicator/time-unit tokens ("100DMA", "50-day",
+      "10 sessions" — lookback lengths and spans).
+    Count words in prose ("two closes below 190") never register — only
+    digits are candidates, so 190 parses. Surviving candidates then face the
+    long-only plausibility check (``_plausible_kill``: within [0.2×, 2×] of
+    the entry price when known). Zero or several candidates, or an
+    implausible one, is honest ambiguity → None, and kill_breached stays
+    null (the reflection judges the free text from the closes itself)
+    rather than a confidently wrong fact."""
     if isinstance(kill, (int, float)) and not isinstance(kill, bool):
-        return float(kill) if kill > 0 else None
+        return _plausible_kill(float(kill), entry_px)
     if not isinstance(kill, str):
         return None
     import re
 
-    nums = re.findall(r"\$\s*(\d[\d,]*(?:\.\d+)?)", kill)
-    if len(nums) != 1:
-        nums = re.findall(r"\d[\d,]*(?:\.\d+)?", kill)
+    unit_after = re.compile(
+        r"^\s*(?:%|[\s\-]*(?:x\b|dma\b|s?ma\b|ema\b|days?\b|sessions?\b|"
+        r"weeks?\b|months?\b|hours?\b))", re.I)
+    dollar: list[str] = []
+    bare: list[str] = []
+    for m in re.finditer(r"(\$)?\s*(\d[\d,]*(?:\.\d+)?)", kill):
+        if unit_after.match(kill[m.end():]):
+            continue  # a percentage / indicator length / time span
+        (dollar if m.group(1) else bare).append(m.group(2))
+    nums = dollar if len(dollar) == 1 else (dollar + bare)
     if len(nums) != 1:
         return None
     try:
         v = float(nums[0].replace(",", ""))
     except ValueError:
         return None
-    return v if v > 0 else None
+    return _plausible_kill(v, entry_px)
 
 
 def _kill_breached(store, symbol: str, level: float, start_date: str,
@@ -1736,6 +1884,92 @@ def _kill_breached(store, symbol: str, level: float, start_date: str,
     return False
 
 
+def _trade_key(t: dict) -> tuple:
+    """The ledger's replay-order key — the same (ts, id) ordering _trades
+    sorts by, usable for strictly-before/after comparisons."""
+    return (str(t.get("ts")), t.get("id") or 0)
+
+
+def _exit_kind_for(dominant_run, pick_run_id: str) -> str:
+    """Classify how a pick closed, by the run that booked the (dominant)
+    closing fills: same_run | cross_run | hardstop | settlement."""
+    r = str(dominant_run or "")
+    if r.startswith("hardstop:"):
+        return "hardstop"
+    if r == "settlement":
+        return "settlement"
+    return "same_run" if r == pick_run_id else "cross_run"
+
+
+def _reconstruct_exit(trades: list[dict], sym: str, entry_fills: list[dict],
+                      split_events: list[tuple[str, float]] | None,
+                      is_opt: bool) -> dict | None:
+    """How a pick's position actually CLOSED when the closing fills lived
+    outside its own run (a hard stop, a later run's exit, expiry
+    settlement).
+
+    Walks the symbol's ledger rows in replay order, finds the FIRST moment
+    the net position returns to flat strictly after the pick's entry fills
+    (long-pick semantics: net <= 0 counts as flat — grade only grades picks
+    with BUY entries), and averages every closing SELL between the last
+    entry fill and that flat point — ANY run_id — split-adjusted onto the
+    current share basis. Corp-action rows are bookkeeping, not exits: split
+    share-deltas move the running position but never enter the average, and
+    0-share dividend credits are ignored. For OPTION picks the exit prices
+    from the fee-inclusive ``dollars`` (fee-net proceeds per share),
+    matching the fee-inclusive entry basis.
+
+    Returns None when the position never went flat after the entry (still
+    open, or the ledger is odd); else ``{exit_avg_px, exit_units, exit_date,
+    flat_key, dominant_run}``.
+    """
+    if not entry_fills:
+        return None
+    last_entry = max(_trade_key(t) for t in entry_fills)
+    running = 0.0
+    closing: list[dict] = []
+    flat_at = None
+    for t in trades:  # already in replay order (_trades sorts)
+        if t["symbol"] != sym:
+            continue
+        qty = float(t["shares"])
+        running += qty if t["side"] == "BUY" else -qty
+        if _trade_key(t) <= last_entry:
+            continue
+        if (t["side"] == "SELL" and qty > EPS_SHARES
+                and _fq(t).get("src") not in ("split_adjustment", "dividend")):
+            closing.append(t)
+        if running <= EPS_SHARES:
+            flat_at = t
+            break
+    if flat_at is None or not closing:
+        return None
+    units = value = 0.0
+    run_units: dict = {}
+    for t in closing:
+        f = _split_factor_since(split_events, _et_date(t.get("ts")) or "")
+        sh = float(t["shares"]) * f
+        if is_opt:  # fee-net per-share proceeds (options never split-adjust)
+            px = float(t["dollars"]) / (float(t["shares"]) * MULTIPLIER)
+        else:
+            px = float(t["price"]) / f
+        units += sh
+        value += sh * px
+        rid = t.get("run_id")
+        run_units[rid] = run_units.get(rid, 0.0) + sh
+    if units <= EPS_SHARES:
+        return None
+    return {"exit_avg_px": value / units, "exit_units": units,
+            "exit_date": _et_date(flat_at.get("ts")),
+            "flat_key": _trade_key(flat_at),
+            "dominant_run": max(run_units, key=lambda r: run_units[r])}
+
+
+# Open picks are always re-graded; --days only bounds how far back CLOSED
+# rows are refreshed (their facts are final once written).
+GRADE_OPEN_LOOKBACK_DAYS = 3650
+
+
 def grade(store=None, *, days: int = 30, run_id: str | None = None,
           account: str = ACCOUNT) -> dict:
     """Materialize per-pick MACHINE FACTS into ``desk_outcomes`` — the
@@ -1752,22 +1986,74 @@ def grade(store=None, *, days: int = 30, run_id: str | None = None,
     entry (BUY) fills in their own run are graded: a hold/trim/exit pick
     books no entry and has no per-pick entry fact to grade.
 
-    Per row: entry_avg_px and mark_px (basis 'exit' for round trips closed
-    in-run, else 'mark'), since_pct / spy_pct / alpha_pct, horizon_days and
-    horizon_elapsed (completed SPY sessions since the decision vs the
-    horizon), kill_level (parsed from the pick's free-text kill when
-    unambiguous — see ``_parse_kill``) and kill_breached (see
-    ``_kill_breached``), status open|closed."""
-    from datetime import date as _date
+    WINDOW (L4): ``days`` bounds CLOSED-row re-grades only — a closed row
+    older than the window whose facts are already stored is skipped. Every
+    still-OPEN pick is re-graded on every pass regardless of ``days``: an
+    open position must never age out of grading.
+
+    EXITS (H3): a pick whose position is flat but whose own run booked no
+    round trip — a hard-stop exit, a later run's sell, expiry settlement —
+    is NOT left with null facts: the exit is reconstructed from the actual
+    closing sell fills (any run_id, split-adjusted, fee-net for options; see
+    ``_reconstruct_exit``) and the row carries ``exit_avg_px``,
+    ``exit_kind`` (same_run | cross_run | hardstop | settlement, by the
+    dominant closing run), a real ``since_pct``/``alpha_pct`` over the
+    entry→flat window, and ``realized_pnl``. realized_pnl is the
+    per-symbol avg-cost replay between entry and flat — exact when the pick
+    owned the lot alone, approximate when other runs built or held the same
+    name concurrently (documented approximation, same replay machinery as
+    ``_realized_pnl``).
+
+    DEGRADED MARKS (M2): when the latest equity snapshot's ``mark_meta``
+    says a pick's symbol was marked at COST BASIS, the mark-derived facts
+    (since_pct / alpha_pct / mark_px) are written as NULL and the row's
+    ``degraded`` flag is set — a fake-flat mark must not grade a pick. A
+    later clean re-grade overwrites both.
+
+    Per row: entry_avg_px and mark_px (basis 'exit' for closed picks with a
+    reconstructed or same-run exit, else 'mark'), since_pct / spy_pct /
+    alpha_pct, horizon_days and horizon_elapsed (completed SPY sessions
+    since the decision vs the horizon), kill_level (parsed from the pick's
+    free-text kill when unambiguous and plausible vs entry — see
+    ``_parse_kill``) and kill_breached (see ``_kill_breached``),
+    status open|closed."""
+    from datetime import date as _date, timedelta as _td
 
     store = store or _store()
-    out = outcomes(store, days=days, run_id=run_id, account=account)
-    split_events = _booked_split_events(_trades(store, account))
+    # Pre-deploy grace (L1): a missing desk_outcomes table must exit with an
+    # actionable message, not a stack trace mid-reflection.
+    try:
+        store.select("desk_outcomes", filters={"account": account}, limit=1)
+    except Exception as exc:  # noqa: BLE001 — classify, then re-raise others
+        if "desk_outcomes" in str(exc):
+            return {"ok": False, "error":
+                    "desk_outcomes is unreachable — schema not migrated; "
+                    "deploy (render_start runs the idempotent DDL) or run "
+                    "scripts/setup_db.py", "detail": str(exc)[:200]}
+        raise
+    out = outcomes(store, days=(days if run_id else GRADE_OPEN_LOOKBACK_DAYS),
+                   run_id=run_id, account=account)
+    trades = _trades(store, account)
+    split_events = _booked_split_events(trades)
     today = _et_date(_utcnow()) or str(_utcnow().date())
     now = _utcnow()
+    cutoff = str(now - _td(days=days))
+    meta = _latest_mark_meta(store, account) or {}
+    cost_marked = set(meta.get("cost_marked") or [])
+    spy_cache: list | None = None
+
+    def _spy():  # lazy: only exit reconstructions need a second SPY read
+        nonlocal spy_cache
+        if spy_cache is None:
+            rd = [d for d in (_et_date(r.get("ts")) for r in out["runs"]) if d]
+            spy_cache = _spy_closes(store, since=min(rd)) if rd else []
+        return spy_cache
+
     graded: list[dict] = []
+    skipped_closed = 0
     for run in out["runs"]:
         rid = run["run_id"]
+        run_ts = str(run.get("ts") or "")
         run_date = _et_date(run.get("ts"))
         sessions = run.get("spy_window_sessions") or 0
         for p in run["picks"]:
@@ -1775,14 +2061,88 @@ def grade(store=None, *, days: int = 30, run_id: str | None = None,
             if entry is None:
                 continue
             sym = p["symbol"]
+            is_opt = bool(p.get("is_option"))
             closed = p.get("closed_return_pct")
             since = closed if closed is not None else p.get("since_this_run_pct")
+            spy_pct = p.get("spy_same_window_pct")
+            alpha = p.get("alpha_pct")
             status = ("closed" if (closed is not None
                                    or p.get("open_now") is None) else "open")
+            existing = store.select(
+                "desk_outcomes",
+                filters={"account": account, "run_id": rid, "symbol": sym},
+                limit=1)
+            # L4: a closed row outside the window with facts already stored
+            # is final — skip the re-grade; open picks always refresh.
+            if (not run_id and status == "closed" and existing
+                    and existing[0].get("status") == "closed"
+                    and run_ts and run_ts < cutoff):
+                skipped_closed += 1
+                continue
+            exit_kind = exit_avg = realized = None
+            mark_basis = "exit" if closed is not None else "mark"
+            if closed is not None:
+                exit_kind = "same_run"
+                exit_avg = round(entry * (1 + closed / 100), 4)
+                realized = p.get("realized_pnl")
+            elif status == "closed":
+                # H3: flat book, no same-run round trip — the exit lives in
+                # other rows (hard stop, later run, settlement). Reconstruct
+                # it so a stop-out grades with numbers, not nulls.
+                entry_fills = [t for t in trades
+                               if t.get("run_id") == rid
+                               and t["symbol"] == sym and t["side"] == "BUY"
+                               and _fq(t).get("src") not in
+                               ("split_adjustment", "dividend")]
+                rec = _reconstruct_exit(trades, sym, entry_fills,
+                                        split_events.get(sym), is_opt)
+                if rec:
+                    exit_avg = round(rec["exit_avg_px"], 4)
+                    exit_kind = _exit_kind_for(rec["dominant_run"], rid)
+                    since = round((rec["exit_avg_px"] - entry) / entry * 100, 2)
+                    mark_basis = "exit"
+                    espy = (_spy_window_pct(_spy(), run_date, rec["exit_date"])
+                            if run_date and rec.get("exit_date") else None)
+                    spy_pct = espy
+                    alpha = (round(since - espy, 2)
+                             if (espy is not None and not is_opt) else None)
+                    if is_opt:
+                        # fee-net proceeds vs fee-inclusive cost, both per
+                        # share on the same basis
+                        realized = round(rec["exit_units"]
+                                         * (rec["exit_avg_px"] - entry)
+                                         * MULTIPLIER, 2)
+                    else:
+                        sym_tr = [t for t in trades if t["symbol"] == sym]
+                        last_entry = max(_trade_key(t) for t in entry_fills)
+                        realized = round(
+                            _realized_pnl([t for t in sym_tr if _trade_key(t)
+                                           <= rec["flat_key"]])[1].get(sym, 0.0)
+                            - _realized_pnl([t for t in sym_tr if _trade_key(t)
+                                             <= last_entry])[1].get(sym, 0.0), 2)
+            if mark_basis == "exit":
+                mark_px = exit_avg
+            else:
+                mark_px = (round(entry * (1 + since / 100), 4)
+                           if since is not None else None)
+            degraded = False
+            if mark_basis == "mark" and sym in cost_marked:
+                # M2: the latest snapshot priced this symbol at cost basis —
+                # its "mark" is fake-flat; write nulls, flag the row.
+                since = alpha = mark_px = None
+                degraded = True
             h = p.get("horizon_days")
             h = (int(h) if isinstance(h, (int, float))
                  and not isinstance(h, bool) else None)
-            kill_level = _parse_kill(p.get("kill"))
+            # kill plausibility runs against the RAW (as-booked) entry — the
+            # kill was stated on the entry-day price basis
+            raw_buys = [f for f in (p.get("fills") or [])
+                        if f.get("side") == "BUY"]
+            raw_units = sum(float(f["shares"]) for f in raw_buys)
+            raw_entry = (sum(float(f["shares"]) * float(f["price"])
+                             for f in raw_buys) / raw_units
+                         if raw_units > 0 else None)
+            kill_level = _parse_kill(p.get("kill"), raw_entry)
             breached = None
             if kill_level is not None and run_date:
                 breached = _kill_breached(store, sym, kill_level, run_date,
@@ -1790,34 +2150,49 @@ def grade(store=None, *, days: int = 30, run_id: str | None = None,
             values = {
                 "grade_date": _date.fromisoformat(today),
                 "entry_avg_px": round(entry, 4),
-                "mark_px": (round(entry * (1 + since / 100), 4)
-                            if since is not None else None),
-                "mark_basis": "exit" if closed is not None else "mark",
+                "mark_px": mark_px,
+                "mark_basis": mark_basis,
                 "since_pct": since,
-                "spy_pct": p.get("spy_same_window_pct"),
-                "alpha_pct": p.get("alpha_pct"),
+                "spy_pct": spy_pct,
+                "alpha_pct": alpha,
+                "exit_kind": exit_kind, "exit_avg_px": exit_avg,
+                "realized_pnl": realized, "degraded": degraded,
                 "horizon_days": h,
                 "horizon_elapsed": (sessions >= h) if h else None,
                 "kill_level": kill_level, "kill_breached": breached,
                 "status": status, "graded_at": now}
-            existing = store.select(
-                "desk_outcomes",
-                filters={"account": account, "run_id": rid, "symbol": sym},
-                limit=1)
             if existing:
                 store.update("desk_outcomes", {"id": existing[0]["id"]},
                              values, returning=False)
             else:
-                store.insert("desk_outcomes",
-                             {"account": account, "run_id": rid, "symbol": sym,
-                              **values}, returning=False)
+                try:
+                    store.insert("desk_outcomes",
+                                 {"account": account, "run_id": rid,
+                                  "symbol": sym, **values}, returning=False)
+                except Exception as exc:  # noqa: BLE001 — race classifier
+                    from agent.store import is_duplicate_key_error
+
+                    if not is_duplicate_key_error(exc):
+                        raise
+                    # L6: a concurrent grade won the insert race on the
+                    # (account, run_id, symbol) unique key → update instead.
+                    rows = store.select(
+                        "desk_outcomes",
+                        filters={"account": account, "run_id": rid,
+                                 "symbol": sym}, limit=1)
+                    if rows:
+                        store.update("desk_outcomes", {"id": rows[0]["id"]},
+                                     values, returning=False)
             graded.append({"run_id": rid, "symbol": sym, "status": status,
                            "since_pct": since,
-                           "alpha_pct": p.get("alpha_pct"),
+                           "alpha_pct": alpha,
+                           "exit_kind": exit_kind,
+                           "degraded": degraded or None,
                            "horizon_elapsed": (sessions >= h) if h else None,
                            "kill_level": kill_level,
                            "kill_breached": breached})
-    return {"ok": True, "as_of": today, "graded": len(graded), "rows": graded}
+    return {"ok": True, "as_of": today, "graded": len(graded),
+            "closed_rows_outside_window": skipped_closed, "rows": graded}
 
 
 def save_backtest(label: str, result: dict, *, run_id: str | None = None,
@@ -1862,7 +2237,9 @@ def main(argv: list[str] | None = None) -> None:
     gd = sub.add_parser("grade",
                         help="materialize machine-graded pick facts into "
                              "desk_outcomes (run before reflection)")
-    gd.add_argument("--days", type=int, default=30)
+    gd.add_argument("--days", type=int, default=30,
+                    help="bounds CLOSED-row re-grades only; still-open picks "
+                         "always refresh regardless of the window")
     gd.add_argument("--run-id", default=None)
     fil = sub.add_parser("fill", help="book a fill AT THE LIVE QUOTE (the agent's path)")
     fil.add_argument("--symbol", required=True)

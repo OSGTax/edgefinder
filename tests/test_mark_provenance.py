@@ -97,6 +97,58 @@ def test_state_surfaces_latest_mark_meta(store, monkeypatch):
     assert ledger.state(store)["mark_meta"] is None
 
 
+def test_mark_survives_missing_mark_meta_column(store, capsys):
+    """L1 pre-deploy grace: a DB that predates the mark_meta column must not
+    crash mid-write — the insert retries WITHOUT provenance and prints a
+    migration warning (the equity point matters more than its provenance
+    for the one deploy where they disagree)."""
+    from agent import ledger
+    _buy(store, "AAA", 10, 100.0)
+
+    class NoMetaStore:
+        """Delegates everything, but rejects a desk_equity insert that
+        carries mark_meta — the error an unmigrated Postgres raises."""
+
+        def __init__(self, inner):
+            self._inner = inner
+            self.rejected = 0
+
+        def select(self, *a, **kw):
+            return self._inner.select(*a, **kw)
+
+        def insert(self, table, rows, **kw):
+            if table == "desk_equity" and isinstance(rows, dict) \
+                    and "mark_meta" in rows:
+                self.rejected += 1
+                raise RuntimeError('column "mark_meta" of relation '
+                                   '"desk_equity" does not exist')
+            return self._inner.insert(table, rows, **kw)
+
+        def update(self, *a, **kw):
+            return self._inner.update(*a, **kw)
+
+        def delete(self, *a, **kw):
+            return self._inner.delete(*a, **kw)
+
+    proxy = NoMetaStore(store)
+    st = ledger.mark(proxy, prices={"AAA": 101.0})
+    assert proxy.rejected == 1
+    assert "mark_meta" in capsys.readouterr().err
+    rows = store.select("desk_equity", filters={"account": "agent"})
+    assert len(rows) == 1 and rows[0]["mark_meta"] is None  # snapshot landed
+    assert rows[0]["equity"] == pytest.approx(100_000.0 + 10 * 1.0)
+    assert st["equity"] == rows[0]["equity"]
+    # any OTHER insert failure still raises — the grace is narrow
+    class BoomStore(NoMetaStore):
+        def insert(self, table, rows, **kw):
+            if table == "desk_equity":
+                raise RuntimeError("connection reset")
+            return self._inner.insert(table, rows, **kw)
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        ledger.mark(BoomStore(store), prices={"AAA": 101.0})
+
+
 def test_degraded_mark_still_writes_the_snapshot(store, monkeypatch):
     """An outage must not stop the equity curve — degraded marks write,
     flagged, and the CLI warning helper fires on them."""

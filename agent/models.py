@@ -415,8 +415,16 @@ class DeskOutcome(Base):
     — machine facts only. The two judgment columns — ``verdict``
     (TRUE|FALSE|NOT_YET) and ``verdict_note`` — are filled ONLY by the
     reflection agent via ``agent.brain verdict`` and survive re-grading
-    (grade never touches them). BOOK stances, settlement rows, and hard-stop
-    exits are never graded here (no per-pick entry to grade).
+    (grade never touches them). BOOK stances and picks with no entry (BUY)
+    fills are never graded here (no per-pick entry to grade) — but a pick
+    CLOSED by fills outside its own run (a hard stop, a later run's exit,
+    expiry settlement) IS graded: grade reconstructs the exit from the
+    closing sell fills and stamps ``exit_kind`` (same_run | cross_run |
+    hardstop | settlement, by the dominant closing run_id), ``exit_avg_px``
+    (current share basis; fee-net for options) and ``realized_pnl``.
+    ``degraded`` marks a row whose mark-derived facts were nulled because
+    the latest equity snapshot priced the symbol at cost basis (mark_meta) —
+    a later clean re-grade overwrites it.
     """
 
     __tablename__ = "desk_outcomes"
@@ -442,6 +450,15 @@ class DeskOutcome(Base):
     kill_level: Mapped[float | None] = mapped_column(Float)  # null: free text
     kill_breached: Mapped[bool | None] = mapped_column(Boolean)
     status: Mapped[str] = mapped_column(String(8))  # open | closed
+    # How a closed pick actually exited (null while open / pre-migration):
+    # same_run | cross_run | hardstop | settlement, by dominant closing run_id
+    exit_kind: Mapped[str | None] = mapped_column(String(12))
+    exit_avg_px: Mapped[float | None] = mapped_column(Float)  # current basis
+    realized_pnl: Mapped[float | None] = mapped_column(Float)  # entry→flat, per symbol
+    # True when mark-derived facts were nulled: the latest equity snapshot
+    # priced this symbol at COST BASIS (desk_equity.mark_meta) and a fake-flat
+    # mark must not grade a pick. Clean re-grades overwrite to False.
+    degraded: Mapped[bool | None] = mapped_column(Boolean)
     verdict: Mapped[str | None] = mapped_column(String(12))  # reflection only
     verdict_note: Mapped[str | None] = mapped_column(Text)   # reflection only
     graded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -648,11 +665,21 @@ DESK_TABLE_DDL: list[str] = [
         kill_level FLOAT,
         kill_breached BOOLEAN,
         status VARCHAR(8) NOT NULL,
+        exit_kind VARCHAR(12),
+        exit_avg_px FLOAT,
+        realized_pnl FLOAT,
+        degraded BOOLEAN,
         verdict VARCHAR(12),
         verdict_note TEXT,
         graded_at TIMESTAMP DEFAULT NOW(),
         CONSTRAINT uq_desk_outcome_pick UNIQUE (account, run_id, symbol)
     )""",
+    # Additive upgrades for desk_outcomes tables created before exit
+    # reconstruction / degraded-mark flagging (v9.8.x review fixes).
+    "ALTER TABLE desk_outcomes ADD COLUMN IF NOT EXISTS exit_kind VARCHAR(12)",
+    "ALTER TABLE desk_outcomes ADD COLUMN IF NOT EXISTS exit_avg_px FLOAT",
+    "ALTER TABLE desk_outcomes ADD COLUMN IF NOT EXISTS realized_pnl FLOAT",
+    "ALTER TABLE desk_outcomes ADD COLUMN IF NOT EXISTS degraded BOOLEAN",
     "CREATE INDEX IF NOT EXISTS idx_desk_outcomes_run ON desk_outcomes (run_id)",
     "ALTER TABLE desk_outcomes ENABLE ROW LEVEL SECURITY",
     # fundamentals_pit is a MARKET-DATA table (edgefinder/db/models.py), not a

@@ -309,6 +309,86 @@ def test_hard_stop_books_unbooked_split_before_selling(store, monkeypatch):
     assert store.select("desk_positions", filters={"symbol": "AMD"}) == []
 
 
+def _seed_daily_bars(store, symbol, closes_volumes):
+    """Seed (close, volume) daily bars ending today, oldest first."""
+    from datetime import date
+
+    d = date.today() - timedelta(days=len(closes_volumes))
+    for close, vol in closes_volumes:
+        d += timedelta(days=1)
+        store.insert("daily_bars", {"symbol": symbol, "date": d, "open": close,
+                                    "high": close, "low": close, "close": close,
+                                    "volume": vol, "source": "test"},
+                     returning=False)
+
+
+def test_hard_stop_overrides_close_band_gap(store, monkeypatch):
+    """H1 repro (the review's canonical scenario): a ~-26% gap vs the stored
+    close is EXACTLY when an armed stop must fire — the last-close ENTRY
+    band must not veto the protective exit into exec_failed (single-attempt
+    semantics would then leave the position riding through the crash). The
+    override is stamped on the persisted fill receipt; a same-tape BUY
+    without the flag still rejects."""
+    import agent.broker as broker
+    from agent import ledger
+    from agent.brain import watch_set
+    from agent.streamer import apply_sweep_results
+
+    _seed_position(store, "AMD", 10, 120.0, last_price=120.0)
+    _seed_daily_bars(store, "AMD", [(120.0, 50_000_000)] * 20)
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    wid = watch_set(store, symbol="AMD", below=90, reason="earnings protect",
+                    hard=True)["id"]
+    _patch_broker(monkeypatch, _StopBroker(px=88.0))  # ~-27% vs stored 120
+    # ENTRIES stay gated: the same tape without the flag refuses a BUY
+    buy = ledger.live_fill(store, symbol="AMD", side="buy", shares=1)
+    assert not buy["ok"] and "latest stored close" in buy["error"]
+
+    watch = store.select("desk_watch", filters={"id": wid})[0]
+    apply_sweep_results(store, [{**watch, "tripped_price": 88.0}], [])
+    row = store.select("desk_watch", filters={"id": wid})[0]
+    assert row["status"] == "executed", row.get("result")
+    sells = store.select("desk_trades",
+                         filters={"symbol": "AMD", "side": "SELL"})
+    assert len(sells) == 1 and sells[0]["shares"] == pytest.approx(10.0)
+    # the receipt shows a gated-but-overridden protective exit
+    fq_warnings = sells[0]["fill_quote"]["warnings"]
+    assert any("override" in w for w in fq_warnings), fq_warnings
+    assert store.select("desk_positions", filters={"symbol": "AMD"}) == []
+
+
+def test_hard_stop_overrides_adv_cap(store, monkeypatch):
+    """H2 repro: a FULL-POSITION exit bigger than the 1% ADV entry cap must
+    still sell — refusing to exit what the book already owns inverts the
+    protection. Override stamped on the receipt; a BUY of the same size
+    stays rejected."""
+    import agent.broker as broker
+    from agent import ledger
+    from agent.brain import watch_set
+    from agent.streamer import apply_sweep_results
+
+    _seed_position(store, "AMD", 100, 100.0, last_price=100.0)
+    # ADV = 100 x 500 = $50k/day → 1% cap $500, far under the ~$8.9k exit
+    _seed_daily_bars(store, "AMD", [(100.0, 500)] * 20)
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    wid = watch_set(store, symbol="AMD", below=90, reason="protect",
+                    hard=True)["id"]
+    _patch_broker(monkeypatch, _StopBroker(px=89.0))
+    buy = ledger.live_fill(store, symbol="AMD", side="buy", notional=8_900)
+    assert not buy["ok"] and "average dollar volume" in buy["error"]
+
+    watch = store.select("desk_watch", filters={"id": wid})[0]
+    apply_sweep_results(store, [{**watch, "tripped_price": 89.0}], [])
+    row = store.select("desk_watch", filters={"id": wid})[0]
+    assert row["status"] == "executed", row.get("result")
+    sells = store.select("desk_trades",
+                         filters={"symbol": "AMD", "side": "SELL"})
+    assert len(sells) == 1 and sells[0]["shares"] == pytest.approx(100.0)
+    fq_warnings = sells[0]["fill_quote"]["warnings"]
+    assert any("ADV" in w for w in fq_warnings), fq_warnings
+    assert store.select("desk_positions", filters={"symbol": "AMD"}) == []
+
+
 def test_hard_stop_claim_is_compare_and_swap(store, monkeypatch):
     """H2: the armed→executing transition is a conditional update — exactly
     one writer wins; a loser (second sweep, deploy-overlap streamer, trading

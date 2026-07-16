@@ -30,7 +30,12 @@ An **autonomous AI paper-trading desk**, private to the owner:
    Fills also clear friction gates: a quote with an unverifiable timestamp
    fails closed, a price >20% off the latest stored close needs an explicit
    override, an order may take at most 1% of 20-session average dollar
-   volume, and option fills pay a flat $0.65/contract fee.
+   volume, and option fills pay a flat $0.65/contract fee. The bands veto
+   ENTRIES: a protective exit (hard stop) traverses the same gates with
+   both overrides passed explicitly and stamped on the fill's receipt —
+   honesty by the receipt, never by refusing the exit. Missing, short, or
+   stale (>5 sessions) reference history warns and allows rather than
+   bricking trading on a data outage.
 2. **Verifiable in real time**: the owner can cross-check any quote on
    `/desk` and any fill price against Alpaca's own dashboard or any ticker.
 3. **Paper only. Equities long-only. Options DEFINED-RISK only** (owner
@@ -55,10 +60,12 @@ An **autonomous AI paper-trading desk**, private to the owner:
    size crypto accordingly.
 6. **The scoreboard cannot flatter**: SPY comparisons are TOTAL RETURN on
    both sides (lab and ledger), every equity snapshot records its mark
-   provenance (live / close / cost — degraded marks are flagged, never
-   hidden), every buy/add pick must register a falsifiable prediction +
-   horizon + kill before the decision will save, and opt-in hard stops
-   execute through the same fill gates as any trade.
+   provenance (live / close / cost — degraded marks recorded on every
+   snapshot; desk surface in a later phase), every buy/add pick must
+   register a falsifiable prediction + horizon + kill before the decision
+   will save, and opt-in hard stops execute through the same fill gates as
+   any trade (the entry-friction bands overridden explicitly, on the
+   receipt).
 
 ## Runtime layout
 
