@@ -8,7 +8,8 @@ history beyond the DB's size budget.
 
 Layout:
     bars/{SYMBOL}.parquet       columns: date, open, high, low, close, volume
-    manifest.json               {symbol: {"rows": n, "max_date": "YYYY-MM-DD"}}
+    manifest.json               {symbol: {"rows": n, "max_date": "YYYY-MM-DD",
+                                "db_rows": n, "db_max": "...", "db_fp": [c, v]}}
 
 Sync is incremental and idempotent: a symbol is re-exported only when its DB
 row count or max date differs from the manifest (a per-symbol rewrite is at
@@ -159,12 +160,18 @@ class BarStore:
           rows / max_date  — describe the R2 PARQUET (the merged asset)
           db_rows / db_max — fingerprint of the DB state last merged; change
                              detection compares THIS against the live DB.
+          db_fp            — [close, volume] of the DB's last bar at db_max,
+                             written on every upload; ``agent.refresh``'s
+                             merge-sync reads it so a same-date VALUE
+                             correction re-syncs instead of reading as
+                             "unchanged".
         Legacy entries (pre-fingerprint) whose parquet state equals the live
         DB state are upgraded in place without an upload.
 
-        Known limitation (pre-existing): the fingerprint is (row count,
-        max date), so an in-place VALUE correction that adds no rows is not
-        detected — force it with ``sync --symbols X`` when hand-correcting
+        Known limitation (pre-existing): THIS command's change detection is
+        (row count, max date) — an in-place VALUE correction that adds no rows
+        is not detected here (the nightly agent.refresh merge-sync catches it
+        via db_fp) — force it with ``sync --symbols X`` when hand-correcting
         history.
         """
         manifest = self.read_manifest()
@@ -241,7 +248,7 @@ class BarStore:
             # one union, one PUT); the DB pull above stays batched
             from concurrent.futures import ThreadPoolExecutor
 
-            def _merge_upload(sym: str) -> tuple[str, int, int, str]:
+            def _merge_upload(sym: str) -> tuple[str, int, int, str, list]:
                 db_df = pd.DataFrame(by_sym[sym], columns=_COLS)
                 existing = self._get_frame(_bar_key(sym))
                 if existing is not None and len(existing):
@@ -251,14 +258,19 @@ class BarStore:
                 else:
                     merged = db_df
                 nbytes = self._put_frame(_bar_key(sym), merged)
-                return sym, nbytes, len(merged), str(merged["date"].iloc[-1])
+                # db_df is date-ordered (the pull ORDER BY) — its last row IS
+                # the DB state at db_max, the content fingerprint db_fp records
+                last = db_df.iloc[-1]
+                fp = [round(float(last["close"]), 6),
+                      round(float(last["volume"]), 6)]
+                return sym, nbytes, len(merged), str(merged["date"].iloc[-1]), fp
 
             with ThreadPoolExecutor(max_workers=16) as pool:
-                for sym, nbytes, mrows, mmax in pool.map(
+                for sym, nbytes, mrows, mmax, fp in pool.map(
                         _merge_upload, [s for s in batch if s in by_sym]):
                     bytes_up += nbytes
                     manifest[sym] = {"rows": mrows, "max_date": mmax,
-                                     **db_state[sym]}
+                                     **db_state[sym], "db_fp": fp}
                     uploaded += 1
             logger.info("sync: %d/%d merged+uploaded (%.1f MB)",
                         uploaded, len(targets), bytes_up / 1e6)

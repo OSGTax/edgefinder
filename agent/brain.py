@@ -503,12 +503,15 @@ def wake_honor(store=None, *, wake_id: int, run_id: str,
 # A small, size-capped set of curated pages the agent reads at the start of
 # every cycle and revises from MEASURED outcomes (see `agent.ledger outcomes`).
 # Fixed slugs are the curation constraint; pages are edited in place; every
-# edit writes a journal note (kind="wiki") so the audit trail can't be skipped.
+# edit writes a journal note (kind="wiki") so the audit trail can't be skipped,
+# AND banks the outgoing body as a desk_wiki_history revision (read back with
+# `wiki-history`) — so pruning a lesson never destroys its evidence.
 # The wiki is ADVISORY context only — it can never loosen a charter guardrail.
 
-WIKI_SLUGS = ("playbook", "lessons", "mistakes", "market-notes")
-WIKI_PAGE_MAX_CHARS = 4000    # ~1k tokens per page
-WIKI_TOTAL_MAX_CHARS = 12000  # ~3k tokens total — bounded prompt growth, forever
+WIKI_SLUGS = ("playbook", "setups", "lessons", "mistakes", "postmortems",
+              "market-notes")
+WIKI_PAGE_MAX_CHARS = 8000    # ~2k tokens per page
+WIKI_TOTAL_MAX_CHARS = 40000  # ~10k tokens total — bounded prompt growth, forever
 
 
 def get_wiki(store=None, *, slug: str | None = None, account: str = "agent") -> dict:
@@ -537,7 +540,10 @@ def set_wiki(store=None, *, slug: str, body: str, title: str | None = None,
 
     Rejects unknown slugs and cap breaches before any write. On success the
     page's revision increments and a desk_journal note (kind="wiki") records
-    that + why — the audit trail; prior body text is deliberately not kept.
+    that + why — the audit trail. The OUTGOING body is banked as an
+    append-only desk_wiki_history revision first (nothing to bank on a page's
+    first-ever write), so curation never destroys evidence — read old
+    revisions back with ``wiki-history``.
     """
     store = store or _store()
     slug = (slug or "").strip().lower()
@@ -559,12 +565,34 @@ def set_wiki(store=None, *, slug: str, body: str, title: str | None = None,
     existing = store.select("desk_wiki",
                             filters={"account": account, "slug": slug}, limit=1)
     if existing:
-        revision = (existing[0].get("revision") or 1) + 1
+        prev = existing[0]
+        revision = (prev.get("revision") or 1) + 1
+        # Bank the OUTGOING revision BEFORE replacing it — the whole point of
+        # the history table. If the archive write fails, the edit does not
+        # proceed: an in-place rewrite that silently skipped the archive would
+        # be exactly the evidence destruction this exists to prevent.
+        try:
+            store.insert("desk_wiki_history", {
+                "account": account, "slug": slug,
+                "revision": prev.get("revision") or 1,
+                "title": prev.get("title"), "body": prev.get("body") or "",
+                "updated_at": prev.get("updated_at"),
+                "updated_run_id": prev.get("updated_run_id")}, returning=False)
+        except Exception as exc:  # noqa: BLE001 — classify, re-raise others
+            # Pre-deploy grace, same convention as set_verdict: a missing
+            # table gets an actionable message, not a stack trace.
+            if "desk_wiki_history" in str(exc):
+                return {"ok": False, "error":
+                        "desk_wiki_history is unreachable — schema not "
+                        "migrated; deploy (render_start runs the idempotent "
+                        "DDL) or run scripts/setup_db.py",
+                        "detail": str(exc)[:200]}
+            raise
         values: dict = {"body": body, "revision": revision,
                         "updated_at": _utcnow(), "updated_run_id": run_id}
         if title is not None:
             values["title"] = title
-        store.update("desk_wiki", {"id": existing[0]["id"]}, values, returning=False)
+        store.update("desk_wiki", {"id": prev["id"]}, values, returning=False)
     else:
         revision = 1
         store.insert("desk_wiki", {
@@ -577,6 +605,44 @@ def set_wiki(store=None, *, slug: str, body: str, title: str | None = None,
     total = others + len(body)
     return {"ok": True, "slug": slug, "revision": revision,
             "chars": len(body), "total_chars": total}
+
+
+def get_wiki_history(store=None, *, slug: str, revision: int | None = None,
+                     limit: int = 20, account: str = "agent") -> dict:
+    """Read archived wiki revisions — the outgoing bodies set_wiki banked.
+
+    Without ``revision``: the slug's archived revisions newest-first (bodies
+    clipped to a preview — this is a finding aid). With ``revision``: that
+    revision's full body. A page's CURRENT body lives in desk_wiki
+    (``wiki-get``); only replaced revisions appear here."""
+    store = store or _store()
+    slug = (slug or "").strip().lower()
+    if slug not in WIKI_SLUGS:
+        return {"ok": False, "error": f"unknown wiki slug {slug!r} — "
+                f"the wiki has exactly these pages: {', '.join(WIKI_SLUGS)}"}
+    filters: dict = {"account": account, "slug": slug}
+    if revision is not None:
+        filters["revision"] = revision
+        rows = store.select("desk_wiki_history", filters=filters,
+                            order=[("id", "desc")], limit=1)
+        if not rows:
+            return {"ok": False, "error": f"no archived revision {revision} "
+                    f"for {slug!r} (the current body lives in wiki-get)"}
+        r = rows[0]
+        return {"ok": True, "slug": slug, "revision": r["revision"],
+                "title": r.get("title"), "body": r["body"],
+                "updated_at": str(r["updated_at"]) if r.get("updated_at") else None,
+                "updated_run_id": r.get("updated_run_id")}
+    rows = store.select("desk_wiki_history", filters=filters,
+                        order=[("revision", "desc"), ("id", "desc")], limit=limit)
+    return {"ok": True, "slug": slug,
+            "revisions": [{"revision": r["revision"], "title": r.get("title"),
+                           "chars": len(r["body"] or ""),
+                           "preview": _clip(r["body"], 200),
+                           "updated_at": (str(r["updated_at"])
+                                          if r.get("updated_at") else None),
+                           "updated_run_id": r.get("updated_run_id")}
+                          for r in rows]}
 
 
 # ── the learning loop: verdicts + the cycle's working memory ────
@@ -865,6 +931,14 @@ def main(argv: list[str] | None = None) -> None:
                     help="why this edit — cite the measured result")
     ws.add_argument("--run-id", default=None)
 
+    wh_hist = sub.add_parser("wiki-history",
+                             help="archived revisions of a wiki page — the "
+                                  "outgoing bodies every edit banks")
+    wh_hist.add_argument("--slug", required=True, choices=list(WIKI_SLUGS))
+    wh_hist.add_argument("--revision", type=int, default=None,
+                         help="one revision's full body (omit to list)")
+    wh_hist.add_argument("--limit", type=int, default=20)
+
     wset = sub.add_parser("watch-set", help="arm a tripwire on the live tape")
     wset.add_argument("--symbol", required=True)
     wset.add_argument("--above", type=float, default=None)
@@ -954,6 +1028,10 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(set_wiki(
             store, slug=args.slug, body=body, title=args.title,
             reason=args.reason, run_id=args.run_id), indent=2))
+    elif args.cmd == "wiki-history":
+        print(json.dumps(get_wiki_history(
+            store, slug=args.slug, revision=args.revision,
+            limit=args.limit), indent=2, default=str))
     elif args.cmd == "verdict":
         print(json.dumps(set_verdict(store, run_id=args.run_id,
                                      symbol=args.symbol, verdict=args.verdict,

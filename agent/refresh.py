@@ -84,8 +84,9 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
     ingest when that subscription was disabled — the agent only needs fresh
     bars for the names it actually watches/holds; the deep archive is R2.
 
-    Works on both store transports (pg + REST): per symbol, missing dates are
-    deleted-then-inserted, which is an upsert for our purposes. Idempotent.
+    Works on both store transports (pg + REST): per symbol, exactly the
+    fetched dates are deleted-then-reinserted, which is an upsert for our
+    purposes — rows outside the payload are never touched. Idempotent.
     """
     from agent import broker
     from agent.models import ACCOUNT
@@ -120,45 +121,24 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
     # Batched bar top-up: ONE multi-symbol Data-API call for the whole live
     # universe instead of one call per name (~15 round-trips → 1). Fewer
     # round-trips = far less exposure to a flaky handshake, and each per-symbol
-    # write keeps its idempotent range-delete-then-insert + transient-error
-    # retry via `_ingest_history_batched` (the same helper the nightly
-    # full-market ingest uses). A short trailing window re-covers the 1-day gap
-    # plus a weekend/holiday buffer; re-inserting a few identical days is
-    # harmless (the delete-then-insert makes it an upsert).
+    # write keeps its idempotent payload-date-delete-then-insert +
+    # transient-error retry via `_ingest_history_batched` (the same helper the
+    # nightly full-market ingest uses). A short trailing window re-covers the
+    # 1-day gap plus a weekend/holiday buffer; re-inserting a few identical
+    # days is harmless (the delete-then-insert makes it an upsert).
     bar_stats = _ingest_history_batched(store, b, symbols,
                                         max_days=max(max_days, 5))
     summary: dict = {"symbols": len(symbols),
                      "bars_upserted": bar_stats.get("bars_upserted", 0),
                      "bar_batches": bar_stats.get("batches", 0),
-                     "bar_errors": bar_stats.get("errors", 0)}
+                     "bar_errors": bar_stats.get("errors", 0),
+                     "bar_holes": bar_stats.get("holes", 0)}
 
     # options IV data bank: one snapshot per underlying per day (first refresh
-    # of the day wins; reruns are no-ops). Failures never abort the bar work.
+    # of the day wins; reruns are no-ops; RTH-only — the session gate lives in
+    # the helper). Failures never abort the bar work.
     try:
-        from agent import occ, options_data
-
-        today = date.today()
-        iv_names = [s for s in symbols if not occ.is_option(s)]
-        # The IV data bank is one snapshot per underlying per DAY
-        # (`persist_snapshot` dedupes at write time). Re-fetching a full option
-        # chain every hour just to discover it's a no-op is the refresh's single
-        # biggest cost (~2s/name) — so skip the FETCH outright for any name
-        # already snapshotted today. Hourly runs after the first pay nothing.
-        have_today = {str(r["symbol"]).upper() for r in store.select(
-            "desk_options_snap", columns="symbol",
-            filters={"symbol": ("in", sorted(iv_names)), "snap_date": today},
-            limit=100000)} if iv_names else set()
-        written = skipped = 0
-        for sym in iv_names:
-            if sym.upper() in have_today:
-                skipped += 1
-                continue
-            # dte_max=30 is enough for the IV data bank — long-dated OPRA is
-            # slower to fetch and rarely trades on the hourly agent's radar
-            s = options_data.get_summary(sym, dte_max=30)
-            if options_data.persist_snapshot(store, s, snap_date=today):
-                written += 1
-        summary["iv_snapshots"] = {"written": written, "skipped_have_today": skipped}
+        summary["iv_snapshots"] = _iv_snapshots_alpaca(store, b, symbols)
     except Exception as exc:  # noqa: BLE001
         logger.warning("IV snapshot pass failed: %s", exc)
         summary["iv_snapshots"] = f"error: {exc}"
@@ -192,6 +172,53 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
     # archival, not a correctness dependency.
     summary["r2_sync"] = _r2_merge_sync(symbols)
     return summary
+
+
+def _iv_snapshots_alpaca(store, b, symbols: list[str]) -> dict:
+    """The options IV data bank pass: one snapshot per underlying per day,
+    captured ONLY during the regular session.
+
+    `persist_snapshot` is first-write-of-the-day-wins (one canonical row per
+    day, on purpose), so a 07:00 pre-market run used to lock crossed/wide
+    pre-open OPRA marks in as the day's IV/expected-move/skew history forever.
+    The session gate makes the canonical row provably an RTH read; fail-closed
+    on purpose — a session we cannot determine skips the pass with a log line
+    rather than gambling the day's row on bad marks."""
+    from agent import occ, options_data
+
+    try:
+        sess = b.session()
+    except Exception as exc:  # noqa: BLE001 — unknown session → skip, never guess
+        logger.warning("IV snapshot pass skipped: session unknown (%s)", exc)
+        return {"written": 0, "skipped_session": f"unknown: {exc}"}
+    if sess != "regular":
+        logger.info("IV snapshot pass skipped: session=%s (RTH-only — "
+                    "pre/post-market OPRA marks must not become the day's row)",
+                    sess)
+        return {"written": 0, "skipped_session": sess}
+
+    today = date.today()
+    iv_names = [s for s in symbols if not occ.is_option(s)]
+    # The IV data bank is one snapshot per underlying per DAY
+    # (`persist_snapshot` dedupes at write time). Re-fetching a full option
+    # chain every hour just to discover it's a no-op is the refresh's single
+    # biggest cost (~2s/name) — so skip the FETCH outright for any name
+    # already snapshotted today. Hourly runs after the first pay nothing.
+    have_today = {str(r["symbol"]).upper() for r in store.select(
+        "desk_options_snap", columns="symbol",
+        filters={"symbol": ("in", sorted(iv_names)), "snap_date": today},
+        limit=100000)} if iv_names else set()
+    written = skipped = 0
+    for sym in iv_names:
+        if sym.upper() in have_today:
+            skipped += 1
+            continue
+        # dte_max=30 is enough for the IV data bank — long-dated OPRA is
+        # slower to fetch and rarely trades on the hourly agent's radar
+        s = options_data.get_summary(sym, dte_max=30)
+        if options_data.persist_snapshot(store, s, snap_date=today):
+            written += 1
+    return {"written": written, "skipped_have_today": skipped}
 
 
 def _news_alpaca(store, symbols: list[str], *, limit: int = 15) -> dict:
@@ -473,15 +500,15 @@ def _ingest_history_batched(store, b, symbols: list[str], *, max_days: int,
                             chunk: int = 100) -> dict:
     """Backfill ``daily_bars`` history for ``symbols`` using batched multi-symbol
     bars requests — one Data-API call per ~100 names instead of one per name.
-    Per-symbol range-delete-then-insert keeps it an idempotent upsert on both
-    transports."""
+    Per-symbol payload-date-delete-then-insert keeps it an idempotent upsert on
+    both transports; ``holes`` counts symbols whose write failed outright (see
+    `_write_bars_with_retry` — their non-payload history survives regardless)."""
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
 
     start = date.today() - timedelta(days=max_days)
-    start_iso = start.isoformat()
-    summary = {"symbols": len(symbols), "bars_upserted": 0, "batches": 0,
-               "errors": 0}
+    summary: dict = {"symbols": len(symbols), "bars_upserted": 0, "batches": 0,
+                     "errors": 0, "holes": 0, "hole_symbols": []}
     for i in range(0, len(symbols), chunk):
         batch = symbols[i:i + chunk]
         try:
@@ -506,29 +533,75 @@ def _ingest_history_batched(store, b, symbols: list[str], *, max_days: int,
             # Isolate + retry each symbol's write: a single transient store/proxy
             # error (e.g. "connection reset by peer" over the REST lane) must not
             # abort a 500-name ingest. Re-runs are idempotent (delete-then-insert).
-            if _write_bars_with_retry(store, sym, rows, start_iso):
+            if _write_bars_with_retry(store, sym, rows):
                 summary["bars_upserted"] += len(rows)
             else:
                 summary["errors"] += 1
+                summary["holes"] += 1  # this symbol's payload window is suspect
+                if len(summary["hole_symbols"]) < 25:  # keep the summary readable
+                    summary["hole_symbols"].append(sym)
     return summary
 
 
-def _write_bars_with_retry(store, sym: str, rows: list[dict], start_iso: str,
+# One REST-lane DELETE carries its date list in the query string
+# (``date=in.(...)``) — chunked so a ~400-date nightly payload never builds an
+# oversize URL.
+DELETE_DATES_CHUNK = 150
+
+
+def _delete_bar_dates(store, sym: str, dates: list[str]) -> None:
+    """Delete exactly ``dates`` for ``sym`` from daily_bars (chunked IN())."""
+    for i in range(0, len(dates), DELETE_DATES_CHUNK):
+        store.delete("daily_bars", {
+            "symbol": sym, "date": ("in", dates[i:i + DELETE_DATES_CHUNK])})
+
+
+def _write_bars_with_retry(store, sym: str, rows: list[dict],
                            attempts: int = 3) -> bool:
-    """Idempotent per-symbol upsert (range-delete + insert) with a short retry
-    on transient store/network errors. Returns True on success."""
+    """Idempotent per-symbol upsert with a bounded blast radius: delete ONLY
+    the exact dates present in the payload, then insert (duplicate-skipping),
+    with a short retry on transient store/network errors.
+
+    ``daily_bars`` is sacred (CLAUDE.md): the old blanket ``date >= start``
+    delete meant one delete-lands-then-every-insert-fails sequence (a
+    documented REST-lane failure mode) silently vaporized a symbol's whole
+    ~400-day hot-set window — invisible to per-DATE coverage checks. Scoping
+    the delete to the payload's own dates bounds any damage to rows that were
+    about to be replaced anyway; rows outside the payload survive every
+    failure mode, and the duplicate-skipping insert lets a retry after a
+    partial insert converge instead of dying on the rows that already landed.
+    Returns True on success."""
     import time
 
+    dates = sorted({str(r["date"])[:10] for r in rows})
+
+    def _once():
+        _delete_bar_dates(store, sym, dates)
+        _insert_skip_dupes(store, "daily_bars", rows)
+
+    last_exc: Exception | None = None
     for i in range(attempts):
         try:
-            store.delete("daily_bars", {"symbol": sym, "date": ("gte", start_iso)})
-            store.insert("daily_bars", rows, returning=False)
+            _once()
             return True
         except Exception as exc:  # noqa: BLE001 — transient network/proxy errors
-            if i == attempts - 1:
-                logger.warning("history write failed for %s: %s", sym, exc)
-                return False
-            time.sleep(0.5 * (i + 1))
+            last_exc = exc
+            if i < attempts - 1:
+                time.sleep(0.5 * (i + 1))
+    # Last chance: prove the store is reachable with a cheap read, then try
+    # once more — a REST-lane blip that cleared mid-backoff must not cost the
+    # symbol its refresh.
+    try:
+        store.select("daily_bars", columns="date", limit=1)
+        _once()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        last_exc = exc
+    logger.error(
+        "HOLE: bar write failed for %s (%s..%s, %d rows) after %d attempts "
+        "+ a connectivity recheck: %s — this symbol's payload dates may be "
+        "missing until the next ingest re-covers them",
+        sym, dates[0], dates[-1], len(rows), attempts, last_exc)
     return False
 
 
@@ -585,8 +658,11 @@ def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
     # non-protected symbols, so an ingest that freshens the DB but leaves R2
     # behind still renders a stale right edge at the default range. Change-
     # detected per symbol (unchanged names cost one tiny query), so this is
-    # cheap when already current.
-    summary["r2_sync"] = _r2_merge_sync(universe)
+    # cheap when already current. Today's (ET) bar joins the grow-only archive
+    # only when today's session is fully CLOSED — the nightly post-close path;
+    # an intraday manual run archives up to yesterday, exactly like the hourly.
+    summary["r2_sync"] = _r2_merge_sync(universe,
+                                        include_today_et=_market_closed_now(b))
     # SEC EDGAR fundamentals for the same universe (isolated pass, like the
     # news/corp-actions passes on the hourly path): first run per symbol is a
     # full 2009+ backfill (companyfacts returns whole history in one call),
@@ -628,13 +704,40 @@ def merge_bar_frames(r2_rows, db_rows):
     return out.reset_index(drop=True)
 
 
-def _r2_merge_sync(symbols: list[str]):
+def _today_et() -> date:
+    """Today's calendar date in US Eastern — the trading day the tape is on."""
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date()
+
+
+def _market_closed_now(b) -> bool:
+    """True only when the equity session is fully CLOSED (weekend, holiday,
+    overnight past 20:00 ET) — NOT merely outside regular hours. Fail-closed:
+    an unreachable clock reads as not-closed, so today's bar is withheld from
+    the grow-only archive rather than risked into it."""
+    try:
+        return b.session() == "closed"
+    except Exception as exc:  # noqa: BLE001 — unknown session → not closed
+        logger.warning("session check failed (%s) — treating as not closed", exc)
+        return False
+
+
+def _r2_merge_sync(symbols: list[str], *, include_today_et: bool = False):
     """Grow the R2 parquet archive from the DB — transport-agnostic.
 
     Bars are read through ``agent.store`` (REST or pg — works on the Routine
     sandbox AND Render) and parquet moves over S3/443, so this runs anywhere
     the R2 creds exist. Change-detected per symbol via the manifest's db_max
-    fingerprint; unchanged symbols cost one tiny store query."""
+    date plus a last-bar content fingerprint (``db_fp``: close+volume at
+    db_max, so a same-date correction re-syncs instead of reading as
+    "unchanged"); unchanged symbols cost one tiny store query.
+
+    Today's (ET) bar is EXCLUDED unless ``include_today_et`` — the DB's
+    in-progress intraday bar is fine (corrected in place next fetch) but the
+    archive is grow-only: a mid-session bar pushed for a symbol that then
+    leaves the sync universe would sit in the 21-year asset forever. Only the
+    nightly post-close path passes the flag (see refresh_alpaca_market)."""
     import io
     import json as _json
     import os
@@ -676,17 +779,32 @@ def _r2_merge_sync(symbols: list[str]):
             logger.warning("R2 manifest flush failed: %s", exc)
             return False
 
+    today_et = str(_today_et())
+
     def _sync_one(sym: str):
         """Sync one symbol; returns "synced" | "unchanged". Raises on failure so
         the caller can retry — a symbol that keeps failing is counted, not fatal."""
-        latest = store.select("daily_bars", filters={"symbol": sym},
-                              order=[("date", "desc")], limit=1)
-        db_max = str(latest[0]["date"])[:10] if latest else None
-        entry = manifest.get(sym) or {}
-        if not db_max or db_max <= str(entry.get("db_max") or
-                                       entry.get("max_date") or ""):
+        flt: dict = {"symbol": sym}
+        if not include_today_et:
+            # only finished sessions may enter the grow-only archive
+            flt["date"] = ("lt", today_et)
+        latest = store.select("daily_bars", columns="date,close,volume",
+                              filters=flt, order=[("date", "desc")], limit=1)
+        if not latest:
             return "unchanged"
-        db_rows = store.select("daily_bars", filters={"symbol": sym})
+        db_max = str(latest[0]["date"])[:10]
+        db_fp = [round(float(latest[0]["close"] or 0), 6),
+                 round(float(latest[0]["volume"] or 0), 6)]
+        entry = manifest.get(sym) or {}
+        entry_max = str(entry.get("db_max") or entry.get("max_date") or "")
+        if db_max < entry_max:
+            return "unchanged"  # DB behind the archive (e.g. today filtered out)
+        if db_max == entry_max and entry.get("db_fp") in (None, db_fp):
+            # Same max date: only a CONTENT change at db_max re-syncs. A legacy
+            # entry without a fingerprint keeps the old date-only rule (and
+            # gains db_fp on its next real sync).
+            return "unchanged"
+        db_rows = store.select("daily_bars", filters=flt)
         try:
             body = s3.get_object(Bucket=bucket,
                                  Key=f"bars/{sym}.parquet")["Body"].read()
@@ -699,7 +817,8 @@ def _r2_merge_sync(symbols: list[str]):
         s3.put_object(Bucket=bucket, Key=f"bars/{sym}.parquet", Body=buf.getvalue())
         manifest[sym] = {"rows": int(len(merged)),
                          "max_date": str(merged["date"].iloc[-1]),
-                         "db_rows": len(db_rows), "db_max": db_max}
+                         "db_rows": len(db_rows), "db_max": db_max,
+                         "db_fp": db_fp}
         return "synced"
 
     # Per-symbol try/retry: a transient reset over 443 (seen live at scale as

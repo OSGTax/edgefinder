@@ -81,6 +81,9 @@ def test_persist_snapshot_once_per_day(store):
     s = {"available": True, "symbol": "SPY", "spot": 748.5, "atm_iv": 0.14,
          "expected_move_pct": 1.2, "skew_25d": 0.03, "dte": 10, "expiry": E2}
     assert persist_snapshot(store, s) is True
+    row = store.select("desk_options_snap",
+                       filters={"symbol": "SPY", "snap_date": TODAY}, limit=1)[0]
+    assert row["captured_at"] is not None               # capture-time receipt
     assert persist_snapshot(store, s) is False          # same day → no-op
     assert persist_snapshot(store, {"available": False, "symbol": "SPY"}) is False
     # a second day appends; history comes back oldest→newest

@@ -323,10 +323,15 @@ python -m agent.brain wiki-set --slug mistakes --body-file page.md \
     --reason "GOOGL -4.2% since 07-01 buy: chased a gap on no catalyst" \
     --run-id <RID>
 ```
-- The tool caps page sizes and journals every edit automatically. Deep
-  curation (grading the whole week, pruning, merging) is the Friday
-  reflection routine's job — don't do it here. An hourly wobble is not a
-  lesson; most cycles the honest move is no edit at all.
+- The tool caps page sizes, journals every edit automatically, and banks
+  the outgoing revision to history (`brain wiki-history --slug <page>`
+  reads old versions back) — so tightening a page never destroys evidence.
+  The pages now include `setups` (named patterns with tracked stats) and
+  `postmortems` (dated entries per closed round trip); the Friday
+  reflection owns both — leave them to it. Deep curation (grading the
+  whole week, pruning, merging) is likewise the Friday reflection
+  routine's job — don't do it here. An hourly wobble is not a lesson;
+  most cycles the honest move is no edit at all.
 
 ### 8. Attention (phase: decide) — decide when to look next
 

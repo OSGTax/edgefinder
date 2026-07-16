@@ -104,6 +104,23 @@ class TestBarStore:
         assert manifest["AAA"]["rows"] == 30
         assert manifest["AAA"]["max_date"] == "2024-01-30"
 
+    def test_sync_writes_content_fingerprint(self, store, session):
+        """Every upload records db_fp = [close, volume] at db_max — the shared
+        manifest field agent.refresh's merge-sync uses to catch same-date
+        value corrections (this command's own diff stays (rows, max))."""
+        store.sync(session)
+        manifest = store.read_manifest()
+        assert manifest["AAA"]["db_fp"] == [129.0, 1e6]   # last bar's close/vol
+        assert manifest["BBB"]["db_fp"] == [79.0, 1e6]
+        # a forced re-merge after a value correction refreshes the fingerprint
+        row = (session.query(DailyBar)
+               .filter(DailyBar.symbol == "AAA",
+                       DailyBar.date == date(2024, 1, 30)).one())
+        row.close = 777.0
+        session.commit()
+        store.sync(session, symbols=["AAA"])
+        assert store.read_manifest()["AAA"]["db_fp"] == [777.0, 1e6]
+
     def test_missing_secrets_raise_clearly(self, monkeypatch):
         for k in ("R2_BUCKET", "R2_ENDPOINT", "R2_ACCESS_KEY_ID",
                   "R2_SECRET_ACCESS_KEY"):

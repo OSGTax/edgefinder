@@ -283,6 +283,14 @@ class DeskOptionsSnap(Base):
     skew_25d: Mapped[float | None] = mapped_column(Float)
     dte: Mapped[int | None] = mapped_column(Integer)
     expiry: Mapped[str | None] = mapped_column(String(10))
+    # When the snapshot was actually taken (UTC). The row's identity stays
+    # (symbol, snap_date) — one canonical row per day — but captured_at is the
+    # receipt proving it was a regular-hours read (the refresh's session gate),
+    # not crossed pre-open OPRA marks locked in as the day's history. NOTE: a
+    # dev database created before this column will error reading
+    # desk_options_snap via the ORM — rerun scripts/setup_db.py (prod
+    # self-heals via the idempotent ALTER in DESK_TABLE_DDL on deploy).
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 # ── desk_wiki — the agent's self-curated lessons wiki (system-prompt learning) ──
@@ -292,12 +300,13 @@ class DeskWiki(Base):
     """One curated page of the agent's lessons wiki.
 
     Karpathy-style "system prompt learning": a small, size-capped set of pages
-    (playbook / lessons / mistakes / market-notes) the agent READS at the start
-    of every cycle and REVISES from measured outcomes — knowledge accumulating
-    in curated context, not weights. Pages are edited IN PLACE (fixed slugs are
-    the curation constraint; no append-only sprawl); every edit writes a
-    desk_journal note (kind="wiki"), which is the audit trail — prior body text
-    is deliberately not retained. Caps enforced by agent.brain (the only writer).
+    (playbook / setups / lessons / mistakes / postmortems / market-notes) the
+    agent READS at the start of every cycle and REVISES from measured outcomes
+    — knowledge accumulating in curated context, not weights. Pages are edited
+    IN PLACE (fixed slugs are the curation constraint; no append-only sprawl);
+    every edit writes a desk_journal note (kind="wiki") AND banks the outgoing
+    body as a desk_wiki_history revision — so curation is aggressive without
+    being destructive. Caps enforced by agent.brain (the only writer).
     """
 
     __tablename__ = "desk_wiki"
@@ -307,12 +316,37 @@ class DeskWiki(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
-    slug: Mapped[str] = mapped_column(String(40), index=True)  # playbook|lessons|mistakes|market-notes
+    # playbook|setups|lessons|mistakes|postmortems|market-notes
+    slug: Mapped[str] = mapped_column(String(40), index=True)
     title: Mapped[str | None] = mapped_column(String(80))
     body: Mapped[str] = mapped_column(Text)  # markdown-lite, hard-capped by the tool
     revision: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now())
+    updated_run_id: Mapped[str | None] = mapped_column(String(40))
+
+
+class DeskWikiHistory(Base):
+    """One archived wiki revision — the OUTGOING body ``agent.brain set_wiki``
+    banks immediately before every in-place rewrite (a page's first-ever write
+    archives nothing: there is no prior). Append-only: pruning a lesson stops
+    destroying its evidence, because the pruned text is one
+    ``brain wiki-history`` read away. Written only by set_wiki; ``updated_at``
+    / ``updated_run_id`` carry over from the revision being replaced (when it
+    was written, and by which run)."""
+
+    __tablename__ = "desk_wiki_history"
+    __table_args__ = (
+        Index("idx_desk_wiki_hist_slug", "account", "slug", "revision"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    slug: Mapped[str] = mapped_column(String(40), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(80))
+    body: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime)
     updated_run_id: Mapped[str | None] = mapped_column(String(40))
 
 
@@ -586,8 +620,12 @@ DESK_TABLE_DDL: list[str] = [
         skew_25d FLOAT,
         dte INTEGER,
         expiry VARCHAR(10),
+        captured_at TIMESTAMP,
         CONSTRAINT uq_desk_optsnap_sym_date UNIQUE (symbol, snap_date)
     )""",
+    # Additive upgrade for desk_options_snap tables created before the
+    # capture-time receipt (the IV pass's RTH session gate).
+    "ALTER TABLE desk_options_snap ADD COLUMN IF NOT EXISTS captured_at TIMESTAMP",
     "CREATE INDEX IF NOT EXISTS idx_desk_optsnap_sym_date ON desk_options_snap (symbol, snap_date)",
     """CREATE TABLE IF NOT EXISTS desk_wiki (
         id SERIAL PRIMARY KEY,
@@ -600,6 +638,19 @@ DESK_TABLE_DDL: list[str] = [
         updated_run_id VARCHAR(40),
         CONSTRAINT uq_desk_wiki_account_slug UNIQUE (account, slug)
     )""",
+    """CREATE TABLE IF NOT EXISTS desk_wiki_history (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        slug VARCHAR(40) NOT NULL,
+        revision INTEGER NOT NULL,
+        title VARCHAR(80),
+        body TEXT NOT NULL,
+        updated_at TIMESTAMP,
+        updated_run_id VARCHAR(40)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_wiki_hist_slug ON desk_wiki_history (account, slug, revision)",
+    # Same lockdown as every other desk_* table: RLS on, zero policies.
+    "ALTER TABLE desk_wiki_history ENABLE ROW LEVEL SECURITY",
     """CREATE TABLE IF NOT EXISTS desk_briefs (
         id SERIAL PRIMARY KEY,
         account VARCHAR(30) DEFAULT 'agent',

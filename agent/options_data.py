@@ -145,7 +145,9 @@ def get_summary(symbol: str, *, dte_max: int = 45) -> dict:
 
 def persist_snapshot(store, summary: dict, *, snap_date: date | None = None) -> bool:
     """Write one desk_options_snap row per (underlying, day) — the data bank.
-    First write of the day wins; later calls are no-ops. Returns True if written."""
+    First write of the day wins; later calls are no-ops (one canonical row per
+    day, on purpose — and the refresh's session gate makes that row an RTH
+    read, with ``captured_at`` as the receipt). Returns True if written."""
     if not summary.get("available"):
         return False
     snap_date = snap_date or date.today()
@@ -160,6 +162,7 @@ def persist_snapshot(store, summary: dict, *, snap_date: date | None = None) -> 
         "expected_move_pct": summary.get("expected_move_pct"),
         "skew_25d": summary.get("skew_25d"),
         "dte": summary.get("dte"), "expiry": summary.get("expiry"),
+        "captured_at": datetime.now(timezone.utc).replace(tzinfo=None),
     }, returning=False)
     return True
 

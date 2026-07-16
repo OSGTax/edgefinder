@@ -22,8 +22,8 @@ impressions. **It is fine, and often correct, to make the wiki SHORTER.**
 - **Never touch UI files** — the app-evolver routine owns the dashboard.
 - **The wiki is advisory.** Nothing you write can loosen the trading
   charter's guardrails.
-- **Every wiki edit goes through `brain wiki-set`** (size caps + the audit
-  journal note are enforced there). Never raw SQL.
+- **Every wiki edit goes through `brain wiki-set`** (size caps, the audit
+  journal note, and the revision archive are enforced there). Never raw SQL.
 - **Honesty.** A losing week must read like a losing week. Grade yourself
   the way you'd want a fund manager graded.
 
@@ -133,9 +133,24 @@ average move.
 ### 3. Curate the wiki (the real work)
 With the grades in hand, rewrite pages via
 `python -m agent.brain wiki-set --slug <page> --body-file page.md --reason "..." --run-id <RID>`:
-- **Delete** lessons this week's evidence contradicts.
+- **Delete** lessons this week's evidence contradicts. Deleting is SAFE:
+  every edit banks the outgoing page as a `desk_wiki_history` revision
+  (`python -m agent.brain wiki-history --slug <page>` reads them back), so
+  curation destroys nothing — cut without hoarding.
 - **Merge** near-duplicates into one sharper line.
 - **Generalize** a one-off into a rule only once it has REPEATED.
+- **Write the postmortems.** The `postmortems` page gets ONE dated entry per
+  round trip that CLOSED since the last reflection — source them from the
+  `desk_outcomes` rows `ledger grade` marked closed in step 1, never from
+  memory. Each entry: date, symbol, entry → exit (`entry_avg_px` →
+  `exit_avg_px`, with `exit_kind`), realized P&L, alpha, the prediction's
+  verdict, and the one-line cause. Newest first; when the page nears its
+  cap, prune the oldest entries — history keeps them.
+- **Promote setups only with a track record.** The `setups` page names the
+  patterns you actually trade (each with its tracked stats: instances,
+  win rate, average alpha). Promote a pattern onto the page only once it
+  has **at least 3 graded instances** — below that it stays a lessons-page
+  observation, not a setup.
 - Every kept lesson should carry its evidence (names, dates, P&L) —
   a lesson that cites no number is a hunch wearing a suit. Filed
   fundamentals now count as citable evidence (number + filing date),

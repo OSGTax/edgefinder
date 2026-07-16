@@ -299,6 +299,9 @@ def test_nightly_market_refresh_covers_corp_actions_for_universe(monkeypatch):
         def list_assets(self, optionable=False):
             return [{"symbol": s} for s in ("AAA", "BBB", "SPY")]
 
+        def session(self):
+            return "closed"  # the nightly's normal post-close window
+
     monkeypatch.setattr(broker, "enabled", lambda: True)
     monkeypatch.setattr(broker, "Broker", lambda: _MarketBroker())
     monkeypatch.setattr(r, "_alpaca_latest_daily",
@@ -310,7 +313,8 @@ def test_nightly_market_refresh_covers_corp_actions_for_universe(monkeypatch):
                         lambda store, b, syms, *, max_days, chunk=100:
                         {"symbols": len(syms), "bars_upserted": 0,
                          "batches": 0, "errors": 0})
-    monkeypatch.setattr(r, "_r2_merge_sync", lambda syms: "skipped (test)")
+    monkeypatch.setattr(r, "_r2_merge_sync",
+                        lambda syms, **kw: "skipped (test)")
     monkeypatch.setattr(edgar, "ingest", lambda store, symbols=None: {})
 
     captured = {}
@@ -325,3 +329,373 @@ def test_nightly_market_refresh_covers_corp_actions_for_universe(monkeypatch):
     assert captured["symbols"] == ["AAA", "BBB", "SPY"]  # bar-ingest set
     assert captured["back_days"] == 400                  # bar-window lookback
     assert out["corp_actions"]["windows"] == 5
+
+
+# ── F17: bounded bar writes (payload-date delete, hole reporting) ──
+
+
+def _bar_row(sym, d, close=1.0, volume=100.0):
+    return {"symbol": sym, "date": d, "open": close, "high": close,
+            "low": close, "close": close, "volume": volume, "source": "test"}
+
+
+class _WrapStore:
+    """Delegating store wrapper for fault injection."""
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_write_bars_replaces_exactly_payload_dates(store):
+    """The delete is scoped to the payload's OWN dates: history outside the
+    fetched window is never touched (the pre-fix blanket `date >= start`
+    delete put ~400 days per symbol at risk on every nightly write)."""
+    from agent.refresh import _write_bars_with_retry
+
+    d = date(2026, 6, 1)
+    store.insert("daily_bars", [
+        _bar_row("AAA", d, close=10.0),                       # outside payload
+        _bar_row("AAA", d + timedelta(days=1), close=11.0),   # outside payload
+        _bar_row("AAA", d + timedelta(days=2), close=99.0),   # stale, replaced
+    ], returning=False)
+    payload = [_bar_row("AAA", d + timedelta(days=2), close=12.0),
+               _bar_row("AAA", d + timedelta(days=3), close=13.0)]
+    assert _write_bars_with_retry(store, "AAA", payload) is True
+    rows = {str(r["date"])[:10]: r["close"]
+            for r in store.select("daily_bars", filters={"symbol": "AAA"})}
+    assert rows == {"2026-06-01": 10.0, "2026-06-02": 11.0,   # untouched
+                    "2026-06-03": 12.0, "2026-06-04": 13.0}   # replaced/added
+
+
+def test_ingest_history_reports_holes_and_preserves_history(store, monkeypatch):
+    """A symbol whose write fails every attempt is a HOLE: counted in the
+    summary (with the symbol named), and its rows OUTSIDE the payload survive
+    — the pre-fix behavior silently vaporized them with the range delete."""
+    import time as _time
+    from datetime import datetime as _dt
+    from types import SimpleNamespace
+
+    import agent.refresh as r
+
+    monkeypatch.setattr(_time, "sleep", lambda s: None)  # skip retry backoff
+
+    class _FailSymbolStore(_WrapStore):
+        def insert(self, table, rows, *, returning=True):
+            rl = [rows] if isinstance(rows, dict) else list(rows)
+            if table == "daily_bars" and any(x.get("symbol") == "BBB"
+                                             for x in rl):
+                raise ConnectionError("proxy reset")
+            return self._inner.insert(table, rows, returning=returning)
+
+    store.insert("daily_bars", [_bar_row("BBB", date(2026, 1, 5), close=5.0)],
+                 returning=False)
+    bar = SimpleNamespace(timestamp=_dt(2026, 6, 1, 5, 0), open=1.0, high=1.0,
+                          low=1.0, close=1.0, volume=10.0, trade_count=1)
+    b = SimpleNamespace(data=SimpleNamespace(
+        get_stock_bars=lambda req: SimpleNamespace(
+            data={"AAA": [bar], "BBB": [bar]})))
+    out = r._ingest_history_batched(_FailSymbolStore(store), b,
+                                    ["AAA", "BBB"], max_days=30)
+    assert out["bars_upserted"] == 1 and out["errors"] == 1
+    assert out["holes"] == 1 and out["hole_symbols"] == ["BBB"]
+    assert len(store.select("daily_bars", filters={"symbol": "AAA"})) == 1
+    # BBB's history outside the payload survived every failed attempt
+    assert [str(x["date"])[:10] for x in
+            store.select("daily_bars", filters={"symbol": "BBB"})] == \
+        ["2026-01-05"]
+
+
+def test_retry_after_partial_insert_survives_duplicate_keys(store, monkeypatch):
+    """Worst case: half the batch lands, the connection dies, and the retry's
+    delete silently misses — the duplicate-skipping insert must converge on
+    exactly the payload (no duplicate-key death, no doubled rows)."""
+    import time as _time
+
+    from agent.refresh import _write_bars_with_retry
+
+    monkeypatch.setattr(_time, "sleep", lambda s: None)
+
+    class _PartialThenDeadDeletes(_WrapStore):
+        def __init__(self, inner):
+            super().__init__(inner)
+            self.insert_calls = 0
+            self.delete_calls = 0
+
+        def insert(self, table, rows, *, returning=True):
+            if table == "daily_bars" and isinstance(rows, list):
+                self.insert_calls += 1
+                if self.insert_calls == 1:  # half lands, then the wire drops
+                    self._inner.insert(table, rows[:1], returning=returning)
+                    raise ConnectionError("reset mid-batch")
+            return self._inner.insert(table, rows, returning=returning)
+
+        def delete(self, table, filters):
+            self.delete_calls += 1
+            if self.delete_calls > 1:
+                return None  # later deletes silently miss (worst case)
+            return self._inner.delete(table, filters)
+
+    payload = [_bar_row("CCC", date(2026, 6, 1), close=1.0),
+               _bar_row("CCC", date(2026, 6, 2), close=2.0)]
+    assert _write_bars_with_retry(_PartialThenDeadDeletes(store), "CCC",
+                                  payload) is True
+    rows = store.select("daily_bars", filters={"symbol": "CCC"})
+    assert sorted(str(x["date"])[:10] for x in rows) == \
+        ["2026-06-01", "2026-06-02"]
+    assert len(rows) == 2  # each date exactly once
+
+
+# ── F18: the R2 archive never keeps a partial intraday bar ──
+
+
+class _FakeS3:
+    """The two S3 calls _r2_merge_sync makes, over a plain dict."""
+
+    def __init__(self):
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, Bucket, Key, Body):
+        self.objects[Key] = Body
+
+    def get_object(self, Bucket, Key):
+        import io
+
+        if Key not in self.objects:
+            raise KeyError(Key)  # the sync catches broadly: missing = fresh
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+
+@pytest.fixture()
+def r2(monkeypatch):
+    import socket
+
+    import boto3
+
+    prev = socket.getdefaulttimeout()
+    for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+              "R2_ENDPOINT", "R2_BUCKET"):
+        monkeypatch.setenv(k, "test")
+    fake = _FakeS3()
+    monkeypatch.setattr(boto3, "client", lambda *a, **k: fake)
+    yield fake
+    socket.setdefaulttimeout(prev)  # _bound_network widened it for "R2"
+
+
+def _r2_dates(fake, sym):
+    import io
+
+    import pandas as pd
+
+    df = pd.read_parquet(io.BytesIO(fake.objects[f"bars/{sym}.parquet"]))
+    return {str(d)[:10] for d in df["date"]}
+
+
+def _r2_manifest(fake):
+    import json as _json
+
+    return _json.loads(fake.objects["manifest.json"])
+
+
+def test_r2_sync_excludes_intraday_today(store, r2):
+    from agent.refresh import _r2_merge_sync, _today_et
+
+    today = _today_et()
+    store.insert("daily_bars", [
+        _bar_row("AAA", today - timedelta(days=2), close=1.0),
+        _bar_row("AAA", today - timedelta(days=1), close=2.0),
+        _bar_row("AAA", today, close=3.0),  # in-progress bar (hourly ingest)
+    ], returning=False)
+    out = _r2_merge_sync(["AAA"])
+    assert out == {"synced": 1, "unchanged": 0, "errors": 0}
+    assert str(today) not in _r2_dates(r2, "AAA")  # never enters the archive
+    assert _r2_manifest(r2)["AAA"]["db_max"] == str(today - timedelta(days=1))
+    # re-running intraday stays a no-op — the partial bar never flips db_max
+    assert _r2_merge_sync(["AAA"]) == {"synced": 0, "unchanged": 1, "errors": 0}
+
+
+def test_r2_sync_includes_today_when_flagged_post_close(store, r2):
+    from agent.refresh import _r2_merge_sync, _today_et
+
+    today = _today_et()
+    store.insert("daily_bars", [
+        _bar_row("AAA", today - timedelta(days=1), close=2.0),
+        _bar_row("AAA", today, close=3.0),
+    ], returning=False)
+    out = _r2_merge_sync(["AAA"], include_today_et=True)  # the nightly path
+    assert out == {"synced": 1, "unchanged": 0, "errors": 0}
+    assert str(today) in _r2_dates(r2, "AAA")
+    assert _r2_manifest(r2)["AAA"]["db_max"] == str(today)
+
+
+def test_r2_sync_same_date_correction_triggers_resync(store, r2):
+    """A changed close at an unchanged db_max must re-sync (the db_fp content
+    fingerprint) — the pre-fix date-only check read it as 'unchanged' forever."""
+    from agent.refresh import _r2_merge_sync, _today_et
+
+    today = _today_et()
+    d1 = today - timedelta(days=2)
+    d2 = today - timedelta(days=1)
+    store.insert("daily_bars", [_bar_row("AAA", d1, close=1.0),
+                                _bar_row("AAA", d2, close=2.0)],
+                 returning=False)
+    assert _r2_merge_sync(["AAA"])["synced"] == 1
+    assert _r2_merge_sync(["AAA"])["unchanged"] == 1  # steady state
+
+    store.update("daily_bars", {"symbol": "AAA", "date": d2},
+                 {"close": 9.99}, returning=False)     # same-date correction
+    out = _r2_merge_sync(["AAA"])
+    assert out == {"synced": 1, "unchanged": 0, "errors": 0}
+    import io
+
+    import pandas as pd
+
+    df = pd.read_parquet(io.BytesIO(r2.objects["bars/AAA.parquet"]))
+    assert float(df[df["date"] == str(d2)]["close"].iloc[0]) == 9.99
+    assert _r2_manifest(r2)["AAA"]["db_fp"] == [9.99, 100.0]
+
+
+def test_r2_sync_legacy_manifest_without_fingerprint(store, r2):
+    """Pre-fingerprint manifest entries keep working: same-max stays unchanged
+    (the old rule), and the next real sync backfills db_fp."""
+    import json as _json
+
+    from agent.refresh import _r2_merge_sync, _today_et
+
+    today = _today_et()
+    d1, d2, d3 = (today - timedelta(days=n) for n in (3, 2, 1))
+    store.insert("daily_bars", [_bar_row("AAA", d1, close=1.0),
+                                _bar_row("AAA", d2, close=2.0)],
+                 returning=False)
+    r2.objects["manifest.json"] = _json.dumps({
+        "AAA": {"rows": 2, "max_date": str(d2),
+                "db_rows": 2, "db_max": str(d2)}}).encode()  # no db_fp
+    assert _r2_merge_sync(["AAA"]) == {"synced": 0, "unchanged": 1, "errors": 0}
+
+    store.insert("daily_bars", [_bar_row("AAA", d3, close=3.0)],
+                 returning=False)
+    assert _r2_merge_sync(["AAA"])["synced"] == 1
+    m = _r2_manifest(r2)["AAA"]
+    assert m["db_max"] == str(d3) and m["db_fp"] == [3.0, 100.0]
+
+
+def test_market_closed_now_fail_closed():
+    from types import SimpleNamespace
+
+    from agent.refresh import _market_closed_now
+
+    def _b(sess):
+        def _session():
+            if isinstance(sess, Exception):
+                raise sess
+            return sess
+        return SimpleNamespace(session=_session)
+
+    assert _market_closed_now(_b("closed")) is True
+    assert _market_closed_now(_b("extended")) is False   # post-close ≠ closed
+    assert _market_closed_now(_b("regular")) is False
+    assert _market_closed_now(_b(RuntimeError("clock down"))) is False
+
+
+def test_nightly_passes_session_gated_today_flag(monkeypatch):
+    """refresh_alpaca_market forwards include_today_et from the session check:
+    today's bar joins the archive only on a genuinely closed session."""
+    import agent.broker as broker
+    import agent.edgar as edgar
+    import agent.refresh as r
+
+    class _MarketBroker:
+        def __init__(self, sess):
+            self._sess = sess
+
+        def list_assets(self, optionable=False):
+            return [{"symbol": "AAA"}]
+
+        def session(self):
+            return self._sess
+
+    monkeypatch.setattr(broker, "enabled", lambda: True)
+    monkeypatch.setattr(r, "_alpaca_latest_daily",
+                        lambda b, catalog, lookback_days=7: [
+                            {"symbol": "AAA", "close": 100.0, "volume": 1e6}])
+    monkeypatch.setattr(r, "_keep_symbols_rest", lambda: set())
+    monkeypatch.setattr(r, "_ingest_history_batched",
+                        lambda store, b, syms, *, max_days, chunk=100: {})
+    monkeypatch.setattr(r, "_corp_actions_alpaca",
+                        lambda store, symbols, **kw: {})
+    monkeypatch.setattr(edgar, "ingest", lambda store, symbols=None: {})
+
+    captured = {}
+
+    def fake_sync(syms, *, include_today_et=False):
+        captured["include_today_et"] = include_today_et
+        return "ok"
+
+    monkeypatch.setattr(r, "_r2_merge_sync", fake_sync)
+    for sess, expect in (("closed", True), ("regular", False)):
+        monkeypatch.setattr(broker, "Broker",
+                            lambda s=sess: _MarketBroker(s))
+        r.refresh_alpaca_market(top_n=1)
+        assert captured["include_today_et"] is expect
+
+
+# ── F19: the IV data bank only snapshots during the regular session ──
+
+
+class _SessionBroker:
+    def __init__(self, sess):
+        self._sess = sess
+
+    def session(self):
+        if isinstance(self._sess, Exception):
+            raise self._sess
+        return self._sess
+
+
+def test_iv_pass_skipped_outside_regular_session(store, monkeypatch):
+    """A 07:00 pre-market run must never lock crossed pre-open OPRA marks in
+    as the day's canonical IV row — the chain is not even fetched."""
+    import agent.options_data as od
+    from agent.refresh import _iv_snapshots_alpaca
+
+    calls = []
+    monkeypatch.setattr(od, "get_summary",
+                        lambda sym, dte_max=45: calls.append(sym))
+    for sess in ("extended", "closed"):
+        out = _iv_snapshots_alpaca(store, _SessionBroker(sess), ["SPY"])
+        assert out == {"written": 0, "skipped_session": sess}
+    assert calls == []
+    assert store.select("desk_options_snap") == []
+
+
+def test_iv_pass_fails_closed_on_unknown_session(store):
+    from agent.refresh import _iv_snapshots_alpaca
+
+    out = _iv_snapshots_alpaca(store,
+                               _SessionBroker(RuntimeError("clock down")),
+                               ["SPY"])
+    assert out["written"] == 0
+    assert out["skipped_session"].startswith("unknown")
+    assert store.select("desk_options_snap") == []
+
+
+def test_iv_pass_writes_in_regular_session_with_captured_at(store, monkeypatch):
+    import agent.options_data as od
+    from agent.refresh import _iv_snapshots_alpaca
+
+    monkeypatch.setattr(od, "get_summary",
+                        lambda sym, dte_max=45: {
+                            "available": True, "symbol": sym, "spot": 100.0,
+                            "atm_iv": 0.2, "expected_move_pct": 1.0,
+                            "skew_25d": 0.01, "dte": 10,
+                            "expiry": "2026-08-21"})
+    out = _iv_snapshots_alpaca(store, _SessionBroker("regular"), ["SPY"])
+    assert out == {"written": 1, "skipped_have_today": 0}
+    rows = store.select("desk_options_snap", filters={"symbol": "SPY"})
+    assert len(rows) == 1
+    assert rows[0]["captured_at"] is not None    # the RTH receipt
+    # rerun same day: first write of the day still wins, the fetch is skipped
+    out2 = _iv_snapshots_alpaca(store, _SessionBroker("regular"), ["SPY"])
+    assert out2 == {"written": 0, "skipped_have_today": 1}
