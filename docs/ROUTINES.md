@@ -2,7 +2,8 @@
 
 EdgeFinder runs entirely on **Claude Code Routines** (claude.ai/code/routines),
 not GitHub Actions or an in-process scheduler. Each Routine is a scheduled
-Claude session on this repo that runs one skill. There are five —
+Claude session on this repo that runs one skill (the loop monitor is
+prompt-only). There are six —
 **crons in the Routine UI are UTC** (ET shown in parens):
 
 | Routine | Skill | Cron (UTC) | What it does |
@@ -12,6 +13,7 @@ Claude session on this repo that runs one skill. There are five —
 | Strategy Lab | `strategy-lab` | `0 2 * * 2-6` (10:00 PM ET, post-ingest) | Sweeps the 168-combo grid (incl. `value_momentum` since v9.4.0) over 21y, split-sample scored; rebuilds the brief with tonight's board |
 | Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week mechanically (predictions, alpha, rejected list, fundamentals citations), curate the lessons wiki |
 | Desk evolution | `app-evolver` | `0 15 * * 6` (11:00 AM ET Sat) | One small, tested, additive `/desk` improvement, announced on What's New |
+| Loop monitor | (prompt-only, read-only) | `0 16,21 * * 1-5` (noon / 5 PM ET) | Fresh-session digest of the autonomy loop — reads `desk_dispatches`, wakes, journal FAILED notes, latest decision/fills, ledger state; **push + email notification** to the owner. Never trades, never writes. Created 2026-07-16 (`trig_01H4n1qmGrWxPp5KTc5BhYCn`) |
 
 **The autonomy loop (v9.11.0):** the trading brain no longer depends on a
 human finger. The always-on Render streamer watches `desk_wakes` (the
