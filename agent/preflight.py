@@ -9,6 +9,13 @@ hang deep inside the cycle.
 Exit code 0 = ready; non-zero = not ready (see ``checks`` in the JSON).
 
   python -m agent.preflight
+  python -m agent.preflight --strict
+
+``--strict`` (for humans/CI, not the trading cycle) additionally runs a
+lightweight broker check (Alpaca clock fetch, short timeout) and escalates
+soft failures: exit 3 when ``research_ok`` is false or the broker is
+unreachable. Without the flag, behavior is byte-identical to before —
+research staleness stays a degrade-gate the cycle handles itself.
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ import sys
 from datetime import date
 
 
-def run() -> dict:
+def run(*, strict: bool = False) -> dict:
     from agent.store import transport
 
     out: dict = {"ok": True, "transport": transport(), "checks": {}}
@@ -127,6 +134,29 @@ def run() -> dict:
 
     check("r2", _r2, critical=False)
 
+    # Broker reachability — STRICT-ONLY so default output stays byte-identical.
+    # A clock fetch is the cheapest authenticated Alpaca round-trip; a short
+    # timeout keeps a dead network from stalling the whole preflight. The
+    # check itself stays non-critical (``ok`` unchanged); main() escalates it
+    # to exit 3 under --strict.
+    if strict:
+        def _broker():
+            from concurrent.futures import ThreadPoolExecutor
+
+            from agent import broker
+
+            if not broker.enabled():
+                raise RuntimeError("no Alpaca keys in this environment")
+            ex = ThreadPoolExecutor(max_workers=1)
+            try:
+                fut = ex.submit(lambda: bool(broker.Broker().is_market_open()))
+                is_open = fut.result(timeout=8.0)
+            finally:
+                ex.shutdown(wait=False, cancel_futures=True)
+            return {"clock": "ok", "is_open": is_open}
+
+        check("broker", _broker, critical=False)
+
     # The skill's degrade gate: whole-market research is only trustworthy when
     # the universe coverage is green/amber (see agent.data.coverage_verdict).
     # A check that errored (after its retry) reads as NOT ok — conservative on
@@ -145,9 +175,24 @@ def run() -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    result = run()
+    import argparse
+
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--strict", action="store_true",
+                   help="also require research_ok and a reachable broker "
+                        "(exit 3 when either fails) — for humans/CI; the "
+                        "trading cycle keeps the default degrade-gate behavior")
+    args = p.parse_args(argv)
+
+    result = run(strict=args.strict)
     print(json.dumps(result, indent=2, default=str))
-    return 0 if result["ok"] else 2
+    if not result["ok"]:
+        return 2
+    if args.strict:
+        broker_ok = bool(result["checks"].get("broker", {}).get("ok"))
+        if not result.get("research_ok") or not broker_ok:
+            return 3
+    return 0
 
 
 if __name__ == "__main__":

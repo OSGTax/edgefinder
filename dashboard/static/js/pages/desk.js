@@ -12,16 +12,10 @@ import { createChart, colors } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
 
 let equityChart = null;
-let equitySeries = null;
+let equitySeries = null;   // the recorded marks — history, never fabricated
+let spySeries = null;      // faint benchmark overlay: $100k in SPY (total return)
+let liveTipSeries = null;  // ONE dashed connector: last real mark → live estimate
 let lastEquityData = [];
-
-/* Live tip on the equity chart — extends the curve past the last real
-   mark using the same live-fold equity as the hero card. Throttled: we
-   advance a fresh point every N seconds and just update it in place
-   between advances, so a page open for hours yields ~240 points/hour of
-   tip, not 3600. */
-let liveTipTime = null;
-const LIVE_TIP_ADVANCE_SEC = 15;
 
 /* Live-marked book state — the source-of-truth "reference" portfolio (cash +
    position shares/avg + starting) and the running dict of live mids from the
@@ -48,8 +42,52 @@ setInterval(() => {
 
 const ACTION_CLASS = { buy: 'up', add: 'up', hold: 'neutral', trim: 'warn', exit: 'down', sell: 'down' };
 
-function pill(text, cls) {
-  return h('span', { class: 'c-pill ' + (cls || 'neutral'), text });
+function pill(text, cls, title) {
+  return h('span', { class: 'c-pill ' + (cls || 'neutral'), title: title || null, text });
+}
+
+/* ── LIVE pill truth ──
+   The pulsing green LIVE dot only appears when a threshold fraction of the
+   HELD symbols' quotes are genuinely fresh AND the market session is open
+   (the SSE payload carries per-symbol staleness + a session tag). A stale
+   tape shows DELAYED; a closed market shows CLOSED — frozen numbers never
+   masquerade as ticking ones. */
+const LIVE_PILL = {
+  live: ['LIVE', 'Fresh real-time quotes are folding into the account value — '
+    + 'the numbers above are the live market value.'],
+  delayed: ['DELAYED', 'The live quote stream is stale — the numbers above are '
+    + 'the most recent recorded prices, not a live market value.'],
+  closed: ['CLOSED', 'The market is closed — prices shown are the last '
+    + 'session’s marks.'],
+};
+
+function setLivePill(state) {
+  const el = document.getElementById('desk-hero-live');
+  if (!el) return;
+  if (!state) { el.hidden = true; return; }
+  const [label, tip] = LIVE_PILL[state] || LIVE_PILL.delayed;
+  el.hidden = false;
+  el.classList.toggle('delayed', state === 'delayed');
+  el.classList.toggle('closed', state === 'closed');
+  el.title = tip;
+  const lbl = el.querySelector('.desk-hero-live-label');
+  if (lbl) lbl.textContent = label;
+}
+
+/* What the pill should say for this SSE frame. null = keep it hidden (an
+   all-cash or all-options book has nothing that folds live). */
+function livePillState(snap) {
+  const book = deskLive.book;
+  const heldEq = (book && book.positions ? book.positions : [])
+    .filter(p => !occParse(p.symbol)).map(p => p.symbol);
+  if (!heldEq.length) return null;
+  if (snap.session === 'closed') return 'closed';
+  const quotes = snap.quotes || {};
+  const fresh = heldEq.filter(s => {
+    const q = quotes[s];
+    return q && q.mid != null && !q.stale;
+  }).length;
+  return fresh >= Math.max(1, Math.ceil(heldEq.length / 2)) ? 'live' : 'delayed';
 }
 
 /* the account's change since the last completed trading session — grouped
@@ -96,10 +134,12 @@ async function loadHeader() {
 
     const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
     setText('desk-hero-pnl', fmtPnl(pf.total_pnl), pnlCls);
-    setText('desk-hero-return', fmtPct(pf.total_return_pct / 100, { signed: true }), pnlCls);
+    // *_pct fields are already percent numbers — fmtPct renders as given
+    // (the old /100 under-displayed every figure a hundredfold).
+    setText('desk-hero-return', fmtPct(pf.total_return_pct, { signed: true }), pnlCls);
     if (pf.vs_spy && pf.vs_spy.alpha_pct != null) {
       const a = pf.vs_spy.alpha_pct;
-      setText('desk-hero-alpha', fmtPct(a / 100, { signed: true }),
+      setText('desk-hero-alpha', fmtPct(a, { signed: true }),
         a >= 0 ? 't-up' : 't-down');
     } else {
       setText('desk-hero-alpha', '—', '');
@@ -175,6 +215,24 @@ async function loadHeader() {
           ? ' (last full refresh: ' + dataHealth.last_full_date + ')' : '';
         chipsEl.append(h('span', { class: 'c-pill ' + cls, title: tip + full, text: label }));
       }
+      // Degraded marks: the latest account valuation priced part of the book
+      // at COST (no live quote, no stored close) — fake-flat P&L must be
+      // visible, not buried in a JSON column.
+      if (dataHealth && dataHealth.marks && dataHealth.marks.degraded) {
+        const m = dataHealth.marks;
+        const who = (m.cost_marked && m.cost_marked.length)
+          ? ' Affected: ' + m.cost_marked.join(', ') + '.' : '';
+        const pct = m.cost_marked_value_pct != null
+          ? m.cost_marked_value_pct + '% of position value' : 'part of the book';
+        chipsEl.append(h('span', {
+          class: 'c-pill warn',
+          title: 'The latest account valuation priced ' + pct + ' at what it '
+            + 'PAID — no live quote or stored close was available, so profit/'
+            + 'loss on those names reads as flat until the data feed recovers.'
+            + who,
+          text: 'Marks: partly at cost',
+        }));
+      }
     }
   } catch (err) {
     // The hero must never take the whole page down — leave placeholders in place
@@ -188,59 +246,101 @@ function ensureEquityChart() {
   const el = document.getElementById('desk-equity-chart');
   equityChart = createChart(el, { height: 320 });
   const c = colors();
+  // benchmark first so the account curve draws over it
+  spySeries = equityChart.addLineSeries({
+    color: c.benchmark, lineWidth: 1, priceLineVisible: false,
+    lastValueVisible: false, crosshairMarkerVisible: false,
+  });
   equitySeries = equityChart.addAreaSeries({
     lineColor: c.accent, topColor: c.accent + '55', bottomColor: c.accent + '08',
     lineWidth: 2, priceLineVisible: false,
   });
+  // The live tip: one clearly-dashed connector from the last RECORDED mark
+  // to the current live estimate. Its two points live in their own series —
+  // never in the history the chart treats as recorded marks (the old code
+  // fabricated ~240 synthetic points/hour into the real curve).
+  liveTipSeries = equityChart.addLineSeries({
+    color: c.accent, lineWidth: 1, lineStyle: 2 /* dashed */,
+    priceLineVisible: false, lastValueVisible: true,
+    crosshairMarkerVisible: false,
+  });
   onThemeChange(() => {
     const cc = colors();
     equitySeries.applyOptions({ lineColor: cc.accent, topColor: cc.accent + '55', bottomColor: cc.accent + '08' });
+    spySeries.applyOptions({ color: cc.benchmark });
+    liveTipSeries.applyOptions({ color: cc.accent });
   });
 }
 
 async function loadEquity() {
   const metaEl = document.getElementById('desk-equity-meta');
   try {
-    const series = await apiGet('/api/desk/equity?limit=2000');
+    const body = await apiGet('/api/desk/equity?limit=2000&with_spy=1');
+    const series = body.points || [];
     if (!series.length) {
       metaEl.textContent = 'no marks yet';
       return;
     }
     ensureEquityChart();
-    lastEquityData = series.map(p => ({ time: toEpochSec(p.t), value: p.equity }))
-      .filter(p => p.time);
     // de-dup identical timestamps (chart requires strictly increasing time)
     const seen = new Set();
     const data = [];
-    for (const p of lastEquityData) { if (!seen.has(p.time)) { seen.add(p.time); data.push(p); } }
+    const degraded = [];
+    for (const p of series) {
+      const time = toEpochSec(p.t);
+      if (!time || seen.has(time)) continue;
+      seen.add(time);
+      data.push({ time, value: p.equity });
+      if (p.degraded) degraded.push(time);
+    }
+    lastEquityData = data;
     equitySeries.setData(data);
-    // Reset the live tip so a page refresh starts extending from the new
-    // (possibly newer) last historical mark, not from the previous session.
-    liveTipTime = null;
+    // Degraded marks (part of the book priced at cost basis) get a visible
+    // warn marker on the exact affected points.
+    const c = colors();
+    equitySeries.setMarkers(degraded.map(time => ({
+      time, position: 'aboveBar', shape: 'circle', color: c.warn,
+      id: 'degraded:' + time, text: '',
+    })));
+    // SPY overlay: what $100k in SPY (dividends reinvested) since the
+    // account's first trade would be worth — same dollar axis, honest beta.
+    const start = (deskLive.book && deskLive.book.starting_capital) || 100000;
+    const spyData = (body.spy || [])
+      .map(x => ({ time: toEpochSec(x.date),
+                   value: Math.round(start * (1 + x.pct / 100) * 100) / 100 }))
+      .filter(x => x.time);
+    spySeries.setData(spyData);
+    const legend = document.getElementById('desk-equity-legend');
+    if (legend) legend.hidden = !spyData.length;
+    // fresh history → the live tip re-anchors on the new last real mark
+    liveTipSeries.setData([]);
     equityChart.timeScale().fitContent();
     const last = series[series.length - 1];
-    metaEl.textContent = `${fmtDollar(last.equity)} · ${series.length} marks · extending live`;
+    metaEl.textContent = `${fmtDollar(last.equity)} · ${series.length} marks`
+      + (degraded.length ? ` · ${degraded.length} degraded` : '');
+    metaEl.title = degraded.length
+      ? 'Some snapshots priced part of the book at cost basis during a '
+        + 'quote/close outage — those points are flagged on the curve.'
+      : '';
   } catch (err) {
     metaEl.textContent = 'error loading curve';
   }
 }
 
-/* Extend the chart's rightmost point with the current live equity. Called
-   from applyLiveMarks on every SSE fold. Skipped if the chart hasn't
-   loaded yet (fresh account with no historical marks) or the tape is
-   dead. Guards against overwriting an existing historical point by
-   starting the tip at least 1 second after the last real mark. */
-function extendEquityChart(liveEquity) {
-  if (!equitySeries || liveEquity == null || !Number.isFinite(liveEquity)) return;
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (liveTipTime == null || nowSec >= liveTipTime + LIVE_TIP_ADVANCE_SEC) {
-    const lastHist = lastEquityData.length
-      ? lastEquityData[lastEquityData.length - 1].time : 0;
-    liveTipTime = Math.max(nowSec, lastHist + 1);
-  }
+/* Redraw the dashed live-estimate tip: last real mark → live equity now.
+   Called from applyLiveMarks only while the pill says LIVE; the two points
+   are setData()'d into their own series, so history stays untouched. */
+function updateLiveTip(liveEquity) {
+  if (!liveTipSeries || !lastEquityData.length
+      || liveEquity == null || !Number.isFinite(liveEquity)) return;
+  const last = lastEquityData[lastEquityData.length - 1];
+  const nowSec = Math.max(Math.floor(Date.now() / 1000), last.time + 1);
   try {
-    equitySeries.update({time: liveTipTime, value: Math.round(liveEquity * 100) / 100});
-  } catch (e) { /* chart not mounted or time collision — skip this fold */ }
+    liveTipSeries.setData([
+      { time: last.time, value: last.value },
+      { time: nowSec, value: Math.round(liveEquity * 100) / 100 },
+    ]);
+  } catch (e) { /* chart not mounted — skip this fold */ }
 }
 
 /* ── holdings (equities + an options book when present) ── */
@@ -352,7 +452,8 @@ function equitiesTable(rows, stats) {
       dayChangeCell(stats[p.symbol]),
       trendCell(stats[p.symbol]),
       h('td', { class: 'num', text: fmtDollar(p.market_value) }),
-      h('td', { class: 'num', text: fmtPct(p.weight) }),
+      // weight is a 0-1 fraction — scale to percent for display
+      h('td', { class: 'num', text: fmtPct(p.weight * 100, { signed: false }) }),
       h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
         text: fmtPnl(p.unrealized_pnl) })))));
 }
@@ -401,7 +502,7 @@ function renderPositions(el, pf, stats) {
    isn't on the equity SIP stream), so an all-options book is still frozen
    between routine runs; the improvement is for the ~90% of the account
    that's equities. */
-function applyLiveMarks() {
+function applyLiveMarks(pillState) {
   const ref = deskLive.book;
   if (!ref || !ref.positions) return;
   const marks = deskLive.marks;
@@ -454,29 +555,28 @@ function applyLiveMarks() {
 
   const pnlCls = totalPnl >= 0 ? 't-up' : 't-down';
   setText('desk-hero-pnl', fmtPnl(totalPnl), pnlCls);
-  setText('desk-hero-return', fmtPct(returnPct / 100, { signed: true }), pnlCls);
+  setText('desk-hero-return', fmtPct(returnPct, { signed: true }), pnlCls);
   // Keep 'vs S&P 500' consistent with the live Return beside it — the SPY
   // side is daily-close based and static between page loads, so live alpha
   // is just live return minus the cached SPY return.
   const spy = ref && ref.vs_spy ? ref.vs_spy.spy_return_pct : null;
   if (spy != null) {
     const a = returnPct - spy;
-    setText('desk-hero-alpha', fmtPct(a / 100, { signed: true }),
+    setText('desk-hero-alpha', fmtPct(a, { signed: true }),
       a >= 0 ? 't-up' : 't-down');
   }
   // cash and count don't change from live marks — leave them alone.
 
-  // LIVE indicator: reveal the pulsing dot + freshness age.
-  const liveEl = document.getElementById('desk-hero-live');
-  if (liveEl) liveEl.hidden = false;
+  // The pill tells the truth: LIVE only for a fresh tape in an open session
+  // (see livePillState); stale → DELAYED, closed market → CLOSED.
+  setLivePill(pillState);
   deskLive.lastTickTs = Date.now();
   const ageEl = document.getElementById('desk-hero-live-age');
   if (ageEl) ageEl.textContent = 'just now';
 
-  // Extend the equity chart's rightmost point with the live equity so the
-  // curve keeps growing between routine marks. Cheap: at most one throttled
-  // series.update per fold.
-  extendEquityChart(equity);
+  // Redraw the dashed live-estimate tip — only while genuinely live; a
+  // stale or closed tape must not draw a "current" estimate.
+  if (pillState === 'live') updateLiveTip(equity);
 
   // Positions tables: repaint only if the container already has content
   // (first load hasn't finished yet → skeleton lives; leave it).
@@ -603,7 +703,59 @@ async function loadWatch() {
   } catch (err) { renderError(el, err, loadWatch); }
 }
 
-/* ── latest decision: picks + watchlist ── */
+/* ── decisions: the latest dossier + the browsable archive ──
+   pickCard renders one pick everywhere (latest view + history dossiers),
+   INCLUDING the prediction registry — the prediction / horizon / kill the
+   agent committed to at buy time (previously recorded but never shown). */
+function pickCard(p) {
+  const action = (p.action || '').toLowerCase();
+  const card = h('div', { class: 'desk-pick c-card' },
+    h('div', { class: 'desk-pick-head' },
+      h('a', { href: '/symbol/' + p.symbol, class: 'desk-pick-sym', text: p.symbol }),
+      pill((p.action || '').toUpperCase() || '—', ACTION_CLASS[action] || 'neutral'),
+      p.why_now ? h('span', { class: 'desk-pick-why t-dim', text: p.why_now }) : null),
+    p.rationale ? h('p', { class: 'desk-pick-rationale', text: p.rationale }) : null);
+  const facts = [];
+  if (p.prediction) facts.push(['predicts', p.prediction]);
+  if (p.horizon_days != null) facts.push(['horizon', p.horizon_days + ' sessions']);
+  if (p.kill) facts.push(['abandon if', String(p.kill)]);
+  if (facts.length) {
+    card.append(h('div', { class: 'desk-pick-evidence c-chips' },
+      ...facts.map(([k, v]) => h('span', {
+        class: 'c-chip',
+        title: 'The commitment made at decision time — graded later in “Predictions vs outcomes”.',
+        text: `${k}: ${v}`,
+      }))));
+  }
+  if (p.evidence && Object.keys(p.evidence).length) {
+    const kv = h('div', { class: 'desk-pick-evidence c-chips' });
+    for (const [k, v] of Object.entries(p.evidence)) {
+      kv.append(h('span', { class: 'c-chip', text: `${k}: ${v}` }));
+    }
+    card.append(kv);
+  }
+  if (p.news && p.news.length) {
+    const news = h('ul', { class: 'desk-pick-news' });
+    for (const n of p.news.slice(0, 3)) {
+      const title = typeof n === 'string' ? n : (n.title || '');
+      const url = typeof n === 'object' ? n.url : null;
+      news.append(h('li', {}, url
+        ? h('a', { href: url, class: 'c-link', target: '_blank', rel: 'noopener', text: title })
+        : h('span', { text: title })));
+    }
+    card.append(news);
+  }
+  return card;
+}
+
+function watchlistChips(watchlist) {
+  return h('div', { class: 'c-chips' },
+    h('span', { class: 't-dim', text: 'Watchlist: ' }),
+    ...watchlist.map(w => h('span', { class: 'c-chip' },
+      h('a', { href: '/symbol/' + (w.symbol || w), class: 'c-link', text: (w.symbol || w) }),
+      w.note ? h('span', { class: 't-dim', text: ' — ' + w.note }) : null)));
+}
+
 async function loadDecision() {
   const picksEl = document.getElementById('desk-picks');
   const sumEl = document.getElementById('desk-summary');
@@ -621,46 +773,238 @@ async function loadDecision() {
     if (!(d.picks && d.picks.length)) {
       renderEmpty(picksEl, 'No per-name picks in this decision.');
     } else {
-      for (const p of d.picks) {
-        const action = (p.action || '').toLowerCase();
-        const card = h('div', { class: 'desk-pick c-card' },
-          h('div', { class: 'desk-pick-head' },
-            h('a', { href: '/symbol/' + p.symbol, class: 'desk-pick-sym', text: p.symbol }),
-            pill((p.action || '').toUpperCase() || '—', ACTION_CLASS[action] || 'neutral'),
-            p.why_now ? h('span', { class: 'desk-pick-why t-dim', text: p.why_now }) : null),
-          p.rationale ? h('p', { class: 'desk-pick-rationale', text: p.rationale }) : null);
-        if (p.evidence && Object.keys(p.evidence).length) {
-          const kv = h('div', { class: 'desk-pick-evidence c-chips' });
-          for (const [k, v] of Object.entries(p.evidence)) {
-            kv.append(h('span', { class: 'c-chip', text: `${k}: ${v}` }));
-          }
-          card.append(kv);
-        }
-        if (p.news && p.news.length) {
-          const news = h('ul', { class: 'desk-pick-news' });
-          for (const n of p.news.slice(0, 3)) {
-            const title = typeof n === 'string' ? n : (n.title || '');
-            const url = typeof n === 'object' ? n.url : null;
-            news.append(h('li', {}, url
-              ? h('a', { href: url, class: 'c-link', target: '_blank', rel: 'noopener', text: title })
-              : h('span', { text: title })));
-          }
-          card.append(news);
-        }
-        picksEl.append(card);
-      }
+      for (const p of d.picks) picksEl.append(pickCard(p));
     }
 
     clear(wlEl);
     if (d.watchlist && d.watchlist.length) {
-      const chips = h('div', { class: 'c-chips' },
-        h('span', { class: 't-dim', text: 'Watchlist: ' }),
-        ...d.watchlist.map(w => h('span', { class: 'c-chip' },
-          h('a', { href: '/symbol/' + (w.symbol || w), class: 'c-link', text: (w.symbol || w) }),
-          w.note ? h('span', { class: 't-dim', text: ' — ' + w.note }) : null)));
-      wlEl.append(chips);
+      wlEl.append(watchlistChips(d.watchlist));
     }
   } catch (err) { renderError(picksEl, err, loadDecision); }
+}
+
+/* ── decision archive: every past dossier, compact rows → expandable ── */
+let decisionView = 'latest';
+const decHist = { rows: [], nextBefore: null, loading: false };
+
+const REGIME_PILL = { risk_on: 'up', risk_off: 'down', neutral: 'neutral' };
+
+function decisionDossier(d) {
+  const box = h('div', { class: 'desk-dec-hist-body' });
+  if (d.summary) box.append(h('p', { class: 'desk-summary', text: d.summary }));
+  for (const p of (d.picks || [])) box.append(pickCard(p));
+  if (d.watchlist && d.watchlist.length) box.append(watchlistChips(d.watchlist));
+  if (d.rejected && d.rejected.length) {
+    box.append(
+      h('div', { class: 'desk-subhead', text: 'Passed on' }),
+      h('ul', { class: 'desk-dec-rej' }, ...d.rejected.map(r => {
+        const sym = (r && r.symbol) || String(r);
+        return h('li', {},
+          h('a', { href: '/symbol/' + sym, class: 'c-link', text: sym }),
+          r && r.why_not ? ' — ' + r.why_not : '');
+      })));
+  }
+  return box;
+}
+
+function renderDecisionHistory() {
+  const el = document.getElementById('desk-decision-history');
+  if (!el) return;
+  clear(el);
+  if (!decHist.rows.length) {
+    renderEmpty(el, 'No past decisions recorded yet.');
+    return;
+  }
+  for (const d of decHist.rows) {
+    const picks = d.picks || [];
+    const btn = h('button', { class: 'desk-morebtn', type: 'button', text: 'Details' });
+    const row = h('div', { class: 'desk-dec-hist-row' },
+      h('div', { class: 'desk-dec-hist-head' },
+        h('span', { class: 'desk-dec-hist-when', text: fmtDateTimeET(d.ts) }),
+        d.regime ? pill(d.regime.replace(/_/g, ' '), REGIME_PILL[d.regime] || 'neutral') : null,
+        h('span', { class: 't-dim', text: picks.length + ' pick' + (picks.length === 1 ? '' : 's') }),
+        h('span', { class: 'spacer' }),
+        btn));
+    const first = String(d.summary || '').split('\n')[0];
+    if (first) {
+      row.append(h('p', { class: 'desk-dec-hist-sum',
+        text: first.length > 180 ? first.slice(0, 180) + '…' : first }));
+    }
+    let body = null;
+    btn.addEventListener('click', () => {
+      if (body) {
+        body.hidden = !body.hidden;
+        btn.textContent = body.hidden ? 'Details' : 'Hide';
+        return;
+      }
+      body = decisionDossier(d);
+      row.append(body);
+      btn.textContent = 'Hide';
+    });
+    el.append(row);
+  }
+  if (decHist.nextBefore != null) {
+    const more = h('button', { class: 'desk-morebtn', type: 'button', text: 'Load older decisions' });
+    more.addEventListener('click', () => loadDecisionHistory(decHist.nextBefore));
+    el.append(more);
+  }
+}
+
+async function loadDecisionHistory(before) {
+  const el = document.getElementById('desk-decision-history');
+  if (!el || decHist.loading) return;
+  decHist.loading = true;
+  if (before == null) { decHist.rows = []; skeleton(el); }
+  try {
+    const d = await apiGet('/api/desk/decisions?limit=10'
+      + (before != null ? '&before=' + encodeURIComponent(before) : ''));
+    decHist.rows = decHist.rows.concat(d.decisions || []);
+    decHist.nextBefore = d.next_before;
+    renderDecisionHistory();
+  } catch (err) {
+    renderError(el, err, () => loadDecisionHistory(before));
+  } finally {
+    decHist.loading = false;
+  }
+}
+
+function applyDecisionView() {
+  const hist = document.getElementById('desk-decision-history');
+  const showHist = decisionView === 'history';
+  for (const id of ['desk-summary', 'desk-picks', 'desk-watchlist']) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = showHist;
+  }
+  if (hist) hist.hidden = !showHist;
+  if (showHist && !decHist.rows.length) loadDecisionHistory();
+}
+
+/* ── predictions vs outcomes: the scoreboard (/api/desk/outcomes) ──
+   Open picks first with a horizon countdown and the kill level against the
+   live price; closed picks with how they exited; verdict chips once the
+   weekly review has judged them. */
+const EXIT_KIND_LABEL = {
+  same_run: ['closed same cycle', 'neutral'],
+  cross_run: ['closed by a later cycle', 'neutral'],
+  hardstop: ['stop-loss exit', 'down'],
+  settlement: ['expired / settled', 'neutral'],
+};
+const VERDICT_CLASS = { TRUE: 'up', FALSE: 'down', NOT_YET: 'neutral' };
+
+function outcomeRow(r) {
+  const sym = r.is_option ? (r.symbol.match(/^[A-Z]+/) || [r.symbol])[0] : r.symbol;
+  const open = r.status === 'open';
+  const [exitLabel, exitCls] = EXIT_KIND_LABEL[r.exit_kind] || ['closed', 'neutral'];
+  const head = h('div', { class: 'desk-outcome-head' },
+    h('a', { href: '/symbol/' + sym, class: 'desk-outcome-sym', text: r.symbol }),
+    open ? pill('OPEN', 'info') : pill(exitLabel, exitCls),
+    r.verdict ? pill(r.verdict.replace(/_/g, ' '), VERDICT_CLASS[r.verdict] || 'neutral',
+      r.verdict_note || 'The weekly review’s judgment of this prediction.') : null,
+    r.degraded ? pill('marks degraded', 'warn',
+      'This pick’s symbol was priced at cost basis in the latest valuation — '
+      + 'its performance numbers are withheld until real marks return.') : null,
+    h('span', { class: 'spacer' }),
+    h('span', { class: 't-dim', title: 'decision run ' + (r.run_id || ''),
+      text: r.decision_ts ? timeAgo(r.decision_ts) : '' }));
+
+  const pred = h('p', { class: 'desk-outcome-pred',
+    text: r.prediction ? '“' + r.prediction + '”'
+      : 'No prediction was recorded with this pick.' });
+
+  const chips = [];
+  const num = (v, suffix) => h('span', {
+    class: 'num ' + (v >= 0 ? 't-up' : 't-down'),
+    text: fmtPct(v) + (suffix || ''),
+  });
+  if (r.since_pct != null) {
+    chips.push(h('span', { class: 'c-chip' },
+      (open ? 'since entry: ' : 'result: '), num(r.since_pct)));
+  }
+  if (r.alpha_pct != null) {
+    chips.push(h('span', {
+      class: 'c-chip',
+      title: 'The move minus SPY’s move over the same window (dividends included) — skill, not market tide.',
+    }, 'vs S&P 500: ', num(r.alpha_pct)));
+  }
+  if (r.realized_pnl != null && !open) {
+    chips.push(h('span', { class: 'c-chip' }, 'booked: ',
+      h('span', { class: 'num ' + (r.realized_pnl >= 0 ? 't-up' : 't-down'),
+        text: fmtPnl(r.realized_pnl) })));
+  }
+  if (r.horizon_days != null) {
+    const done = r.sessions_elapsed != null
+      ? Math.min(r.sessions_elapsed, r.horizon_days) : null;
+    const reached = r.horizon_elapsed === true
+      || (done != null && done >= r.horizon_days);
+    chips.push(h('span', {
+      class: 'c-chip',
+      title: 'Trading sessions elapsed against the prediction’s own deadline.',
+      text: reached ? 'horizon reached (' + r.horizon_days + ' sessions)'
+        : (done != null ? 'session ' + done + ' of ' + r.horizon_days
+          : r.horizon_days + '-session horizon'),
+    }));
+  }
+  if (open && r.kill_level != null) {
+    const live = deskLive.marks[r.symbol];
+    const now = (live != null && Number.isFinite(live)) ? live : r.mark_px;
+    chips.push(h('span', {
+      class: 'c-chip' + (r.kill_breached ? ' t-down' : ''),
+      title: r.kill ? 'The stated abandon condition: ' + r.kill : 'The stated abandon level.',
+      text: 'kill ' + fmtPrice(r.kill_level)
+        + (now != null ? ' · now ' + fmtPrice(now) : '')
+        + (r.kill_breached ? ' — BREACHED' : ''),
+    }));
+  } else if (open && r.kill) {
+    chips.push(h('span', { class: 'c-chip', text: 'abandon if: ' + r.kill }));
+  }
+
+  const rowEl = h('div', { class: 'desk-outcome' }, head, pred);
+  if (chips.length) rowEl.append(h('div', { class: 'desk-outcome-facts c-chips' }, ...chips));
+  if (r.verdict_note) {
+    rowEl.append(h('p', { class: 'desk-outcome-note t-dim', text: 'Review: ' + r.verdict_note }));
+  }
+  return rowEl;
+}
+
+async function loadPredictions() {
+  const el = document.getElementById('desk-predictions');
+  const metaEl = document.getElementById('desk-predictions-meta');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const d = await apiGet('/api/desk/outcomes?limit=60');
+    const rows = d.rows || [];
+    const s = d.summary || {};
+    if (metaEl) {
+      const bits = [];
+      if (s.open) bits.push(s.open + ' open');
+      if (s.closed) bits.push(s.closed + ' closed');
+      if (s.hit_rate_pct != null) bits.push(s.hit_rate_pct + '% hit rate');
+      metaEl.textContent = bits.join(' · ');
+    }
+    clear(el);
+    if (!rows.length) {
+      renderEmpty(el, 'No graded predictions yet — every buy records one, and the grader scores them from real prices.');
+      return;
+    }
+    if (s.closed_graded) {
+      el.append(h('p', { class: 'desk-lab-honesty t-dim', text:
+        'Every buy commits to a written prediction, a deadline, and an abandon '
+        + 'level. A grader scores them from recorded prices — '
+        + s.closed_graded + ' closed prediction' + (s.closed_graded === 1 ? '' : 's')
+        + ' judged so far, ' + (s.hit_rate_pct != null ? s.hit_rate_pct + '% came true.' : '') }));
+    }
+    const opens = rows.filter(r => r.status === 'open');
+    const closed = rows.filter(r => r.status !== 'open');
+    if (opens.length) {
+      el.append(h('div', { class: 'desk-outcome-subhead', text: 'Open' }));
+      for (const r of opens) el.append(outcomeRow(r));
+    }
+    if (closed.length) {
+      el.append(h('div', { class: 'desk-outcome-subhead', text: 'Closed' }));
+      for (const r of closed) el.append(outcomeRow(r));
+    }
+  } catch (err) { renderError(el, err, loadPredictions); }
 }
 
 /* ── backtest evidence ── */
@@ -800,7 +1144,8 @@ async function loadLab() {
    One card, two views. Lessons are curated pages rewritten from measured
    results; the diary is every approach change, in order, in plain words. ── */
 const WIKI_TITLES = {
-  playbook: 'Playbook', lessons: 'Lessons', mistakes: 'Mistakes',
+  playbook: 'Playbook', setups: 'Setups', lessons: 'Lessons',
+  mistakes: 'Mistakes', postmortems: 'Postmortems',
   'market-notes': 'Market notes',
 };
 const REGIME_TAGS = {
@@ -941,8 +1286,9 @@ function renderTape(snap) {
     if (q.mid != null && !q.stale) deskLive.marks[s] = q.mid;
     else if (q.stale) delete deskLive.marks[s];
   }
-  // Fold the live mids we just captured into hero + positions rows.
-  applyLiveMarks();
+  // Fold the live mids we just captured into hero + positions rows, with an
+  // honest pill verdict for this frame (freshness × session).
+  applyLiveMarks(livePillState(snap));
 }
 
 function startTape() {
@@ -956,12 +1302,13 @@ function startTape() {
     es.onerror = () => { /* EventSource auto-reconnects; watchdog surfaces it */ };
   };
   connect();
-  // client-side watchdog: hide the LIVE pulse when the stream goes quiet so
-  // frozen numbers never masquerade as ticking ones.
+  // client-side watchdog: when the stream itself goes quiet the pill flips
+  // to DELAYED (if it was showing) so frozen numbers never masquerade as
+  // ticking ones.
   setInterval(() => {
     if (tapeLastEvent && Date.now() - tapeLastEvent > 6000) {
       const liveEl = document.getElementById('desk-hero-live');
-      if (liveEl) liveEl.hidden = true;
+      if (liveEl && !liveEl.hidden) setLivePill('delayed');
     }
   }, 3000);
 }
@@ -969,13 +1316,36 @@ function startTape() {
 /* ── recent fills: each trade + the live bid/ask it priced off ── */
 const OCC_RE_F = /^[A-Z]{1,6}\d{6}[CP]\d{8}$/;
 
+/* Rationale cell: truncated with an inline more/less toggle — the full
+   reasoning is readable in place, not trapped in a hover title. */
+function fillWhyCell(rationale) {
+  if (!rationale) return h('td', { class: 't-dim', text: '—' });
+  const CUT = 90;
+  const td = h('td', { class: 'desk-fills-why' });
+  const short = rationale.length > CUT ? rationale.slice(0, CUT) + '…' : rationale;
+  const txt = h('span', { text: short });
+  td.append(txt);
+  if (short !== rationale) {
+    let open = false;
+    const btn = h('button', { class: 'desk-fills-more', type: 'button', text: 'more' });
+    btn.addEventListener('click', () => {
+      open = !open;
+      txt.textContent = open ? rationale : short;
+      td.classList.toggle('expanded', open);
+      btn.textContent = open ? 'less' : 'more';
+    });
+    td.append(' ', btn);
+  }
+  return td;
+}
+
 async function loadFills() {
   const el = document.getElementById('desk-fills');
   const metaEl = document.getElementById('desk-fills-meta');
   if (!el) return;
   skeleton(el);
   try {
-    const rows = await apiGet('/api/desk/trades?limit=20');
+    const rows = await apiGet('/api/desk/trades?limit=200');
     if (!rows.length) { renderEmpty(el, 'No trades yet.'); if (metaEl) metaEl.textContent = ''; return; }
     if (metaEl) metaEl.textContent = rows.length + ' most recent';
     clear(el);
@@ -984,30 +1354,42 @@ async function loadFills() {
         h('th', { text: 'When' }), h('th', { text: 'Stock' }),
         h('th', { text: 'Side' }), h('th', { class: 'num', text: 'Shares' }),
         h('th', { class: 'num', text: 'Fill price' }),
-        h('th', { class: 'num', text: 'Live bid / ask', title: 'The real-time bid and ask the fill priced against at that moment' }),
+        h('th', { class: 'num', text: 'Live bid / ask', title: 'The real-time bid and ask the fill priced against at that moment, plus any fee, session, or override receipts stamped on the fill' }),
         h('th', { class: 'num', text: 'Value' }),
-        h('th', { text: 'Why', title: 'The AI\'s stated reason for this trade at the time — hover to read it in full' }))),
+        h('th', { text: 'Why', title: 'The AI\'s stated reason for this trade at the time' }))),
       h('tbody', {}, ...rows.map(r => {
         const q = r.fill_quote || {};
         const isOpt = OCC_RE_F.test(r.symbol);
         const buy = (r.side || '').toUpperCase() === 'BUY';
-        const quote = (q.bid != null && q.ask != null)
-          ? h('span', { class: 't-dim', text: fmtPrice(q.bid) + ' / ' + fmtPrice(q.ask) })
-          : h('span', { class: 't-dim', text: '—' });
-        const rationale = (r.rationale || '').trim();
-        const why = rationale
-          ? h('td', { class: 'desk-fills-why', title: rationale },
-              (rationale.length > 60 ? rationale.slice(0, 60) + '…' : rationale))
-          : h('td', { class: 't-dim', text: '—' });
+        const quoteCell = h('td', { class: 'num' },
+          (q.bid != null && q.ask != null)
+            ? h('span', { class: 't-dim', text: fmtPrice(q.bid) + ' / ' + fmtPrice(q.ask) })
+            : h('span', { class: 't-dim', text: '—' }));
+        // Receipt extras stamped on the fill: option fee, session tag,
+        // override/degraded-gate warnings — the honesty trail, visible.
+        const extras = [];
+        if (q.session && q.session !== 'regular') {
+          extras.push(pill(String(q.session).toUpperCase(), 'neutral',
+            'This fill booked outside regular trading hours.'));
+        }
+        if (q.fee && q.fee.total) {
+          extras.push(h('span', { class: 't-dim',
+            title: q.fee.contracts + ' contract(s) × ' + fmtPrice(q.fee.per_contract) + ' per-contract fee, included in the value',
+            text: 'fee ' + fmtPrice(q.fee.total) }));
+        }
+        if (q.warnings && q.warnings.length) {
+          extras.push(pill('override', 'warn', q.warnings.join('\n')));
+        }
+        if (extras.length) quoteCell.append(h('div', { class: 'desk-fill-extra' }, ...extras));
         return h('tr', {},
-          h('td', { class: 't-dim', text: timeAgo(r.t) }),
+          h('td', { class: 't-dim', title: fmtDateTimeET(r.t), text: timeAgo(r.t) }),
           h('td', {}, h('a', { href: '/symbol/' + (isOpt ? r.symbol.match(/^[A-Z]+/)[0] : r.symbol), class: 'c-link', text: r.symbol })),
           h('td', {}, pill((r.side || '').toUpperCase() || '—', buy ? 'up' : 'down')),
           h('td', { class: 'num', text: fmtNum(Math.abs(r.shares), isOpt ? 0 : 2) }),
           h('td', { class: 'num', text: fmtPrice(r.price) }),
-          h('td', { class: 'num' }, quote),
+          quoteCell,
           h('td', { class: 'num', text: fmtDollar(Math.abs(r.dollars)) }),
-          why);
+          fillWhyCell((r.rationale || '').trim()));
       })));
     el.append(table);
   } catch (err) { renderError(el, err, loadFills); }
@@ -1099,7 +1481,7 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadWhatsNew(), loadFills(), loadWiki(),
-    loadLab(), loadWatch(),
+    loadLab(), loadWatch(), loadPredictions(),
   ]);
 }
 
@@ -1204,6 +1586,7 @@ function wireSegs() {
   };
   wire('desk-lab-seg', v => { labView = v; renderLab(); });
   wire('desk-wiki-seg', v => { wikiView = v; renderNotebook(); });
+  wire('desk-decision-seg', v => { decisionView = v; applyDecisionView(); });
 }
 
 wireCollapse();
@@ -1212,4 +1595,4 @@ wireSegs();
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki(); loadLab(); loadWatch(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki(); loadLab(); loadWatch(); loadPredictions(); }, 60_000);

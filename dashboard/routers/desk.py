@@ -8,20 +8,22 @@ state, and the journal of pivots. All times are ISO UTC; the page normalizes.
 
 from __future__ import annotations
 
+import json
+import time
 from datetime import timezone
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from agent.models import (
     ACCOUNT,
-    STARTING_CAPITAL,
     DeskBacktest,
     DeskChangelog,
     DeskDecision,
     DeskEquity,
     DeskJournal,
+    DeskOutcome,
     DeskPosition,
     DeskStrategyState,
     DeskThinking,
@@ -46,106 +48,143 @@ def _iso(dt):
     return dt.isoformat()
 
 
+def _iso_any(v):
+    """ISO string from a datetime OR an already-string timestamp (the two DB
+    transports disagree on what a TIMESTAMP round-trips as)."""
+    if v is None or isinstance(v, str):
+        return v
+    return _iso(v)
+
+
+def _parse_meta(meta):
+    """A mark_meta value as a dict (transports may hand JSON back as text)."""
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = None
+    return meta if isinstance(meta, dict) else None
+
+
 @router.get("/portfolio")
-def portfolio(db: Session = Depends(get_db)):
-    """Cash, positions (marked), equity, and P&L — the book right now."""
-    from sqlalchemy import func as safunc
+def portfolio():
+    """Cash, positions (marked), equity, and P&L — the book right now.
 
-    from agent import occ
+    ONE implementation of the account math (Phase E): this endpoint calls
+    ``agent.ledger.state()`` — the exact cash-from-ledger recompute, option
+    multiplier, and weight math the agent trades against — instead of the
+    old parallel re-derivation, which had already drifted on rounding.
+    ``vs_spy`` reuses the ledger's own TOTAL-RETURN SPY helpers
+    (``_spy_closes`` / ``_spy_window_pct``): dividend back-adjusted closes,
+    baseline = last close STRICTLY BEFORE the ET inception date, and None
+    means too-young-to-benchmark, never zero. ``mark_meta`` (the latest
+    snapshot's mark provenance) rides along additively.
+    """
+    from agent import ledger
+    from agent.store import get_store
 
-    positions = (db.query(DeskPosition)
-                 .filter(DeskPosition.account == ACCOUNT).all())
-    # Cash = starting capital + Σ sell − Σ buy, computed from the trade ledger
-    # (source of truth) on this read-only session — same formula as agent.ledger.
-    by_side = {side: float(total) for side, total in (
-        db.query(DeskTrade.side, safunc.coalesce(safunc.sum(DeskTrade.dollars), 0.0))
-        .filter(DeskTrade.account == ACCOUNT).group_by(DeskTrade.side).all())}
-    c = round(STARTING_CAPITAL + by_side.get("SELL", 0.0) - by_side.get("BUY", 0.0), 2)
-    rows, pos_value = [], 0.0
-    for p in positions:
-        mark = p.last_price or p.avg_price
-        m = 100 if occ.is_option(p.symbol) else 1  # OCC contracts are ×100
-        mv = round(p.shares * mark * m, 2)
-        pos_value += mv
-        rows.append({
-            "symbol": p.symbol, "shares": p.shares,
-            "avg_price": round(p.avg_price, 4), "last_price": round(mark, 4),
-            "market_value": mv, "cost_basis": round(p.shares * p.avg_price * m, 2),
-            "unrealized_pnl": round(p.shares * (mark - p.avg_price) * m, 2),
-            "opened_at": _iso(p.opened_at), "marked_at": _iso(p.marked_at),
-        })
-    equity = round(c + pos_value, 2)
-    for r in rows:
-        r["weight"] = round(r["market_value"] / equity, 4) if equity else 0.0
-    rows.sort(key=lambda r: -r["market_value"])
-    total_return_pct = round((equity - STARTING_CAPITAL) / STARTING_CAPITAL * 100, 2)
+    store = get_store()
+    st = ledger.state(store)
 
-    # vs SPY since inception — a long book's raw return is mostly market beta,
-    # so the hero shows the difference. SPY closes come from daily_bars
-    # (index_daily froze at the cutover), back-adjusted to TOTAL RETURN with
-    # the SPY rows in ``dividends`` — the book credits dividend cash on held
-    # names at the ex-date (settle books it), so a price-only SPY would
-    # flatter the book by the index's own yield. Same pure adjustment and
-    # baseline convention as agent.ledger._spy_closes/_spy_window_pct:
-    # baseline = last close STRICTLY BEFORE the ET inception date (a close ON
-    # it is 16:00, after the first fill — and on day one it would be the
-    # endpoint itself, a confident fake 0.0); missing dividend rows degrade
-    # to price return. One bounded range query per call — the endpoint is
-    # polled every minute per client, and the book is young. (Short-lived
-    # duplication of the ledger's query plumbing; Phase E unifies.)
+    # opened_at/marked_at are page-only fields state() doesn't emit — merge
+    # them from the same positions projection state() just read.
+    meta_by_sym: dict = {}
+    try:
+        for p in store.select("desk_positions",
+                              columns="symbol,opened_at,marked_at",
+                              filters={"account": ACCOUNT}):
+            meta_by_sym[p["symbol"]] = p
+    except Exception:  # noqa: BLE001 — cosmetic fields, never a 500
+        meta_by_sym = {}
+    positions = []
+    for r in st["positions"]:
+        m = meta_by_sym.get(r["symbol"]) or {}
+        positions.append({**r, "opened_at": _iso_any(m.get("opened_at")),
+                          "marked_at": _iso_any(m.get("marked_at"))})
+
+    total_return_pct = round(st["total_return_pct"], 2)
     vs_spy = None
-    first_trade = (db.query(safunc.min(DeskTrade.ts))
-                   .filter(DeskTrade.account == ACCOUNT).scalar())
-    if first_trade is not None:
-        from datetime import date as _date, timedelta as _td
-
-        from agent.ledger import _adjust_closes_for_dividends, _et_date
-        from edgefinder.db.models import DailyBar, DividendRecord
-
-        inception = _date.fromisoformat(_et_date(first_trade))
-        lo = inception - _td(days=10)  # weekend/holiday baseline buffer
-        spy_rows = (db.query(DailyBar.date, DailyBar.close)
-                    .filter(DailyBar.symbol == "SPY", DailyBar.date >= lo)
-                    .order_by(DailyBar.date).all())
-        closes = [(str(d), float(c)) for d, c in spy_rows if c]
-        divs = sorted((str(x), float(a)) for x, a in
-                      db.query(DividendRecord.ex_date, DividendRecord.cash_amount)
-                      .filter(DividendRecord.symbol == "SPY",
-                              DividendRecord.ex_date >= lo).all() if a)
-        closes = _adjust_closes_for_dividends(closes, divs)
-        base = base_d = None
-        for d, c in closes:
-            if d < str(inception):
-                base, base_d = c, d
-            else:
-                break
-        if base and closes and closes[-1][0] != base_d:
-            end_d, end = closes[-1]
-            spy_pct = round((end - base) / base * 100, 2)
-            vs_spy = {"inception": str(inception), "spy_as_of": end_d,
+    first = store.select("desk_trades", columns="ts",
+                         filters={"account": ACCOUNT},
+                         order=[("ts", "asc")], limit=1)
+    inception = ledger._et_date(first[0]["ts"]) if first and first[0].get("ts") else None
+    if inception:
+        spy = ledger._spy_closes(store, since=inception)
+        spy_pct = ledger._spy_window_pct(spy, inception)
+        if spy_pct is not None:
+            vs_spy = {"inception": inception, "spy_as_of": spy[-1][0],
                       "spy_return_pct": spy_pct,
                       "alpha_pct": round(total_return_pct - spy_pct, 2)}
 
     return {
-        "account": ACCOUNT, "cash": c, "positions_value": round(pos_value, 2),
-        "equity": equity, "starting_capital": STARTING_CAPITAL,
-        "total_pnl": round(equity - STARTING_CAPITAL, 2),
+        "account": st["account"], "cash": st["cash"],
+        "positions_value": st["positions_value"], "equity": st["equity"],
+        "starting_capital": st["starting_capital"],
+        "total_pnl": st["total_pnl"],
         "total_return_pct": total_return_pct,
         "vs_spy": vs_spy,
-        "positions": rows,
+        "mark_meta": st.get("mark_meta"),
+        "positions": positions,
     }
 
 
 @router.get("/equity")
-def equity(db: Session = Depends(get_db), limit: int = Query(2000, le=10000)):
-    """Equity-curve series (oldest→newest) for the chart."""
+def equity(db: Session = Depends(get_db), limit: int = Query(2000, le=10000),
+           with_spy: int = Query(0, ge=0, le=1)):
+    """Equity-curve series (oldest→newest) for the chart.
+
+    Additive honesty (Phase E): a point whose stored ``mark_meta`` flagged
+    the snapshot carries ``degraded: true`` (+ ``cost_marked_value_pct`` /
+    ``cost_marked``) — cost-basis marks are fake-flat P&L and the chart must
+    show them, not bury them. Plain calls keep the original bare-list shape.
+
+    With ``with_spy=1`` the response becomes ``{"points": [...], "spy":
+    [{date, pct}]}`` — a TOTAL-RETURN SPY series over the same window,
+    rebased to inception = 0, computed with the ledger's own helpers (the
+    exact convention behind /portfolio's vs_spy) so the chart can overlay
+    the benchmark.
+    """
     rows = (db.query(DeskEquity)
             .filter(DeskEquity.account == ACCOUNT)
             .order_by(desc(DeskEquity.ts)).limit(limit).all())
     rows.reverse()
-    return [{"t": _iso(r.ts), "equity": r.equity, "cash": r.cash,
+    points = []
+    for r in rows:
+        p = {"t": _iso(r.ts), "equity": r.equity, "cash": r.cash,
              "positions_value": r.positions_value, "return_pct": r.return_pct}
-            for r in rows]
+        meta = _parse_meta(r.mark_meta)
+        if meta and meta.get("degraded"):
+            p["degraded"] = True
+            if meta.get("cost_marked_value_pct") is not None:
+                p["cost_marked_value_pct"] = meta["cost_marked_value_pct"]
+            if meta.get("cost_marked"):
+                p["cost_marked"] = meta["cost_marked"]
+        points.append(p)
+    if not with_spy:
+        return points
+
+    from agent import ledger
+    from agent.store import get_store
+
+    store = get_store()
+    spy_series: list[dict] = []
+    first = store.select("desk_trades", columns="ts",
+                         filters={"account": ACCOUNT},
+                         order=[("ts", "asc")], limit=1)
+    inception = ledger._et_date(first[0]["ts"]) if first and first[0].get("ts") else None
+    if inception:
+        closes = ledger._spy_closes(store, since=inception)
+        base = None
+        for d, c in closes:
+            if d < inception:
+                base = c
+            else:
+                break
+        if base:
+            spy_series = [{"date": d, "pct": round((c - base) / base * 100, 2)}
+                          for d, c in closes if d >= inception]
+    return {"points": points, "spy": spy_series, "spy_inception": inception,
+            "spy_basis": "total_return"}
 
 
 @router.get("/decision/latest")
@@ -163,6 +202,183 @@ def latest_decision(db: Session = Depends(get_db)):
         "target_weights": d.target_weights or {}, "picks": d.picks or [],
         "watchlist": d.watchlist or [], "rejected": d.rejected or [],
         "strategy_version": d.strategy_version,
+    }
+
+
+@router.get("/decisions")
+def decisions_archive(db: Session = Depends(get_db),
+                      limit: int = Query(10, le=50),
+                      before: str | None = None):
+    """The decision archive, newest first — the full dossier per row (same
+    shape as /decision/latest, plus ``id``). Page with ``before=<row id>``
+    (or an ISO timestamp): returns rows strictly older than it;
+    ``next_before`` is ready to pass back when more rows may exist."""
+    q = db.query(DeskDecision).filter(DeskDecision.account == ACCOUNT)
+    if before:
+        b = before.strip()
+        if b.isdigit():
+            # keyset pagination on (ts, id) — the sort key. Filtering on raw
+            # id would silently skip rows whenever id order and ts order
+            # disagree (backfills, imported history).
+            from sqlalchemy import and_, or_
+
+            anchor = (db.query(DeskDecision)
+                      .filter(DeskDecision.account == ACCOUNT,
+                              DeskDecision.id == int(b)).first())
+            if anchor is None:
+                raise HTTPException(status_code=404,
+                                    detail="before row id not found")
+            q = q.filter(or_(DeskDecision.ts < anchor.ts,
+                             and_(DeskDecision.ts == anchor.ts,
+                                  DeskDecision.id < anchor.id)))
+        else:
+            from datetime import datetime as _dt
+            try:
+                ts = _dt.fromisoformat(b.replace("Z", "+00:00"))
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail="before must be a decision row id or an ISO timestamp")
+            if ts.tzinfo is not None:  # desk timestamps are naive UTC
+                ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+            q = q.filter(DeskDecision.ts < ts)
+    rows = (q.order_by(desc(DeskDecision.ts), desc(DeskDecision.id))
+            .limit(limit).all())
+    out = [{
+        "id": d.id, "run_id": d.run_id, "ts": _iso(d.ts),
+        "decision_date": str(d.decision_date) if d.decision_date else None,
+        "regime": d.regime, "summary": d.summary,
+        "target_weights": d.target_weights or {}, "picks": d.picks or [],
+        "watchlist": d.watchlist or [], "rejected": d.rejected or [],
+        "strategy_version": d.strategy_version,
+    } for d in rows]
+    return {"decisions": out,
+            "next_before": out[-1]["id"] if out and len(out) == limit else None}
+
+
+@router.get("/outcomes")
+def outcomes_scoreboard(db: Session = Depends(get_db),
+                        status: str = Query("all"),
+                        limit: int = Query(100, le=200)):
+    """The predictions scoreboard — machine-graded pick facts
+    (``desk_outcomes``, written by ``agent.ledger grade``) joined with each
+    pick's own words (prediction / horizon / kill free text from the
+    decision row) so the page shows what was SAID next to what HAPPENED.
+
+    Open rows come first (newest decision first), then recent closed rows.
+    ``sessions_elapsed`` counts stored SPY closes on/after the decision's ET
+    date (the ledger's session convention) for horizon countdowns.
+    ``summary`` carries whole-table counts by status and verdict plus the
+    hit rate over closed, reflection-graded rows (TRUE vs FALSE)."""
+    from bisect import bisect_left
+
+    from sqlalchemy import func as safunc
+
+    from agent import occ
+    from agent.ledger import _et_date
+    from edgefinder.db.models import DailyBar
+
+    def fetch(st: str, lim: int):
+        if lim <= 0:
+            return []
+        return (db.query(DeskOutcome)
+                .filter(DeskOutcome.account == ACCOUNT,
+                        DeskOutcome.status == st)
+                .order_by(desc(DeskOutcome.id)).limit(lim).all())
+
+    if status in ("open", "closed"):
+        rows = fetch(status, limit)
+    else:
+        rows = fetch("open", limit)
+        rows += fetch("closed", limit - len(rows))
+
+    # Pick context: one decisions query covering every run_id involved.
+    run_ids = sorted({r.run_id for r in rows})
+    decisions: dict[str, DeskDecision] = {}
+    if run_ids:
+        for d in (db.query(DeskDecision)
+                  .filter(DeskDecision.account == ACCOUNT,
+                          DeskDecision.run_id.in_(run_ids)).all()):
+            decisions[d.run_id] = d
+    run_dates = {rid: (_et_date(d.ts) if d.ts is not None else None)
+                 for rid, d in decisions.items()}
+
+    # Completed SPY sessions since each decision — one bounded date query.
+    spy_dates: list[str] = []
+    dated = [v for v in run_dates.values() if v]
+    if dated:
+        spy_dates = [str(x[0])[:10] for x in
+                     (db.query(DailyBar.date)
+                      .filter(DailyBar.symbol == "SPY",
+                              DailyBar.date >= min(dated))
+                      .order_by(DailyBar.date).all())]
+
+    out_rows = []
+    for r in rows:
+        d = decisions.get(r.run_id)
+        pick: dict = {}
+        if d:
+            for p in (d.picks or []):
+                if isinstance(p, dict) \
+                        and str(p.get("symbol") or "").upper() == r.symbol:
+                    pick = p
+                    break
+        rd = run_dates.get(r.run_id)
+        sessions = (len(spy_dates) - bisect_left(spy_dates, rd)
+                    if rd and spy_dates else None)
+        out_rows.append({
+            "id": r.id, "run_id": r.run_id, "symbol": r.symbol,
+            "is_option": occ.is_option(r.symbol),
+            "status": r.status, "decision_ts": _iso(d.ts) if d else None,
+            "action": pick.get("action"), "prediction": pick.get("prediction"),
+            "kill": pick.get("kill"),
+            "horizon_days": r.horizon_days,
+            "horizon_elapsed": r.horizon_elapsed,
+            "sessions_elapsed": sessions,
+            "entry_avg_px": r.entry_avg_px, "mark_px": r.mark_px,
+            "mark_basis": r.mark_basis, "since_pct": r.since_pct,
+            "spy_pct": r.spy_pct, "alpha_pct": r.alpha_pct,
+            "exit_kind": r.exit_kind, "exit_avg_px": r.exit_avg_px,
+            "realized_pnl": r.realized_pnl,
+            "kill_level": r.kill_level, "kill_breached": r.kill_breached,
+            "degraded": bool(r.degraded),
+            "verdict": r.verdict, "verdict_note": r.verdict_note,
+            "grade_date": str(r.grade_date) if r.grade_date else None,
+            "graded_at": _iso(r.graded_at),
+        })
+    opens = [x for x in out_rows if x["status"] == "open"]
+    closed = [x for x in out_rows if x["status"] != "open"]
+    key = lambda x: (x["decision_ts"] or "", x["id"])  # noqa: E731
+    opens.sort(key=key, reverse=True)
+    closed.sort(key=key, reverse=True)
+
+    status_counts = {s: int(n) for s, n in
+                     (db.query(DeskOutcome.status, safunc.count())
+                      .filter(DeskOutcome.account == ACCOUNT)
+                      .group_by(DeskOutcome.status).all())}
+    verdict_counts: dict[str, int] = {}
+    for v, n in (db.query(DeskOutcome.verdict, safunc.count())
+                 .filter(DeskOutcome.account == ACCOUNT)
+                 .group_by(DeskOutcome.verdict).all()):
+        verdict_counts[v or "ungraded"] = int(n)
+
+    def _closed_verdicts(v: str) -> int:
+        return int(db.query(safunc.count())
+                   .filter(DeskOutcome.account == ACCOUNT,
+                           DeskOutcome.status == "closed",
+                           DeskOutcome.verdict == v).scalar() or 0)
+
+    hits, misses = _closed_verdicts("TRUE"), _closed_verdicts("FALSE")
+    return {
+        "summary": {
+            "open": status_counts.get("open", 0),
+            "closed": status_counts.get("closed", 0),
+            "verdicts": verdict_counts,
+            "closed_graded": hits + misses,
+            "hit_rate_pct": (round(hits / (hits + misses) * 100, 1)
+                             if hits + misses else None),
+        },
+        "rows": opens + closed,
     }
 
 
@@ -221,7 +437,9 @@ def wiki(db: Session = Depends(get_db)):
     its own measured wins and losses (Karpathy-style system-prompt learning).
     Served in canonical page order for the "What the AI has learned" card."""
     rows = db.query(DeskWiki).filter(DeskWiki.account == ACCOUNT).all()
-    order = {"playbook": 0, "lessons": 1, "mistakes": 2, "market-notes": 3}
+    # Mirrors agent.brain.WIKI_SLUGS — the canonical page order.
+    order = {"playbook": 0, "setups": 1, "lessons": 2, "mistakes": 3,
+             "postmortems": 4, "market-notes": 5}
     rows.sort(key=lambda r: order.get(r.slug, 9))
     return {"pages": [{"slug": r.slug, "title": r.title, "body": r.body,
                        "revision": r.revision,
@@ -376,13 +594,42 @@ def live_quotes():
     return cache.snapshot()
 
 
+# The equity market session ('regular' | 'extended' | 'closed'), 60s-cached
+# so the 1 Hz SSE loop never talks to Alpaca more than once a minute. None
+# when keys/clock are unavailable — the page then falls back to
+# freshness-only pill logic (never a fake "open").
+_SESSION_TTL = 60.0
+_session_cache: tuple[float, str | None] = (0.0, None)
+
+
+def _market_session() -> str | None:
+    global _session_cache
+    now = time.time()
+    ts, val = _session_cache
+    if now - ts < _SESSION_TTL:
+        return val
+    val = None
+    try:
+        from agent import broker
+
+        if broker.enabled():
+            val = broker.Broker().session()
+    except Exception:  # noqa: BLE001 — unknown session, never a dead stream
+        val = None
+    _session_cache = (now, val)
+    return val
+
+
 @router.get("/stream")
 async def stream():
     """Server-Sent Events: the live tape for the /desk page.
 
     Emits an ``event: quotes`` frame with the full cache snapshot every second
-    (the universe is small, so full snapshots beat diff bookkeeping). The
-    browser's EventSource auto-reconnects; frames double as heartbeats."""
+    (the universe is small, so full snapshots beat diff bookkeeping). Each
+    frame also carries ``session`` (regular|extended|closed|null) so the page
+    can tell a quiet-but-open tape from a closed market — the LIVE pill's
+    honesty input. The browser's EventSource auto-reconnects; frames double
+    as heartbeats."""
     import asyncio as _asyncio
     import json as _json
 
@@ -392,7 +639,11 @@ async def stream():
 
     async def gen():
         while True:
-            payload = _json.dumps(cache.snapshot(), default=str)
+            snap = cache.snapshot()
+            # off-loop: the cached path returns instantly; the once-a-minute
+            # refresh must not stall every other request on a network call.
+            snap["session"] = await _asyncio.to_thread(_market_session)
+            payload = _json.dumps(snap, default=str)
             yield f"event: quotes\ndata: {payload}\n\n"
             await _asyncio.sleep(1.0)
 
@@ -401,25 +652,132 @@ async def stream():
                                       "X-Accel-Buffering": "no"})
 
 
+# ── options endpoint guards (E4): allowlist + a tiny rate limit ──
+#
+# /options/{symbol} fans out to LIVE paid Alpaca calls (quote + chain) for
+# whatever string is in the URL — a public endpoint must not be an open
+# proxy to a metered API. The allowlist is every symbol the desk actually
+# has a reason to show: held positions (options mapped to their underlying),
+# armed/tripped tripwires, the latest decision's picks + watchlist, and the
+# streamer's seed universe. One cheap cached query, 60s TTL.
+
+_OPTIONS_ALLOW_TTL = 60.0
+_options_allow: tuple[float, frozenset] | None = None
+
+
+def _options_allowlist(db: Session) -> frozenset[str]:
+    global _options_allow
+    now = time.time()
+    if _options_allow is not None and now - _options_allow[0] < _OPTIONS_ALLOW_TTL:
+        return _options_allow[1]
+
+    from agent import occ
+    from agent.models import DeskWatch
+    from config.settings import settings
+
+    syms: set[str] = set()
+
+    def add(s) -> None:
+        s = str(s or "").upper().strip()
+        if not s or s == "BOOK":
+            return
+        if occ.is_option(s):
+            try:
+                s = occ.parse(s)["underlying"]
+            except Exception:  # noqa: BLE001 — a garbled OCC symbol adds nothing
+                return
+        syms.add(s)
+
+    for (s,) in (db.query(DeskPosition.symbol)
+                 .filter(DeskPosition.account == ACCOUNT).all()):
+        add(s)
+    for (s,) in (db.query(DeskWatch.symbol)
+                 .filter(DeskWatch.account == ACCOUNT,
+                         DeskWatch.status.in_(("armed", "tripped"))).all()):
+        add(s)
+    d = (db.query(DeskDecision).filter(DeskDecision.account == ACCOUNT)
+         .order_by(desc(DeskDecision.ts)).first())
+    if d:
+        for p in (d.picks or []):
+            add(p.get("symbol") if isinstance(p, dict) else p)
+        for w in (d.watchlist or []):
+            add(w.get("symbol") if isinstance(w, dict) else w)
+    for s in str(settings.stream_symbols or "").split(","):
+        add(s)
+
+    allow = frozenset(syms)
+    _options_allow = (now, allow)
+    return allow
+
+
+class _TokenBucket:
+    """Tiny per-key token bucket — dependency-free, in-process. Refills
+    continuously; a full-again bucket is pruned so the dict stays bounded."""
+
+    def __init__(self, capacity: float = 30.0, refill_per_sec: float = 0.5):
+        self.capacity = float(capacity)
+        self.refill = float(refill_per_sec)
+        self._buckets: dict[str, tuple[float, float]] = {}  # key -> (tokens, ts)
+
+    def allow(self, key: str) -> bool:
+        now = time.time()
+        tokens, ts = self._buckets.get(key, (self.capacity, now))
+        tokens = min(self.capacity, tokens + (now - ts) * self.refill)
+        ok = tokens >= 1.0
+        self._buckets[key] = (tokens - 1.0 if ok else tokens, now)
+        if len(self._buckets) > 2048:  # bound memory under key churn
+            self._buckets = {k: v for k, v in self._buckets.items()
+                             if v[0] < self.capacity - 1.0}
+        return ok
+
+    def reset(self) -> None:
+        self._buckets.clear()
+
+
+_options_bucket = _TokenBucket()
+
+
+def _client_key(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 @router.get("/options/{symbol}")
-def options_summary(symbol: str):
+def options_summary(symbol: str, request: Request, db: Session = Depends(get_db)):
     """Live options intelligence for an underlying: spot, focus expiry, ATM IV,
     straddle-implied expected move, 25-delta skew, and a strikes table around
-    the money. 60s-cached; degrades to {"available": false} without keys."""
+    the money. 60s-cached; degrades to {"available": false} without keys.
+    Allowlisted (held ∪ watched ∪ latest picks/watchlist ∪ streamed seeds)
+    and rate-limited — this endpoint triggers metered external calls."""
     from agent import options_data
 
-    return options_data.get_summary(symbol)
+    sym = symbol.upper().strip()
+    if not _options_bucket.allow(_client_key(request)):
+        raise HTTPException(status_code=429,
+                            detail="too many options requests — slow down")
+    if sym not in _options_allowlist(db):
+        raise HTTPException(status_code=404,
+                            detail=f"{sym} is not on the desk's radar")
+    return options_data.get_summary(sym)
 
 
 @router.get("/options/{symbol}/history")
-def options_history(symbol: str, limit: int = Query(250, le=1000)):
+def options_history(symbol: str, db: Session = Depends(get_db),
+                    limit: int = Query(250, le=1000)):
     """The IV data bank series (one snapshot/day, accumulated by the agent's
-    refresh) — powers the IV/expected-move history charts."""
+    refresh) — powers the IV/expected-move history charts. DB-only (no
+    external calls), so the allowlist alone is enough."""
     from agent import options_data
     from agent.store import get_store
 
-    return {"symbol": symbol.upper(),
-            "series": options_data.history(get_store(), symbol, limit=limit)}
+    sym = symbol.upper().strip()
+    if sym not in _options_allowlist(db):
+        raise HTTPException(status_code=404,
+                            detail=f"{sym} is not on the desk's radar")
+    return {"symbol": sym,
+            "series": options_data.history(get_store(), sym, limit=limit)}
 
 
 @router.get("/broker-health")
@@ -459,6 +817,10 @@ def data_health(db: Session = Depends(get_db)):
     a handful of held names current while the other ~2,000 symbols go stale.
     This counts bar rows per recent date and reports sessions since the last
     full-coverage ingest (one definition, shared with agent.preflight).
+
+    ``marks`` (additive, Phase E) surfaces the latest equity snapshot's mark
+    provenance — degraded flag + which symbols were marked at cost basis —
+    so the desk pill can show a fake-flat book for what it is.
     """
     from datetime import timedelta
 
@@ -469,11 +831,23 @@ def data_health(db: Session = Depends(get_db)):
 
     latest = db.query(safunc.max(DailyBar.date)).scalar()
     if latest is None:
-        return coverage_verdict([])
-    lo = latest - timedelta(days=21)
-    rows = (db.query(DailyBar.date, safunc.count(DailyBar.symbol))
-            .filter(DailyBar.date >= lo).group_by(DailyBar.date).all())
-    return coverage_verdict(rows)
+        out = coverage_verdict([])
+    else:
+        lo = latest - timedelta(days=21)
+        rows = (db.query(DailyBar.date, safunc.count(DailyBar.symbol))
+                .filter(DailyBar.date >= lo).group_by(DailyBar.date).all())
+        out = coverage_verdict(rows)
+    meta = _parse_meta(
+        (db.query(DeskEquity.mark_meta)
+         .filter(DeskEquity.account == ACCOUNT)
+         .order_by(desc(DeskEquity.ts), desc(DeskEquity.id))
+         .first() or [None])[0])
+    out["marks"] = None if meta is None else {
+        "degraded": bool(meta.get("degraded")),
+        "cost_marked": meta.get("cost_marked") or [],
+        "cost_marked_value_pct": meta.get("cost_marked_value_pct"),
+    }
+    return out
 
 
 @router.get("/watch")

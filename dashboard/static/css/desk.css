@@ -477,6 +477,63 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 /* holdings: the per-row next-dividend note */
 .desk-pos-div { font-size: var(--t-fs-xs); cursor: help; white-space: nowrap; }
 
+/* ── v9.10 Phase E: honest desk ── */
+
+/* LIVE pill truth: DELAYED / CLOSED variants — muted, no pulse. The green
+   pulsing dot is reserved for genuinely fresh quotes in an open session. */
+.desk-hero-live.delayed .desk-live-dot,
+.desk-hero-live.closed .desk-live-dot {
+  animation: none;
+  background: var(--t-text-3);
+}
+.desk-hero-live.delayed .desk-hero-live-label { color: var(--t-warn); }
+.desk-hero-live.closed .desk-hero-live-label { color: var(--t-text-3); }
+
+/* equity chart legend (account / SPY overlay / live-estimate tip) */
+.desk-equity-legend {
+  display: flex; gap: var(--t-space-4); flex-wrap: wrap;
+  font-size: var(--t-fs-xs); padding: 2px var(--t-space-2) var(--t-space-2);
+}
+.desk-legend-item { display: inline-flex; align-items: center; gap: 6px; cursor: help; }
+.desk-legend-swatch { width: 14px; height: 0; border-top: 2px solid; display: inline-block; }
+.desk-legend-swatch.acct { border-color: var(--t-accent); }
+.desk-legend-swatch.spy { border-color: var(--t-benchmark); }
+.desk-legend-swatch.live { border-top-style: dashed; border-color: var(--t-accent); }
+
+/* predictions scoreboard */
+.desk-outcome { padding: var(--t-space-3) 0; border-bottom: 1px solid var(--t-border); }
+.desk-outcome:last-child { border-bottom: none; padding-bottom: 0; }
+.desk-outcome-head { display: flex; align-items: center; gap: var(--t-space-2); flex-wrap: wrap; }
+.desk-outcome-sym { font-weight: 700; color: var(--t-text); text-decoration: none; }
+.desk-outcome-sym:hover { color: var(--t-accent); }
+.desk-outcome-pred { margin: var(--t-space-1) 0 0; color: var(--t-text-2); line-height: 1.5; }
+.desk-outcome-facts { margin-top: var(--t-space-2); }
+.desk-outcome-subhead {
+  margin: var(--t-space-3) 0 var(--t-space-1);
+  font-weight: 700; color: var(--t-text);
+  font-size: var(--t-fs-sm); text-transform: uppercase; letter-spacing: 0.06em;
+}
+.desk-outcome-note { margin: var(--t-space-1) 0 0; font-size: var(--t-fs-sm); line-height: 1.5; }
+
+/* decision archive (the History view of the decision card) */
+.desk-dec-hist-row { padding: var(--t-space-3) 0; border-bottom: 1px solid var(--t-border); }
+.desk-dec-hist-row:last-child { border-bottom: none; }
+.desk-dec-hist-head { display: flex; align-items: center; gap: var(--t-space-2); flex-wrap: wrap; }
+.desk-dec-hist-when { font-family: var(--t-font-mono); font-size: var(--t-fs-sm); color: var(--t-text); }
+.desk-dec-hist-sum { margin: var(--t-space-1) 0 0; color: var(--t-text-2); line-height: 1.5; }
+.desk-dec-hist-body { margin-top: var(--t-space-3); }
+.desk-dec-rej { margin: var(--t-space-2) 0 0; padding-left: var(--t-space-4); color: var(--t-text-2); font-size: var(--t-fs-sm); }
+.desk-dec-rej li { margin: 2px 0; }
+
+/* trade receipts: expandable rationale + receipt extras */
+.desk-fills-why.expanded { max-width: none; white-space: normal; }
+.desk-fills-more {
+  font: inherit; font-size: var(--t-fs-xs); color: var(--t-accent);
+  background: none; border: none; cursor: pointer; padding: 0 2px;
+}
+.desk-fills-more:hover { text-decoration: underline; }
+.desk-fill-extra { display: flex; gap: var(--t-space-2); justify-content: flex-end; margin-top: 2px; font-size: var(--t-fs-xs); }
+
 @media (max-width: 640px) {
   .desk-hero-indices { width: 100%; }
   .desk-card-seg button { padding: 3px 8px; }

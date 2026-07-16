@@ -67,6 +67,11 @@
   </div>
   <div class="c-card-sub">The whole account (cash + investments), recorded every trading cycle. Started at $100,000.</div>
   <div class="c-card-body tight">
+    <div class="desk-equity-legend t-dim" id="desk-equity-legend" hidden>
+      <span class="desk-legend-item"><span class="desk-legend-swatch acct"></span>Account</span>
+      <span class="desk-legend-item" title="What $100,000 put into the S&amp;P 500 (SPY, dividends reinvested) on the account's first trade day would be worth."><span class="desk-legend-swatch spy"></span>$100k in the S&amp;P 500</span>
+      <span class="desk-legend-item" title="The dashed tip is a live estimate from real-time quotes — not yet a recorded mark."><span class="desk-legend-swatch live"></span>live estimate</span>
+    </div>
     <div class="ch-shell">
       <div class="ch-pane tall" id="desk-equity-chart"></div>
     </div>
@@ -120,13 +125,18 @@
         <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
         <span>The latest decision</span>
         <span class="spacer"></span>
+        <div class="c-seg desk-card-seg" id="desk-decision-seg">
+          <button data-view="latest" class="active" type="button">Latest</button>
+          <button data-view="history" type="button">History</button>
+        </div>
         <span id="desk-decision-when" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">What the AI decided on its most recent cycle — what it bought, held, or sold, and the reasoning behind each pick.</div>
+      <div class="c-card-sub">What the AI decided on its most recent cycle — what it bought, held, or sold, and the reasoning behind each pick. "History" browses every past decision in full.</div>
       <div class="c-card-body">
         <div id="desk-summary" class="mb-16"></div>
         <div id="desk-picks"></div>
         <div id="desk-watchlist" class="mt-16"></div>
+        <div id="desk-decision-history" hidden></div>
       </div>
     </div>
 
@@ -151,6 +161,17 @@
     <p class="desk-zone-sub">What the AI is learning — from 21 years of history every night, and from its own results every week.</p>
   </header>
   <div class="desk-zone-grid">
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="predictions">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Predictions vs outcomes</span>
+        <span class="spacer"></span>
+        <span id="desk-predictions-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">Every prediction the AI wrote down when it bought — tracked, machine-graded against what actually happened, and judged TRUE or FALSE by the weekly review. The scoreboard it cannot argue with.</div>
+      <div class="c-card-body" id="desk-predictions"></div>
+    </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="lab">
       <div class="c-card-header">

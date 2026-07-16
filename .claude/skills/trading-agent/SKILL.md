@@ -79,6 +79,9 @@ short, candid lines; this is the live "thinking" panel the owner watches.
 ### 0. Preflight (always first)
 - `python -m agent.preflight` — DB reachability + data freshness. Non-zero →
   STOP and report; don't trade around a broken environment.
+  (A `--strict` flag exists for humans/CI — it adds a broker clock check and
+  exits non-zero on soft failures; the cycle keeps the degrade-gate behavior
+  below, never `--strict`.)
 - **Check `research_ok` in the preflight JSON.** `false` means the nightly
   whole-market ingest has been dead for 3+ sessions — universe rankings and
   scan indicators are stale even though your held names look fresh (the

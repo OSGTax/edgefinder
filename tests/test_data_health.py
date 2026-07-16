@@ -194,6 +194,48 @@ def test_preflight_exposes_research_ok_and_siblings(store, monkeypatch):
     assert len(sib["warnings"]) == 2
 
 
+def test_preflight_strict_flag(store, monkeypatch, capsys):
+    """--strict adds a broker check and escalates soft failures to exit 3;
+    without it, behavior (checks emitted, exit code) is unchanged."""
+    import agent.data as agent_data
+    from agent import broker as broker_mod, preflight
+
+    monkeypatch.setattr(agent_data, "FULL_COVERAGE_MIN", 5)
+    seed_bars(store, D0, ["SPY", "AAA", "BBB", "CCC", "DDD"])
+    monkeypatch.setattr(broker_mod, "enabled", lambda: False)  # no keys here
+
+    # default run: no broker check at all — output unchanged from pre-E4
+    out = preflight.run()
+    assert "broker" not in out["checks"]
+    assert out["ok"] is True and out["research_ok"] is True
+
+    # strict run: broker check present but NON-critical (ok stays True)
+    out = preflight.run(strict=True)
+    assert out["checks"]["broker"]["ok"] is False
+    assert "no Alpaca keys" in out["checks"]["broker"]["error"]
+    assert out["ok"] is True
+
+    # exit codes: default 0; --strict escalates the unreachable broker to 3
+    assert preflight.main([]) == 0
+    assert preflight.main(["--strict"]) == 3
+
+    # --strict also escalates research_ok=false, even with a healthy broker
+    class _FakeBroker:
+        def is_market_open(self):
+            return True
+
+    monkeypatch.setattr(broker_mod, "enabled", lambda: True)
+    monkeypatch.setattr(broker_mod, "Broker", _FakeBroker)
+    for n in (1, 2, 3):  # kill the nightly ingest → coverage goes red
+        seed_bars(store, D0 + timedelta(days=n), ["SPY", "AAA"])
+    out = preflight.run(strict=True)
+    assert out["checks"]["broker"]["ok"] is True
+    assert out["research_ok"] is False
+    assert preflight.main([]) == 0            # degrade-gate: still exit 0
+    assert preflight.main(["--strict"]) == 3  # strict: escalated
+    capsys.readouterr()  # swallow the JSON prints
+
+
 # ── /api/desk/data-health ──
 
 

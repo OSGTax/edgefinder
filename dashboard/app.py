@@ -24,7 +24,7 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 
-__version__ = "9.9.1"
+__version__ = "9.10.0"
 
 
 @asynccontextmanager
@@ -53,12 +53,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Public READ-ONLY API: any origin may read (wildcard), but credentials are
+# never accepted — nothing on the desk uses cookies or auth headers, and
+# "*" + credentials is a security misconfiguration browsers only sometimes
+# save you from. GET-only matches the surface: there are no write routes.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["Accept", "Content-Type"],
 )
 
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")

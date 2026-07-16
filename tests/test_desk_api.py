@@ -27,6 +27,14 @@ def client(tmp_path, monkeypatch):
     agent_data._session_factory = None
     deps._engine = deps._session_factory = None
 
+    # Reset the desk router's in-process caches (options allowlist, options
+    # rate-limit bucket, market-session cache) — module state must not leak
+    # a previous test's DB view into this one.
+    import dashboard.routers.desk as desk_router
+    desk_router._options_allow = None
+    desk_router._options_bucket.reset()
+    desk_router._session_cache = (0.0, None)
+
     now = datetime.now(timezone.utc)
     sess = agent_data.session_factory()()
     try:
@@ -279,3 +287,271 @@ def test_wiki_endpoint_empty_and_seeded(client):
     assert body["pages"][1]["revision"] == 1
     assert "Momentum works" in body["pages"][1]["body"]
     assert body["pages"][0]["updated_at"]  # ISO timestamp present
+
+
+def test_wiki_order_covers_all_six_slugs(client):
+    """Phase E: the router's order map matches agent.brain.WIKI_SLUGS —
+    setups after playbook, postmortems after mistakes."""
+    from agent.brain import WIKI_SLUGS, set_wiki
+
+    for slug in reversed(WIKI_SLUGS):  # insert out of order on purpose
+        set_wiki(slug=slug, body=f"{slug} body.", reason="seed")
+    body = client.get("/api/desk/wiki").json()
+    assert [p["slug"] for p in body["pages"]] == list(WIKI_SLUGS)
+
+
+# ── Phase E: one book — /portfolio is ledger.state(), not a re-derivation ──
+
+
+def test_portfolio_matches_ledger_state(client):
+    from agent import ledger
+    from agent.store import get_store
+
+    st = ledger.state(get_store())
+    pf = client.get("/api/desk/portfolio").json()
+    assert pf["cash"] == st["cash"]
+    assert pf["equity"] == st["equity"]
+    assert pf["positions_value"] == st["positions_value"]
+    assert pf["total_pnl"] == st["total_pnl"]
+    assert pf["total_return_pct"] == round(st["total_return_pct"], 2)
+    by_sym = {p["symbol"]: p for p in pf["positions"]}
+    for row in st["positions"]:
+        got = by_sym[row["symbol"]]
+        for k in ("shares", "avg_price", "last_price", "market_value",
+                  "cost_basis", "unrealized_pnl", "weight"):
+            assert got[k] == row[k], (row["symbol"], k)
+    # page-only fields still ride along; mark_meta is additive
+    assert "opened_at" in pf["positions"][0] and "marked_at" in pf["positions"][0]
+    assert "mark_meta" in pf
+    assert pf["vs_spy"] is None  # no SPY bars seeded → too young to benchmark
+
+
+# ── Phase E: /equity mark provenance + SPY overlay ──
+
+
+def test_equity_degraded_points_and_spy_overlay(client):
+    from datetime import date, datetime, timedelta, timezone
+
+    import agent.data as agent_data
+    from agent.ledger import _et_date
+    from agent.models import ACCOUNT, DeskEquity
+    from edgefinder.db.models import DailyBar
+
+    now = datetime.now(timezone.utc)
+    sess = agent_data.session_factory()()
+    try:
+        sess.add(DeskEquity(
+            account=ACCOUNT, ts=now + timedelta(minutes=5), cash=88000.0,
+            positions_value=12000.0, equity=100000.0, return_pct=0.0,
+            mark_meta={"sources": {"live": 0, "close": 0, "cost": 1},
+                       "cost_marked": ["NVDA"], "cost_marked_value_pct": 100.0,
+                       "degraded": True}))
+        # SPY closes: baseline strictly before inception, endpoint on it
+        incep = date.fromisoformat(_et_date(now.replace(tzinfo=None)))
+        for d, px in ((incep - timedelta(days=5), 600.0), (incep, 612.0)):
+            sess.add(DailyBar(symbol="SPY", date=d, open=px, high=px, low=px,
+                              close=px, volume=1e6, source="test",
+                              created_at=now))
+        sess.commit()
+    finally:
+        sess.close()
+
+    # bare shape stays a list; the degraded point carries the flags additively
+    series = client.get("/api/desk/equity").json()
+    assert isinstance(series, list)
+    assert "degraded" not in series[0]           # the clean fixture point
+    last = series[-1]
+    assert last["degraded"] is True
+    assert last["cost_marked_value_pct"] == 100.0
+    assert last["cost_marked"] == ["NVDA"]
+
+    # with_spy=1: dict shape, TR SPY rebased to inception = 0
+    body = client.get("/api/desk/equity?with_spy=1").json()
+    assert [p["equity"] for p in body["points"]] == [p["equity"] for p in series]
+    assert body["spy"] == [{"date": str(incep), "pct": 2.0}]
+    assert body["spy_basis"] == "total_return"
+
+
+# ── Phase E: /outcomes — the predictions scoreboard ──
+
+
+def _seed_outcomes(client):
+    from datetime import date, datetime, timedelta, timezone
+
+    import agent.data as agent_data
+    from agent.models import ACCOUNT, DeskDecision, DeskOutcome
+
+    now = datetime.now(timezone.utc)
+    sess = agent_data.session_factory()()
+    try:
+        sess.add(DeskDecision(
+            account=ACCOUNT, run_id="R9", ts=now - timedelta(hours=1),
+            regime="risk_on", summary="bought XYZ",
+            picks=[{"symbol": "XYZ", "action": "buy",
+                    "prediction": "XYZ +5% within 10 sessions",
+                    "horizon_days": 10, "kill": "closes below 90"}]))
+        sess.add(DeskOutcome(
+            account=ACCOUNT, run_id="R9", symbol="XYZ",
+            grade_date=date.today(), entry_avg_px=100.0, mark_px=104.0,
+            mark_basis="mark", since_pct=4.0, spy_pct=1.0, alpha_pct=3.0,
+            horizon_days=10, horizon_elapsed=False, kill_level=90.0,
+            kill_breached=False, status="open", degraded=False))
+        sess.add(DeskOutcome(
+            account=ACCOUNT, run_id="R1", symbol="NVDA",
+            grade_date=date.today(), entry_avg_px=120.0, mark_px=126.0,
+            mark_basis="exit", since_pct=5.0, spy_pct=1.0, alpha_pct=4.0,
+            status="closed", exit_kind="hardstop", exit_avg_px=126.0,
+            realized_pnl=600.0, degraded=False,
+            verdict="TRUE", verdict_note="called it"))
+        sess.commit()
+    finally:
+        sess.close()
+
+
+def test_outcomes_scoreboard(client):
+    _seed_outcomes(client)
+    body = client.get("/api/desk/outcomes").json()
+
+    s = body["summary"]
+    assert s["open"] == 1 and s["closed"] == 1
+    assert s["verdicts"] == {"TRUE": 1, "ungraded": 1}
+    assert s["closed_graded"] == 1 and s["hit_rate_pct"] == 100.0
+
+    rows = body["rows"]
+    assert [r["symbol"] for r in rows] == ["XYZ", "NVDA"]  # open first
+    xyz = rows[0]
+    # pick context joined from the decision row (the words next to the math)
+    assert xyz["prediction"] == "XYZ +5% within 10 sessions"
+    assert xyz["kill"] == "closes below 90"
+    assert xyz["action"] == "buy" and xyz["decision_ts"]
+    assert xyz["kill_level"] == 90.0 and xyz["kill_breached"] is False
+    assert xyz["sessions_elapsed"] is None  # no SPY bars seeded
+    nvda = rows[1]
+    assert nvda["exit_kind"] == "hardstop" and nvda["verdict"] == "TRUE"
+    assert nvda["verdict_note"] == "called it"
+    assert nvda["realized_pnl"] == 600.0
+    # R1's fixture pick carries no prediction — surfaced as null, not invented
+    assert nvda["prediction"] is None
+
+    only_open = client.get("/api/desk/outcomes?status=open").json()["rows"]
+    assert [r["symbol"] for r in only_open] == ["XYZ"]
+    only_closed = client.get("/api/desk/outcomes?status=closed").json()["rows"]
+    assert [r["symbol"] for r in only_closed] == ["NVDA"]
+    assert client.get("/api/desk/outcomes?limit=999").status_code == 422
+
+
+# ── Phase E: /decisions — the archive with paging ──
+
+
+def test_decisions_archive_paging(client):
+    from datetime import datetime, timedelta, timezone
+
+    import agent.data as agent_data
+    from agent.models import ACCOUNT, DeskDecision
+
+    now = datetime.now(timezone.utc)
+    sess = agent_data.session_factory()()
+    try:
+        for i, rid in ((2, "OLD1"), (4, "OLD2")):
+            sess.add(DeskDecision(
+                account=ACCOUNT, run_id=rid, ts=now - timedelta(hours=i),
+                regime="neutral", summary=f"decision {rid}",
+                picks=[{"symbol": "XYZ", "action": "hold"}]))
+        sess.commit()
+    finally:
+        sess.close()
+
+    page1 = client.get("/api/desk/decisions?limit=2").json()
+    assert [d["run_id"] for d in page1["decisions"]] == ["R1", "OLD1"]
+    assert page1["next_before"] == page1["decisions"][-1]["id"]
+    # full dossier shape (same as /decision/latest plus id)
+    top = page1["decisions"][0]
+    for k in ("id", "run_id", "ts", "regime", "summary", "target_weights",
+              "picks", "watchlist", "rejected", "strategy_version"):
+        assert k in top
+    assert top["picks"][0]["symbol"] == "NVDA"
+
+    page2 = client.get(
+        f"/api/desk/decisions?limit=2&before={page1['next_before']}").json()
+    assert [d["run_id"] for d in page2["decisions"]] == ["OLD2"]
+    assert page2["next_before"] is None       # short page → archive exhausted
+
+    assert client.get("/api/desk/decisions?before=not-a-ts").status_code == 422
+
+
+# ── Phase E: /data-health carries the latest mark provenance ──
+
+
+def test_data_health_marks_section(client):
+    from datetime import datetime, timedelta, timezone
+
+    import agent.data as agent_data
+    from agent.models import ACCOUNT, DeskEquity
+
+    body = client.get("/api/desk/data-health").json()
+    assert body["marks"] is None            # fixture snapshot has no mark_meta
+
+    sess = agent_data.session_factory()()
+    try:
+        sess.add(DeskEquity(
+            account=ACCOUNT, ts=datetime.now(timezone.utc) + timedelta(minutes=5),
+            cash=88000.0, positions_value=12000.0, equity=100000.0,
+            return_pct=0.0,
+            mark_meta={"sources": {"live": 0, "close": 0, "cost": 1},
+                       "cost_marked": ["NVDA"], "cost_marked_value_pct": 100.0,
+                       "degraded": True}))
+        sess.commit()
+    finally:
+        sess.close()
+
+    body = client.get("/api/desk/data-health").json()
+    assert body["marks"]["degraded"] is True
+    assert body["marks"]["cost_marked"] == ["NVDA"]
+    assert body["marks"]["cost_marked_value_pct"] == 100.0
+
+
+# ── Phase E: options endpoints are allowlisted + rate-limited ──
+
+
+def test_options_allowlist_and_rate_limit(client, monkeypatch):
+    import agent.options_data as od
+    import dashboard.routers.desk as desk_router
+
+    # no external calls even for allowed symbols: strip the Alpaca keys
+    for v in ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY",
+              "ALPACA_API_KEY", "ALPACA_API_SECRET"):
+        monkeypatch.delenv(v, raising=False)
+    from agent import broker as _b
+    monkeypatch.setattr(_b.settings, "alpaca_api_key", "", raising=False)
+    monkeypatch.setattr(_b.settings, "alpaca_api_secret", "", raising=False)
+    od._cache.clear()
+    desk_router._options_allow = None
+    desk_router._options_bucket.reset()
+
+    # held position (NVDA) and the latest decision's watchlist (AAPL) → allowed
+    r = client.get("/api/desk/options/NVDA")
+    assert r.status_code == 200 and r.json()["available"] is False
+    assert client.get("/api/desk/options/AAPL").status_code == 200
+    # streamer seed (SPY) → allowed
+    assert client.get("/api/desk/options/SPY").status_code == 200
+    # arbitrary symbol → 404, and NO Alpaca call was attempted for it
+    r = client.get("/api/desk/options/EVILCO")
+    assert r.status_code == 404 and "EVILCO" in r.json()["detail"]
+
+    # history is DB-only: allowlist applies, no rate limit needed
+    hist = client.get("/api/desk/options/NVDA/history")
+    assert hist.status_code == 200 and hist.json()["symbol"] == "NVDA"
+    assert client.get("/api/desk/options/EVILCO/history").status_code == 404
+
+    # rate limit: a tiny bucket exhausts, then 429
+    old_bucket = desk_router._options_bucket
+    try:
+        desk_router._options_bucket = desk_router._TokenBucket(
+            capacity=3, refill_per_sec=0.0)
+        for _ in range(3):
+            assert client.get("/api/desk/options/NVDA").status_code == 200
+        assert client.get("/api/desk/options/NVDA").status_code == 429
+        # the DB-only history lane stays open
+        assert client.get("/api/desk/options/NVDA/history").status_code == 200
+    finally:
+        desk_router._options_bucket = old_bucket
