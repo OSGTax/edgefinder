@@ -8,6 +8,7 @@ state, and the journal of pivots. All times are ISO UTC; the page normalizes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import timezone
@@ -66,6 +67,16 @@ def _parse_meta(meta):
     return meta if isinstance(meta, dict) else None
 
 
+# /portfolio answers via ledger.state(), which recomputes cash by scanning
+# the ENTIRE append-only desk_trades ledger — a table that grows forever —
+# and the endpoint is polled once per open viewer. A short TTL cache bounds
+# the full-scan frequency to once per _PORTFOLIO_TTL regardless of viewer
+# count (same reset pattern as the other module caches below). Phase-later:
+# aggregate cash server-side instead of rescanning.
+_PORTFOLIO_TTL = 10.0
+_portfolio_cache: tuple[float, dict] | None = None
+
+
 @router.get("/portfolio")
 def portfolio():
     """Cash, positions (marked), equity, and P&L — the book right now.
@@ -78,11 +89,20 @@ def portfolio():
     (``_spy_closes`` / ``_spy_window_pct``): dividend back-adjusted closes,
     baseline = last close STRICTLY BEFORE the ET inception date, and None
     means too-young-to-benchmark, never zero. ``mark_meta`` (the latest
-    snapshot's mark provenance) rides along additively.
+    snapshot's mark provenance) rides along additively. The response body is
+    cached ~10s (the underlying cash recompute scans the whole trade ledger).
     """
+    global _portfolio_cache
+    now = time.time()
+    if _portfolio_cache is not None and now - _portfolio_cache[0] < _PORTFOLIO_TTL:
+        return _portfolio_cache[1]
+
     from agent import ledger
     from agent.store import get_store
 
+    # Transport expectation: pg on Render (DATABASE_URL is set there); `auto`
+    # may pick the rest lane when SUPABASE_* env is present — an intentional
+    # fallback, same tables either way.
     store = get_store()
     st = ledger.state(store)
 
@@ -116,7 +136,7 @@ def portfolio():
                       "spy_return_pct": spy_pct,
                       "alpha_pct": round(total_return_pct - spy_pct, 2)}
 
-    return {
+    out = {
         "account": st["account"], "cash": st["cash"],
         "positions_value": st["positions_value"], "equity": st["equity"],
         "starting_capital": st["starting_capital"],
@@ -126,6 +146,8 @@ def portfolio():
         "mark_meta": st.get("mark_meta"),
         "positions": positions,
     }
+    _portfolio_cache = (now, out)
+    return out
 
 
 @router.get("/equity")
@@ -599,24 +621,57 @@ def live_quotes():
 # when keys/clock are unavailable — the page then falls back to
 # freshness-only pill logic (never a fake "open").
 _SESSION_TTL = 60.0
+_SESSION_FETCH_TIMEOUT = 5.0   # alpaca-py sets NO HTTP timeout — bound it here
+_SESSION_ERROR_BACKOFF = 30.0  # after a timeout/failure, don't retry at once
 _session_cache: tuple[float, str | None] = (0.0, None)
+# Single-flight latch: at most one refresh in flight. A plain bool (not an
+# asyncio.Lock) on purpose — waiters must serve stale IMMEDIATELY rather than
+# queue behind the refresher, the event loop is single-threaded so flag flips
+# never race, and a module-level Lock would bind to whichever event loop
+# touched it first (breaking under test clients / server restarts).
+_session_refreshing = False
 
 
-def _market_session() -> str | None:
-    global _session_cache
-    now = time.time()
-    ts, val = _session_cache
-    if now - ts < _SESSION_TTL:
-        return val
-    val = None
+def _fetch_market_session() -> str | None:
+    """One blocking broker clock round-trip (runs on a worker thread)."""
     try:
         from agent import broker
 
         if broker.enabled():
-            val = broker.Broker().session()
+            return broker.Broker().session()
     except Exception:  # noqa: BLE001 — unknown session, never a dead stream
-        val = None
-    _session_cache = (now, val)
+        pass
+    return None
+
+
+async def _market_session() -> str | None:
+    """The cached market session for SSE frames — single-flight refresh.
+
+    On TTL expiry exactly ONE frame (across ALL open SSE connections)
+    performs the refresh; every other frame serves the stale value
+    immediately instead of stacking N simultaneous broker calls. The refresh
+    is bounded by ``asyncio.wait_for`` because alpaca-py sets no HTTP
+    timeout — unbounded, one hung socket per frame would progressively pin
+    every default-executor thread and stall ALL streams. On timeout/error
+    the stale/null value keeps serving and the cache timestamp moves forward
+    so the next attempt backs off ~30s instead of hammering a dead socket.
+    A timed-out ``to_thread`` worker may linger until its socket dies, but
+    single-flight bounds that leak to one thread at a time.
+    """
+    global _session_cache, _session_refreshing
+    now = time.time()
+    ts, val = _session_cache
+    if now - ts < _SESSION_TTL or _session_refreshing:
+        return val
+    _session_refreshing = True
+    try:
+        val = await asyncio.wait_for(asyncio.to_thread(_fetch_market_session),
+                                     timeout=_SESSION_FETCH_TIMEOUT)
+        _session_cache = (now, val)
+    except Exception:  # noqa: BLE001 — timeout/cancel: keep stale, back off
+        _session_cache = (now - _SESSION_TTL + _SESSION_ERROR_BACKOFF, val)
+    finally:
+        _session_refreshing = False
     return val
 
 
@@ -630,7 +685,6 @@ async def stream():
     can tell a quiet-but-open tape from a closed market — the LIVE pill's
     honesty input. The browser's EventSource auto-reconnects; frames double
     as heartbeats."""
-    import asyncio as _asyncio
     import json as _json
 
     from fastapi.responses import StreamingResponse
@@ -640,12 +694,13 @@ async def stream():
     async def gen():
         while True:
             snap = cache.snapshot()
-            # off-loop: the cached path returns instantly; the once-a-minute
-            # refresh must not stall every other request on a network call.
-            snap["session"] = await _asyncio.to_thread(_market_session)
+            # the cached path returns instantly; the once-a-minute refresh is
+            # single-flight and time-bounded (see _market_session), so no
+            # frame — on any connection — ever stalls on a network call.
+            snap["session"] = await _market_session()
             payload = _json.dumps(snap, default=str)
             yield f"event: quotes\ndata: {payload}\n\n"
-            await _asyncio.sleep(1.0)
+            await asyncio.sleep(1.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
@@ -738,9 +793,17 @@ _options_bucket = _TokenBucket()
 
 
 def _client_key(request: Request) -> str:
+    # Prefer the direct peer; consult X-Forwarded-For only when a proxy set
+    # it, and then take the LAST hop, not the first: the head of XFF is
+    # client-supplied (an attacker can pre-populate it and rotate a fake
+    # first hop per request to mint fresh buckets), while the last entry is
+    # the one appended by the nearest trusted proxy (Render's) — the real
+    # peer that proxy saw.
     fwd = request.headers.get("x-forwarded-for")
     if fwd:
-        return fwd.split(",")[0].strip()
+        last = fwd.split(",")[-1].strip()
+        if last:
+            return last
     return request.client.host if request.client else "unknown"
 
 

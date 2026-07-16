@@ -6,6 +6,7 @@ Usage:
 
 Asserts HTTP 200 (or an allowed status) and the presence of shape keys.
 Read-only; safe against production. Exits non-zero on any failure.
+(The SSE /api/desk/stream is the one surface skipped — it never ends.)
 """
 
 from __future__ import annotations
@@ -17,44 +18,42 @@ import urllib.request
 
 CHECKS: list[tuple[str, list[str], set[int]]] = [
     # (path, required_top_level_keys, allowed_statuses)
+    # Every expectation tolerates an EMPTY-but-healthy payload (fresh DB, no
+    # trades yet): shape keys only, never row counts. List-shaped responses
+    # declare no keys (`k in data` would test list membership).
     ("/api/health", ["status", "version"], {200}),
-    ("/api/strategies", [], {200}),
-    ("/api/strategies/accounts", [], {200}),
-    ("/api/strategies/equity-curve?days=30", [], {200}),
-    ("/api/strategies/scorecard?days=30", [], {200}),
-    ("/api/strategies/validation", [], {200}),
-    ("/api/strategies/scheduler", [], {200}),
-    ("/api/trades?limit=5", [], {200}),
-    ("/api/trades/stats", ["total_trades"], {200}),
-    ("/api/trades/integrity", [], {200}),
-    ("/api/market/regime?limit=1", [], {200}),
-    ("/api/benchmarks/comparison?days=5", ["times", "indices"], {200}),
-    ("/api/benchmarks/sectors", [], {200}),
-    ("/api/research/search?q=AA&limit=3", [], {200}),
-    ("/api/research/active", [], {200}),
-    ("/api/ops/health", ["heartbeats"], {200}),
+    # pages: / is the desk now (307 redirect), /desk is the page itself
+    ("/", [], {307}),
+    ("/desk", [], {200}),
+    # /api/desk/* — the read-only projections of the desk_* tables
+    ("/api/desk/portfolio", ["cash", "equity", "positions"], {200}),
+    ("/api/desk/equity", [], {200}),                       # bare list shape
+    ("/api/desk/equity?with_spy=1", ["points", "spy"], {200}),
+    ("/api/desk/decision/latest", ["exists"], {200}),
+    ("/api/desk/decisions", ["decisions"], {200}),
+    ("/api/desk/outcomes", ["summary", "rows"], {200}),
+    ("/api/desk/thinking", ["lines"], {200}),
+    ("/api/desk/backtests", [], {200}),                    # bare list shape
+    ("/api/desk/strategy", ["current", "journal"], {200}),
+    ("/api/desk/wiki", ["pages"], {200}),
+    ("/api/desk/regime", ["tag"], {200}),
+    ("/api/desk/movers", ["gainers", "losers", "most_active"], {200}),
+    ("/api/desk/holding-stats", ["symbols"], {200}),
+    ("/api/desk/dividends", ["holdings"], {200}),
+    ("/api/desk/quotes", ["quotes", "connected"], {200}),
+    # allowlist guard: a name the desk neither holds nor watches must 404
+    # (the endpoint fans out to metered live options calls when allowed)
+    ("/api/desk/options/ZZZQ", [], {404}),
+    ("/api/desk/broker-health", ["keys_present"], {200}),
+    ("/api/desk/data-health", ["status", "marks"], {200}),
+    ("/api/desk/lab", ["top", "combos_tested"], {200}),
+    ("/api/desk/brief", ["exists"], {200}),
+    ("/api/desk/watch", ["watches", "wakes"], {200}),
+    ("/api/desk/whatsnew", ["entries", "new_count"], {200}),
+    ("/api/desk/trades?limit=5", [], {200}),               # bare list shape
     # symbol workstation API (404 acceptable when the symbol has no bars
     # in the target environment)
     ("/api/symbols/SPY/bars?range=3m", ["bars", "source"], {200, 404}),
-    ("/api/symbols/SPY/bars?range=3m&indicators=true", ["bars"], {200, 404}),
-    ("/api/symbols/SPY/events", ["dividends", "splits", "news"], {200}),
-    ("/api/lab/runs?limit=5", ["total", "runs"], {200}),
-    ("/api/lab/scoreboard", ["target", "finalists", "counts"], {200}),
-    ("/api/lab/labels", ["prefixes"], {200}),
-    ("/api/strategies/summary", ["v2", "all"], {200}),
-    ("/api/strategies/promoted", [], {200}),
-    ("/api/strategies/meta", [], {200}),
-    ("/api/ops/activity?limit=10", ["items"], {200}),
-    ("/api/ops/storage", ["db"], {200}),
-    # pages
-    ("/", [], {200}),
-    ("/strategies", [], {200}),
-    ("/trades", [], {200}),
-    ("/research", [], {200, 307}),
-    ("/screener", [], {200}),
-    ("/backtest", [], {307}),
-    ("/lab", [], {200}),
-    ("/ops", [], {200}),
 ]
 
 

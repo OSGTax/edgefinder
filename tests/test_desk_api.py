@@ -28,12 +28,15 @@ def client(tmp_path, monkeypatch):
     deps._engine = deps._session_factory = None
 
     # Reset the desk router's in-process caches (options allowlist, options
-    # rate-limit bucket, market-session cache) — module state must not leak
-    # a previous test's DB view into this one.
+    # rate-limit bucket, market-session cache + single-flight flag, portfolio
+    # TTL cache) — module state must not leak a previous test's DB view into
+    # this one.
     import dashboard.routers.desk as desk_router
     desk_router._options_allow = None
     desk_router._options_bucket.reset()
     desk_router._session_cache = (0.0, None)
+    desk_router._session_refreshing = False
+    desk_router._portfolio_cache = None
 
     now = datetime.now(timezone.utc)
     sess = agent_data.session_factory()()
@@ -555,3 +558,130 @@ def test_options_allowlist_and_rate_limit(client, monkeypatch):
         assert client.get("/api/desk/options/NVDA/history").status_code == 200
     finally:
         desk_router._options_bucket = old_bucket
+
+
+def test_options_rate_limit_key_ignores_spoofed_xff_head(client, monkeypatch):
+    """Rotating the FIRST X-Forwarded-For hop (attacker-appendable) must not
+    mint fresh rate-limit buckets — the key is the LAST hop, the one appended
+    by the nearest trusted proxy."""
+    import agent.options_data as od
+    import dashboard.routers.desk as desk_router
+
+    for v in ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY",
+              "ALPACA_API_KEY", "ALPACA_API_SECRET"):
+        monkeypatch.delenv(v, raising=False)
+    from agent import broker as _b
+    monkeypatch.setattr(_b.settings, "alpaca_api_key", "", raising=False)
+    monkeypatch.setattr(_b.settings, "alpaca_api_secret", "", raising=False)
+    od._cache.clear()
+    desk_router._options_allow = None
+
+    old_bucket = desk_router._options_bucket
+    try:
+        desk_router._options_bucket = desk_router._TokenBucket(
+            capacity=3, refill_per_sec=0.0)
+        # same trusted last hop, rotating fake first hops → ONE shared bucket
+        for i in range(3):
+            r = client.get("/api/desk/options/NVDA", headers={
+                "x-forwarded-for": f"10.0.0.{i}, 8.8.8.8"})
+            assert r.status_code == 200
+        r = client.get("/api/desk/options/NVDA", headers={
+            "x-forwarded-for": "10.0.0.99, 8.8.8.8"})
+        assert r.status_code == 429              # the rotation bought nothing
+        # a different LAST hop is a genuinely different client → its own bucket
+        assert client.get("/api/desk/options/NVDA", headers={
+            "x-forwarded-for": "10.0.0.99, 9.9.9.9"}).status_code == 200
+    finally:
+        desk_router._options_bucket = old_bucket
+
+
+# ── E4 follow-up: the SSE session cache is single-flight + time-bounded ──
+
+
+def test_market_session_single_flight(monkeypatch):
+    """On TTL expiry exactly one refresh runs; a concurrent frame serves the
+    stale value immediately instead of stacking a second broker call."""
+    import asyncio
+    import time
+
+    import dashboard.routers.desk as desk_router
+
+    calls = {"n": 0}
+
+    def fake_fetch():
+        calls["n"] += 1
+        time.sleep(0.05)  # long enough for the second caller to overlap
+        return "regular"
+
+    monkeypatch.setattr(desk_router, "_fetch_market_session", fake_fetch)
+    monkeypatch.setattr(desk_router, "_session_cache", (0.0, None))
+    monkeypatch.setattr(desk_router, "_session_refreshing", False)
+
+    async def race():
+        return await asyncio.gather(desk_router._market_session(),
+                                    desk_router._market_session())
+
+    results = asyncio.run(race())
+    assert calls["n"] == 1                       # single-flight
+    assert "regular" in results                  # the refresher got the value
+    assert None in results                       # the other served stale/null
+    # now cached: no further fetch inside the TTL
+    assert asyncio.run(desk_router._market_session()) == "regular"
+    assert calls["n"] == 1
+
+
+def test_market_session_timeout_backs_off(monkeypatch):
+    """A hung broker call is bounded by wait_for; the stale/null value keeps
+    serving and the next attempt backs off instead of re-firing at once."""
+    import asyncio
+    import time
+
+    import dashboard.routers.desk as desk_router
+
+    calls = {"n": 0}
+
+    def hung_fetch():
+        calls["n"] += 1
+        time.sleep(0.3)  # well past the patched timeout
+        return "regular"
+
+    monkeypatch.setattr(desk_router, "_fetch_market_session", hung_fetch)
+    monkeypatch.setattr(desk_router, "_SESSION_FETCH_TIMEOUT", 0.02)
+    monkeypatch.setattr(desk_router, "_session_cache", (0.0, None))
+    monkeypatch.setattr(desk_router, "_session_refreshing", False)
+
+    assert asyncio.run(desk_router._market_session()) is None  # stale kept
+    assert calls["n"] == 1
+    # backoff: an immediate retry serves the cache — no second broker call
+    assert asyncio.run(desk_router._market_session()) is None
+    assert calls["n"] == 1
+    ts, _ = desk_router._session_cache           # timestamp pushed forward
+    assert time.time() - ts < desk_router._SESSION_TTL
+
+
+# ── /portfolio response cache: bounded full-ledger-scan frequency ──
+
+
+def test_portfolio_response_is_ttl_cached(client):
+    import dashboard.routers.desk as desk_router
+
+    first = client.get("/api/desk/portfolio").json()
+
+    # a new fill lands...
+    import agent.data as agent_data
+    from agent.models import ACCOUNT, DeskTrade
+    sess = agent_data.session_factory()()
+    try:
+        sess.add(DeskTrade(account=ACCOUNT, run_id="R9", symbol="AMD",
+                           side="BUY", shares=10, price=100.0, dollars=1000.0,
+                           ts=datetime.now(timezone.utc)))
+        sess.commit()
+    finally:
+        sess.close()
+
+    # ...but inside the TTL the cached body still serves (bounded staleness)
+    assert client.get("/api/desk/portfolio").json() == first
+    # cache expiry (simulated) → the fresh ledger scan sees the fill
+    desk_router._portfolio_cache = None
+    fresh = client.get("/api/desk/portfolio").json()
+    assert fresh["cash"] == pytest.approx(first["cash"] - 1000.0)

@@ -12,10 +12,12 @@ Exit code 0 = ready; non-zero = not ready (see ``checks`` in the JSON).
   python -m agent.preflight --strict
 
 ``--strict`` (for humans/CI, not the trading cycle) additionally runs a
-lightweight broker check (Alpaca clock fetch, short timeout) and escalates
-soft failures: exit 3 when ``research_ok`` is false or the broker is
-unreachable. Without the flag, behavior is byte-identical to before —
-research staleness stays a degrade-gate the cycle handles itself.
+lightweight broker check — an Alpaca clock fetch on a daemon thread with a
+bounded join, so a hung socket can neither delay the verdict nor hang
+process exit — and escalates soft failures: exit 3 when ``research_ok`` is
+false or the broker is unreachable. Without the flag, behavior is
+byte-identical to before — research staleness stays a degrade-gate the
+cycle handles itself.
 """
 
 from __future__ import annotations
@@ -135,25 +137,39 @@ def run(*, strict: bool = False) -> dict:
     check("r2", _r2, critical=False)
 
     # Broker reachability — STRICT-ONLY so default output stays byte-identical.
-    # A clock fetch is the cheapest authenticated Alpaca round-trip; a short
-    # timeout keeps a dead network from stalling the whole preflight. The
+    # A clock fetch is the cheapest authenticated Alpaca round-trip. It runs
+    # on a plain DAEMON thread with a bounded join, not a ThreadPoolExecutor:
+    # the pool's atexit hook joins its non-daemon worker, so a hung Alpaca
+    # socket (alpaca-py sets no HTTP timeout) would hang process EXIT after
+    # the JSON had already printed; a daemon thread is simply abandoned. The
     # check itself stays non-critical (``ok`` unchanged); main() escalates it
     # to exit 3 under --strict.
     if strict:
         def _broker():
-            from concurrent.futures import ThreadPoolExecutor
+            import threading
 
             from agent import broker
 
             if not broker.enabled():
                 raise RuntimeError("no Alpaca keys in this environment")
-            ex = ThreadPoolExecutor(max_workers=1)
-            try:
-                fut = ex.submit(lambda: bool(broker.Broker().is_market_open()))
-                is_open = fut.result(timeout=8.0)
-            finally:
-                ex.shutdown(wait=False, cancel_futures=True)
-            return {"clock": "ok", "is_open": is_open}
+            result: dict = {}
+
+            def _probe():
+                try:
+                    result["is_open"] = bool(broker.Broker().is_market_open())
+                except Exception as exc:  # noqa: BLE001 — re-raised below
+                    result["error"] = exc
+
+            t = threading.Thread(target=_probe, daemon=True,
+                                 name="preflight-broker-probe")
+            t.start()
+            t.join(timeout=8.0)
+            if "error" in result:
+                raise result["error"]
+            if t.is_alive():
+                raise RuntimeError(
+                    "broker unreachable: clock fetch still hanging after 8s")
+            return {"clock": "ok", "is_open": result["is_open"]}
 
         check("broker", _broker, critical=False)
 

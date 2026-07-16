@@ -29,6 +29,12 @@ def store(tmp_path, monkeypatch):
     import edgefinder.db.models  # noqa: F401 — daily_bars for the SPY series
 
     Base.metadata.create_all(get_engine())
+
+    # The desk router caches the /portfolio body ~10s; a stale entry from a
+    # sibling test's DB must never serve here.
+    import dashboard.routers.desk as desk_router
+    desk_router._portfolio_cache = None
+
     from agent.store import get_store
 
     return get_store()

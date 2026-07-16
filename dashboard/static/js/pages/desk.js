@@ -16,6 +16,7 @@ let equitySeries = null;   // the recorded marks — history, never fabricated
 let spySeries = null;      // faint benchmark overlay: $100k in SPY (total return)
 let liveTipSeries = null;  // ONE dashed connector: last real mark → live estimate
 let lastEquityData = [];
+let lastDegradedTimes = [];  // epoch secs of cost-marked points (warn markers)
 
 /* Live-marked book state — the source-of-truth "reference" portfolio (cash +
    position shares/avg + starting) and the running dict of live mids from the
@@ -48,10 +49,14 @@ function pill(text, cls, title) {
 
 /* ── LIVE pill truth ──
    The pulsing green LIVE dot only appears when a threshold fraction of the
-   HELD symbols' quotes are genuinely fresh AND the market session is open
-   (the SSE payload carries per-symbol staleness + a session tag). A stale
-   tape shows DELAYED; a closed market shows CLOSED — frozen numbers never
-   masquerade as ticking ones. */
+   HELD symbols' quotes are genuinely fresh AND the session tag says the
+   market is verifiably open — 'regular' or 'extended' (the SSE payload
+   carries per-symbol staleness + the session tag). Fresh quotes alone are
+   NOT proof the tape is live: REST cache warming stamps recv=now, so a warm
+   cache on a closed market would otherwise read as ticking. A stale tape
+   shows DELAYED; a closed market shows CLOSED; an unverifiable session
+   (null) caps the pill at DELAYED — frozen numbers never masquerade as
+   ticking ones. */
 const LIVE_PILL = {
   live: ['LIVE', 'Fresh real-time quotes are folding into the account value — '
     + 'the numbers above are the live market value.'],
@@ -59,6 +64,9 @@ const LIVE_PILL = {
     + 'the most recent recorded prices, not a live market value.'],
   closed: ['CLOSED', 'The market is closed — prices shown are the last '
     + 'session’s marks.'],
+  unknown: ['UNKNOWN', 'The market session can’t be verified right now and '
+    + 'the quote stream isn’t fresh — the numbers above are the most recent '
+    + 'recorded prices, not a live market value.'],
 };
 
 function setLivePill(state) {
@@ -68,7 +76,7 @@ function setLivePill(state) {
   const [label, tip] = LIVE_PILL[state] || LIVE_PILL.delayed;
   el.hidden = false;
   el.classList.toggle('delayed', state === 'delayed');
-  el.classList.toggle('closed', state === 'closed');
+  el.classList.toggle('closed', state === 'closed' || state === 'unknown');
   el.title = tip;
   const lbl = el.querySelector('.desk-hero-live-label');
   if (lbl) lbl.textContent = label;
@@ -87,7 +95,15 @@ function livePillState(snap) {
     const q = quotes[s];
     return q && q.mid != null && !q.stale;
   }).length;
-  return fresh >= Math.max(1, Math.ceil(heldEq.length / 2)) ? 'live' : 'delayed';
+  const freshEnough = fresh >= Math.max(1, Math.ceil(heldEq.length / 2));
+  // LIVE requires a VERIFIED open session ('regular' | 'extended'). A null
+  // session (no keys / clock unreachable) must never fall through to
+  // freshness alone — cache warming stamps recv=now, so warm REST quotes on
+  // a closed market look fresh. Unknown session: DELAYED at best.
+  if (snap.session === 'regular' || snap.session === 'extended') {
+    return freshEnough ? 'live' : 'delayed';
+  }
+  return freshEnough ? 'delayed' : 'unknown';
 }
 
 /* the account's change since the last completed trading session — grouped
@@ -269,7 +285,22 @@ function ensureEquityChart() {
     equitySeries.applyOptions({ lineColor: cc.accent, topColor: cc.accent + '55', bottomColor: cc.accent + '08' });
     spySeries.applyOptions({ color: cc.benchmark });
     liveTipSeries.applyOptions({ color: cc.accent });
+    // markers capture their color at set time (applyOptions can't restyle
+    // them) — re-set the degraded markers in the new palette
+    applyDegradedMarkers();
   });
+}
+
+/* Degraded marks (part of the book priced at cost basis) get a visible warn
+   marker on the exact affected points. A helper so the theme-change handler
+   can re-apply them in the new palette. */
+function applyDegradedMarkers() {
+  if (!equitySeries) return;
+  const c = colors();
+  equitySeries.setMarkers(lastDegradedTimes.map(time => ({
+    time, position: 'aboveBar', shape: 'circle', color: c.warn,
+    id: 'degraded:' + time, text: '',
+  })));
 }
 
 async function loadEquity() {
@@ -285,23 +316,24 @@ async function loadEquity() {
     // de-dup identical timestamps (chart requires strictly increasing time)
     const seen = new Set();
     const data = [];
-    const degraded = [];
+    const degraded = new Set();
     for (const p of series) {
       const time = toEpochSec(p.t);
-      if (!time || seen.has(time)) continue;
+      if (!time) continue;
+      if (seen.has(time)) {
+        // same-second collision: the dropped point must not swallow a
+        // degraded flag — the kept point inherits it
+        if (p.degraded) degraded.add(time);
+        continue;
+      }
       seen.add(time);
       data.push({ time, value: p.equity });
-      if (p.degraded) degraded.push(time);
+      if (p.degraded) degraded.add(time);
     }
     lastEquityData = data;
+    lastDegradedTimes = [...degraded].sort((a, b) => a - b);
     equitySeries.setData(data);
-    // Degraded marks (part of the book priced at cost basis) get a visible
-    // warn marker on the exact affected points.
-    const c = colors();
-    equitySeries.setMarkers(degraded.map(time => ({
-      time, position: 'aboveBar', shape: 'circle', color: c.warn,
-      id: 'degraded:' + time, text: '',
-    })));
+    applyDegradedMarkers();
     // SPY overlay: what $100k in SPY (dividends reinvested) since the
     // account's first trade would be worth — same dollar axis, honest beta.
     const start = (deskLive.book && deskLive.book.starting_capital) || 100000;
@@ -317,8 +349,8 @@ async function loadEquity() {
     equityChart.timeScale().fitContent();
     const last = series[series.length - 1];
     metaEl.textContent = `${fmtDollar(last.equity)} · ${series.length} marks`
-      + (degraded.length ? ` · ${degraded.length} degraded` : '');
-    metaEl.title = degraded.length
+      + (degraded.size ? ` · ${degraded.size} degraded` : '');
+    metaEl.title = degraded.size
       ? 'Some snapshots priced part of the book at cost basis during a '
         + 'quote/close outage — those points are flagged on the curve.'
       : '';

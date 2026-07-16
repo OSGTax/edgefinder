@@ -410,7 +410,17 @@ async function renderRailOptions(body) {
               h('td', { class: 'num t-dim', text: iv != null ? f(iv * 100, 1) + '%' : '—' }));
           }))));
     }
-  } catch (err) { renderError(body, err, () => renderRailOptions(body)); }
+  } catch (err) {
+    if (err && err.status === 404) {
+      // Allowlist miss, not an outage: the live options endpoint only serves
+      // names the desk holds or watches (each hit costs metered API calls).
+      // No Retry button — retrying a 404 only burns the rate-limit budget.
+      renderEmpty(body, 'Options snapshots are tracked only for names the '
+        + 'desk holds or watches — ' + state.symbol + ' isn’t one right now.');
+      return;
+    }
+    renderError(body, err, () => renderRailOptions(body));
+  }
 }
 
 /* ── Research tab: SEC EDGAR point-in-time fundamentals (public domain) ──
