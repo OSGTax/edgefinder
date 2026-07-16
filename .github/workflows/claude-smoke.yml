@@ -23,5 +23,8 @@ jobs:
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The default workflow token skips the action's OIDC->app-token
+          # exchange (which needs id-token:write + the Claude GitHub App).
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: "State the current UTC time and this repository's name, then stop. Do not read, modify, or execute anything else."
           claude_args: "--max-turns 2"
