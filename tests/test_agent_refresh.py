@@ -156,8 +156,8 @@ def test_corp_actions_hourly_defaults_stay_one_window(store, monkeypatch):
     _patch_broker(monkeypatch, fake)
     out = _corp_actions_alpaca(store, ["AAA"], back_days=45, fwd_days=45)
     assert len(fake.calls) == 1                    # the pre-fix single call
-    assert out == {"dividends": 0, "splits": 0, "windows": 1,
-                   "window_errors": 0}
+    assert out == {"dividends": 0, "splits": 0, "dupes_skipped": 0,
+                   "windows": 1, "window_errors": 0}
 
 
 def test_corp_actions_dedup_is_idempotent_across_nights(store, monkeypatch):
@@ -209,6 +209,82 @@ def test_corp_actions_one_bad_window_degrades_not_aborts(store, monkeypatch):
     out = _corp_actions_alpaca(store, ["SPL"], back_days=400, fwd_days=45)
     assert out["window_errors"] == 1
     assert out["splits"] == 1  # the recent window's split still landed
+
+
+def test_corp_actions_out_of_window_dupe_skips_row_not_batch(store, monkeypatch):
+    """M3 regression: Alpaca tiles CA windows on DECLARATION date, so a
+    correction row can carry an ex-date OLDER than the dedup pre-load window.
+    It escapes the dedup set and trips the unique constraint — which must
+    cost that ONE row, never the whole night's batch (the pre-fix behavior
+    rolled back every new dividend AND split, every night)."""
+    from agent.refresh import _corp_actions_alpaca
+
+    today = date.today()
+    old_ex = today - timedelta(days=100)   # outside the default 45d window
+    # already stored by an earlier long-lookback run
+    store.insert("dividends", {"symbol": "OLDDIV", "ex_date": old_ex,
+                               "cash_amount": 0.5}, returning=False)
+    store.insert("ticker_splits", {"symbol": "OLDSPL",
+                                   "execution_date": old_ex,
+                                   "split_from": 1, "split_to": 10},
+                 returning=False)
+
+    class _Unwindowed(_FakeCABroker):
+        """Returns every announcement regardless of the query window —
+        modeling declaration-date tiling handing back an old ex-date."""
+
+        def corporate_announcements(self, *, since=None, until=None,
+                                    symbol=None):
+            self.calls.append((since, until))
+            return list(self._anns)
+
+    fake = _Unwindowed([
+        _dividend("OLDDIV", old_ex),                     # escapes the dedup
+        _dividend("NEWDIV", today - timedelta(days=5)),
+        _split("OLDSPL", old_ex),                        # escapes the dedup
+        _split("NEWSPL", today - timedelta(days=3)),
+    ])
+    _patch_broker(monkeypatch, fake)
+
+    out = _corp_actions_alpaca(store, ["OLDDIV", "NEWDIV", "OLDSPL", "NEWSPL"])
+    assert out["dividends"] == 1 and out["splits"] == 1  # the new rows landed
+    assert out["dupes_skipped"] == 2                     # skipped, not fatal
+    assert len(store.select("dividends", filters={"symbol": "OLDDIV"})) == 1
+    assert len(store.select("dividends", filters={"symbol": "NEWDIV"})) == 1
+    assert len(store.select("ticker_splits", filters={"symbol": "OLDSPL"})) == 1
+    assert len(store.select("ticker_splits", filters={"symbol": "NEWSPL"})) == 1
+
+
+def test_corp_actions_dedup_bounded_by_symbols_when_small(store, monkeypatch):
+    """L1: the hourly ~15-name pass must not scan the whole market's recent
+    CA rows every hour — small symbol sets bound the dedup pre-load by
+    symbol IN() as well as the date window; the ~1000-name nightly keeps the
+    pure window scan."""
+    from agent.refresh import DEDUP_SYMBOL_IN_MAX, _corp_actions_alpaca
+
+    fake = _FakeCABroker([])
+    _patch_broker(monkeypatch, fake)
+
+    seen: list[tuple[str, dict]] = []
+    orig = store.select
+
+    def spy(table, **kw):
+        seen.append((table, kw.get("filters") or {}))
+        return orig(table, **kw)
+
+    monkeypatch.setattr(store, "select", spy)
+
+    _corp_actions_alpaca(store, ["AAA", "BBB"])
+    small = dict(seen)
+    assert small["dividends"]["symbol"] == ("in", ["AAA", "BBB"])
+    assert "ex_date" in small["dividends"]              # window bound kept
+    assert small["ticker_splits"]["symbol"] == ("in", ["AAA", "BBB"])
+
+    seen.clear()
+    _corp_actions_alpaca(store, [f"S{i:04d}" for i in range(DEDUP_SYMBOL_IN_MAX + 1)])
+    large = dict(seen)
+    assert "symbol" not in large["dividends"]           # nightly: window-only
+    assert "symbol" not in large["ticker_splits"]
 
 
 def test_nightly_market_refresh_covers_corp_actions_for_universe(monkeypatch):

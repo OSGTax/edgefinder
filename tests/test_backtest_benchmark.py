@@ -103,3 +103,32 @@ def test_total_return_degrades_to_price_when_no_dividend_rows(store):
     assert len(tr) == len(pr) == 400
     assert tr["close"].iloc[0] == pytest.approx(float(pr["close"].iloc[0]))
     assert tr["close"].iloc[-1] == pytest.approx(float(pr["close"].iloc[-1]))
+
+
+def test_pg_lane_tr_benchmark_keeps_deep_history_without_r2(store):
+    """M2(a) regression: on a pg host WITHOUT R2 creds the TR benchmark must
+    still be the DEEP engine union (daily_bars ∪ index_daily), not the hot
+    set — routing TR through load_bars handed such a host a ~400-day
+    benchmark, an EMPTY in-sample half, and a silent "missing excess" on
+    every lab combo. (The conftest strips R2_* env, so this test IS the
+    pg-without-R2 environment.)"""
+    from agent.data import spy_series_df
+
+    seed_spy_bars(store)                      # the ~400d "hot set"
+    seed_spy_dividends(store)
+    deep_start = date(2006, 1, 3)
+    store.insert("index_daily", [             # frozen deep SPY history
+        {"symbol": "SPY", "date": deep_start + timedelta(days=i),
+         "close": 80.0 + i * 0.01, "change_pct": 0.0}
+        for i in range(0, 200, 5)], returning=False)
+
+    tr = spy_series_df(total_return=True)
+    pr = spy_series_df()
+    assert str(min(tr["date"]))[:10] == str(deep_start)   # deep, not 400d
+    assert len(tr) == len(pr) > 400
+    # and it IS total-return: closes before the seeded ex-dates sit below
+    # the price series by the dividend back-adjustment...
+    assert float(tr["close"].iloc[0]) < float(pr["close"].iloc[0])
+    # ...while the two series converge at the last close (CRSP-style)
+    assert float(tr["close"].iloc[-1]) == pytest.approx(
+        float(pr["close"].iloc[-1]))

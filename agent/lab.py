@@ -104,20 +104,33 @@ def _universe_symbols(name: str, as_of: date | None = None) -> list[str]:
     return syms
 
 
-def _bars_near(as_of: date) -> bool:
-    """Cheap probe: does the local hot set hold bars around ``as_of`` at all?
-    Anchored on SPY (always ingested). Without this, an as_of the hot set
-    can't cover would page a ~200k-row PIT ranking query on the REST lane
-    just to find the window empty — every sweep night, per universe."""
+def _pit_breadth(as_of: date, *, need: int) -> int:
+    """Bounded count of DISTINCT NON-PROTECTED symbols with a bar in the 10
+    calendar days ending at ``as_of`` (inclusive both sides).
+
+    The old probe anchored on SPY — but SPY is one of the ~10
+    ``DB_PROTECTED_ETFS`` whose FULL history always stays in ``daily_bars``,
+    so it passed every night while the hot set held nothing else near
+    ``as_of``; the PIT "ranking" then returned exactly those deep-history
+    ETFs, and an ETF-only sweep got mislabeled with the trusted as_of basis.
+    Real breadth means names beyond the protected keeps, so only those count.
+    Bounded: a 10-calendar-day window holds ≤8 sessions, so ordering by
+    symbol guarantees the first ``cap`` rows span at least
+    ``need + len(protected)`` distinct symbols when they exist — never a
+    full-table scan, on either transport."""
     from datetime import timedelta
 
     from agent.store import get_store
+    from edgefinder.data.barstore import DB_PROTECTED_ETFS
 
+    protected = {s.upper() for s in DB_PROTECTED_ETFS}
+    cap = (need + len(protected) + 5) * 10
     rows = get_store().select(
-        "daily_bars", columns="date",
-        filters={"symbol": "SPY", "date": ("gte", as_of - timedelta(days=10))},
-        order=[("date", "asc")], limit=1)
-    return bool(rows) and str(rows[0]["date"])[:10] <= as_of.isoformat()
+        "daily_bars", columns="symbol",
+        filters={"date": [("gte", as_of - timedelta(days=10)),
+                          ("lte", as_of)]},
+        order=[("symbol", "asc")], limit=cap)
+    return len({str(r["symbol"]).upper() for r in rows} - protected)
 
 
 def _resolve_universe(name: str) -> tuple[list[str], str]:
@@ -125,20 +138,30 @@ def _resolve_universe(name: str) -> tuple[list[str], str]:
 
     Ranking membership as of TODAY back-tests tomorrow's survivors — free
     excess for any long rule. So try a point-in-time ranking as of SPLIT_DATE
-    first (the out-sample half's information boundary). The hot set only
-    holds ~400 recent days, so a 2018 as_of usually finds no bars: when the
-    probe misses, the PIT ranking comes back too thin (fewer than half the
-    requested names), or anything raises, fall back to present-day ranking
-    and SAY SO in the label every result row carries. TODO: true
-    SPLIT_DATE-era (and 2006-era in-sample) PIT ranking needs R2-depth
-    frames — rank via ``edgefinder.engine.data.rank_top_universe`` over the
-    archive.
+    first (the out-sample half's information boundary) — but only when the
+    hot set holds REAL breadth there. Two belts, both counting only
+    NON-protected symbols (the protected ETFs keep deep history forever, so
+    they prove nothing about coverage): the ``_pit_breadth`` probe must find
+    at least ``floor`` names with bars near SPLIT_DATE BEFORE the ranked
+    universe call, and the RESOLVED set must itself hold ``floor``
+    non-protected names. In today's production shape (10 deep ETFs + a
+    ~400-day hot set) both gates fail, so every universe falls back to
+    present-day ranking and SAYS SO in the label every result row carries.
+    TODO: true SPLIT_DATE-era (and 2006-era in-sample) PIT ranking needs
+    R2-depth frames — rank via ``edgefinder.engine.data.rank_top_universe``
+    over the archive.
     """
+    from edgefinder.data.barstore import DB_PROTECTED_ETFS
+
     requested = 200 if name == "mid200" else int(name.removeprefix("top"))
+    floor = max(requested // 2, 5)
+    protected = {s.upper() for s in DB_PROTECTED_ETFS}
     try:
-        if _bars_near(SPLIT_DATE):
+        if _pit_breadth(SPLIT_DATE, need=floor) >= floor:
             syms = _universe_symbols(name, as_of=SPLIT_DATE)
-            if len(syms) >= max(requested // 2, 5):
+            # Belt two: a resolved set that is mostly protected ETFs is the
+            # hot set echoing its keep-list, not a 2018 universe.
+            if sum(1 for s in syms if s.upper() not in protected) >= floor:
                 return syms, f"as_of_{SPLIT_DATE}"
     except Exception:  # noqa: BLE001 — PIT ranking is best-effort
         pass
@@ -167,6 +190,14 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
     # Total-return SPY: the strategy bars are dividend-adjusted, so the
     # benchmark must be too — excess is TR-vs-TR, never TR-vs-price.
     bench = data.spy_series_df(total_return=True)
+    # TR is only as deep as the dividends table: if SPY's first stored
+    # ex-date lands AFTER the in-sample start, the in-sample half's "TR"
+    # benchmark is effectively price-only there. Stamp the coverage on every
+    # verdict so the data-bounded efficacy is visible, never silent.
+    div_min = store.select("dividends", columns="ex_date",
+                           filters={"symbol": "SPY"},
+                           order=[("ex_date", "asc")], limit=1)
+    benchmark_div_from = str(div_min[0]["ex_date"])[:10] if div_min else None
     bars_cache: dict[str, dict] = {}
     basis_cache: dict[str, str] = {}
     tested = qualified = errors = 0
@@ -196,6 +227,7 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
             # Stamp the membership basis on every result payload so the
             # leaderboard/brief carry the survivorship caveat with the number.
             verdict["universe_basis"] = basis_cache[uni]
+            verdict["benchmark_div_from"] = benchmark_div_from
             tested += 1
             qualified += 1 if verdict["qualifies"] else 0
             row = {**combo, **verdict}
@@ -217,6 +249,7 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
             "elapsed_secs": round(time.time() - t0, 1),
             "grid_size": len(grid), "offset": offset,
             "split": str(SPLIT_DATE),
+            "benchmark_div_from": benchmark_div_from,
             "honesty": f"{qualified} of {tested} tested combos qualified "
                        "(positive excess in BOTH halves); expect live "
                        "results to shrink toward the worst half.",
@@ -279,27 +312,44 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
         tested += 1
         res = r.get("result") or {}
         if res.get("qualifies"):
-            entries.append({"rule": spec.get("rule"),
-                            "universe": spec.get("universe"),
-                            "schedule": spec.get("schedule"),
-                            "score": res.get("score"),
-                            "in_sample_excess_pct": res.get("in_sample_excess_pct"),
-                            "out_sample_excess_pct": res.get("out_sample_excess_pct"),
-                            "sharpe_out": res.get("sharpe_out"),
-                            "max_dd_out": res.get("max_dd_out"),
-                            # rows persisted before the basis stamp were all
-                            # ranked present-day — label them honestly
-                            "universe_basis": res.get("universe_basis")
-                            or "present_day_survivorship_inflated"})
+            entry = {"rule": spec.get("rule"),
+                     "universe": spec.get("universe"),
+                     "schedule": spec.get("schedule"),
+                     "score": res.get("score"),
+                     "in_sample_excess_pct": res.get("in_sample_excess_pct"),
+                     "out_sample_excess_pct": res.get("out_sample_excess_pct"),
+                     "sharpe_out": res.get("sharpe_out"),
+                     "max_dd_out": res.get("max_dd_out"),
+                     # rows persisted before the basis stamp were all
+                     # ranked present-day — label them honestly
+                     "universe_basis": res.get("universe_basis")
+                     or "present_day_survivorship_inflated"}
+            # carried only when the sweep stamped it — an absent key is a
+            # legacy row (unknown coverage), not "no dividends"
+            if "benchmark_div_from" in res:
+                entry["benchmark_div_from"] = res["benchmark_div_from"]
+            entries.append(entry)
     entries.sort(key=lambda e: -(e.get("score") or -999))
     survivorship = sum(1 for e in entries
                        if e["universe_basis"] != f"as_of_{SPLIT_DATE}")
+    # Benchmark dividend coverage starting AFTER the in-sample start means
+    # the in-sample "TR" benchmark was effectively price-only — the TR fix's
+    # efficacy is data-bounded, and that must ride with the numbers.
+    thin_bench = sum(
+        1 for e in entries
+        if "benchmark_div_from" in e
+        and (e["benchmark_div_from"] is None
+             or str(e["benchmark_div_from"])[:10] > str(IN_SAMPLE_START)))
     honesty = (f"top picks are {min(top, len(entries))} of "
                f"{tested} tested — expect live shrinkage toward "
                "the worst-half number")
     if survivorship:
         honesty += (f"; {survivorship} of {len(entries)} qualifiers ranked "
                     "their universe present-day (survivorship-inflated)")
+    if thin_bench:
+        honesty += (f"; {thin_bench} of {len(entries)} qualifiers scored vs "
+                    "a benchmark whose dividend coverage starts after the "
+                    "in-sample start (in-sample TR is effectively price-only)")
     return {"window_days": days, "combos_tested": tested,
             "qualified": len(entries),
             "honesty": honesty,

@@ -17,7 +17,10 @@ Selection (``EDGEFINDER_DB_TRANSPORT``):
   auto  — rest iff SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are set, else pg
 
 Filters are ``{column: value}`` (equality) or ``{column: (op, value)}`` with
-op in {in, gte, lte, gt, lt}. ``order`` is a list of ``(column, "asc"|"desc")``.
+op in {in, gte, lte, gt, lt}; a LIST of (op, value) specs on one column
+applies all of them — how a range is expressed
+(``{"date": [("gte", lo), ("lte", hi)]}``), since dict keys are unique.
+``order`` is a list of ``(column, "asc"|"desc")``.
 """
 
 from __future__ import annotations
@@ -84,24 +87,27 @@ class PgStore:
     def _apply_filters(stmt, table, filters):
         for col, spec in (filters or {}).items():
             c = table.c[col]
-            if isinstance(spec, tuple) and len(spec) == 2:
-                # Dispatch lazily — building every expression eagerly would
-                # call c.in_(val) on scalar values (dates, numbers) and raise.
-                op, val = spec
-                if op == "in":
-                    stmt = stmt.where(c.in_(val))
-                elif op == "gte":
-                    stmt = stmt.where(c >= val)
-                elif op == "lte":
-                    stmt = stmt.where(c <= val)
-                elif op == "gt":
-                    stmt = stmt.where(c > val)
-                elif op == "lt":
-                    stmt = stmt.where(c < val)
+            # A LIST of specs ANDs each onto the same column (a range) —
+            # mirrors the REST transport's repeated-param encoding.
+            for sp in (spec if isinstance(spec, list) else [spec]):
+                if isinstance(sp, tuple) and len(sp) == 2:
+                    # Dispatch lazily — building every expression eagerly would
+                    # call c.in_(val) on scalar values (dates, numbers) and raise.
+                    op, val = sp
+                    if op == "in":
+                        stmt = stmt.where(c.in_(val))
+                    elif op == "gte":
+                        stmt = stmt.where(c >= val)
+                    elif op == "lte":
+                        stmt = stmt.where(c <= val)
+                    elif op == "gt":
+                        stmt = stmt.where(c > val)
+                    elif op == "lt":
+                        stmt = stmt.where(c < val)
+                    else:
+                        raise ValueError(f"unknown filter op {op!r}")
                 else:
-                    raise ValueError(f"unknown filter op {op!r}")
-            else:
-                stmt = stmt.where(c == spec)
+                    stmt = stmt.where(c == sp)
         return stmt
 
     def select(self, table, *, filters=None, order=None, limit=None, columns="*"):
@@ -154,6 +160,31 @@ class PgStore:
         stmt = self._apply_filters(sa_delete(t), t, filters)
         with self._engine.begin() as conn:
             conn.execute(stmt)
+
+
+def is_duplicate_key_error(exc: Exception) -> bool:
+    """True when ``exc`` is a unique-constraint (duplicate key) violation,
+    however the active transport surfaces it.
+
+    pg   — SQLAlchemy wraps the driver error in ``IntegrityError``; the
+           message carries "duplicate key" (Postgres, code 23505) or
+           "UNIQUE constraint failed" (SQLite).
+    rest — PostgREST answers with the Postgres code in the body
+           (``"code":"23505"`` / "duplicate key ... violates").
+    """
+    from agent.rest import RestError
+
+    if isinstance(exc, RestError):
+        body = (exc.body or "").lower()
+        return "23505" in body or "duplicate key" in body
+    try:
+        from sqlalchemy.exc import IntegrityError
+    except ImportError:  # pragma: no cover — REST-only host without SQLAlchemy
+        return False
+    if not isinstance(exc, IntegrityError):
+        return False
+    msg = str(getattr(exc, "orig", None) or exc).lower()
+    return "unique" in msg or "duplicate" in msg
 
 
 @lru_cache(maxsize=1)

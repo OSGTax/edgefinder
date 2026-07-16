@@ -154,6 +154,95 @@ def test_rest_filter_and_value_encoding():
     assert params["date"] == "gte.2026-01-01"
 
 
+def test_rest_filter_range_encodes_repeated_params():
+    """A LIST of specs on one column becomes repeated PostgREST params —
+    how a server-side [gte, lte] date range is expressed (dict keys are
+    unique, so a single tuple can't carry both bounds)."""
+    from agent.rest import Rest
+
+    r = Rest(url="https://x.supabase.co", key="k")
+    params = r._filter_params({
+        "date": [("gte", date(2017, 12, 22)), ("lte", date(2018, 1, 1))]})
+    assert params == [("date", "gte.2017-12-22"), ("date", "lte.2018-01-01")]
+
+
+def test_pg_filter_range_applies_both_bounds(tmp_path, monkeypatch):
+    """The pg transport honors the same list-of-specs range filter, so the
+    lab's breadth probe and the PIT ranking window behave identically on
+    either lane (and are testable on SQLite)."""
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'range.db'}")
+    from edgefinder.db.engine import Base, get_engine
+    import agent.models  # noqa: F401
+    import edgefinder.db.models  # noqa: F401
+
+    Base.metadata.create_all(get_engine())
+    from agent.store import get_store
+
+    store = get_store()
+    for d in (date(2017, 12, 20), date(2017, 12, 28), date(2018, 1, 5)):
+        store.insert("daily_bars", {"symbol": "AAA", "date": d, "open": 1.0,
+                                    "high": 1.0, "low": 1.0, "close": 1.0,
+                                    "volume": 1.0, "source": "test"},
+                     returning=False)
+    rows = store.select("daily_bars", columns="date",
+                        filters={"date": [("gte", date(2017, 12, 22)),
+                                          ("lte", date(2018, 1, 1))]})
+    assert [str(r["date"])[:10] for r in rows] == ["2017-12-28"]
+
+
+def test_rest_universe_pit_window_bounded_both_sides(monkeypatch):
+    """M1 regression: a past ``as_of`` with a gte-only filter matched every
+    bar AFTER it too — up to 200 paged HTTPS calls of rows the client threw
+    away, every sweep night. Both bounds must reach the store query."""
+    import agent.store as agent_store
+    from agent.data import _rest_universe
+
+    captured = {}
+
+    class _Store:
+        def select(self, table, *, columns="*", filters=None, order=None,
+                   limit=None):
+            captured["table"] = table
+            captured["filters"] = filters
+            return [{"symbol": "AAA", "close": 10.0, "volume": 100.0,
+                     "date": "2017-12-29"}]
+
+    def fake_get_store():
+        return _Store()
+
+    fake_get_store.cache_clear = lambda: None  # conftest teardown calls it
+    monkeypatch.setattr(agent_store, "get_store", fake_get_store)
+    assert _rest_universe(5, date(2018, 1, 1)) == ["AAA"]
+    assert captured["table"] == "daily_bars"
+    assert captured["filters"]["date"] == [("gte", "2017-12-22"),
+                                           ("lte", "2018-01-01")]
+
+
+def test_is_duplicate_key_error_covers_both_transports():
+    """The constraint-error probe behind the CA insert fallback must
+    recognize a unique violation however the active transport surfaces it —
+    and nothing else."""
+    from sqlalchemy.exc import IntegrityError
+
+    from agent.rest import RestError
+    from agent.store import is_duplicate_key_error
+
+    # rest: PostgREST carries the Postgres code in the 409 body
+    assert is_duplicate_key_error(RestError(
+        409, '{"code":"23505","message":"duplicate key value violates '
+             'unique constraint \\"uq_dividends_symbol_exdate\\""}'))
+    assert not is_duplicate_key_error(RestError(400, '{"code":"22P02"}'))
+    # pg: SQLAlchemy wraps the driver error (SQLite + Postgres wordings)
+    assert is_duplicate_key_error(IntegrityError(
+        "INSERT", {}, Exception("UNIQUE constraint failed: dividends.symbol")))
+    assert is_duplicate_key_error(IntegrityError(
+        "INSERT", {}, Exception('duplicate key value violates unique '
+                                'constraint "uq_ticker_split"')))
+    assert not is_duplicate_key_error(IntegrityError(
+        "INSERT", {}, Exception("NOT NULL constraint failed: dividends.symbol")))
+    assert not is_duplicate_key_error(RuntimeError("connection reset"))
+
+
 def test_rest_select_paginates_past_server_cap(monkeypatch):
     """Regression (P2 verifier): PostgREST caps responses (Supabase: 1000);
     select must page with offset instead of silently truncating."""

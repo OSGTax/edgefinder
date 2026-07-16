@@ -57,8 +57,10 @@ class Rest:
     """Minimal CRUD over a Supabase PostgREST endpoint.
 
     Filters are ``{column: value}`` for equality, or ``{column: ("in", [..])}``
-    / ``("gte", v)`` / ``("lte", v)`` for the few non-eq needs. ``order`` is a
-    list of ``(column, "asc"|"desc")``.
+    / ``("gte", v)`` / ``("lte", v)`` for the few non-eq needs. A LIST of
+    specs on one column applies all of them — how a range is expressed
+    (``{"date": [("gte", lo), ("lte", hi)]}``), since dict keys are unique.
+    ``order`` is a list of ``(column, "asc"|"desc")``.
     """
 
     def __init__(self, url: str | None = None, key: str | None = None,
@@ -82,15 +84,19 @@ class Rest:
     def _filter_params(self, filters: dict | None) -> list[tuple[str, str]]:
         params: list[tuple[str, str]] = []
         for col, spec in (filters or {}).items():
-            if isinstance(spec, tuple) and len(spec) == 2:
-                op, val = spec
-                if op == "in":
-                    joined = ",".join(_encode(v) for v in val)
-                    params.append((col, f"in.({joined})"))
+            # A LIST of specs applies each to the same column — PostgREST
+            # accepts repeated params (``date=gte.A&date=lte.B``), which is
+            # how a range is expressed since dict keys are unique.
+            for sp in (spec if isinstance(spec, list) else [spec]):
+                if isinstance(sp, tuple) and len(sp) == 2:
+                    op, val = sp
+                    if op == "in":
+                        joined = ",".join(_encode(v) for v in val)
+                        params.append((col, f"in.({joined})"))
+                    else:
+                        params.append((col, f"{op}.{_encode(val)}"))
                 else:
-                    params.append((col, f"{op}.{_encode(val)}"))
-            else:
-                params.append((col, f"eq.{_encode(spec)}"))
+                    params.append((col, f"eq.{_encode(sp)}"))
         return params
 
     def _do(self, method: str, table: str, *, params=None, body=None,

@@ -323,6 +323,11 @@ def _rest_universe(top_n: int, as_of: date | None) -> list[str]:
     names for the prior session. Ranking each symbol's most-recent bar within a
     trailing window instead lets the broad ingest's names rank in regardless of
     which day the last thin top-up happened to land on.
+
+    The window is bounded on BOTH sides server-side: a past ``as_of`` with a
+    gte-only filter matches every bar after it too, paging up to ~200 HTTPS
+    calls of rows the client then throws away. With gte+lte the response is
+    ~10 sessions x symbols, small on every lane.
     """
     from agent.store import get_store
 
@@ -331,7 +336,8 @@ def _rest_universe(top_n: int, as_of: date | None) -> list[str]:
     lo = (anchor - timedelta(days=10)).isoformat()
     hi = anchor.isoformat()
     rows = store.select("daily_bars", columns="symbol,close,volume,date",
-                        filters={"date": ("gte", lo)}, limit=200000)
+                        filters={"date": [("gte", lo), ("lte", hi)]},
+                        limit=200000)
     latest_per_sym: dict[str, tuple[str, float, float]] = {}
     for r in rows:
         sym, c, v, d = r.get("symbol"), r.get("close"), r.get("volume"), str(r.get("date"))[:10]
@@ -352,30 +358,43 @@ def _rest_universe(top_n: int, as_of: date | None) -> list[str]:
 def spy_series_df(*, total_return: bool = False) -> pd.DataFrame:
     """Longest available SPY series for benchmarking (transport-aware).
 
-    ``total_return=True`` dividend-adjusts the series through the SAME
-    ``load_bars`` path the strategy bars take, so backtest/lab excess is
-    TR-vs-TR. A price-only SPY against dividend-adjusted strategy bars hands
-    EVERY strategy the benchmark's dividend yield as phantom "excess"
-    (~+50pp compounded over 2006-2018) — the structural inflation fixed
-    2026-07-16. Missing SPY dividend rows degrade gracefully: the adjustment
-    is a no-op and TR ≈ PR (never a crash).
+    ``total_return=True`` dividend-adjusts the series onto the same basis as
+    the strategy bars, so backtest/lab excess is TR-vs-TR. A price-only SPY
+    against dividend-adjusted strategy bars hands EVERY strategy the
+    benchmark's dividend yield as phantom "excess" (~+50pp compounded over
+    2006-2018) — the structural inflation fixed 2026-07-16. Missing SPY
+    dividend rows degrade gracefully: the adjustment is a no-op and TR ≈ PR
+    (never a crash).
+
+    Depth per lane: the rest lane reads through ``load_bars`` (R2-backed —
+    deep — with the DB's fresh tail spliced on). The pg lane uses the
+    engine's ``spy_series`` union (daily_bars ∪ index_daily — SPY is a
+    DB-protected keep, so that union is deep with or without R2) and applies
+    the dividend back-adjustment on top for TR. Routing the pg lane's TR
+    through ``load_bars`` was the silent regression: a pg host WITHOUT R2
+    creds got the hot set only (~400d), an EMPTY in-sample half, and every
+    lab combo scored "missing excess".
 
     The default stays price-only for the callers where that is the honest
     basis: the live book's vs-SPY (``agent.ledger``) books no dividend cash
     on either side, so its price-vs-price comparison is deliberate.
     """
-    if total_return or _use_rest():
+    if _use_rest():
         bars = load_bars(["SPY"], div_adjust=total_return, source="auto")
         df = bars.get("SPY")
         if df is None or not len(df):
             return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
         return df.sort_values("date").reset_index(drop=True)
 
-    from edgefinder.engine.data import spy_series
+    from edgefinder.engine import data as eng
 
     sess = session_factory()()
     try:
-        return spy_series(sess)
+        df = eng.spy_series(sess)
+        if total_return and len(df):
+            divs = eng.load_dividends(sess, ["SPY"])
+            df = eng.adjust_for_dividends({"SPY": df}, divs)["SPY"]
+        return df
     finally:
         sess.close()
 

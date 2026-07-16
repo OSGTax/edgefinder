@@ -240,14 +240,53 @@ def _news_alpaca(store, symbols: list[str], *, limit: int = 15) -> dict:
 # Alpaca caps one corporate-announcements query at a 90-day window (see
 # broker.corporate_announcements), so longer lookbacks are walked in chunks.
 CA_WINDOW_DAYS = 90
+# Below this many symbols the CA dedup pre-load is additionally bounded by
+# symbol IN(): the hourly ~15-name pass must not scan the whole market's
+# recent CA rows every hour, while the ~1000-name nightly keeps the pure
+# date-window scan (an IN() that size gains nothing and bloats the query).
+DEDUP_SYMBOL_IN_MAX = 50
+
+
+def _insert_skip_dupes(store, table: str, rows: list[dict]) -> tuple[int, int]:
+    """Insert ``rows`` as one fast batch; if the batch trips a unique
+    constraint, fall back to per-row inserts that skip duplicate-key rows.
+
+    Alpaca tiles corporate-actions windows on DECLARATION date, so a
+    correction row can carry an ex-date OLDER than the dedup pre-load
+    window — it escapes the dedup set, violates the table's unique
+    constraint, and on the pure batch path that ONE row rolled back the
+    WHOLE night's insert, every night. Returns ``(inserted, dupes_skipped)``;
+    non-duplicate errors still raise."""
+    from agent.store import is_duplicate_key_error
+
+    if not rows:
+        return 0, 0
+    try:
+        store.insert(table, rows, returning=False)
+        return len(rows), 0
+    except Exception as exc:  # noqa: BLE001 — inspect; re-raise if not a dupe
+        if not is_duplicate_key_error(exc):
+            raise
+    inserted = skipped = 0
+    for row in rows:
+        try:
+            store.insert(table, row, returning=False)
+            inserted += 1
+        except Exception as exc:  # noqa: BLE001
+            if not is_duplicate_key_error(exc):
+                raise
+            skipped += 1
+    return inserted, skipped
 
 
 def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
                          fwd_days: int = 45) -> dict:
     """Ingest cash dividends + stock splits for ``symbols`` from Alpaca into the
     existing ``dividends`` / ``ticker_splits`` tables — the Polygon corporate-
-    actions replacement. Deduped by (symbol, date), so re-runs and overlapping
-    windows stay idempotent. Keeping the ``dividends`` table fed is what keeps
+    actions replacement. Deduped by (symbol, date) — pre-loaded for the fetch
+    window, with a duplicate-skipping insert catching out-of-window
+    corrections — so re-runs and overlapping windows stay idempotent.
+    Keeping the ``dividends`` table fed is what keeps
     total-return backtests honest; the same rows drive the desk's upcoming-
     catalysts panel. Best-effort; ``back_days`` beyond Alpaca's 90-day CA cap
     (the nightly passes its bar window, ~400d) is walked in ≤90-day chunks —
@@ -279,13 +318,21 @@ def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
         return {"error": f"all {windows} corporate-actions windows failed"}
     # Dedup against what's already stored, bounded to the fetch window (every
     # insertable row's ex-date lies inside it) — no giant IN() of the ~1000-name
-    # nightly universe, and no unbounded whole-table scan.
+    # nightly universe, and no unbounded whole-table scan. Small (hourly)
+    # symbol sets ARE additionally bounded by symbol IN(), so the hourly pass
+    # never scans the whole market's recent rows. Rows whose ex-date falls
+    # OUTSIDE the window can still slip past this set (Alpaca tiles on
+    # declaration date) — the duplicate-skipping insert below absorbs those.
+    dedup_filters: dict = {}
+    if len(wanted) <= DEDUP_SYMBOL_IN_MAX:
+        dedup_filters["symbol"] = ("in", sorted(wanted))
     ex_div = {(r["symbol"], str(r["ex_date"])[:10]) for r in store.select(
         "dividends", columns="symbol,ex_date",
-        filters={"ex_date": ("gte", since)}, limit=100000)}
+        filters={**dedup_filters, "ex_date": ("gte", since)}, limit=100000)}
     ex_split = {(r["symbol"], str(r["execution_date"])[:10]) for r in store.select(
         "ticker_splits", columns="symbol,execution_date",
-        filters={"execution_date": ("gte", since.isoformat())}, limit=100000)}
+        filters={**dedup_filters, "execution_date": ("gte", since.isoformat())},
+        limit=100000)}
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     div_rows, split_rows, seen = [], [], set()
     for a in cas:
@@ -304,11 +351,10 @@ def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
             split_rows.append({"symbol": sym, "execution_date": ex_d,
                                "split_from": a["old_rate"], "split_to": a["new_rate"],
                                "created_at": now})
-    if div_rows:
-        store.insert("dividends", div_rows, returning=False)
-    if split_rows:
-        store.insert("ticker_splits", split_rows, returning=False)
-    return {"dividends": len(div_rows), "splits": len(split_rows),
+    div_ins, div_dupes = _insert_skip_dupes(store, "dividends", div_rows)
+    split_ins, split_dupes = _insert_skip_dupes(store, "ticker_splits", split_rows)
+    return {"dividends": div_ins, "splits": split_ins,
+            "dupes_skipped": div_dupes + split_dupes,
             "windows": windows, "window_errors": window_errors}
 
 

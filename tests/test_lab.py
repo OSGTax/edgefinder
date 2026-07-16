@@ -126,6 +126,7 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'lab.db'}")
     from edgefinder.db.engine import Base, get_engine
     import agent.models  # noqa: F401
+    import edgefinder.db.models  # noqa: F401 — daily_bars/dividends tables
 
     Base.metadata.create_all(get_engine())
     from agent.store import get_store
@@ -134,12 +135,14 @@ def store(tmp_path, monkeypatch):
 
 
 def seed_lab_row(store, rule, uni, sched, *, qualifies, score, ts=None,
-                 basis=None):
+                 basis=None, extra=None):
     result = {"qualifies": qualifies, "score": score,
               "in_sample_excess_pct": score,
               "out_sample_excess_pct": score + 1}
     if basis is not None:
         result["universe_basis"] = basis
+    if extra:
+        result.update(extra)
     store.insert("desk_backtests", {
         "account": "agent", "run_id": "lab-test",
         "ts": ts or datetime.utcnow(),
@@ -323,7 +326,7 @@ def test_resolve_universe_prefers_split_date_ranking(monkeypatch):
         calls.append((n, as_of))
         return [f"S{i}" for i in range(n)]
 
-    monkeypatch.setattr(lab, "_bars_near", lambda as_of: True)
+    monkeypatch.setattr(lab, "_pit_breadth", lambda as_of, *, need: need)
     monkeypatch.setattr(agent_data, "universe", fake_universe)
     syms, basis = lab._resolve_universe("top20")
     assert basis == f"as_of_{lab.SPLIT_DATE}"
@@ -335,7 +338,7 @@ def test_resolve_universe_falls_back_and_labels_survivorship(monkeypatch):
     import agent.data as agent_data
     from agent import lab
 
-    monkeypatch.setattr(lab, "_bars_near", lambda as_of: True)
+    monkeypatch.setattr(lab, "_pit_breadth", lambda as_of, *, need: need)
 
     def thin_pit(n, *, as_of=None):
         if as_of is not None:
@@ -360,7 +363,7 @@ def test_resolve_universe_survives_pit_ranking_errors(monkeypatch):
     import agent.data as agent_data
     from agent import lab
 
-    monkeypatch.setattr(lab, "_bars_near", lambda as_of: True)
+    monkeypatch.setattr(lab, "_pit_breadth", lambda as_of, *, need: need)
 
     def flaky(n, *, as_of=None):
         if as_of is not None:
@@ -380,7 +383,7 @@ def test_sweep_stamps_universe_basis_on_results(store, monkeypatch):
     import agent.data as agent_data
     from agent import lab
 
-    # SQLite store has no SPY bars near 2018 → _bars_near probe misses →
+    # SQLite store has no bars near 2018 → the breadth probe finds nothing →
     # present-day fallback, and the label must say so end to end.
     monkeypatch.setattr(
         agent_data, "universe",
@@ -406,3 +409,144 @@ def test_sweep_stamps_universe_basis_on_results(store, monkeypatch):
     assert rows
     assert (rows[0]["result"]["universe_basis"]
             == "present_day_survivorship_inflated")
+
+
+# ── H1: the protected-ETF collision must never mislabel a PIT universe ──
+
+
+def seed_bars(store, symbol, dates, *, volume=1_000_000.0):
+    store.insert("daily_bars", [
+        {"symbol": symbol, "date": d, "open": 100.0, "high": 101.0,
+         "low": 99.0, "close": 100.0, "volume": volume, "source": "test"}
+        for d in dates], returning=False)
+
+
+def test_pit_breadth_counts_only_nonprotected_inside_window(store):
+    from agent import lab
+
+    d = lab.SPLIT_DATE - timedelta(days=2)
+    seed_bars(store, "SPY", [d])
+    seed_bars(store, "QQQ", [d])
+    assert lab._pit_breadth(lab.SPLIT_DATE, need=5) == 0  # keeps ≠ breadth
+
+    seed_bars(store, "AAPL", [d])
+    seed_bars(store, "MSFT", [lab.SPLIT_DATE])                 # inclusive edge
+    seed_bars(store, "OLD", [lab.SPLIT_DATE - timedelta(days=30)])  # too old
+    seed_bars(store, "NEW", [lab.SPLIT_DATE + timedelta(days=1)])   # the future
+    assert lab._pit_breadth(lab.SPLIT_DATE, need=5) == 2
+
+
+def test_prod_shape_resolves_present_day_not_as_of_2018(store):
+    """THE H1 regression: production's data shape is ~10 protected ETFs with
+    deep history (2018 bars included) plus a ~400-day hot set for everything
+    else. The old SPY-anchored probe passed on that shape every night, the
+    PIT "ranking" returned exactly those 10 deep ETFs, and 10 >= max(20//2,
+    5) labeled an ETF-only top20 sweep with the trusted as_of basis — rows
+    the leaderboard dedup then let replace legitimate present-day results.
+    On this shape every universe must resolve present-day and say so."""
+    from edgefinder.data.barstore import DB_PROTECTED_ETFS
+
+    from agent import lab
+
+    near_split = [lab.SPLIT_DATE - timedelta(days=k) for k in (1, 4, 7)]
+    recent = [date.today() - timedelta(days=k) for k in (1, 2, 3)]
+    for sym in DB_PROTECTED_ETFS:          # deep keeps: 2018 AND recent bars
+        seed_bars(store, sym, near_split + recent, volume=5e6)
+    for i in range(30):                    # the hot set: recent bars ONLY
+        seed_bars(store, f"HOT{i:02d}", recent, volume=1e8 - i * 1e5)
+
+    syms, basis = lab._resolve_universe("top20")
+    assert basis == "present_day_survivorship_inflated"
+    assert basis != f"as_of_{lab.SPLIT_DATE}"
+    assert sum(1 for s in syms if s.startswith("HOT")) == 20  # present-day rank
+
+
+def test_resolve_universe_rejects_protected_only_pit_set(monkeypatch):
+    """Belt two: even with the breadth probe forced green, a resolved set
+    that is (mostly) protected ETFs is the hot set echoing its keep-list,
+    not a 2018 universe — exactly 10 ETFs >= the old 10-name top20 floor WAS
+    the collision. It must fall back and carry the survivorship label."""
+    import agent.data as agent_data
+    from edgefinder.data.barstore import DB_PROTECTED_ETFS
+
+    from agent import lab
+
+    monkeypatch.setattr(lab, "_pit_breadth", lambda as_of, *, need: need)
+
+    def etf_only(n, *, as_of=None):
+        if as_of is not None:
+            return list(DB_PROTECTED_ETFS)   # the collision's exact output
+        return [f"S{i}" for i in range(n)]
+
+    monkeypatch.setattr(agent_data, "universe", etf_only)
+    _, basis = lab._resolve_universe("top20")
+    assert basis == "present_day_survivorship_inflated"
+
+
+# ── M2: the TR benchmark's dividend coverage must be visible, not silent ──
+
+
+def test_sweep_stamps_benchmark_div_coverage(store, monkeypatch):
+    import agent.backtest_tool as backtest_tool
+    import agent.data as agent_data
+    from agent import lab
+
+    store.insert("dividends", {"symbol": "SPY", "ex_date": date(2012, 3, 16),
+                               "cash_amount": 0.65}, returning=False)
+    monkeypatch.setattr(
+        agent_data, "universe",
+        lambda n, *, as_of=None: [] if as_of else [f"S{i}" for i in range(n)])
+    frame = pd.DataFrame({
+        "date": [date(2006, 1, 2) + timedelta(days=i) for i in range(220)],
+        "open": [100.0] * 220, "high": [100.0] * 220, "low": [100.0] * 220,
+        "close": [100.0] * 220, "volume": [1e6] * 220})
+    monkeypatch.setattr(agent_data, "load_bars",
+                        lambda syms, **kw: {s: frame.copy() for s in syms})
+    monkeypatch.setattr(agent_data, "spy_series_df",
+                        lambda **kw: frame.copy())
+    monkeypatch.setattr(backtest_tool, "run_prepared",
+                        lambda *a, **kw: {"excess_return_pct": 5.0,
+                                          "sharpe": 1.0,
+                                          "max_drawdown_pct": -10.0})
+
+    res = lab.sweep(max_combos=1, offset=0)
+    assert res["benchmark_div_from"] == "2012-03-16"  # queried once per sweep
+    assert res["top"][0]["benchmark_div_from"] == "2012-03-16"
+    rows = [r for r in store.select("desk_backtests")
+            if str(r.get("label") or "").startswith("lab:")]
+    assert rows[0]["result"]["benchmark_div_from"] == "2012-03-16"
+
+
+def test_leaderboard_flags_thin_benchmark_dividend_coverage(store):
+    from agent.lab import IN_SAMPLE_START, leaderboard
+
+    # SPY dividend rows starting AFTER the in-sample start mean the in-sample
+    # "TR" benchmark was effectively price-only — the honesty string says so.
+    assert str(IN_SAMPLE_START) < "2012-03-16"
+    seed_lab_row(store, "momentum:5", "top40", "monthly", qualifies=True,
+                 score=6.0, extra={"benchmark_div_from": "2012-03-16"})
+    b = leaderboard(top=5)
+    assert b["top"][0]["benchmark_div_from"] == "2012-03-16"
+    assert "dividend coverage" in b["honesty"]
+
+
+def test_leaderboard_flags_null_benchmark_coverage(store):
+    from agent.lab import leaderboard
+
+    # stamped None = the dividends table held NO SPY rows at all: fully thin
+    seed_lab_row(store, "momentum:5", "top40", "monthly", qualifies=True,
+                 score=6.0, extra={"benchmark_div_from": None})
+    assert "dividend coverage" in leaderboard(top=5)["honesty"]
+
+
+def test_leaderboard_quiet_on_deep_coverage_and_legacy_rows(store):
+    from agent.lab import leaderboard
+
+    seed_lab_row(store, "momentum:5", "top40", "monthly", qualifies=True,
+                 score=6.0, extra={"benchmark_div_from": "2004-01-05"})
+    seed_lab_row(store, "breakout:5", "top20", "weekly", qualifies=True,
+                 score=3.0)   # legacy row: coverage unknown, never flagged
+    b = leaderboard(top=5)
+    assert "dividend coverage" not in b["honesty"]
+    by_rule = {e["rule"]: e for e in b["top"]}
+    assert "benchmark_div_from" not in by_rule["breakout:5"]  # honest absence
