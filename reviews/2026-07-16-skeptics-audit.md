@@ -8,6 +8,42 @@ looked, it says so — a skeptic who exaggerates is just a different kind of lia
 
 ---
 
+> ## Remediation status (added same day, after the fix run)
+>
+> Every finding below was remediated on this branch across ten commits
+> (v9.6.0–v9.10.1), each phase implemented by one agent and adversarially
+> re-reviewed by another before landing; the reviews caught and fixed
+> nine further bugs the fixes themselves introduced (notably: a PIT-probe
+> collision that would have mislabeled an ETF-only universe as honest, a
+> hard-stop/split interaction that destroyed value, a double-sell race,
+> and sanity gates that would have vetoed protective exits mid-crash).
+>
+> - **P0 scoreboard** (F1–F4) → v9.6.0/v9.6.1 — TR benchmark + regression
+>   test, PIT plumbing + survivorship labels, full-market corp actions,
+>   split-guarded screens.
+> - **P1 book + reflexes** (F5, F6, F8–F10) → v9.7.0/v9.7.1 — corp actions
+>   on the live book, expiry-day settlement, post-market session fix,
+>   enforced prediction registry, opt-in hard stops with CAS claims.
+> - **P2 measurement** (F11–F14 + loop closure) → v9.8.0/v9.8.1 — fill
+>   friction/sanity gates, mark provenance, desk_outcomes + grade/verdict/
+>   context commands, charter truth pass.
+> - **P3 durability** (F17–F19, F21) → v9.9.0/v9.9.1 — safe nightly
+>   writes, finalized-bars R2 sync + fingerprints, RTH-only IV bank,
+>   wiki history + setups/postmortems pages.
+> - **P4 desk** (F15, F16, F20, F22, F23) → v9.10.0/v9.10.1 — predictions
+>   panel, decision archive, SPY overlay, honest LIVE pill, one book,
+>   options allowlist + rate limit, CORS fix, preflight --strict.
+>
+> Deferred (not silently skipped): dropping the dead legacy prod tables
+> (destructive — owner call), true 2006-era PIT universe ranking from R2
+> depth (data engineering; leaderboard rows are honestly labeled until
+> then), Routine-trigger wiring so tripped wires fire a run (lives outside
+> the repo; hard stops cover the protective case), and the prod schema
+> migration (applies automatically via render_start on the next deploy;
+> new code degrades gracefully until then).
+
+---
+
 ## 0. The 60-second verdict
 
 You built an honest cash register attached to a rigged scale.
