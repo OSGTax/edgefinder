@@ -7,7 +7,7 @@ Claude session on this repo that runs one skill. There are five —
 
 | Routine | Skill | Cron (UTC) | What it does |
 |---|---|---|---|
-| Trading brain | `trading-agent` | **agent-paced, no cron** — each run ends with `NEXT RUN REQUESTED: <UTC>`; the owner fires the Routine manually | Observe + trade the $100k paper book at live quotes; tripwires + budgeted self-wakes cover the gaps |
+| Trading brain | `trading-agent` | `30 13,16,19 * * 1-5` (≈9:30 AM / 12:30 PM / 3:30 PM ET floor) **plus owner-fired on request** — each run still ends with `NEXT RUN REQUESTED: <UTC>` and the owner remains the fine-grained scheduler | Observe + trade the $100k paper book at live quotes; tripwires + budgeted self-wakes cover the gaps |
 | Nightly data | `data-refresh` | `45 0 * * 2-6` (8:45 PM ET Mon–Fri) | Full-market bar ingest (top-1000 + R2 sync) **+ SEC EDGAR fundamentals ingest** + builds the research brief |
 | Strategy Lab | `strategy-lab` | `0 2 * * 2-6` (10:00 PM ET, post-ingest) | Sweeps the 168-combo grid (incl. `value_momentum` since v9.4.0) over 21y, split-sample scored; rebuilds the brief with tonight's board |
 | Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week mechanically (predictions, alpha, rejected list, fundamentals citations), curate the lessons wiki |
