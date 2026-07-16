@@ -82,32 +82,47 @@ def portfolio(db: Session = Depends(get_db)):
 
     # vs SPY since inception — a long book's raw return is mostly market beta,
     # so the hero shows the difference. SPY closes come from daily_bars
-    # (index_daily froze at the cutover); price return on both sides, since
-    # the ledger books no dividend cash either. Convention matches
-    # agent.ledger._spy_window_pct: baseline = last close STRICTLY BEFORE the
-    # ET inception date (a close ON it is 16:00, after the first fill — and on
-    # day one it would be the endpoint itself, a confident fake 0.0). Two
-    # indexed point-queries; this endpoint is polled every minute per client.
+    # (index_daily froze at the cutover), back-adjusted to TOTAL RETURN with
+    # the SPY rows in ``dividends`` — the book credits dividend cash on held
+    # names at the ex-date (settle books it), so a price-only SPY would
+    # flatter the book by the index's own yield. Same pure adjustment and
+    # baseline convention as agent.ledger._spy_closes/_spy_window_pct:
+    # baseline = last close STRICTLY BEFORE the ET inception date (a close ON
+    # it is 16:00, after the first fill — and on day one it would be the
+    # endpoint itself, a confident fake 0.0); missing dividend rows degrade
+    # to price return. One bounded range query per call — the endpoint is
+    # polled every minute per client, and the book is young. (Short-lived
+    # duplication of the ledger's query plumbing; Phase E unifies.)
     vs_spy = None
     first_trade = (db.query(safunc.min(DeskTrade.ts))
                    .filter(DeskTrade.account == ACCOUNT).scalar())
     if first_trade is not None:
-        from datetime import date as _date
+        from datetime import date as _date, timedelta as _td
 
-        from agent.ledger import _et_date
-        from edgefinder.db.models import DailyBar
+        from agent.ledger import _adjust_closes_for_dividends, _et_date
+        from edgefinder.db.models import DailyBar, DividendRecord
 
         inception = _date.fromisoformat(_et_date(first_trade))
-        base_row = (db.query(DailyBar.date, DailyBar.close)
-                    .filter(DailyBar.symbol == "SPY", DailyBar.date < inception)
-                    .order_by(desc(DailyBar.date)).first())
-        last_row = (db.query(DailyBar.date, DailyBar.close)
-                    .filter(DailyBar.symbol == "SPY")
-                    .order_by(desc(DailyBar.date)).first())
-        if (base_row and last_row and base_row[1]
-                and last_row[0] != base_row[0]):
-            spy_pct = round((last_row[1] - base_row[1]) / base_row[1] * 100, 2)
-            vs_spy = {"inception": str(inception), "spy_as_of": str(last_row[0]),
+        lo = inception - _td(days=10)  # weekend/holiday baseline buffer
+        spy_rows = (db.query(DailyBar.date, DailyBar.close)
+                    .filter(DailyBar.symbol == "SPY", DailyBar.date >= lo)
+                    .order_by(DailyBar.date).all())
+        closes = [(str(d), float(c)) for d, c in spy_rows if c]
+        divs = sorted((str(x), float(a)) for x, a in
+                      db.query(DividendRecord.ex_date, DividendRecord.cash_amount)
+                      .filter(DividendRecord.symbol == "SPY",
+                              DividendRecord.ex_date >= lo).all() if a)
+        closes = _adjust_closes_for_dividends(closes, divs)
+        base = base_d = None
+        for d, c in closes:
+            if d < str(inception):
+                base, base_d = c, d
+            else:
+                break
+        if base and closes and closes[-1][0] != base_d:
+            end_d, end = closes[-1]
+            spy_pct = round((end - base) / base * 100, 2)
+            vs_spy = {"inception": str(inception), "spy_as_of": end_d,
                       "spy_return_pct": spy_pct,
                       "alpha_pct": round(total_return_pct - spy_pct, 2)}
 

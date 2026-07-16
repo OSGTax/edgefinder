@@ -33,7 +33,9 @@ a tighter 2% spread cap, and **options fills are refused** (the OPRA book is
 too thin outside RTH — respect it, don't fight it). Within **15 minutes of
 the close** the ledger refuses new BUYs — you can't sell what you just
 bought, and holding it over into tomorrow was not the plan. Sells stay open
-so you can exit if you need to.
+so you can exit if you need to. A BUY in **post-close** extended hours books
+but cannot be exited until the NEXT session's tape — an overnight hold by
+construction, same as a pre-market buy before the open; size it accordingly.
 
 **Crypto is on the menu, 24/7.** Any Alpaca pair — BTC/USD, ETH/USD,
 DOGE/USD, SOL/USD, and the rest — trades any hour of any day. Use the
@@ -329,10 +331,14 @@ python -m agent.brain watch-set --symbol AMD --below 540 \
   expire in 24h unless you pass `--until`/`--hours` — re-arm what still
   matters each cycle.
 - **Hard stops are the one wire that ACTS.** Add `--hard` to a `--below`
-  wire on a long equity/crypto position you hold and the streamer itself
-  sells the WHOLE position when the live mid touches the level — through
-  the ledger's normal fill gates (session, spread, staleness), one attempt
-  only. Success lands as status `executed`; a gated rejection (e.g. market
+  wire on a long EQUITY position you hold and the streamer itself sells
+  the WHOLE position when the live mid touches the level — through the
+  ledger's normal fill gates (session, spread, staleness), one attempt
+  only. Equity shares only: crypto pairs are refused at arm time (the
+  sweep watches the equity SIP tape and crypto quotes never enter it, so
+  that stop could never trip), as are shares backing covered calls (leg
+  out of the calls first) and stops with no live/last reference price.
+  Success lands as status `executed`; a gated rejection (e.g. market
   closed) lands as `exec_failed` with the reason, surfaced with tripped
   wires at your next wake — handle it first. This is code-enforced
   protection you opt into per position; plain above/below wires remain

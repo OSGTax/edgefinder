@@ -83,6 +83,9 @@ only flips its status, and the trip is handled at the next owner-fired run.
 The one exception is the opt-in **`hard_stop`** kind: it is the only wire
 that acts by itself. When its level trips, the always-on streamer sells the
 whole position through the ledger's normal fill gates (one attempt; a gated
-rejection is recorded as `exec_failed` for the next run to handle). The
+rejection is recorded as `exec_failed` for the next run to handle). Hard
+stops protect long **equity** positions only — the sweep watches the equity
+SIP tape, crypto quotes never enter it, so `watch-set --hard` refuses to
+arm on a crypto pair (protection that cannot trip must not arm). The
 brain arms one per position explicitly via `agent.brain watch-set --hard`;
 nothing else can ever trade between runs.

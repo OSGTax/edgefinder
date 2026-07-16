@@ -265,9 +265,10 @@ def test_broker_session_helper_states(monkeypatch):
 
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_KEY", "k")
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_SECRET", "s")
-    # Force settings to re-read
+    # monkeypatch so the settings singleton is restored (no test bleed)
     from config.settings import settings as _s
-    _s.alpaca_api_key = "k"; _s.alpaca_api_secret = "s"
+    monkeypatch.setattr(_s, "alpaca_api_key", "k", raising=False)
+    monkeypatch.setattr(_s, "alpaca_api_secret", "s", raising=False)
 
     b = broker.Broker()
     # regular hours: is_open=True
@@ -330,8 +331,10 @@ def test_broker_is_close_soon(monkeypatch):
 
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_KEY", "k")
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_SECRET", "s")
+    # monkeypatch so the settings singleton is restored (no test bleed)
     from config.settings import settings as _s
-    _s.alpaca_api_key = "k"; _s.alpaca_api_secret = "s"
+    monkeypatch.setattr(_s, "alpaca_api_key", "k", raising=False)
+    monkeypatch.setattr(_s, "alpaca_api_secret", "s", raising=False)
 
     b = broker.Broker()
     soon = datetime.now(timezone.utc) + timedelta(minutes=10)

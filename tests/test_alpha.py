@@ -187,6 +187,41 @@ def test_option_pick_alpha_is_null_by_design(store):
     assert pick["alpha_pct"] is None            # but never called alpha
 
 
+def test_spy_benchmark_is_total_return_when_dividends_present(store):
+    """M2: the book now credits dividend cash (settle books ex-date
+    credits), so the SPY benchmark must carry SPY's dividends too — a
+    price-only index would hand the book the benchmark's own yield as
+    fake alpha. CRSP back-adjustment: baseline 600 × (1 − 6/600) = 594 →
+    (612 − 594) / 594 = +3.03%, not the price-only +2.00%."""
+    from agent import ledger
+
+    ex = D_ENTRY + timedelta(days=1)
+    seed_spy(store, {D_BASE: 600.0, ex: 600.0, TODAY: 612.0})
+    store.insert("dividends", {"symbol": "SPY", "ex_date": ex,
+                               "cash_amount": 6.0}, returning=False)
+    seed_backdated_book(store)
+
+    out = ledger.outcomes(store, days=30)
+    run = next(r for r in out["runs"] if r["run_id"] == "A")
+    assert run["spy_same_window_pct"] == pytest.approx(3.03)
+    assert out["book"]["spy_since_inception_pct"] == pytest.approx(3.03)
+    assert out["book"]["alpha_pct"] == pytest.approx(0.1 - 3.03)
+
+
+def test_spy_benchmark_degrades_to_price_return_without_dividends(store):
+    """M2: no SPY dividend rows in the window → the adjustment is a no-op
+    and the numbers match the old price-return benchmark exactly."""
+    from agent import ledger
+
+    seed_spy(store, {D_BASE: 600.0, TODAY: 612.0})
+    seed_backdated_book(store)
+
+    out = ledger.outcomes(store, days=30)
+    run = next(r for r in out["runs"] if r["run_id"] == "A")
+    assert run["spy_same_window_pct"] == 2.0
+    assert out["book"]["spy_since_inception_pct"] == 2.0
+
+
 def test_no_spy_data_degrades_to_none(store):
     from agent import ledger
 
@@ -285,6 +320,29 @@ def test_registry_exempts_holds_and_book_stance(store):
     assert store.select("desk_decisions", filters={"run_id": "H2"}) == []
 
 
+def test_registry_rejects_unknown_action_and_empty_symbol(store):
+    """F6 tightening: every pick needs a real symbol and an action from the
+    skill's vocabulary (hold/buy/add/trim/exit/stance) — invented verbs and
+    blank symbols are write-time errors, not grading-time surprises."""
+    from agent.brain import save_decision
+
+    r = save_decision(store, run_id="V1", picks=[
+        {"symbol": "XYZ", "action": "yolo"}])
+    assert not r["ok"] and "unrecognized action" in r["error"]
+    r2 = save_decision(store, run_id="V1", picks=[
+        {"symbol": "  ", "action": "hold"}])
+    assert not r2["ok"] and "symbol" in r2["error"]
+    r3 = save_decision(store, run_id="V1", picks=[{"symbol": "XYZ"}])
+    assert not r3["ok"] and "unrecognized action" in r3["error"]
+    assert store.select("desk_decisions", filters={"run_id": "V1"}) == []
+    # the full managing vocabulary still passes without a registry
+    ok = save_decision(store, run_id="V1", picks=[
+        {"symbol": "XYZ", "action": "hold"},
+        {"symbol": "XYZ", "action": "trim"},
+        {"symbol": "XYZ", "action": "exit"}])
+    assert ok["ok"], ok
+
+
 def test_outcomes_skips_book_picks(store):
     from agent import ledger
     from agent.brain import save_decision
@@ -320,6 +378,32 @@ def test_portfolio_and_decision_endpoints(store, monkeypatch):
 
         d = c.get("/api/desk/decision/latest").json()
         assert d["rejected"] == [{"symbol": "ABC", "why_not": "falling knife"}]
+
+
+def test_portfolio_vs_spy_is_total_return(store, monkeypatch):
+    """M2: the desk hero's vs_spy applies the SAME dividend back-adjustment
+    as the ledger — 600 baseline × (1 − 6/600) = 594 → +3.03%, not +2.00%."""
+    from fastapi.testclient import TestClient
+
+    import agent.data as agent_data
+    import dashboard.dependencies as deps
+
+    deps._engine = deps._session_factory = None
+    agent_data._session_factory = None
+
+    ex = D_ENTRY + timedelta(days=1)
+    seed_spy(store, {D_BASE: 600.0, ex: 600.0, TODAY: 612.0})
+    store.insert("dividends", {"symbol": "SPY", "ex_date": ex,
+                               "cash_amount": 6.0}, returning=False)
+    seed_backdated_book(store)
+
+    from dashboard.app import app
+
+    with TestClient(app) as c:
+        pf = c.get("/api/desk/portfolio").json()
+        assert pf["vs_spy"]["spy_return_pct"] == pytest.approx(3.03)
+        assert pf["vs_spy"]["alpha_pct"] == pytest.approx(
+            pf["total_return_pct"] - 3.03)
 
 
 def test_portfolio_applies_option_multiplier(store, monkeypatch):

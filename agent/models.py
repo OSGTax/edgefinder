@@ -355,8 +355,10 @@ class DeskWatch(Base):
     reason: Mapped[str] = mapped_column(Text)
     armed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     until: Mapped[datetime | None] = mapped_column(DateTime)  # expiry (UTC)
-    # armed | tripped | expired | disarmed | executed | exec_failed | stale
-    # (the last three are hard_stop outcomes)
+    # armed | tripped | expired | disarmed
+    #   | executing | executed | exec_failed | stale   (hard_stop lifecycle:
+    # 'executing' is the atomic claim — exactly one writer wins it; a claim
+    # orphaned by a crash is flagged exec_failed, never auto-retried)
     status: Mapped[str] = mapped_column(String(12), default="armed", index=True)
     tripped_at: Mapped[datetime | None] = mapped_column(DateTime)
     tripped_price: Mapped[float | None] = mapped_column(Float)

@@ -238,6 +238,7 @@ async def run_stream() -> None:
 
 WATCH_SWEEP_SECS = 5      # evaluate armed wires against the cache
 WATCH_REFRESH_SECS = 60   # re-read armed wires from the DB
+WATCH_EXEC_STALE_SECS = 600  # an 'executing' claim older than this is a crash
 
 
 def evaluate_watches(watches: list[dict], quotes: dict[str, dict],
@@ -275,31 +276,128 @@ def evaluate_watches(watches: list[dict], quotes: dict[str, dict],
     return tripped, expired
 
 
+def claim_watch(store, watch_id: int, values: dict | None = None) -> bool:
+    """Atomically claim one watch: compare-and-swap armed→executing.
+
+    The conditional update (``WHERE id=? AND status='armed'``) is a single
+    statement on both transports, so exactly ONE writer can win — the
+    changed-row count comes back as the returned representation on both:
+    PgStore's ``UPDATE … RETURNING`` yields the updated rows (Postgres and
+    SQLite ≥3.35 alike), and RestStore's PostgREST PATCH with
+    ``Prefer: return=representation`` yields the rows the filter matched
+    and changed. True iff exactly one row transitioned — the caller owns
+    the execution; False means another writer (a sibling streamer during
+    deploy overlap, a trading cycle) got there first, or the wire is no
+    longer armed."""
+    rows = store.update("desk_watch",
+                        {"id": watch_id, "status": "armed"},
+                        {**(values or {}), "status": "executing"},
+                        returning=True)
+    return len(rows) == 1
+
+
+def flag_stale_executing(store, now: datetime | None = None) -> int:
+    """Flag crashed hard-stop claims: a wire stuck in 'executing' longer
+    than WATCH_EXEC_STALE_SECS means its executor died mid-flight. It is
+    NEVER auto-retried (the position may or may not have sold — retrying
+    blind could double-sell); it becomes 'exec_failed' with reason
+    'stale executing claim' so the next trading cycle inspects the ledger
+    and decides. The flip is itself a conditional update, so a
+    still-running executor's terminal write wins if it lands first."""
+    now = now or datetime.utcnow()
+    try:
+        rows = store.select("desk_watch", filters={"status": "executing"},
+                            limit=100)
+    except Exception:  # noqa: BLE001 — the sweep must not die on a DB blip
+        return 0
+    flagged = 0
+    for w in rows:
+        t = w.get("tripped_at") or w.get("armed_at")
+        if isinstance(t, str):
+            try:
+                t = datetime.fromisoformat(t.replace("Z", "+00:00"))
+                t = t.replace(tzinfo=None)
+            except ValueError:
+                t = None
+        if t is not None and (now - t).total_seconds() <= WATCH_EXEC_STALE_SECS:
+            continue  # a live executor may still be in flight
+        store.update("desk_watch", {"id": w["id"], "status": "executing"},
+                     {"status": "exec_failed",
+                      "result": "stale executing claim"}, returning=False)
+        flagged += 1
+        logger.warning("HARD STOP %s (watch %s): stale executing claim "
+                       "flagged exec_failed — next cycle must inspect",
+                       w.get("symbol"), w.get("id"))
+    return flagged
+
+
 def execute_hard_stop(store, watch: dict, tripped_price: float,
                       now: datetime | None = None) -> dict:
     """Execute ONE tripped hard_stop: a FULL-POSITION SELL through the
     ledger's normal live-fill path — every gate stays in force (session,
-    spread, quote staleness, long-only). Exactly one attempt: whatever
-    happens, the wire leaves 'armed', so the sweep never retries — a gated
-    rejection lands as status='exec_failed' with the reason in ``result``
-    for the next trading cycle to see in watch-list and decide.
+    spread, quote staleness, long-only).
+
+    Concurrency-safe by construction:
+    1. CLAIM — an atomic compare-and-swap flips the wire armed→executing
+       (``claim_watch``); exactly one writer can win, so two sweeps (or a
+       sweep racing a trading cycle) can never sell the same position
+       twice. A claim orphaned by a crash is flagged 'exec_failed' by
+       ``flag_stale_executing`` — never silently retried.
+    2. CORP ACTIONS FIRST — the idempotent per-symbol equity pass
+       (``ledger.settle_corp_actions_for``) books any split/dividend that
+       executed since the last settle. A split at today's open rebases the
+       tape and trips a stop armed below the pre-split price instantly;
+       selling the stale PRE-split share count at the POST-split price
+       would silently destroy the difference.
+    3. FRESH READ — the position is re-read AFTER the claim and the corp
+       pass, and that EXPLICIT share count (never "all") is what sells.
+
+    Exactly one attempt: the wire leaves 'armed' at the claim, so the sweep
+    never retries — a gated rejection lands as status='exec_failed' with
+    the reason in ``result`` for the next trading cycle to see in
+    watch-list and decide.
 
     DEFAULT-OFF GUARANTEE: only a wire the brain explicitly armed with
     kind='hard_stop' ever reaches this function; plain above/below wires
     remain advisory alerts and can never trade."""
-    from agent import ledger, occ
+    from agent import broker, ledger, occ
     from agent.models import ACCOUNT
 
     now = now or datetime.utcnow()
     sym = str(watch.get("symbol") or "").upper()
     run_id = f"hardstop:{watch['id']}"
     stamp = {"tripped_at": now, "tripped_price": tripped_price}
+    if not claim_watch(store, watch["id"], stamp):
+        logger.info("HARD STOP %s @ %.4f — claim lost (another writer owns "
+                    "it, or it is no longer armed)", sym, tripped_price)
+        return {"ok": False, "status": "claim_lost",
+                "error": "watch already claimed/handled by another writer"}
+    if occ.is_option(sym) or broker.is_crypto(sym):
+        why = "hard stops protect long EQUITY share positions only"
+        store.update("desk_watch", {"id": watch["id"]},
+                     {**stamp, "status": "stale", "result": why},
+                     returning=False)
+        logger.info("HARD STOP %s @ %.4f — stale (%s)", sym, tripped_price, why)
+        return {"ok": False, "status": "stale", "error": why}
+    try:
+        corp = ledger.settle_corp_actions_for(store, sym)
+        if corp.get("splits") or corp.get("dividends"):
+            logger.warning("HARD STOP %s: corp actions booked before exit: %s",
+                           sym, corp["details"])
+    except Exception as exc:  # noqa: BLE001 — selling on an unverified basis
+        # would be worse than not selling; the next cycle inspects.
+        store.update("desk_watch", {"id": watch["id"]},
+                     {**stamp, "status": "exec_failed",
+                      "result": f"corp-action pass failed: {exc}"},
+                     returning=False)
+        logger.warning("HARD STOP FAILED %s @ %.4f — corp-action pass failed "
+                       "(%s); no sale, next cycle decides", sym, tripped_price, exc)
+        return {"ok": False, "status": "exec_failed", "error": str(exc)}
     rows = store.select("desk_positions",
                         filters={"account": ACCOUNT, "symbol": sym}, limit=1)
     shares = float(rows[0]["shares"]) if rows else 0.0
-    if occ.is_option(sym) or shares <= 0:
-        why = ("not an equity/crypto long position" if occ.is_option(sym)
-               else "position already gone at trip time")
+    if shares <= 0:
+        why = "position already gone at trip time"
         store.update("desk_watch", {"id": watch["id"]},
                      {**stamp, "status": "stale", "result": why},
                      returning=False)
@@ -356,7 +454,11 @@ async def run_watch_sweep() -> None:
             if time.time() - last_refresh > WATCH_REFRESH_SECS:
                 def _load():
                     from agent.store import get_store
-                    return get_store().select(
+                    s = get_store()
+                    # crashed hard-stop claims surface as exec_failed for
+                    # the next cycle — never re-armed, never re-executed
+                    flag_stale_executing(s)
+                    return s.select(
                         "desk_watch", filters={"status": "armed"}, limit=100)
                 armed = await asyncio.to_thread(_load)
                 last_refresh = time.time()

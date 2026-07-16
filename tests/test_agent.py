@@ -129,6 +129,41 @@ def test_ledger_guards(seeded):
     assert not over["ok"]
 
 
+def test_compute_book_equity_oversell_clamps_flat():
+    """H2 regression: an equity SELL row must never flip a long lot short.
+    record_trade guards upstream, but a double-writer race (streamer hard
+    stop + trading cycle, or two streamers during deploy overlap) can land
+    an over-sell row — the replay must degrade to FLAT, never fabricate a
+    short lot. Options keep honest signed arithmetic."""
+    from datetime import date, timedelta
+
+    from agent import ledger, occ
+
+    def t(sym, side, shares, price, ts):
+        return {"symbol": sym, "side": side, "shares": shares, "price": price,
+                "dollars": round(shares * price, 2), "ts": ts}
+
+    # duplicate full exit: the second SELL lands on a flat book
+    book = ledger._compute_book([
+        t("AMD", "BUY", 10, 100.0, "2026-07-01T14:00:00"),
+        t("AMD", "SELL", 10, 90.0, "2026-07-02T14:00:00"),
+        t("AMD", "SELL", 10, 90.0, "2026-07-02T14:00:05"),
+    ])
+    assert book["AMD"]["shares"] == 0.0 and book["AMD"]["cost"] == 0.0
+
+    # cross-through over-sell (sell more than held) also clamps at zero
+    book = ledger._compute_book([
+        t("AMD", "BUY", 10, 100.0, "2026-07-01T14:00:00"),
+        t("AMD", "SELL", 15, 90.0, "2026-07-02T14:00:00"),
+    ])
+    assert book["AMD"]["shares"] == 0.0 and book["AMD"]["cost"] == 0.0
+
+    # options are SIGNED: a covered short leg opens negative, as designed
+    call = occ.build("NVDA", date.today() + timedelta(days=45), "C", 200)
+    book = ledger._compute_book([t(call, "SELL", 1, 5.0, "2026-07-01T14:00:00")])
+    assert book[call]["shares"] == -1.0
+
+
 def test_brain_state_journal_decision(seeded):
     from agent import brain
     from agent.store import get_store

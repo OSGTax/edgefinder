@@ -120,11 +120,15 @@ def think(store=None, *, run_id: str, text: str, phase: str | None = None,
 
 # ── decision ────────────────────────────────────────────
 
+# The complete pick-action vocabulary the skill defines (SKILL.md step 6).
+# Anything else is a typo or an invented verb — rejected at the write so
+# grading never meets an action it can't classify.
+PICK_ACTIONS = ("hold", "buy", "add", "trim", "exit", "stance")
 # Pick actions that OPEN or ADD exposure — these require the prediction
 # registry (SKILL.md step 6 calls it REQUIRED; this is the code that makes
 # it true). hold/trim/exit picks manage what's already graded, so they may
 # carry nulls.
-OPENING_ACTIONS = ("buy", "add", "open", "new")
+OPENING_ACTIONS = ("buy", "add")
 # The pseudo-symbol BOOK records a whole-book stance; it has no fills and
 # nothing to grade per-name, so it is exempt from the registry — and only
 # these actions make sense for it.
@@ -132,17 +136,27 @@ BOOK_ACTIONS = ("hold", "stance")
 
 
 def _validate_picks(picks: list | None) -> str | None:
-    """The prediction registry, enforced at the write. Every opening/adding
-    pick must carry a non-empty ``prediction``, an integer ``horizon_days``
-    >= 1, and a non-null ``kill`` — otherwise Friday's grading is vibes.
-    Returns an actionable error string, or None when the picks pass."""
+    """The prediction registry, enforced at the write. Every pick needs a
+    non-empty symbol and an action from PICK_ACTIONS; every opening/adding
+    pick must additionally carry a non-empty ``prediction``, an integer
+    ``horizon_days`` >= 1, and a non-null ``kill`` — otherwise Friday's
+    grading is vibes. Returns an actionable error string, or None when the
+    picks pass."""
     problems = []
     for i, p in enumerate(picks or []):
         if not isinstance(p, dict):
             problems.append(f"picks[{i}] is not an object")
             continue
-        sym = str(p.get("symbol") or "").upper() or f"picks[{i}]"
+        sym = str(p.get("symbol") or "").strip().upper()
+        if not sym:
+            problems.append(f"picks[{i}]: 'symbol' must be a non-empty "
+                            "ticker (or BOOK for a whole-book stance)")
+            continue
         action = str(p.get("action") or "").strip().lower()
+        if action not in PICK_ACTIONS:
+            problems.append(f"{sym}: unrecognized action {action or 'none'!r}"
+                            f" — use one of {'/'.join(PICK_ACTIONS)}")
+            continue
         if sym == "BOOK":
             if action not in BOOK_ACTIONS:
                 problems.append(
@@ -231,8 +245,15 @@ def watch_set(store=None, *, symbol: str, above: float | None = None,
     touches the level, the streamer itself SELLS THE WHOLE POSITION through
     the ledger's normal fill gates (see agent.streamer.execute_hard_stop).
     Opt-in per position — plain above/below wires never trade. A hard stop
-    must be a --below level on a currently-held long equity/crypto position,
-    below the market so it can't fire the moment it's armed."""
+    must be a --below level on a currently-held long EQUITY position, below
+    the market so it can't fire the moment it's armed. Arm-time rules —
+    protection that cannot fire must not arm:
+    - equities only: the sweep watches the equity SIP websocket cache, and
+      crypto quotes never enter it, so a crypto hard stop could never trip;
+    - the shares must not be backing short calls (a covered-call exit would
+      trip and then fail the ledger's coverage gate — leg out first);
+    - a live/last reference price must exist to prove the level sits below
+      the market (retry once a quote is up)."""
     from datetime import timedelta
 
     store = store or _store()
@@ -246,24 +267,44 @@ def watch_set(store=None, *, symbol: str, above: float | None = None,
         return {"ok": False, "error": "level must be positive"}
     kind = "above" if above is not None else "below"
     if hard:
-        from agent import occ
+        from agent import broker, occ
 
         if below is None:
             return {"ok": False, "error": "a hard stop is a --below level on "
                                           "a long position — pass --below"}
         if occ.is_option(symbol):
-            return {"ok": False, "error": "hard stops protect equity/crypto "
+            return {"ok": False, "error": "hard stops protect long equity "
                                           "share positions, not option contracts"}
+        if broker.is_crypto(symbol):
+            # protection that cannot trip must not arm: the sweep only sees
+            # the equity SIP websocket cache — crypto quotes never enter it
+            return {"ok": False, "error":
+                    f"hard stops are equity-only: the streamer's sweep "
+                    f"watches the equity SIP tape and {symbol} quotes never "
+                    "enter it, so this stop could never trip — manage crypto "
+                    "exits in-cycle (or arm an advisory wire and act on the "
+                    "trip yourself)"}
         pos = store.select("desk_positions",
                            filters={"account": account, "symbol": symbol}, limit=1)
         held = float(pos[0]["shares"]) if pos else 0.0
         if held <= 0:
             return {"ok": False, "error": f"no long {symbol} position to "
                                           "protect — hard stops arm on names you hold"}
+        # Shares that back short calls cannot sell: the stop would trip and
+        # then fail the ledger's coverage gate — dead protection. Same math
+        # record_trade runs at fill time, applied at arm time instead.
+        from agent.ledger import (_check_equity_sell_keeps_calls_covered,
+                                  _positions_map)
+
+        err = _check_equity_sell_keeps_calls_covered(
+            _positions_map(store, account), symbol, held)
+        if err:
+            return {"ok": False, "error":
+                    f"cannot arm a hard stop on {symbol}: {err}. A stop on "
+                    "covered-call shares would trip and then fail the same "
+                    "coverage gate — leg out of the short calls before arming"}
         px = None
         try:
-            from agent import broker
-
             if broker.enabled():
                 q = broker.Broker().quotes([symbol]).get(symbol) or {}
                 px = q.get("mid") or q.get("bid") or q.get("ask")
@@ -271,7 +312,15 @@ def watch_set(store=None, *, symbol: str, above: float | None = None,
             px = None
         if px is None and pos:
             px = pos[0].get("last_price")
-        if px is not None and float(level) >= float(px):
+        if px is None:
+            # Strict: without a reference price we cannot prove the level
+            # sits below the market — an at/above-market stop would fire
+            # the moment the tape wakes up.
+            return {"ok": False, "error":
+                    f"no live or last reference price for {symbol} — cannot "
+                    "verify the stop sits below the market; retry once a "
+                    "quote is up (after the streamer warms or a mark runs)"}
+        if float(level) >= float(px):
             return {"ok": False, "error":
                     f"hard stop at {float(level):g} would fire instantly — "
                     f"{symbol} trades at {float(px):g}; pick a level below "
@@ -578,7 +627,8 @@ def main(argv: list[str] | None = None) -> None:
     wset.add_argument("--hard", action="store_true",
                       help="arm a HARD STOP: the streamer sells the WHOLE "
                            "position through the normal fill gates when the "
-                           "level trips (longs only, --below required)")
+                           "level trips (long EQUITY positions only — crypto "
+                           "never reaches the sweep's tape; --below required)")
 
     wl = sub.add_parser("watch-list")
     wl.add_argument("--all", action="store_true", dest="include_done")

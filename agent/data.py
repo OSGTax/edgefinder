@@ -375,9 +375,11 @@ def spy_series_df(*, total_return: bool = False) -> pd.DataFrame:
     creds got the hot set only (~400d), an EMPTY in-sample half, and every
     lab combo scored "missing excess".
 
-    The default stays price-only for the callers where that is the honest
-    basis: the live book's vs-SPY (``agent.ledger``) books no dividend cash
-    on either side, so its price-vs-price comparison is deliberate.
+    The default stays price-only for callers that want raw index closes.
+    The live book's vs-SPY does NOT come through here: the ledger credits
+    dividend cash on held names (``settle``), so ``agent.ledger._spy_closes``
+    applies its own pandas-free total-return back-adjustment — same
+    semantics, no pandas dependency in the ledger.
     """
     if _use_rest():
         bars = load_bars(["SPY"], div_adjust=total_return, source="auto")

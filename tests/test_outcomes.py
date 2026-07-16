@@ -127,3 +127,97 @@ def test_unattributed_counted(store):
         "shares": 1, "price": 10.0, "dollars": 10.0,
         "ts": ledger._utcnow()}, returning=False)
     assert ledger.outcomes(store, days=30)["unattributed_trades"] == 1
+
+
+def test_hardstop_runs_bucketed_like_settlement(store):
+    """L1: hard-stop exits book under run_id 'hardstop:<watch id>' — no
+    decision carries that id, so they get their own bucket (like
+    settlement) instead of vanishing from per-run grading."""
+    from agent import ledger
+    _fill(store, "A", "XYZ", "BUY", 10, 100.0)
+    _fill(store, "hardstop:7", "XYZ", "SELL", 10, 90.0)  # the stop loss
+    out = ledger.outcomes(store, days=30)
+    assert out["hardstop"]["realized_pnl"] == -100.0
+    assert out["settlement"]["realized_pnl"] == 0.0
+    assert out["unattributed_trades"] == 0
+    assert all(not str(r["run_id"]).startswith("hardstop:")
+               for r in out["runs"])
+
+
+# ── M1: splits must not corrupt grading ──
+
+
+def _seed_trade(store, run_id, symbol, side, shares, price, ts,
+                fill_quote=None):
+    store.insert("desk_trades", {
+        "account": "agent", "run_id": run_id, "symbol": symbol, "side": side,
+        "shares": shares, "price": price, "dollars": round(shares * price, 2),
+        "fill_quote": fill_quote, "ts": ts}, returning=False)
+
+
+def _seed_split_adjustment(store, symbol, delta, exec_ts, ratio):
+    """A booked 0-price split row, exactly as settle writes it."""
+    store.insert("desk_trades", {
+        "account": "agent", "run_id": "settlement", "symbol": symbol,
+        "side": "BUY" if delta > 0 else "SELL", "shares": abs(delta),
+        "price": 0.0, "dollars": 0.0,
+        "fill_quote": {"src": "split_adjustment",
+                       "execution_date": str(exec_ts.date()), "ratio": ratio},
+        "ts": exec_ts}, returning=False)
+
+
+def test_split_between_entry_and_mark_grades_flat_as_zero(store):
+    """M1 repro: entry fills at pre-split prices, marks post-split — the
+    old math graded a flat position −50% after a 2:1 and Friday's
+    reflection learned a lie. entry_avg_px must rebase to the current
+    share basis via the ledger's own split_adjustment rows."""
+    from datetime import datetime, timedelta
+
+    from agent import ledger
+    from agent.brain import save_decision
+
+    t0 = datetime.utcnow() - timedelta(days=6)
+    save_decision(store, run_id="S", summary="entry",
+                  picks=[{"symbol": "XYZ", "action": "buy",
+                          "prediction": "XYZ +5% within 10 sessions",
+                          "horizon_days": 10, "kill": "closes below 90"}])
+    store.update("desk_decisions", {"run_id": "S"}, {"ts": t0}, returning=False)
+    _seed_trade(store, "S", "XYZ", "BUY", 10, 100.0, t0)
+    _seed_split_adjustment(store, "XYZ", +10,
+                           datetime.utcnow() - timedelta(days=3), "2:1")
+    ledger.mark(store, prices={"XYZ": 50.0})  # rebased tape, flat position
+
+    out = ledger.outcomes(store, days=30)
+    pick = next(r for r in out["runs"] if r["run_id"] == "S")["picks"][0]
+    assert pick["entry_avg_px"] == pytest.approx(50.0)       # current basis
+    assert pick["since_this_run_pct"] == pytest.approx(0.0)  # flat, not −50
+    # the raw fills stay as booked (receipts)
+    assert pick["fills"] == [{"side": "BUY", "shares": 10.0, "price": 100.0}]
+
+
+def test_closed_round_trip_across_split_matches_buys_to_sells(store):
+    """M1: buy 10 pre-split, sell 20 post-split — on the current basis
+    that IS a closed round trip (20 vs 20) and its return is +10%
+    (sell 55 vs rebased entry 50), not an unmatched half-position."""
+    from datetime import datetime, timedelta
+
+    from agent import ledger
+    from agent.brain import save_decision
+
+    t0 = datetime.utcnow() - timedelta(days=6)
+    save_decision(store, run_id="C", summary="round trip",
+                  picks=[{"symbol": "XYZ", "action": "buy",
+                          "prediction": "XYZ +5% within 10 sessions",
+                          "horizon_days": 10, "kill": "closes below 90"}])
+    store.update("desk_decisions", {"run_id": "C"}, {"ts": t0}, returning=False)
+    _seed_trade(store, "C", "XYZ", "BUY", 10, 100.0, t0)
+    _seed_split_adjustment(store, "XYZ", +10,
+                           datetime.utcnow() - timedelta(days=3), "2:1")
+    _seed_trade(store, "C", "XYZ", "SELL", 20, 55.0,
+                datetime.utcnow() - timedelta(days=1))
+
+    out = ledger.outcomes(store, days=30)
+    pick = next(r for r in out["runs"] if r["run_id"] == "C")["picks"][0]
+    assert pick["closed_return_pct"] == pytest.approx(10.0)
+    assert pick["open_now"] is None
+    assert pick["realized_pnl"] == pytest.approx(100.0)  # 20 × (55 − 50)

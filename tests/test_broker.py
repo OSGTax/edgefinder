@@ -129,8 +129,11 @@ def test_broker_session_post_market_from_calendar(monkeypatch):
 
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_KEY", "k")
     monkeypatch.setenv("EDGEFINDER_ALPACA_API_SECRET", "s")
+    # monkeypatch (not bare assignment) so the settings singleton is
+    # restored after this test — leaked fake creds bleed into other tests
     from config.settings import settings as _s
-    _s.alpaca_api_key = "k"; _s.alpaca_api_secret = "s"
+    monkeypatch.setattr(_s, "alpaca_api_key", "k", raising=False)
+    monkeypatch.setattr(_s, "alpaca_api_secret", "s", raising=False)
 
     def cal_row(d, close_h, close_m=0):
         return SimpleNamespace(

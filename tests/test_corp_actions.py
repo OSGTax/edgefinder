@@ -169,6 +169,61 @@ def test_settle_corp_actions_idempotent(store):
     assert pos["shares"] == pytest.approx(100.0)        # applied exactly once
 
 
+def test_settle_corp_actions_for_targets_one_symbol(store):
+    """H1(a): the per-symbol seam the hard-stop executor calls — folds ONLY
+    the named symbol, rebuilds the projection, is idempotent, and books
+    nothing for closed/crypto/option names."""
+    from agent import ledger
+    _buy(store, "NVDA", 10, 500.0, days_ago=5)
+    _buy(store, "AMD", 10, 100.0, days_ago=5)
+    _split(store, "NVDA", 2, frm=1, to=10)
+    _split(store, "AMD", 2, frm=1, to=2)
+
+    out = ledger.settle_corp_actions_for(store, "nvda")
+    assert out["splits"] == 1 and out["details"][0]["symbol"] == "NVDA"
+    # projection rebuilt for the target; the OTHER symbol untouched
+    assert store.select("desk_positions",
+                        filters={"symbol": "NVDA"})[0]["shares"] == 100.0
+    assert store.select("desk_positions",
+                        filters={"symbol": "AMD"})[0]["shares"] == 10.0
+    # idempotent
+    assert ledger.settle_corp_actions_for(store, "NVDA") == {
+        "splits": 0, "dividends": 0, "details": []}
+    # closed / never-held / crypto / option names book nothing
+    assert ledger.settle_corp_actions_for(store, "GONE")["splits"] == 0
+    assert ledger.settle_corp_actions_for(store, "BTC/USD")["splits"] == 0
+    assert ledger.settle_corp_actions_for(
+        store, "NVDA270116C00100000")["splits"] == 0
+    # the later full settle still folds AMD's split (nothing was lost)
+    assert ledger.settle(store)["corp_actions"]["splits"] == 1
+    assert store.select("desk_positions",
+                        filters={"symbol": "AMD"})[0]["shares"] == 20.0
+
+
+def test_split_never_books_onto_concurrently_closed_lot(store):
+    """H1(b) inverse interleave: the fresh ledger re-read right before a
+    split delta books must see a lot another writer just zeroed — booking
+    onto it would fabricate a phantom position at avg_price 0."""
+    from agent import ledger
+    _buy(store, "NVDA", 10, 500.0, days_ago=5)
+    _split(store, "NVDA", 2, frm=1, to=2)
+    trades = ledger._trades(store, "agent")
+    sym_trades = [t for t in trades if t["symbol"] == "NVDA"]
+    # simulate the race: the hard stop's full exit lands AFTER the pass
+    # captured its in-memory replay but BEFORE the delta books
+    store.insert("desk_trades", {
+        "account": "agent", "run_id": "hardstop:1", "symbol": "NVDA",
+        "side": "SELL", "shares": 10, "price": 480.0, "dollars": 4800.0,
+        "ts": datetime.utcnow()}, returning=False)
+    today = ledger._et_date(ledger._utcnow())
+    opened = ledger._et_date(sym_trades[0]["ts"])
+    s, d, det = ledger._corp_actions_for_symbol(
+        store, "NVDA", sym_trades, opened, today, account="agent")
+    assert (s, d, det) == (0, 0, [])
+    ledger.rebuild_positions(store)
+    assert store.select("desk_positions", filters={"symbol": "NVDA"}) == []
+
+
 def test_corp_actions_skip_crypto_and_closed_positions(store):
     """Crypto pairs never have corp actions; a closed lot gets nothing even
     if a row exists in its window."""

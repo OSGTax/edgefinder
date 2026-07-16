@@ -152,13 +152,13 @@ def _patch_broker(monkeypatch, fake):
     monkeypatch.setattr(broker, "enabled", lambda: True)
 
 
-def _seed_position(store, symbol, shares, price, last_price=None):
+def _seed_position(store, symbol, shares, price, last_price=None, days_ago=0):
     from agent import ledger
 
     store.insert("desk_trades", {
         "account": "agent", "run_id": "T", "symbol": symbol, "side": "BUY",
         "shares": shares, "price": price, "dollars": round(shares * price, 2),
-        "ts": datetime.utcnow()}, returning=False)
+        "ts": datetime.utcnow() - timedelta(days=days_ago)}, returning=False)
     ledger.rebuild_positions(store)
     if last_price is not None:
         store.update("desk_positions", {"symbol": symbol},
@@ -261,6 +261,157 @@ def test_hard_stop_position_gone_marks_stale(store):
     assert not r["ok"]
     row = store.select("desk_watch", filters={"id": rows[0]["id"]})[0]
     assert row["status"] == "stale" and "gone" in row["result"]
+
+
+def test_hard_stop_books_unbooked_split_before_selling(store, monkeypatch):
+    """H1 regression (the exact reviewer repro): a 2:1 split executes at the
+    open (unbooked), the tape rebases, and the stop armed below the
+    PRE-split price trips instantly. The executor must run the per-symbol
+    corp-actions pass FIRST and sell the POST-split share count — the old
+    path sold the stale pre-split count at the post-split price and half
+    the position's value silently vanished."""
+    from datetime import date
+
+    import agent.broker as broker
+    from agent import ledger
+    from agent.brain import watch_set
+    from agent.streamer import apply_sweep_results
+
+    _seed_position(store, "AMD", 10, 100.0, last_price=100.0, days_ago=5)
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    wid = watch_set(store, symbol="AMD", below=90, reason="protect",
+                    hard=True)["id"]
+    # the split lands after arming; no settle has booked it yet
+    store.insert("ticker_splits", {
+        "symbol": "AMD", "execution_date": str(date.today()),
+        "split_from": 1, "split_to": 2}, returning=False)
+    _patch_broker(monkeypatch, _StopBroker(px=49.0))  # rebased tape → trip
+    watch = store.select("desk_watch", filters={"id": wid})[0]
+    apply_sweep_results(store, [{**watch, "tripped_price": 49.0}], [])
+
+    assert store.select("desk_watch", filters={"id": wid})[0]["status"] == "executed"
+    sells = store.select("desk_trades", filters={"symbol": "AMD", "side": "SELL"})
+    assert len(sells) == 1
+    assert sells[0]["shares"] == pytest.approx(20.0)  # POST-split count
+    # value conserved (± spread/slippage): ~20 × ~48.94 back into cash,
+    # never 10 × 49 with the other half evaporated
+    assert sells[0]["dollars"] == pytest.approx(20 * 49.0, rel=0.01)
+    assert ledger.cash(store) == pytest.approx(
+        100_000.0 - 1_000.0 + sells[0]["dollars"])
+    # the split adjustment row booked exactly once, before the sale
+    adj = [t for t in store.select("desk_trades", filters={"symbol": "AMD"})
+           if (t.get("fill_quote") or {}).get("src") == "split_adjustment"]
+    assert len(adj) == 1
+    # and the later full settle books nothing more (idempotent; lot closed
+    # → no phantom position at avg_price 0 either)
+    out = ledger.settle(store)
+    assert out["corp_actions"] == {"splits": 0, "dividends": 0, "details": []}
+    assert store.select("desk_positions", filters={"symbol": "AMD"}) == []
+
+
+def test_hard_stop_claim_is_compare_and_swap(store, monkeypatch):
+    """H2: the armed→executing transition is a conditional update — exactly
+    one writer wins; a loser (second sweep, deploy-overlap streamer, trading
+    cycle) books nothing."""
+    import agent.broker as broker
+    from agent.brain import watch_set
+    from agent.streamer import claim_watch, execute_hard_stop
+
+    _seed_position(store, "AMD", 10, 100.0, last_price=100.0)
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    wid = watch_set(store, symbol="AMD", below=90, reason="protect",
+                    hard=True)["id"]
+    assert claim_watch(store, wid, {"tripped_price": 89.0}) is True
+    assert store.select("desk_watch", filters={"id": wid})[0]["status"] == "executing"
+    assert claim_watch(store, wid) is False  # second claimant loses
+
+    # a full executor racing on the same (stale-cached) armed row loses the
+    # claim and must not touch the book or the wire's status
+    watch = store.select("desk_watch", filters={"id": wid})[0]
+    r = execute_hard_stop(store, {**watch, "status": "armed"}, 89.0)
+    assert not r["ok"] and r["status"] == "claim_lost"
+    assert store.select("desk_trades", filters={"side": "SELL"}) == []
+    assert store.select("desk_watch", filters={"id": wid})[0]["status"] == "executing"
+
+
+def test_stale_executing_claims_flagged_not_retried(store):
+    """A wire stuck in 'executing' (executor crashed mid-flight) is flagged
+    exec_failed after ~10 min — surfaced for the next cycle to inspect,
+    NEVER auto-retried. A fresh claim is left alone."""
+    from agent.streamer import WATCH_EXEC_STALE_SECS, flag_stale_executing
+
+    old = store.insert("desk_watch", {
+        "account": "agent", "symbol": "AMD", "kind": "hard_stop", "level": 90.0,
+        "reason": "x", "armed_at": datetime.utcnow(), "status": "executing",
+        "tripped_at": datetime.utcnow()
+        - timedelta(seconds=WATCH_EXEC_STALE_SECS + 60)})[0]
+    fresh = store.insert("desk_watch", {
+        "account": "agent", "symbol": "NVDA", "kind": "hard_stop", "level": 90.0,
+        "reason": "x", "armed_at": datetime.utcnow(), "status": "executing",
+        "tripped_at": datetime.utcnow()})[0]
+    assert flag_stale_executing(store) == 1
+    old_row = store.select("desk_watch", filters={"id": old["id"]})[0]
+    assert old_row["status"] == "exec_failed"
+    assert old_row["result"] == "stale executing claim"
+    assert store.select("desk_watch",
+                        filters={"id": fresh["id"]})[0]["status"] == "executing"
+
+
+def test_hard_stop_refuses_crypto_pairs(store):
+    """M3: the sweep only sees the equity SIP tape — crypto quotes never
+    enter it, so a crypto hard stop could never trip. Protection that
+    cannot trip must not arm."""
+    from agent.brain import watch_set
+
+    r = watch_set(store, symbol="BTC/USD", below=50_000, reason="stop",
+                  hard=True)
+    assert not r["ok"] and "never" in r["error"] and "SIP" in r["error"]
+    assert store.select("desk_watch") == []
+    # plain advisory wires on crypto are still allowed (they don't promise
+    # to act)
+    assert watch_set(store, symbol="BTC/USD", below=50_000, reason="note")["ok"]
+
+
+def test_hard_stop_refuses_covered_call_shares(store, monkeypatch):
+    """M4: arming on shares that back short calls is dead protection — the
+    execution would trip and then fail the ledger's coverage gate. Refused
+    at arm time with a leg-out instruction; arms once the calls are gone."""
+    from datetime import date
+
+    import agent.broker as broker
+    from agent import occ
+    from agent.brain import watch_set
+    from agent.ledger import record_trade
+
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    _seed_position(store, "NVDA", 100, 100.0, last_price=100.0)
+    call = occ.build("NVDA", date.today() + timedelta(days=45), "C", 120)
+    fq = {"bid": 4.9, "ask": 5.1, "mid": 5.0, "t": "x", "src": "test"}
+    assert record_trade(store, symbol=call, side="SELL", shares=1, price=5.0,
+                        fill_quote=fq)["ok"]
+    r = watch_set(store, symbol="NVDA", below=90, reason="protect", hard=True)
+    assert not r["ok"] and "call" in r["error"] and "leg out" in r["error"]
+    # buy the call back → the same stop arms (re-mark first: rebuild wiped
+    # last_price, and an unmarked position has no reference price — L4)
+    assert record_trade(store, symbol=call, side="BUY", shares=1, price=5.0,
+                        fill_quote=fq)["ok"]
+    store.update("desk_positions", {"symbol": "NVDA"},
+                 {"last_price": 100.0}, returning=False)
+    assert watch_set(store, symbol="NVDA", below=90, reason="protect",
+                     hard=True)["ok"]
+
+
+def test_hard_stop_refuses_without_reference_price(store, monkeypatch):
+    """L4: no live quote and no last mark → the level can't be proven below
+    the market, so the stop refuses to arm (strict) with a retry hint."""
+    import agent.broker as broker
+    from agent.brain import watch_set
+
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    _seed_position(store, "AMD", 10, 100.0)  # last_price never marked
+    r = watch_set(store, symbol="AMD", below=90, reason="stop", hard=True)
+    assert not r["ok"] and "reference price" in r["error"]
+    assert store.select("desk_watch") == []
 
 
 def test_alert_wires_never_trade_regression(store, monkeypatch):

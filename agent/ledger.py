@@ -117,11 +117,15 @@ def cash(store, account: str = ACCOUNT) -> float:
 def _compute_book(trades: list[dict]) -> dict[str, dict]:
     """Average-cost open lots from the trade ledger.
 
-    Equities are long-only fractional lots (record_trade guarantees sells never
-    exceed holdings). Option contracts are SIGNED: a SELL beyond the long lot
-    opens a short leg (negative shares) — record_trade only permits that when
-    the short is covered, so here we just do honest signed arithmetic. ``cost``
-    tracks |basis|; crossing through zero re-opens the lot at the fill price.
+    Equities are long-only fractional lots. record_trade caps sells at
+    holdings, but a double-writer race (streamer hard stop + trading cycle,
+    or two streamers during a deploy overlap) can still land an over-sell
+    row — the replay therefore CLAMPS equity lots at zero and never
+    fabricates a short. Option contracts are SIGNED: a SELL beyond the long
+    lot opens a short leg (negative shares) — record_trade only permits that
+    when the short is covered, so options keep honest signed arithmetic.
+    ``cost`` tracks |basis|; crossing through zero re-opens the lot at the
+    fill price.
 
     SPLIT ADJUSTMENTS (fill_quote.src == "split_adjustment", booked by
     ``settle``) change the unit count, never the basis: shares move by the
@@ -143,6 +147,13 @@ def _compute_book(trades: list[dict]) -> dict[str, dict]:
                 b["shares"], b["cost"] = 0.0, 0.0
             continue
         if abs(cur) <= EPS_SHARES:
+            if signed < 0 and not occ.is_option(sym):
+                # An equity SELL on a flat book (a duplicate exit from a
+                # writer race) must degrade to FLAT — opening a short lot
+                # here would double-credit cash AND display a position the
+                # desk would then try to "cover".
+                b["shares"], b["cost"] = 0.0, 0.0
+                continue
             b.update(shares=signed, cost=abs(signed) * float(t["price"]),
                      opened_at=t.get("ts"))
             continue
@@ -216,21 +227,69 @@ def _realized_pnl(trades: list[dict]):
     return by_run_symbol, by_symbol
 
 
-def _spy_closes(store, *, since: str) -> list[tuple[str, float]]:
-    """SPY daily closes (ascending) from ``daily_bars``, with a lookback buffer
-    so a window starting on a weekend/holiday still finds a baseline close.
+def _adjust_closes_for_dividends(closes: list[tuple[str, float]],
+                                 divs: list[tuple[str, float]]
+                                 ) -> list[tuple[str, float]]:
+    """CRSP-style total-return back-adjustment, pandas-free (the ledger has
+    no pandas dependency — this mirrors the semantics of
+    ``edgefinder.engine.data.adjust_for_dividends`` on plain (iso-date,
+    close) tuples).
 
-    Price return only — dividends are excluded, which matches the book (the
-    ledger books no dividend cash), so the comparison is like-for-like.
-    ``index_daily`` is NOT used: it froze at the 2026-06-22 cutover."""
+    For each ex-date, every close strictly BEFORE it is scaled by
+    ``1 − dividend / close_the_day_before_ex``; the LAST close is unchanged,
+    so a buy-and-hold of the adjusted series equals the dividend-reinvested
+    return. Ex-dates outside the series and degenerate rows (dividend >=
+    prev close, prev close <= 0) are skipped. With no dividend rows at all
+    the series passes through untouched — total return degrades to price
+    return, never a crash."""
+    if not closes or not divs:
+        return closes
+    import bisect
+
+    dates = [d for d, _ in closes]
+    factors = [1.0] * len(closes)
+    for ex, amount in divs:
+        idx = bisect.bisect_left(dates, str(ex)[:10])
+        if idx <= 0 or idx >= len(dates):
+            continue
+        prev_close = closes[idx - 1][1]
+        if prev_close <= 0 or amount >= prev_close:
+            continue
+        f = 1.0 - amount / prev_close
+        for i in range(idx):
+            factors[i] *= f
+    return [(d, c * f) for (d, c), f in zip(closes, factors)]
+
+
+def _spy_closes(store, *, since: str) -> list[tuple[str, float]]:
+    """SPY daily closes (ascending) from ``daily_bars``, back-adjusted to
+    TOTAL RETURN with the SPY rows from ``dividends``, with a lookback
+    buffer so a window starting on a weekend/holiday still finds a baseline
+    close.
+
+    Total return, because the book is total return too: ``settle`` credits
+    dividend cash on held names at the ex-date, so a price-only SPY would
+    hand the book the benchmark's own yield as fake alpha. Missing SPY
+    dividend rows degrade gracefully to price return (see
+    ``_adjust_closes_for_dividends``). ``index_daily`` is NOT used: it
+    froze at the 2026-06-22 cutover."""
     from datetime import date as _date, timedelta as _td
 
     start = _date.fromisoformat(since[:10]) - _td(days=10)
     rows = store.select("daily_bars", columns="date,close",
                         filters={"symbol": "SPY", "date": ("gte", start)},
                         order=[("date", "asc")])
-    return [(str(r["date"])[:10], float(r["close"]))
-            for r in rows if r.get("close")]
+    closes = [(str(r["date"])[:10], float(r["close"]))
+              for r in rows if r.get("close")]
+    try:
+        div_rows = store.select("dividends", columns="ex_date,cash_amount",
+                                filters={"symbol": "SPY",
+                                         "ex_date": ("gte", start)})
+    except Exception:  # noqa: BLE001 — no dividend table/rows → price return
+        div_rows = []
+    divs = sorted((str(r["ex_date"])[:10], float(r["cash_amount"]))
+                  for r in div_rows if r.get("cash_amount"))
+    return _adjust_closes_for_dividends(closes, divs)
 
 
 def _et_date(ts) -> str | None:
@@ -284,6 +343,42 @@ def _spy_window_pct(spy: list[tuple[str, float]], start_date: str,
     return round((end - base) / base * 100, 2)
 
 
+def _booked_split_events(trades: list[dict]) -> dict[str, list[tuple[str, float]]]:
+    """{symbol: [(execution_date, to/from factor), ...]} from the ledger's own
+    ``split_adjustment`` rows (``fill_quote`` carries ratio + execution_date).
+    Only what the book actually folded in can be netted out of its prices —
+    the raw ticker_splits table may hold rows settle never booked."""
+    out: dict[str, list[tuple[str, float]]] = {}
+    for t in trades:
+        fq = _fq(t)
+        if fq.get("src") != "split_adjustment":
+            continue
+        try:
+            to_s, frm_s = str(fq.get("ratio") or "").split(":")
+            factor = float(to_s) / float(frm_s)
+        except (ValueError, ZeroDivisionError):
+            continue
+        d = str(fq.get("execution_date") or "")[:10]
+        if d and factor > 0:
+            out.setdefault(t["symbol"], []).append((d, factor))
+    for evs in out.values():
+        evs.sort()
+    return out
+
+
+def _split_factor_since(events: list[tuple[str, float]] | None, d: str) -> float:
+    """Cumulative to/from factor of booked splits executing STRICTLY AFTER
+    ``d`` — how many current-basis units one unit dated ``d`` became. A fill
+    ON the execution date is already post-split (the tape rebases at the
+    open), so it takes no factor — mirrors ``_shares_held_asof``'s
+    strictly-before entitlement rule."""
+    f = 1.0
+    for ed, x in (events or []):
+        if ed > d[:10]:
+            f *= x
+    return f
+
+
 def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
              account: str = ACCOUNT) -> dict:
     """How past decisions actually aged — the grounding for wiki lessons.
@@ -295,8 +390,9 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
     signal). Every window also carries the SPY move over the same period
     (``spy_same_window_pct``) and the difference (``alpha_pct``) — raw P&L
     on a long book is mostly beta; alpha is the skill signal reflection
-    should grade. Settlement rows (run_id='settlement') are bucketed
-    separately; trades with no run_id are counted, never silently dropped.
+    should grade. Settlement rows (run_id='settlement') and hard-stop exits
+    (run_id='hardstop:<watch id>') are bucketed separately; trades with no
+    run_id are counted, never silently dropped.
     No network: marks come from desk_positions.last_price, same as
     ``state()``."""
     from agent import occ
@@ -323,6 +419,7 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
     fills_by_run: dict[tuple[str | None, str], list[dict]] = {}
     for t in trades:
         fills_by_run.setdefault((t.get("run_id"), t["symbol"]), []).append(t)
+    split_events = _booked_split_events(trades)
 
     runs = []
     for d in decisions:
@@ -337,8 +434,21 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
             raw_fills = fills_by_run.get((rid, sym), [])
             fills = [{"side": f["side"], "shares": f["shares"], "price": f["price"]}
                      for f in raw_fills]
-            buys = [f for f in fills if f["side"] == "BUY"]
-            sells = [f for f in fills if f["side"] == "SELL"]
+            # Grading math runs on the CURRENT share basis: a split booked
+            # between a fill and the mark rebases the tape, and grading a
+            # pre-split entry against a post-split mark reads as a fake −50%
+            # a flat position never earned. Each fill is rescaled by the
+            # cumulative booked-split factor since its date (shares × f,
+            # price / f) — ``fills`` above stays raw, as booked (receipts).
+            evs = split_events.get(sym)
+            adj = [{"side": f["side"],
+                    "shares": f["shares"] * _split_factor_since(
+                        evs, _et_date(f.get("ts")) or ""),
+                    "price": f["price"] / _split_factor_since(
+                        evs, _et_date(f.get("ts")) or "")}
+                   for f in raw_fills] if evs else fills
+            buys = [f for f in adj if f["side"] == "BUY"]
+            sells = [f for f in adj if f["side"] == "SELL"]
             entry_avg = (sum(f["shares"] * f["price"] for f in buys)
                          / sum(f["shares"] for f in buys)) if buys else None
             pos = positions.get(sym)
@@ -408,6 +518,11 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
 
     settlement_pnl = round(sum(v for (r, _), v in by_run_symbol.items()
                                if r == "settlement"), 2)
+    # Hard-stop exits book under run_id "hardstop:<watch id>" — no decision
+    # row carries that id, so without its own bucket every stop loss would
+    # vanish from per-run grading exactly when it matters most.
+    hardstop_pnl = round(sum(v for (r, _), v in by_run_symbol.items()
+                             if str(r or "").startswith("hardstop:")), 2)
     unattributed = sum(1 for t in trades if not t.get("run_id"))
     symbols_out = []
     for sym in sorted(set(by_symbol) | set(positions)):
@@ -443,23 +558,33 @@ def outcomes(store=None, *, days: int = 30, run_id: str | None = None,
                           "cost at that moment — approximate when several runs "
                           "built the lot; per-symbol totals are exact. "
                           "since_this_run_pct compares the current mark to that "
-                          "run's own average fill and is exact per pick. "
-                          "spy_same_window_pct / alpha_pct benchmark each window "
-                          "against SPY closes from daily_bars (price return, "
-                          "dividends excluded on both sides — the book books no "
-                          "dividend cash either). SPY baseline = the last close "
-                          "STRICTLY BEFORE the window's ET start date; endpoint "
-                          "= exit-day close for round trips closed in-run "
-                          "(closed_return_pct), else the latest stored close. "
-                          "None means too-young-to-benchmark, never zero. Alpha "
-                          "under spy_window_sessions < 2 is inside benchmark "
-                          "noise — do not grade it as skill. Options carry "
-                          "alpha_pct = null by design: premium %-moves embed "
-                          "leverage/theta; grade them on realized dollars and "
-                          "thesis. A long book's raw P&L is mostly market "
-                          "beta, so grade alpha, not dollars.",
+                          "run's own average fill and is exact per pick; "
+                          "entry_avg_px and round-trip matching are expressed "
+                          "on the CURRENT share basis (booked split adjustments "
+                          "between a fill and the mark rescale that run's own "
+                          "fills, so a flat position grades ~0 after a split, "
+                          "not a fake -50). spy_same_window_pct / alpha_pct "
+                          "benchmark each window against SPY closes from "
+                          "daily_bars back-adjusted to TOTAL RETURN with SPY's "
+                          "dividend rows — like-for-like with the book, which "
+                          "credits dividend cash at the ex-date; missing "
+                          "dividend rows degrade to price return. SPY baseline "
+                          "= the last close STRICTLY BEFORE the window's ET "
+                          "start date; endpoint = exit-day close for round "
+                          "trips closed in-run (closed_return_pct), else the "
+                          "latest stored close. None means "
+                          "too-young-to-benchmark, never zero. Alpha under "
+                          "spy_window_sessions < 2 is inside benchmark noise — "
+                          "do not grade it as skill. Options carry alpha_pct = "
+                          "null by design: premium %-moves embed leverage/"
+                          "theta; grade them on realized dollars and thesis. "
+                          "Hard-stop exits (run_id 'hardstop:<id>') are "
+                          "bucketed under 'hardstop', like settlement. A long "
+                          "book's raw P&L is mostly market beta, so grade "
+                          "alpha, not dollars.",
             "book": book, "runs": runs, "symbols": symbols_out,
             "settlement": {"realized_pnl": settlement_pnl},
+            "hardstop": {"realized_pnl": hardstop_pnl},
             "unattributed_trades": unattributed}
 
 
@@ -753,7 +878,10 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     refuses to book when the market is closed, the quote is degenerate, or
     the quote is stale. Extended hours are allowed for equities with tighter
     spread guards; options are refused outside RTH (OPRA book is genuinely
-    bad pre-open/post-close). **Crypto** pairs (BTC/USD, ETH/USD, …) trade
+    bad pre-open/post-close). NOTE: a post-close (after-hours) extended BUY
+    cannot be exited until the NEXT session's tape — an overnight hold by
+    construction, matching pre-market semantics — so size it accordingly.
+    **Crypto** pairs (BTC/USD, ETH/USD, …) trade
     24/7 and skip the RTH/close-soon gates; their spread cap is 3% and no
     options structure is possible.  Exactly one of ``shares`` / ``notional``
     sizes the order (fractional ok — required for high-priced crypto).
@@ -919,8 +1047,9 @@ def settle(store=None, *, account: str = ACCOUNT) -> dict:
     OPTIONS: for each open contract past expiry, priced off the underlying's
     EXPIRY-DAY daily close from ``daily_bars`` (settle_basis=expiry_close —
     a Friday expiry must not settle at Monday's price; the old run-time
-    pricing gave a free weekend look-back). Only when that bar is missing
-    does it fall back to the live mid / latest close
+    pricing gave a free weekend look-back). KNOWN LIMIT: the expiry_close
+    basis requires the underlying in the daily_bars hot set — only when
+    that bar is missing does it fall back to the live mid / latest close
     (settle_basis=runtime_price), and the basis used is stamped on every
     settlement row:
     - long ITM  → cash-settled exercise: SELL at intrinsic value.
@@ -1060,6 +1189,153 @@ def _book_adjustment(store, *, symbol: str, side: str, qty: float,
     return row
 
 
+def _ledger_shares_now(store, symbol: str, account: str = ACCOUNT) -> float:
+    """Net open shares of ``symbol`` recomputed from a FRESH ledger read —
+    not the desk_positions projection (which may be mid-rebuild) and not an
+    in-memory replay that predates a concurrent writer's rows."""
+    rows = store.select("desk_trades",
+                        filters={"account": account, "symbol": symbol})
+    rows.sort(key=lambda r: (str(r.get("ts")), r.get("id") or 0))
+    b = _compute_book(rows).get(symbol)
+    return b["shares"] if b else 0.0
+
+
+def _corp_actions_for_symbol(store, sym: str, sym_trades: list[dict],
+                             opened: str, today: str, *,
+                             account: str = ACCOUNT
+                             ) -> tuple[int, int, list[dict]]:
+    """The per-symbol splits+dividends pass shared by the full sweep inside
+    ``settle`` and the streamer's targeted ``settle_corp_actions_for``.
+
+    ``sym_trades`` must be the symbol's ledger rows in replay order; it is
+    extended in place as adjustment rows book, so later entitlements in the
+    same pass see earlier adjustments (a dividend after a split pays on the
+    post-split count). Returns (splits_booked, dividends_booked, details).
+    """
+    from datetime import date as _date
+
+    splits_booked = dividends_booked = 0
+    details: list[dict] = []
+    done = {(_fq(t).get("src"), _adj_effective_date(t))
+            for t in sym_trades if _adj_effective_date(t)}
+
+    # splits — few rows per symbol ever; window client-side. Reverse splits
+    # keep the exact fractional share count (KNOWN LIMIT: no cash-in-lieu —
+    # a real broker would pay out the fraction; the paper book holds it).
+    try:
+        split_rows = store.select("ticker_splits", filters={"symbol": sym})
+    except Exception:
+        split_rows = []
+    split_rows = [r for r in split_rows
+                  if opened <= str(r.get("execution_date"))[:10] <= today]
+    split_rows.sort(key=lambda r: str(r.get("execution_date"))[:10])
+    for r in split_rows:
+        exec_date = str(r["execution_date"])[:10]
+        frm, to = float(r.get("split_from") or 0), float(r.get("split_to") or 0)
+        if frm <= 0 or to <= 0 or ("split_adjustment", exec_date) in done:
+            continue
+        held = _shares_held_asof(sym_trades, sym, exec_date)
+        delta = held * (to / frm - 1.0)
+        if abs(delta) <= EPS_SHARES:
+            continue
+        # Book the delta ONLY onto a position that is STILL open RIGHT NOW:
+        # a concurrent hard-stop sell (the streamer) may have zeroed the lot
+        # after this pass read the book, and a split delta landing on a
+        # closed lot fabricates a phantom position at avg_price 0.
+        # Prevention is layered — execute_hard_stop runs this pass FIRST
+        # and the skill's cycle ordering runs settle before any manual
+        # sells — and this fresh ledger re-read closes the remaining window.
+        if _ledger_shares_now(store, sym, account) <= EPS_SHARES:
+            continue
+        ratio = f"{to:g}:{frm:g}"
+        row = _book_adjustment(
+            store, symbol=sym, side="BUY" if delta > 0 else "SELL",
+            qty=abs(delta), dollars=0.0,
+            rationale=f"split adjustment: {sym} {ratio} split executed "
+                      f"{exec_date} — {held:g} shares become "
+                      f"{held + delta:g}, cost basis unchanged",
+            fill_quote={"src": "split_adjustment",
+                        "execution_date": exec_date, "ratio": ratio},
+            account=account)
+        sym_trades.append(row)
+        done.add(("split_adjustment", exec_date))
+        splits_booked += 1
+        details.append({"symbol": sym, "action": "split", "ratio": ratio,
+                        "execution_date": exec_date,
+                        "share_delta": round(delta, 6)})
+
+    # dividends — ex-date window bounded by the lot's open (range filter
+    # is transport-safe on the Date column; Phase A added list-of-specs)
+    try:
+        div_rows = store.select(
+            "dividends",
+            filters={"symbol": sym,
+                     "ex_date": [("gte", _date.fromisoformat(opened)),
+                                 ("lte", _date.fromisoformat(today))]})
+    except Exception:
+        div_rows = []
+    div_rows.sort(key=lambda r: str(r.get("ex_date"))[:10])
+    for r in div_rows:
+        ex = str(r["ex_date"])[:10]
+        cash_amount = float(r.get("cash_amount") or 0.0)
+        if cash_amount <= 0 or ("dividend", ex) in done:
+            continue
+        held = _shares_held_asof(sym_trades, sym, ex)
+        credit = round(held * cash_amount, 2)
+        if held <= EPS_SHARES or credit <= 0:
+            continue
+        row = _book_adjustment(
+            store, symbol=sym, side="SELL", qty=0.0, dollars=credit,
+            rationale=f"dividend: {sym} ${cash_amount:g}/share, ex-date "
+                      f"{ex} on {held:g} shares held — ${credit:,.2f} "
+                      "credited (ex-date basis; real cash pays later)",
+            fill_quote={"src": "dividend", "ex_date": ex,
+                        "cash_per_share": cash_amount,
+                        "shares_asof": round(held, 6)},
+            account=account)
+        sym_trades.append(row)
+        done.add(("dividend", ex))
+        dividends_booked += 1
+        details.append({"symbol": sym, "action": "dividend", "ex_date": ex,
+                        "cash_per_share": cash_amount, "credit": credit})
+    return splits_booked, dividends_booked, details
+
+
+def settle_corp_actions_for(store, symbol: str, *,
+                            account: str = ACCOUNT) -> dict:
+    """Idempotent SINGLE-SYMBOL equity corp-actions pass (splits+dividends).
+
+    The streamer's hard-stop executor calls this BEFORE sizing a
+    full-position exit: a split that executed at today's open rebases the
+    tape, and a stop armed below the pre-split price trips instantly — the
+    sale must be sized off the POST-split share count, so the split books
+    first, then the caller re-reads the position. Same math and same
+    idempotence keys as the full pass inside ``settle``; running both is
+    safe. Rebuilds the positions projection when anything booked. Options
+    and crypto pairs have no equity corp actions; a closed or unknown
+    position books nothing."""
+    from agent import broker, occ
+
+    symbol = symbol.upper().strip()
+    out = {"splits": 0, "dividends": 0, "details": []}
+    if occ.is_option(symbol) or broker.is_crypto(symbol):
+        return out
+    trades = _trades(store, account)
+    b = _compute_book(trades).get(symbol)
+    if not b or b["shares"] <= EPS_SHARES:
+        return out
+    opened = _et_date(b.get("opened_at"))
+    if not opened:
+        return out
+    today = _et_date(_utcnow()) or str(_utcnow().date())
+    sym_trades = [t for t in trades if t["symbol"] == symbol]
+    s, d, details = _corp_actions_for_symbol(store, symbol, sym_trades,
+                                             opened, today, account=account)
+    if s or d:
+        rebuild_positions(store, account)
+    return {"splits": s, "dividends": d, "details": details}
+
+
 def _settle_equity_corp_actions(store, *, account: str = ACCOUNT) -> dict:
     """Fold real-world corporate actions into open EQUITY positions, using
     the same 0-dollar ledger-row convention option expiry already uses.
@@ -1067,9 +1343,12 @@ def _settle_equity_corp_actions(store, *, account: str = ACCOUNT) -> dict:
     SPLITS (ticker_splits): a held N:1 split otherwise fabricates a fake
     ≈−(1−1/N) loss the moment the quote rebases. For each split executed
     while the current lot was open, book a share delta of
-    ``held × (to/from − 1)`` at price 0 / dollars 0 (BUY for a forward
-    split, SELL for a reverse) — cost basis is untouched, so avg_price
-    rebases by the ratio and market value / unrealized P&L are unchanged.
+    ``held-as-of-the-execution-date × (to/from − 1)`` at price 0 / dollars 0
+    (BUY for a forward split, SELL for a reverse) — cost basis is untouched,
+    so avg_price rebases by the ratio and market value / unrealized P&L are
+    unchanged. Each delta books only if the position is still open at that
+    moment (fresh re-read — see ``_corp_actions_for_symbol``). KNOWN LIMIT:
+    reverse-split fractional shares are kept exactly; no cash-in-lieu.
 
     DIVIDENDS (dividends): credit ``shares held going into the ex-date ×
     cash_amount`` as a SELL of 0 shares with ``dollars=credit`` — pure cash,
@@ -1078,7 +1357,9 @@ def _settle_equity_corp_actions(store, *, account: str = ACCOUNT) -> dict:
     waited would show a phantom dip between ex and pay, so crediting at ex
     is the honest simplification. Shares are replayed from the ledger AS OF
     the ex-date, so a position resized since then still pays on what was
-    actually held.
+    actually held. KNOWN LIMIT: only currently-open positions are scanned,
+    so a position fully exited between an ex-date and the next settle drops
+    that entitlement (small, conservative — never overstates the book).
 
     IDEMPOTENT: every adjustment row carries its key in fill_quote
     ({src, execution_date|ex_date}); booked keys are skipped by reading the
@@ -1087,8 +1368,6 @@ def _settle_equity_corp_actions(store, *, account: str = ACCOUNT) -> dict:
     the current lot's earliest open fill — positions are short-lived.
     Options are skipped (occ), crypto pairs are skipped (no corp actions).
     """
-    from datetime import date as _date
-
     from agent import broker, occ
 
     trades = _trades(store, account)
@@ -1104,78 +1383,12 @@ def _settle_equity_corp_actions(store, *, account: str = ACCOUNT) -> dict:
         opened = _et_date(b.get("opened_at"))
         if not opened:
             continue
-        done = {(_fq(t).get("src"), _adj_effective_date(t))
-                for t in trades if t["symbol"] == sym and _adj_effective_date(t)}
         sym_trades = [t for t in trades if t["symbol"] == sym]
-
-        # splits — few rows per symbol ever; window client-side
-        try:
-            split_rows = store.select("ticker_splits", filters={"symbol": sym})
-        except Exception:
-            split_rows = []
-        split_rows = [r for r in split_rows
-                      if opened <= str(r.get("execution_date"))[:10] <= today]
-        split_rows.sort(key=lambda r: str(r.get("execution_date"))[:10])
-        for r in split_rows:
-            exec_date = str(r["execution_date"])[:10]
-            frm, to = float(r.get("split_from") or 0), float(r.get("split_to") or 0)
-            if frm <= 0 or to <= 0 or ("split_adjustment", exec_date) in done:
-                continue
-            held = _shares_held_asof(sym_trades, sym, exec_date)
-            delta = held * (to / frm - 1.0)
-            if abs(delta) <= EPS_SHARES:
-                continue
-            ratio = f"{to:g}:{frm:g}"
-            row = _book_adjustment(
-                store, symbol=sym, side="BUY" if delta > 0 else "SELL",
-                qty=abs(delta), dollars=0.0,
-                rationale=f"split adjustment: {sym} {ratio} split executed "
-                          f"{exec_date} — {held:g} shares become "
-                          f"{held + delta:g}, cost basis unchanged",
-                fill_quote={"src": "split_adjustment",
-                            "execution_date": exec_date, "ratio": ratio},
-                account=account)
-            sym_trades.append(row)
-            done.add(("split_adjustment", exec_date))
-            splits_booked += 1
-            details.append({"symbol": sym, "action": "split", "ratio": ratio,
-                            "execution_date": exec_date,
-                            "share_delta": round(delta, 6)})
-
-        # dividends — ex-date window bounded by the lot's open (range filter
-        # is transport-safe on the Date column; Phase A added list-of-specs)
-        try:
-            div_rows = store.select(
-                "dividends",
-                filters={"symbol": sym,
-                         "ex_date": [("gte", _date.fromisoformat(opened)),
-                                     ("lte", _date.fromisoformat(today))]})
-        except Exception:
-            div_rows = []
-        div_rows.sort(key=lambda r: str(r.get("ex_date"))[:10])
-        for r in div_rows:
-            ex = str(r["ex_date"])[:10]
-            cash_amount = float(r.get("cash_amount") or 0.0)
-            if cash_amount <= 0 or ("dividend", ex) in done:
-                continue
-            held = _shares_held_asof(sym_trades, sym, ex)
-            credit = round(held * cash_amount, 2)
-            if held <= EPS_SHARES or credit <= 0:
-                continue
-            row = _book_adjustment(
-                store, symbol=sym, side="SELL", qty=0.0, dollars=credit,
-                rationale=f"dividend: {sym} ${cash_amount:g}/share, ex-date "
-                          f"{ex} on {held:g} shares held — ${credit:,.2f} "
-                          "credited (ex-date basis; real cash pays later)",
-                fill_quote={"src": "dividend", "ex_date": ex,
-                            "cash_per_share": cash_amount,
-                            "shares_asof": round(held, 6)},
-                account=account)
-            sym_trades.append(row)
-            done.add(("dividend", ex))
-            dividends_booked += 1
-            details.append({"symbol": sym, "action": "dividend", "ex_date": ex,
-                            "cash_per_share": cash_amount, "credit": credit})
+        s, d, det = _corp_actions_for_symbol(store, sym, sym_trades,
+                                             opened, today, account=account)
+        splits_booked += s
+        dividends_booked += d
+        details.extend(det)
     return {"splits": splits_booked, "dividends": dividends_booked,
             "details": details}
 
