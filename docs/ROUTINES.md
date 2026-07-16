@@ -8,26 +8,31 @@ prompt-only). There are six —
 
 | Routine | Skill | Cron (UTC) | What it does |
 |---|---|---|---|
-| Trading brain | `trading-agent` | `30 13,16,19 * * 1-5` (≈9:30 AM / 12:30 PM / 3:30 PM ET floor) **plus owner-fired on request** — each run still ends with `NEXT RUN REQUESTED: <UTC>` and the owner remains the fine-grained scheduler | Observe + trade the $100k paper book at live quotes; tripwires + budgeted self-wakes cover the gaps |
+| Trading brain | `trading-agent` | **GitHub Actions, not this table** (since v9.11.0; all-day chain since v9.12.0) — the streamer dispatches every due wake/trip; the workflow's own `0,30 12-21 * * 1-5` half-hour floor restarts a dropped chain. The claude.ai Routine (daily `0 13 * * *`) is a transition fallback only | At the desk all day: prep cycle ~9:00 ET, rolling 15–60-min wake chain with a rotating study block, wrap cycle post-close |
 | Nightly data | `data-refresh` | `45 0 * * 2-6` (8:45 PM ET Mon–Fri) | Full-market bar ingest (top-1000 + R2 sync) **+ SEC EDGAR fundamentals ingest** + builds the research brief |
 | Strategy Lab | `strategy-lab` | `0 2 * * 2-6` (10:00 PM ET, post-ingest) | Sweeps the 168-combo grid (incl. `value_momentum` since v9.4.0) over 21y, split-sample scored; rebuilds the brief with tonight's board |
 | Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week mechanically (predictions, alpha, rejected list, fundamentals citations), curate the lessons wiki |
 | Desk evolution | `app-evolver` | `0 15 * * 6` (11:00 AM ET Sat) | One small, tested, additive `/desk` improvement, announced on What's New |
 | Loop monitor | (prompt-only, read-only) | `0 16,21 * * 1-5` (noon / 5 PM ET) | Fresh-session digest of the autonomy loop — reads `desk_dispatches`, wakes, journal FAILED notes, latest decision/fills, ledger state; **push + email notification** to the owner. Never trades, never writes. Created 2026-07-16 (`trig_01H4n1qmGrWxPp5KTc5BhYCn`) |
 
-**The autonomy loop (v9.11.0):** the trading brain no longer depends on a
-human finger. The always-on Render streamer watches `desk_wakes` (the
-agent's own next-run requests) and tripped tripwires, and fires the repo's
+**The autonomy loop (v9.11.0, all-day chain v9.12.0):** the trading brain
+no longer depends on a human finger — it is at the desk all day. Every
+market-hours cycle ends by planning the next wake 15–60 minutes out (a
+rolling chain from a ~9:00 AM ET prep cycle to a post-close wrap, with a
+rotating study block each cycle); the always-on Render streamer watches
+`desk_wakes` and tripped tripwires and fires the repo's
 `trading-agent.yml` GitHub Actions workflow (`workflow_dispatch`, PAT with
-Actions:write only) within ~1 minute of either; a UTC cron floor inside the
-workflow covers dispatcher outages, and a cheap gate step keeps idle
-scheduled runs at ~zero cost. Cycles authenticate with the owner's Max
-subscription (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
-Guards: >=10-min dispatch gap + 15/ET-day cap (DB-enforced,
-`desk_dispatches`), 3 attempts per wake then terminal, wake budget
-10/ET-day. Failures journal loudly to the desk. The claude.ai trading
-Routine remains as a fallback during transition and should be retired
-after a week of proven autonomous fires.
+Actions:write only) within ~1 minute of either. The workflow's half-hour
+cron floor is a CHAIN-RESTARTER: its gate (`scripts/wake_gate.py`) runs a
+scheduled slot only when a wake is due OR it's desk hours (9:00–4:30 ET)
+with no cycle in the last 25 minutes — a healthy chain makes floor slots
+free. Cycles authenticate with the owner's Max subscription
+(`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`). Guards: >=5-min
+dispatch gap + 45/ET-day cap (DB-enforced, `desk_dispatches`), 3 attempts
+per wake then terminal, wake budget 30/ET-day. Expected volume: ~15–25
+cycles/trading day. Failures journal loudly to the desk. The claude.ai
+trading Routine remains as a fallback during transition and should be
+retired after a week of proven autonomous fires.
 
 Routine prompts are thin pointers ("Run the X skill.") — behavior lives in
 `.claude/skills/*/SKILL.md`, which every firing loads fresh from `main`, so

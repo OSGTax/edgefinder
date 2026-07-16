@@ -6,11 +6,15 @@
 #      — the PRIMARY path, ~1-minute latency. The PAT it uses has
 #      Actions:write only (cannot push code or read these secrets).
 #   2. workflow_dispatch pressed by the owner (the manual button).
-#   3. A UTC cron floor, placed inside regular market hours in BOTH EST and
-#      EDT. GH crons drift 15-60 min and auto-disable after 60 days of repo
-#      inactivity — the floor is belt-and-suspenders, never the plan.
+#   3. A UTC cron floor every 30 minutes across the trading day (both EST
+#      and EDT). Since v9.12.0 the floor is a CHAIN-RESTARTER: the agent
+#      runs a rolling 15-60-min wake chain all session, and a floor slot
+#      only actually runs Claude when the chain has gone quiet (no cycle in
+#      the last 25 min during desk hours) or a wake is due. GH crons drift
+#      15-60 min and auto-disable after 60 days of repo inactivity — the
+#      dispatch path stays primary.
 #
-# The gate step makes idle scheduled runs ~free: no due wake -> no Claude.
+# The gate step makes idle scheduled runs ~free: healthy chain -> no Claude.
 # The prompt is STATIC by design — dispatch payload text never reaches the
 # model (prompt-injection surface stays closed); the cycle reads its own
 # obligations from the DB via wake-due/watch-list.
@@ -23,9 +27,10 @@ on:
         description: "machine wake reason (ids/labels only — never shown to the model)"
         required: false
   schedule:
-    - cron: "45 14 * * 1-5"   # 9:45/10:45 AM ET (EDT/EST)
-    - cron: "45 17 * * 1-5"   # 12:45/1:45 PM ET
-    - cron: "15 19 * * 1-5"   # 2:15/3:15 PM ET — clear of the pre-close buy cutoff
+    # Every 30 min, 12:00-21:30 UTC — spans 9:00 AM ET prep through the
+    # post-close wrap in both EDT and EST. The gate skips slots outside
+    # desk hours or when the wake chain is healthy, so most cost nothing.
+    - cron: "0,30 12-21 * * 1-5"
 
 permissions:
   contents: read

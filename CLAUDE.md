@@ -58,7 +58,7 @@ rules). The agent's operating manual is
 |---|---|---|
 | Quote streamer | Render (always-on) | One Alpaca SIP WebSocket → in-memory `QuoteCache` → SSE to `/desk` (`/api/desk/stream`) |
 | Desk page | Render | Live ticks, the book, thinking feed, decisions, journal, What's New |
-| Trading brain | Claude Code Routine, **agent-paced** (no cron: each run's summary requests its next run time; the owner fires it) | Runs the `trading-agent` skill; fills via `agent.ledger fill` |
+| Trading brain | GitHub Actions, **at the desk all day** (v9.12.0): the Render streamer machine-fires a cycle for every due wake/tripped wire; the agent runs a rolling 15–60-min wake chain from a ~9:00 ET prep cycle to a post-close wrap, with a rotating study block each cycle; a half-hour cron floor only restarts a dropped chain | Runs the `trading-agent` skill; fills via `agent.ledger fill` |
 | Data refresh | Claude Code Routine, nightly | `data-refresh` skill — whole-market ingest, fresh top-N set |
 | Strategy Lab | Claude Code Routine, nightly post-ingest | `strategy-lab` skill — mass backtest sweep (incl. mid-tier universe), split-sample scored, leaderboard → rebuilds the brief |
 | App evolver | Claude Code Routine, nightly | `app-evolver` skill — one small announced `/desk` improvement |
@@ -133,11 +133,13 @@ One Supabase Postgres database, two namespaces:
   pack the trading cycle reads first), `desk_watch` (tripwires the
   always-on streamer sweeps against the live tape), `desk_wakes` (the
   budget ledger for self-scheduled check-ins — the brain owns its own
-  attention: heartbeat cron as the floor, `brain wake-plan` + one-shot
-  triggers for extra focused wakes, max 10/ET-day, 15-min gap; since
-  v9.11.0 the always-on streamer MACHINE-FIRES a GitHub Actions trading
-  cycle when a wake comes due or a tripwire trips — `desk_dispatches` is
-  that loop's at-most-once ledger),
+  attention: since v9.12.0 it runs a ROLLING CHAIN all session (every
+  market-hours cycle plans the next, 15–60 min out; prep ~9:00 ET, wrap
+  post-close; max 30 wakes/ET-day, 15-min gap), and the always-on
+  streamer MACHINE-FIRES a GitHub Actions trading cycle when a wake
+  comes due or a tripwire trips (≤45 dispatches/ET-day, ≥5-min gap) —
+  `desk_dispatches` is that loop's at-most-once ledger; a half-hour
+  cron floor in the workflow re-seeds a dropped chain),
   `desk_outcomes` (machine-graded pick facts written by `agent.ledger
   grade`; the weekly reflection's verdicts live here via `agent.brain
   verdict`, next to the numbers they judged).

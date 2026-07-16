@@ -510,8 +510,10 @@ async def run_watch_sweep() -> None:
 # at-most-once guarantee is the same bucket-CAS idiom as claim_watch.
 
 DISPATCH_PERIOD_SECS = 60          # how often the dispatcher looks
-DISPATCH_MIN_GAP_SECS = 600        # >=10 min between dispatches (the bucket)
-DISPATCH_MAX_PER_DAY = 15          # per ET day — independent of the wake budget
+DISPATCH_MIN_GAP_SECS = 300        # >=5 min between dispatches (the bucket) — tight
+                                   # enough that a trip between chain cycles isn't
+                                   # held at the door for long (v9.12.0)
+DISPATCH_MAX_PER_DAY = 45          # per ET day — chain + trips + retry headroom
 DISPATCH_MAX_PER_WAKE = 3          # then the wake is stamped missed:auto
 DISPATCH_WAKE_LOOKBACK_HOURS = 8   # same "due" definition as brain.wake_due
 

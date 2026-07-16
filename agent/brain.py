@@ -235,9 +235,10 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
 # after wake-plan says ok, so the cap and minimum gap are enforced and every
 # planned check-in is on the record for the desk.
 
-WAKE_MAX_PER_DAY = 10     # self-scheduled wakes per ET day — lowered 20→10 for the
-                          # machine-fired era (v9.11.0): the dispatcher honors every
-                          # plan, so the cap IS the cadence, not a formality
+WAKE_MAX_PER_DAY = 30     # self-scheduled wakes per ET day. Sized for the rolling
+                          # chain (v9.12.0): prep + a 15-60-min chain across the
+                          # session + wrap needs up to ~28. The dispatcher honors
+                          # every plan, so the cap IS the cadence ceiling.
 WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes
 
 
