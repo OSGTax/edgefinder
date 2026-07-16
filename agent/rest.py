@@ -95,6 +95,9 @@ class Rest:
                         params.append((col, f"in.({joined})"))
                     else:
                         params.append((col, f"{op}.{_encode(val)}"))
+                elif sp is None:
+                    # PostgREST null test — eq.None would match the string "None"
+                    params.append((col, "is.null"))
                 else:
                     params.append((col, f"eq.{_encode(sp)}"))
         return params

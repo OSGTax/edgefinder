@@ -1,0 +1,85 @@
+# The autonomy loop's execution arm (v9.11.0).
+#
+# Fired three ways:
+#   1. workflow_dispatch from the Render streamer (agent/streamer.py
+#      run_wake_dispatch) when a planned wake comes due or a tripwire trips
+#      — the PRIMARY path, ~1-minute latency. The PAT it uses has
+#      Actions:write only (cannot push code or read these secrets).
+#   2. workflow_dispatch pressed by the owner (the manual button).
+#   3. A UTC cron floor, placed inside regular market hours in BOTH EST and
+#      EDT. GH crons drift 15-60 min and auto-disable after 60 days of repo
+#      inactivity — the floor is belt-and-suspenders, never the plan.
+#
+# The gate step makes idle scheduled runs ~free: no due wake -> no Claude.
+# The prompt is STATIC by design — dispatch payload text never reaches the
+# model (prompt-injection surface stays closed); the cycle reads its own
+# obligations from the DB via wake-due/watch-list.
+name: Trading Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "machine wake reason (ids/labels only — never shown to the model)"
+        required: false
+  schedule:
+    - cron: "45 14 * * 1-5"   # 9:45/10:45 AM ET (EDT/EST)
+    - cron: "45 17 * * 1-5"   # 12:45/1:45 PM ET
+    - cron: "15 19 * * 1-5"   # 2:15/3:15 PM ET — clear of the pre-close buy cutoff
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trading-agent
+  cancel-in-progress: false   # never kill a cycle mid-fill
+
+jobs:
+  cycle:
+    if: github.repository == 'OSGTax/edgefinder'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Gate — is a cycle actually due?
+        id: gate
+        timeout-minutes: 2
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python3 scripts/wake_gate.py
+
+      - name: Install the agent toolchain
+        if: steps.gate.outputs.should_run == 'true'
+        run: pip install -e ".[dev]" --quiet
+
+      - name: Run one trading cycle
+        if: steps.gate.outputs.should_run == 'true'
+        uses: anthropics/claude-code-action@v1
+        timeout-minutes: 25
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: "/trading-agent"
+          claude_args: "--max-turns 150"
+        env:
+          EDGEFINDER_DB_TRANSPORT: rest
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          EDGEFINDER_ALPACA_API_KEY: ${{ secrets.EDGEFINDER_ALPACA_API_KEY }}
+          EDGEFINDER_ALPACA_API_SECRET: ${{ secrets.EDGEFINDER_ALPACA_API_SECRET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+
+      - name: Alarm on failure (journals to the desk)
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: python3 scripts/wake_gate.py --report-failure "${{ github.run_id }}"

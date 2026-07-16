@@ -435,6 +435,35 @@ class DeskWake(Base):
     reason: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     honored_run_id: Mapped[str | None] = mapped_column(String(40))
+    # machine-fired autonomy (v9.11.0): how many workflow dispatches this
+    # wake has triggered; at DISPATCH_MAX_PER_WAKE the dispatcher stamps it
+    # honored_run_id='missed:auto' so no wake can loop forever
+    dispatch_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class DeskDispatch(Base):
+    """One GitHub workflow_dispatch fired (or attempted) by the streamer.
+
+    The autonomy loop's at-most-once ledger: ``bucket`` (epoch // gap) is
+    UNIQUE per account, so sibling streamer instances during a Render
+    deploy overlap CAS-race on the insert and exactly one wins the window
+    (the ``claim_watch`` idiom). Also the debounce clock and the per-ET-day
+    dispatch cap — DB state, never process memory."""
+
+    __tablename__ = "desk_dispatches"
+    __table_args__ = (
+        UniqueConstraint("account", "bucket", name="uq_desk_dispatch_bucket"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    bucket: Mapped[int] = mapped_column(Integer)   # epoch // (min-gap secs)
+    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    reason: Mapped[str] = mapped_column(Text)
+    wake_ids: Mapped[list | None] = mapped_column(JSON)
+    watch_ids: Mapped[list | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(12), default="claimed")
+    http_status: Mapped[int | None] = mapped_column(Integer)
 
 
 # ── desk_outcomes — machine-graded pick facts (the learning loop's ledger) ──
@@ -750,4 +779,19 @@ DESK_TABLE_DDL: list[str] = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_fund_pit_symbol_filed ON fundamentals_pit (symbol, filed)",
     "ALTER TABLE fundamentals_pit ENABLE ROW LEVEL SECURITY",
+    # v9.11.0 autonomy loop: the dispatch ledger + per-wake attempt counter
+    """CREATE TABLE IF NOT EXISTS desk_dispatches (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        bucket INTEGER NOT NULL,
+        ts TIMESTAMP DEFAULT NOW(),
+        reason TEXT NOT NULL,
+        wake_ids JSON,
+        watch_ids JSON,
+        status VARCHAR(12) DEFAULT 'claimed',
+        http_status INTEGER,
+        CONSTRAINT uq_desk_dispatch_bucket UNIQUE (account, bucket)
+    )""",
+    "ALTER TABLE desk_dispatches ENABLE ROW LEVEL SECURITY",
+    "ALTER TABLE desk_wakes ADD COLUMN IF NOT EXISTS dispatch_count INTEGER DEFAULT 0",
 ]

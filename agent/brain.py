@@ -235,7 +235,9 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
 # after wake-plan says ok, so the cap and minimum gap are enforced and every
 # planned check-in is on the record for the desk.
 
-WAKE_MAX_PER_DAY = 20     # self-scheduled wakes per ET day (heartbeat separate)
+WAKE_MAX_PER_DAY = 10     # self-scheduled wakes per ET day — lowered 20→10 for the
+                          # machine-fired era (v9.11.0): the dispatcher honors every
+                          # plan, so the cap IS the cadence, not a formality
 WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes
 
 
@@ -487,7 +489,12 @@ def wake_due(store=None, *, run_id: str | None = None,
 
 def wake_honor(store=None, *, wake_id: int, run_id: str,
                account: str = "agent") -> dict:
-    """Stamp a due wake-plan as honored by this run (exactly once)."""
+    """Stamp a due wake-plan as honored by this run — exactly once, CAS.
+
+    Under machine firing two cycles can overlap (a dispatch and the cron
+    floor); the conditional update (WHERE honored_run_id IS NULL) lets
+    exactly one win. The loser gets ok:False and must STAND DOWN on that
+    wake — another live cycle owns it."""
     store = store or _store()
     rows = store.select("desk_wakes",
                         filters={"account": account, "id": wake_id}, limit=1)
@@ -496,8 +503,12 @@ def wake_honor(store=None, *, wake_id: int, run_id: str,
     if rows[0].get("honored_run_id"):
         return {"ok": False, "error": f"wake {wake_id} already honored by "
                                       f"{rows[0]['honored_run_id']}"}
-    store.update("desk_wakes", {"id": wake_id},
-                 {"honored_run_id": run_id}, returning=False)
+    claimed = store.update("desk_wakes",
+                           {"id": wake_id, "honored_run_id": None},
+                           {"honored_run_id": run_id}, returning=True)
+    if len(claimed) != 1:
+        return {"ok": False, "error": f"wake {wake_id} claimed by a "
+                                      "concurrent cycle — stand down"}
     return {"ok": True, "id": wake_id, "honored_run_id": run_id}
 
 

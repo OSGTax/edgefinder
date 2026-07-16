@@ -25,7 +25,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from config.settings import settings
 
@@ -500,15 +500,224 @@ async def run_watch_sweep() -> None:
         await asyncio.sleep(WATCH_SWEEP_SECS)
 
 
+# ── the autonomy dispatcher (v9.11.0) ────────────────────────────────
+#
+# When a planned wake comes due or a tripwire trips, POST a GitHub
+# workflow_dispatch so the trading-agent workflow runs a cycle — no human
+# finger required. Every decision is made over DB STATE ONLY (desk_wakes,
+# desk_watch, desk_dispatches): process memory survives neither restarts
+# nor the sibling-instance overlap Render creates during deploys. The
+# at-most-once guarantee is the same bucket-CAS idiom as claim_watch.
+
+DISPATCH_PERIOD_SECS = 60          # how often the dispatcher looks
+DISPATCH_MIN_GAP_SECS = 600        # >=10 min between dispatches (the bucket)
+DISPATCH_MAX_PER_DAY = 15          # per ET day — independent of the wake budget
+DISPATCH_MAX_PER_WAKE = 3          # then the wake is stamped missed:auto
+DISPATCH_WAKE_LOOKBACK_HOURS = 8   # same "due" definition as brain.wake_due
+
+
+def dispatch_reason(wakes: list[dict], watches: list[dict],
+                    dispatches: list[dict],
+                    now: datetime | None = None) -> dict | None:
+    """Pure decision: should the streamer fire a trading cycle right now?
+
+    ``wakes``/``watches``/``dispatches`` are plain row dicts (naive-UTC
+    timestamps, both transports). Returns {"reason", "wake_ids",
+    "watch_ids"} or None. Enforces: the min-gap debounce and the per-ET-day
+    cap (from the dispatch ledger), the 8h due-window and per-wake attempt
+    cap (immortal wakes are the classic infinite-loop cost trap), and
+    EDGE-triggered trip detection — a tripped wire fires only if it tripped
+    AFTER the newest dispatch (level-triggered status would re-fire forever
+    on one un-cleared wire)."""
+    now = now or datetime.utcnow()
+
+    def _dt(v):
+        if isinstance(v, datetime):
+            return v.replace(tzinfo=None) if v.tzinfo else v
+        try:
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return d.astimezone(timezone.utc).replace(tzinfo=None) if d.tzinfo else d
+        except (TypeError, ValueError):
+            return None
+
+    disp_times = sorted((t for t in (_dt(d.get("ts")) for d in dispatches) if t))
+    if disp_times and (now - disp_times[-1]).total_seconds() < DISPATCH_MIN_GAP_SECS:
+        return None
+    # ET-day cap: naive-UTC minus 4/5h is close enough for a rate cap;
+    # use a fixed -5 (EST) so the cap is never looser than intended.
+    et_day = (now - timedelta(hours=5)).date()
+    today = [t for t in disp_times if (t - timedelta(hours=5)).date() == et_day]
+    if len(today) >= DISPATCH_MAX_PER_DAY:
+        return None
+
+    lookback = now - timedelta(hours=DISPATCH_WAKE_LOOKBACK_HOURS)
+    due = [w for w in wakes
+           if not w.get("honored_run_id")
+           and int(w.get("dispatch_count") or 0) < DISPATCH_MAX_PER_WAKE
+           and (t := _dt(w.get("at"))) is not None and lookback <= t <= now]
+    last_disp = disp_times[-1] if disp_times else datetime.min
+    trips = [w for w in watches
+             if w.get("status") in ("tripped", "exec_failed")
+             and (t := _dt(w.get("tripped_at"))) is not None and t > last_disp]
+
+    if not due and not trips:
+        return None
+    parts = []
+    if trips:
+        parts.append("tripwire " + ", ".join(
+            f"{w.get('symbol')} {w.get('kind')} {w.get('level')}" for w in trips[:3]))
+    if due:
+        parts.append(f"{len(due)} wake-plan(s) due")
+    return {"reason": " + ".join(parts),
+            "wake_ids": [w["id"] for w in due],
+            "watch_ids": [w["id"] for w in trips]}
+
+
+def claim_dispatch_slot(store, decision: dict,
+                        now: datetime | None = None) -> int | None:
+    """CAS-claim this debounce window: insert the UNIQUE (account, bucket)
+    row BEFORE posting. A duplicate-key loss means a sibling instance owns
+    the window — stand down. Returns the row id or None."""
+    from agent.store import is_duplicate_key_error
+
+    now = now or datetime.utcnow()
+    bucket = int(now.timestamp()) // DISPATCH_MIN_GAP_SECS
+    try:
+        rows = store.insert("desk_dispatches", {
+            "account": "agent", "bucket": bucket, "ts": now,
+            "reason": decision["reason"], "wake_ids": decision["wake_ids"],
+            "watch_ids": decision["watch_ids"], "status": "claimed",
+        }, returning=True)
+        return rows[0]["id"] if rows else None
+    except Exception as exc:  # noqa: BLE001
+        if is_duplicate_key_error(exc):
+            return None
+        raise
+
+
+def fire_workflow_dispatch(reason: str) -> int:
+    """POST the workflow_dispatch (stdlib urllib; 204 = accepted).
+
+    workflow_dispatch (not repository_dispatch) so the PAT needs only
+    Actions:write — it cannot push code or read repo secrets. The reason
+    carries ids/labels only; the workflow prompt is static and never sees
+    this text."""
+    import urllib.request
+
+    url = (f"https://api.github.com/repos/{settings.github_dispatch_repo}"
+           f"/actions/workflows/{settings.github_dispatch_workflow}/dispatches")
+    body = json.dumps({"ref": "main",
+                       "inputs": {"reason": reason[:200]}}).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={
+        "Authorization": f"Bearer {settings.github_dispatch_token}",
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.status
+
+
+def _run_dispatch_once(store, now: datetime | None = None) -> dict | None:
+    """One dispatcher pass (sync; called via to_thread). Returns the
+    decision it acted on, or None."""
+    now = now or datetime.utcnow()
+    wakes = store.select("desk_wakes", filters={"account": "agent"},
+                         order=[("at", "desc")], limit=60)
+    watches = store.select("desk_watch", limit=100,
+                           filters={"status": ("in", ["tripped", "exec_failed"])})
+    dispatches = store.select("desk_dispatches", order=[("ts", "desc")], limit=40)
+    decision = dispatch_reason(wakes, watches, dispatches, now=now)
+
+    # Terminal-resolve exhausted wakes so they can never loop the dispatcher:
+    # an unhonored wake at the attempt cap is stamped missed:auto (honest —
+    # it fired cycles that chose not to honor it, or the market was closed
+    # and the skill's honor-before-stop didn't exist yet).
+    lookback = now - timedelta(hours=DISPATCH_WAKE_LOOKBACK_HOURS)
+    for w in wakes:
+        if (not w.get("honored_run_id")
+                and int(w.get("dispatch_count") or 0) >= DISPATCH_MAX_PER_WAKE):
+            store.update("desk_wakes",
+                         {"id": w["id"], "honored_run_id": None},
+                         {"honored_run_id": "missed:auto"}, returning=False)
+
+    if not decision:
+        return None
+    slot = claim_dispatch_slot(store, decision, now=now)
+    if slot is None:
+        return None
+    try:
+        status = fire_workflow_dispatch(decision["reason"])
+        store.update("desk_dispatches", {"id": slot},
+                     {"status": "sent", "http_status": status}, returning=False)
+        for wid in decision["wake_ids"]:
+            row = store.select("desk_wakes", filters={"id": wid}, limit=1)
+            if row:
+                store.update("desk_wakes", {"id": wid},
+                             {"dispatch_count": int(row[0].get("dispatch_count") or 0) + 1},
+                             returning=False)
+        logger.info("AUTONOMY dispatch fired (%s): %s", status, decision["reason"])
+        return decision
+    except Exception as exc:  # noqa: BLE001 — mark failed; next bucket retries
+        code = getattr(exc, "code", None)
+        store.update("desk_dispatches", {"id": slot},
+                     {"status": "failed", "http_status": code}, returning=False)
+        if code in (401, 403):
+            logger.error("AUTONOMY dispatch token rejected (%s) — the PAT is "
+                         "expired or under-scoped; the loop is DEAD until the "
+                         "owner rotates it", code)
+            try:
+                from agent.brain import journal
+                journal(store, kind="note",
+                        title="Autonomy dispatch token rejected",
+                        body=f"GitHub returned {code} for workflow_dispatch — "
+                             "the fine-grained PAT on Render is expired or "
+                             "under-scoped. Machine-fired trading cycles are "
+                             "OFF until it is rotated; the cron floor and "
+                             "manual fires still work.")
+            except Exception:  # noqa: BLE001
+                logger.exception("could not journal the dead-dispatch alert")
+        else:
+            logger.exception("AUTONOMY dispatch POST failed (will retry next bucket)")
+        return None
+
+
+async def run_wake_dispatch() -> None:
+    """Forever task: the autonomy dispatcher. Separate from run_watch_sweep
+    on purpose — a hung GitHub POST must never stall the 5-second hard-stop
+    loop — and started even without Alpaca keys (it needs only DB + PAT)."""
+    if not settings.github_dispatch_token.strip():
+        logger.info("Autonomy dispatcher disabled (no EDGEFINDER_GITHUB_DISPATCH_TOKEN)")
+        return
+    logger.info("Autonomy dispatcher up: %s/%s every %ss",
+                settings.github_dispatch_repo, settings.github_dispatch_workflow,
+                DISPATCH_PERIOD_SECS)
+    while True:
+        try:
+            def _pass():
+                from agent.store import get_store
+                return _run_dispatch_once(get_store())
+            await asyncio.to_thread(_pass)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the dispatcher must never die loudly
+            logger.exception("autonomy dispatcher pass failed (retrying)")
+        await asyncio.sleep(DISPATCH_PERIOD_SECS)
+
+
 _sweep_task: asyncio.Task | None = None  # keep a ref so GC can't collect it
+_dispatch_task: asyncio.Task | None = None
 
 
 def start_in(_app=None) -> asyncio.Task | None:
     """Start the streamer as an asyncio task (called from the FastAPI lifespan).
-    Returns the task, or None when keys are absent (dev/CI/tests)."""
-    global _sweep_task
+    Returns the task, or None when keys are absent (dev/CI/tests). The
+    autonomy dispatcher starts UNCONDITIONALLY (needs only DB + PAT) so
+    revoked Alpaca keys can never silently kill machine-fired cycles."""
+    global _sweep_task, _dispatch_task
     from agent import broker
 
+    _dispatch_task = asyncio.get_running_loop().create_task(
+        run_wake_dispatch(), name="wake-dispatch")
     if not broker.enabled():
         logger.info("Live streamer disabled (no Alpaca keys)")
         return None

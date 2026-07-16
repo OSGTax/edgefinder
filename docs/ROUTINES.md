@@ -13,6 +13,20 @@ Claude session on this repo that runs one skill. There are five —
 | Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week mechanically (predictions, alpha, rejected list, fundamentals citations), curate the lessons wiki |
 | Desk evolution | `app-evolver` | `0 15 * * 6` (11:00 AM ET Sat) | One small, tested, additive `/desk` improvement, announced on What's New |
 
+**The autonomy loop (v9.11.0):** the trading brain no longer depends on a
+human finger. The always-on Render streamer watches `desk_wakes` (the
+agent's own next-run requests) and tripped tripwires, and fires the repo's
+`trading-agent.yml` GitHub Actions workflow (`workflow_dispatch`, PAT with
+Actions:write only) within ~1 minute of either; a UTC cron floor inside the
+workflow covers dispatcher outages, and a cheap gate step keeps idle
+scheduled runs at ~zero cost. Cycles authenticate with the owner's Max
+subscription (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`).
+Guards: >=10-min dispatch gap + 15/ET-day cap (DB-enforced,
+`desk_dispatches`), 3 attempts per wake then terminal, wake budget
+10/ET-day. Failures journal loudly to the desk. The claude.ai trading
+Routine remains as a fallback during transition and should be retired
+after a week of proven autonomous fires.
+
 Routine prompts are thin pointers ("Run the X skill.") — behavior lives in
 `.claude/skills/*/SKILL.md`, which every firing loads fresh from `main`, so
 skill updates need **no Routine changes**. Fundamentals context:

@@ -134,7 +134,10 @@ One Supabase Postgres database, two namespaces:
   always-on streamer sweeps against the live tape), `desk_wakes` (the
   budget ledger for self-scheduled check-ins — the brain owns its own
   attention: heartbeat cron as the floor, `brain wake-plan` + one-shot
-  triggers for extra focused wakes, max 20/ET-day, 15-min gap),
+  triggers for extra focused wakes, max 10/ET-day, 15-min gap; since
+  v9.11.0 the always-on streamer MACHINE-FIRES a GitHub Actions trading
+  cycle when a wake comes due or a tripwire trips — `desk_dispatches` is
+  that loop's at-most-once ledger),
   `desk_outcomes` (machine-graded pick facts written by `agent.ledger
   grade`; the weekly reflection's verdicts live here via `agent.brain
   verdict`, next to the numbers they judged).

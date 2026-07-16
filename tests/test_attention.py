@@ -523,7 +523,8 @@ def test_wake_plan_records_and_reports_budget(store):
 
     at = datetime.utcnow() + timedelta(minutes=30)
     r = wake_plan(store, at=at.isoformat(), reason="NVDA near kill", run_id="R1")
-    assert r["ok"] and r["budget_left_today"] == 19
+    from agent.brain import WAKE_MAX_PER_DAY
+    assert r["ok"] and r["budget_left_today"] == WAKE_MAX_PER_DAY - 1
     rows = store.select("desk_wakes")
     assert len(rows) == 1 and rows[0]["reason"] == "NVDA near kill"
 
@@ -620,3 +621,91 @@ def test_watch_endpoint(store, monkeypatch):
         assert r["watches"][0]["symbol"] == "AMD"
         assert r["watches"][0]["status"] == "armed"
         assert r["wakes"][0]["reason"] == "decide before close"
+
+
+# ── the autonomy dispatcher (v9.11.0): pure decisions + CAS slots ──
+
+
+def test_dispatch_reason_fires_on_due_wake_and_respects_debounce():
+    from agent.streamer import DISPATCH_MIN_GAP_SECS, dispatch_reason
+
+    now = datetime(2026, 7, 16, 15, 0)
+    wakes = [{"id": 1, "at": now - timedelta(minutes=5),
+              "honored_run_id": None, "dispatch_count": 0}]
+    d = dispatch_reason(wakes, [], [], now=now)
+    assert d and d["wake_ids"] == [1] and "wake-plan" in d["reason"]
+
+    # a dispatch inside the min-gap suppresses; one outside it does not
+    recent = [{"ts": now - timedelta(seconds=DISPATCH_MIN_GAP_SECS - 60)}]
+    assert dispatch_reason(wakes, [], recent, now=now) is None
+    old = [{"ts": now - timedelta(seconds=DISPATCH_MIN_GAP_SECS + 60)}]
+    assert dispatch_reason(wakes, [], old, now=now) is not None
+
+
+def test_dispatch_reason_wake_edge_cases():
+    from agent.streamer import DISPATCH_MAX_PER_WAKE, dispatch_reason
+
+    now = datetime(2026, 7, 16, 15, 0)
+    # honored, attempt-capped, future, and aged-out wakes never fire
+    dead = [
+        {"id": 1, "at": now - timedelta(minutes=5), "honored_run_id": "r1"},
+        {"id": 2, "at": now - timedelta(minutes=5), "honored_run_id": None,
+         "dispatch_count": DISPATCH_MAX_PER_WAKE},
+        {"id": 3, "at": now + timedelta(minutes=5), "honored_run_id": None},
+        {"id": 4, "at": now - timedelta(hours=9), "honored_run_id": None},
+    ]
+    assert dispatch_reason(dead, [], [], now=now) is None
+
+
+def test_dispatch_reason_trips_are_edge_triggered():
+    from agent.streamer import dispatch_reason
+
+    now = datetime(2026, 7, 16, 15, 0)
+    trip = {"id": 7, "symbol": "NVDA", "kind": "below", "level": 190,
+            "status": "tripped", "tripped_at": now - timedelta(minutes=30)}
+    # no dispatches yet -> the trip fires
+    d = dispatch_reason([], [trip], [], now=now)
+    assert d and d["watch_ids"] == [7] and "NVDA" in d["reason"]
+    # a dispatch NEWER than the trip means it was already announced —
+    # a still-'tripped' wire must not re-fire forever (level vs edge)
+    newer = [{"ts": now - timedelta(minutes=20)}]
+    assert dispatch_reason([], [trip], newer, now=now) is None
+
+
+def test_dispatch_daily_cap(store):
+    from agent.streamer import DISPATCH_MAX_PER_DAY, dispatch_reason
+
+    now = datetime(2026, 7, 16, 20, 0)
+    wakes = [{"id": 1, "at": now - timedelta(minutes=5),
+              "honored_run_id": None, "dispatch_count": 0}]
+    # cap spent across the same ET day, all outside the min-gap
+    spent = [{"ts": now - timedelta(minutes=20 + 15 * i)}
+             for i in range(DISPATCH_MAX_PER_DAY)]
+    assert dispatch_reason(wakes, [], spent, now=now) is None
+
+
+def test_claim_dispatch_slot_is_at_most_once(store):
+    from agent.streamer import claim_dispatch_slot
+
+    now = datetime(2026, 7, 16, 15, 0)
+    decision = {"reason": "wake #1 due", "wake_ids": [1], "watch_ids": []}
+    first = claim_dispatch_slot(store, decision, now=now)
+    assert first is not None
+    # the same bucket (a sibling instance in the same window) must lose
+    assert claim_dispatch_slot(store, decision, now=now) is None
+    # the next window claims fine
+    later = now + timedelta(seconds=700)
+    assert claim_dispatch_slot(store, decision, now=later) is not None
+
+
+def test_wake_honor_is_compare_and_swap(store):
+    from agent.brain import wake_honor, wake_plan
+
+    base = datetime.utcnow() + timedelta(minutes=60)
+    wid = wake_plan(store, at=base.isoformat(), reason="cas test")["id"]
+    a = wake_honor(store, wake_id=wid, run_id="cycle-A")
+    b = wake_honor(store, wake_id=wid, run_id="cycle-B")
+    assert a["ok"] is True
+    assert b["ok"] is False and "cycle-A" in b["error"] or "claimed" in b.get("error", "")
+    rows = store.select("desk_wakes", filters={"id": wid})
+    assert rows[0]["honored_run_id"] == "cycle-A"
