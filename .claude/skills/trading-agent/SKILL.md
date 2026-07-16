@@ -101,8 +101,10 @@ short, candid lines; this is the live "thinking" panel the owner watches.
   would reject anyway. `extended` = equities only + tighter spread bar;
   `regular` = full menu.
 - `python -m agent.ledger settle` — settles any option positions past
-  expiry (exercise/assignment/worthless, booked honestly). ALWAYS run this
-  before reading your book; narrate anything it settled.
+  expiry (exercise/assignment/worthless, priced at the expiry day's close)
+  AND folds equity corporate actions into the book (splits rebase share
+  counts, dividends credit cash — see `corp_actions` in its JSON). ALWAYS
+  run this before reading your book; narrate anything it settled.
 - `python -m agent.refresh --source alpaca` — cheap idempotent top-up of
   daily bars for your universe (keeps indicators/backtests current).
 
@@ -263,6 +265,13 @@ Write the run's dossier so the desk page renders it. Small JSON files:
     a lesson you chose not to learn.
   Friday's reflection grades predicted-vs-happened mechanically; a pick
   without a prediction can only be graded on vibes, which is worthless.
+  **This is enforced in code:** `agent.brain decision` REJECTS the save
+  when any buy/add pick is missing `prediction`, an integer
+  `horizon_days` >= 1, or `kill` — fill them in, don't drop the pick.
+  A whole-book stance may be recorded as `{"symbol": "BOOK", "action":
+  "hold"}` (hold/stance are the only actions BOOK accepts); it is exempt
+  from the registry and skipped by outcome grading — never put a trade
+  on BOOK.
 - `watchlist.json` — near-misses: `[{"symbol","note"}]`.
 - `rejected.json` — the alternatives that LOST the slot:
   `[{"symbol","why_not"}]`. Your playbook already makes you name them —
@@ -319,6 +328,17 @@ python -m agent.brain watch-set --symbol AMD --below 540 \
   seconds. Clear wires that no longer matter (`watch-clear --id N`). Wires
   expire in 24h unless you pass `--until`/`--hours` — re-arm what still
   matters each cycle.
+- **Hard stops are the one wire that ACTS.** Add `--hard` to a `--below`
+  wire on a long equity/crypto position you hold and the streamer itself
+  sells the WHOLE position when the live mid touches the level — through
+  the ledger's normal fill gates (session, spread, staleness), one attempt
+  only. Success lands as status `executed`; a gated rejection (e.g. market
+  closed) lands as `exec_failed` with the reason, surfaced with tripped
+  wires at your next wake — handle it first. This is code-enforced
+  protection you opt into per position; plain above/below wires remain
+  advisory alerts, exactly as before. Arm one when a kill level must not
+  wait for the owner to fire your next run; re-arm it each cycle like any
+  wire.
 - **Request your next run — every cycle, no exceptions.** Decide when you
   genuinely next need eyes on the market and why, record it:
   `python -m agent.brain wake-plan --at 2026-07-10T19:45:00Z --reason

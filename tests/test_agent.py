@@ -149,7 +149,10 @@ def test_brain_state_journal_decision(seeded):
     d = brain.save_decision(store, run_id="R1", regime="risk_on",
                             summary="add NVDA", target_weights={"NVDA": 0.5},
                             picks=[{"symbol": "NVDA", "action": "buy",
-                                    "why_now": "breakout"}],
+                                    "why_now": "breakout",
+                                    "prediction": "NVDA +5% within 10 sessions",
+                                    "horizon_days": 10,
+                                    "kill": "closes below 120"}],
                             watchlist=[{"symbol": "AAPL", "note": "near trigger"}],
                             strategy_version=2)
     assert d["ok"]

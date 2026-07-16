@@ -105,6 +105,87 @@ def test_normalize_news_maps_alpaca_to_ticker_news_shape():
     assert out["symbols"] == ["LLY", "NVO"]       # upper-cased
 
 
+def test_broker_session_post_market_from_calendar(monkeypatch):
+    """F9: after 16:00 Alpaca's clock points next_close at the NEXT session,
+    so the old 'next_close is today' post-market test was unsatisfiable dead
+    code — 16:00-20:00 ET exits were refused as 'closed'. Post-market now
+    derives from the trading CALENDAR: a session happened today (ET) and now
+    is between its actual close (16:00, or 13:00 on half-days) and 20:00."""
+    from datetime import date, datetime, timezone
+
+    from agent import broker
+
+    class _Trading:
+        def __init__(self, is_open, nxt_open, cal_rows):
+            self._c = SimpleNamespace(is_open=is_open, next_open=nxt_open,
+                                      next_close=None)
+            self._cal = cal_rows
+
+        def get_clock(self):
+            return self._c
+
+        def get_calendar(self, req=None):
+            return self._cal
+
+    monkeypatch.setenv("EDGEFINDER_ALPACA_API_KEY", "k")
+    monkeypatch.setenv("EDGEFINDER_ALPACA_API_SECRET", "s")
+    from config.settings import settings as _s
+    _s.alpaca_api_key = "k"; _s.alpaca_api_secret = "s"
+
+    def cal_row(d, close_h, close_m=0):
+        return SimpleNamespace(
+            date=d,
+            open=datetime(d.year, d.month, d.day, 9, 30),
+            close=datetime(d.year, d.month, d.day, close_h, close_m))
+
+    def make(is_open, nxt_open, cal_rows):
+        b = broker.Broker()
+        b._trading = _Trading(is_open, nxt_open, cal_rows)
+        return b
+
+    day = date(2026, 7, 8)                            # a Wednesday; EDT = UTC-4
+    next_open = datetime(2026, 7, 9, 13, 30, tzinfo=timezone.utc)  # Thu 09:30 ET
+
+    # regular day, 17:30 ET (21:30 UTC) → extended (after-hours)
+    b = make(False, next_open, [cal_row(day, 16)])
+    at = datetime(2026, 7, 8, 21, 30, tzinfo=timezone.utc)
+    assert b.session(now_utc=at) == "extended"
+
+    # half-day (13:00 close), 13:30 ET → extended
+    b = make(False, next_open, [cal_row(day, 13)])
+    at = datetime(2026, 7, 8, 17, 30, tzinfo=timezone.utc)
+    assert b.session(now_utc=at) == "extended"
+
+    # regular day, 21:00 ET → closed (extended hours end at 20:00)
+    b = make(False, next_open, [cal_row(day, 16)])
+    at = datetime(2026, 7, 9, 1, 0, tzinfo=timezone.utc)   # 21:00 ET on the 8th
+    assert b.session(now_utc=at) == "closed"
+
+    # weekend, 17:30 ET → closed (no calendar session that day)
+    sat = date(2026, 7, 11)
+    b = make(False, datetime(2026, 7, 13, 13, 30, tzinfo=timezone.utc), [])
+    at = datetime(2026, 7, 11, 21, 30, tzinfo=timezone.utc)
+    assert b.session(now_utc=at) == "closed"
+    assert sat.weekday() == 5  # the scenario really is a Saturday
+
+    # regular day 15:00 ET with the clock open → regular (clock wins)
+    b = make(True, None, [cal_row(day, 16)])
+    at = datetime(2026, 7, 8, 19, 0, tzinfo=timezone.utc)
+    assert b.session(now_utc=at) == "regular"
+
+    # pre-market path intact: 08:00 ET before the same day's 09:30 open
+    b = make(False, datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc),
+             [cal_row(day, 16)])
+    at = datetime(2026, 7, 8, 12, 0, tzinfo=timezone.utc)
+    assert b.session(now_utc=at) == "extended"
+
+    # 01:00 ET on a trading day (overnight) → closed, not post-market
+    b = make(False, datetime(2026, 7, 8, 13, 30, tzinfo=timezone.utc),
+             [cal_row(day, 16)])
+    at = datetime(2026, 7, 8, 5, 0, tzinfo=timezone.utc)
+    assert b.session(now_utc=at) == "closed"
+
+
 def test_normalize_corp_action_dividend_and_split():
     div = SimpleNamespace(ca_type=SimpleNamespace(value="dividend"),
                           initiating_symbol="lly", target_symbol=None,

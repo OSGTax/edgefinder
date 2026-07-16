@@ -120,6 +120,57 @@ def think(store=None, *, run_id: str, text: str, phase: str | None = None,
 
 # ── decision ────────────────────────────────────────────
 
+# Pick actions that OPEN or ADD exposure — these require the prediction
+# registry (SKILL.md step 6 calls it REQUIRED; this is the code that makes
+# it true). hold/trim/exit picks manage what's already graded, so they may
+# carry nulls.
+OPENING_ACTIONS = ("buy", "add", "open", "new")
+# The pseudo-symbol BOOK records a whole-book stance; it has no fills and
+# nothing to grade per-name, so it is exempt from the registry — and only
+# these actions make sense for it.
+BOOK_ACTIONS = ("hold", "stance")
+
+
+def _validate_picks(picks: list | None) -> str | None:
+    """The prediction registry, enforced at the write. Every opening/adding
+    pick must carry a non-empty ``prediction``, an integer ``horizon_days``
+    >= 1, and a non-null ``kill`` — otherwise Friday's grading is vibes.
+    Returns an actionable error string, or None when the picks pass."""
+    problems = []
+    for i, p in enumerate(picks or []):
+        if not isinstance(p, dict):
+            problems.append(f"picks[{i}] is not an object")
+            continue
+        sym = str(p.get("symbol") or "").upper() or f"picks[{i}]"
+        action = str(p.get("action") or "").strip().lower()
+        if sym == "BOOK":
+            if action not in BOOK_ACTIONS:
+                problems.append(
+                    f"BOOK: the whole-book pseudo-symbol only takes a "
+                    f"{'/'.join(BOOK_ACTIONS)} action, got {action or 'none'!r}"
+                    " — trades go on real symbols")
+            continue
+        if action not in OPENING_ACTIONS:
+            continue
+        pred = p.get("prediction")
+        if not (isinstance(pred, str) and pred.strip()):
+            problems.append(f"{sym} ({action}): 'prediction' must be a "
+                            "non-empty falsifiable sentence")
+        h = p.get("horizon_days")
+        if not (isinstance(h, (int, float)) and not isinstance(h, bool)
+                and float(h) >= 1 and float(h).is_integer()):
+            problems.append(f"{sym} ({action}): 'horizon_days' must be an "
+                            "integer >= 1")
+        if p.get("kill") in (None, ""):
+            problems.append(f"{sym} ({action}): 'kill' (the exit criterion "
+                            "that proves you wrong) must not be null")
+    if problems:
+        return ("prediction registry rejected the save: "
+                + "; ".join(problems)
+                + ". Every buy/add pick needs prediction + horizon_days + "
+                  "kill (SKILL.md step 6) — fill them in, don't drop the pick.")
+    return None
+
 
 def save_decision(store=None, *, run_id: str, regime: str | None = None,
                   summary: str | None = None, target_weights: dict | None = None,
@@ -128,6 +179,9 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
                   strategy_version: int | None = None,
                   decision_date: date | None = None, account: str = "agent") -> dict:
     store = store or _store()
+    err = _validate_picks(picks)
+    if err:
+        return {"ok": False, "error": err}
     values = {
         "decision_date": decision_date or date.today(), "regime": regime,
         "summary": summary, "target_weights": target_weights, "picks": picks,
@@ -168,12 +222,21 @@ WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes
 def watch_set(store=None, *, symbol: str, above: float | None = None,
               below: float | None = None, reason: str,
               until: str | None = None, hours: float = 24.0,
-              run_id: str | None = None, account: str = "agent") -> dict:
+              run_id: str | None = None, hard: bool = False,
+              account: str = "agent") -> dict:
     """Arm one tripwire. Exactly one of above/below; reason is mandatory —
-    an unexplained tripwire is noise waiting to happen."""
+    an unexplained tripwire is noise waiting to happen.
+
+    ``hard`` arms a HARD STOP instead of an advisory wire: when the live mid
+    touches the level, the streamer itself SELLS THE WHOLE POSITION through
+    the ledger's normal fill gates (see agent.streamer.execute_hard_stop).
+    Opt-in per position — plain above/below wires never trade. A hard stop
+    must be a --below level on a currently-held long equity/crypto position,
+    below the market so it can't fire the moment it's armed."""
     from datetime import timedelta
 
     store = store or _store()
+    symbol = symbol.upper()
     if (above is None) == (below is None):
         return {"ok": False, "error": "pass exactly one of --above / --below"}
     if not (reason or "").strip():
@@ -181,16 +244,47 @@ def watch_set(store=None, *, symbol: str, above: float | None = None,
     level = above if above is not None else below
     if level is None or level <= 0:
         return {"ok": False, "error": "level must be positive"}
+    kind = "above" if above is not None else "below"
+    if hard:
+        from agent import occ
+
+        if below is None:
+            return {"ok": False, "error": "a hard stop is a --below level on "
+                                          "a long position — pass --below"}
+        if occ.is_option(symbol):
+            return {"ok": False, "error": "hard stops protect equity/crypto "
+                                          "share positions, not option contracts"}
+        pos = store.select("desk_positions",
+                           filters={"account": account, "symbol": symbol}, limit=1)
+        held = float(pos[0]["shares"]) if pos else 0.0
+        if held <= 0:
+            return {"ok": False, "error": f"no long {symbol} position to "
+                                          "protect — hard stops arm on names you hold"}
+        px = None
+        try:
+            from agent import broker
+
+            if broker.enabled():
+                q = broker.Broker().quotes([symbol]).get(symbol) or {}
+                px = q.get("mid") or q.get("bid") or q.get("ask")
+        except Exception:  # noqa: BLE001 — fall back to the last mark
+            px = None
+        if px is None and pos:
+            px = pos[0].get("last_price")
+        if px is not None and float(level) >= float(px):
+            return {"ok": False, "error":
+                    f"hard stop at {float(level):g} would fire instantly — "
+                    f"{symbol} trades at {float(px):g}; pick a level below "
+                    "the market"}
+        kind = "hard_stop"
     expiry = (datetime.fromisoformat(until) if until
               else _utcnow() + timedelta(hours=hours))
     rows = store.insert("desk_watch", {
-        "account": account, "run_id": run_id, "symbol": symbol.upper(),
-        "kind": "above" if above is not None else "below",
-        "level": float(level), "reason": reason.strip(),
+        "account": account, "run_id": run_id, "symbol": symbol,
+        "kind": kind, "level": float(level), "reason": reason.strip(),
         "armed_at": _utcnow(), "until": expiry, "status": "armed"})
     return {"ok": True, "id": rows[0]["id"] if rows else None,
-            "symbol": symbol.upper(),
-            "kind": "above" if above is not None else "below",
+            "symbol": symbol, "kind": kind,
             "level": float(level), "until": str(expiry)}
 
 
@@ -216,7 +310,10 @@ def watch_list(store=None, *, include_done: bool = False,
         entry = {k: (str(v) if isinstance(v, datetime) else v)
                  for k, v in r.items()}
         entry["status"] = status
-        if status == "tripped":
+        # exec_failed (a hard stop that tripped but was gated, e.g. market
+        # closed) surfaces WITH the tripped wires — it is an unhandled trip
+        # the next cycle must address first.
+        if status in ("tripped", "exec_failed"):
             out["tripped"].append(entry)
         elif status == "armed":
             out["armed"].append(entry)
@@ -478,6 +575,10 @@ def main(argv: list[str] | None = None) -> None:
     wset.add_argument("--hours", type=float, default=24.0,
                       help="expiry horizon when --until not given")
     wset.add_argument("--run-id", default=None)
+    wset.add_argument("--hard", action="store_true",
+                      help="arm a HARD STOP: the streamer sells the WHOLE "
+                           "position through the normal fill gates when the "
+                           "level trips (longs only, --below required)")
 
     wl = sub.add_parser("watch-list")
     wl.add_argument("--all", action="store_true", dest="include_done")
@@ -549,7 +650,7 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(watch_set(
             store, symbol=args.symbol, above=args.above, below=args.below,
             reason=args.reason, until=args.until, hours=args.hours,
-            run_id=args.run_id), indent=2))
+            run_id=args.run_id, hard=args.hard), indent=2))
     elif args.cmd == "watch-list":
         print(json.dumps(watch_list(store, include_done=args.include_done),
                          indent=2))

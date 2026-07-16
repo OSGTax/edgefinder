@@ -114,6 +114,176 @@ def test_evaluate_watches_expires_past_until():
     assert not tripped and [w["id"] for w in expired] == [1]
 
 
+# ── hard stops: the ONE wire that acts (opt-in, F8) ──
+
+
+class _StopBroker:
+    """Live-fill fake: market state + a fresh quote around ``px``."""
+
+    def __init__(self, px=100.0, open_=True):
+        self._px, self._open = px, open_
+
+    def is_market_open(self):
+        return self._open
+
+    def session(self, symbol=None):
+        if symbol and "/" in symbol:
+            return "crypto"
+        return "regular" if self._open else "closed"
+
+    def is_close_soon(self, minutes=15):
+        return False
+
+    def quotes(self, symbols):
+        from datetime import timezone
+        t = datetime.now(timezone.utc).isoformat()
+        return {s: {"symbol": s, "bid": round(self._px * 0.999, 4),
+                    "ask": round(self._px * 1.001, 4), "mid": self._px,
+                    "t": t} for s in symbols}
+
+    def option_quotes(self, symbols):
+        return self.quotes(symbols)
+
+
+def _patch_broker(monkeypatch, fake):
+    import agent.broker as broker
+
+    monkeypatch.setattr(broker, "Broker", lambda *a, **k: fake)
+    monkeypatch.setattr(broker, "enabled", lambda: True)
+
+
+def _seed_position(store, symbol, shares, price, last_price=None):
+    from agent import ledger
+
+    store.insert("desk_trades", {
+        "account": "agent", "run_id": "T", "symbol": symbol, "side": "BUY",
+        "shares": shares, "price": price, "dollars": round(shares * price, 2),
+        "ts": datetime.utcnow()}, returning=False)
+    ledger.rebuild_positions(store)
+    if last_price is not None:
+        store.update("desk_positions", {"symbol": symbol},
+                     {"last_price": last_price}, returning=False)
+
+
+def test_hard_stop_arm_time_validations(store, monkeypatch):
+    import agent.broker as broker
+    from agent.brain import watch_set
+
+    monkeypatch.setattr(broker, "enabled", lambda: False)  # price = last mark
+    # not held → refused
+    r = watch_set(store, symbol="AMD", below=90, reason="stop", hard=True)
+    assert not r["ok"] and "no long" in r["error"]
+    _seed_position(store, "AMD", 10, 100.0, last_price=100.0)
+    # a protective stop is a below-level
+    assert not watch_set(store, symbol="AMD", above=110, reason="stop",
+                         hard=True)["ok"]
+    # at/above the market would fire the moment it's armed
+    inst = watch_set(store, symbol="AMD", below=105, reason="stop", hard=True)
+    assert not inst["ok"] and "instantly" in inst["error"]
+    # option contracts are not hard-stoppable
+    assert not watch_set(store, symbol="AMD270116C00100000", below=1,
+                         reason="x", hard=True)["ok"]
+    ok = watch_set(store, symbol="amd", below=90, reason="protect the swing",
+                   hard=True, run_id="R1")
+    assert ok["ok"] and ok["kind"] == "hard_stop"
+    row = store.select("desk_watch", filters={"id": ok["id"]})[0]
+    assert row["kind"] == "hard_stop" and row["status"] == "armed"
+
+
+def test_evaluate_watches_hard_stop_trips_at_or_below():
+    from agent.streamer import evaluate_watches
+
+    watches = [{"id": 1, "symbol": "AMD", "kind": "hard_stop", "level": 90.0}]
+    assert evaluate_watches(watches, {"AMD": _q(95.0, 95.2)}) == ([], [])
+    tripped, _ = evaluate_watches(watches, {"AMD": _q(89.5, 89.7)})
+    assert [w["id"] for w in tripped] == [1]
+
+
+def test_hard_stop_executes_full_position_sell(store, monkeypatch):
+    import agent.broker as broker
+    from agent.brain import watch_set
+    from agent.streamer import apply_sweep_results
+
+    _seed_position(store, "AMD", 10, 100.0, last_price=100.0)
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    wid = watch_set(store, symbol="AMD", below=90, reason="protect",
+                    hard=True)["id"]
+    _patch_broker(monkeypatch, _StopBroker(px=89.0))  # gates price a REST quote
+    watch = store.select("desk_watch", filters={"id": wid})[0]
+    apply_sweep_results(store, [{**watch, "tripped_price": 89.0}], [])
+
+    row = store.select("desk_watch", filters={"id": wid})[0]
+    assert row["status"] == "executed"
+    assert row["honored_run_id"] == f"hardstop:{wid}"
+    assert row["tripped_price"] == 89.0 and row["tripped_at"] is not None
+    sells = store.select("desk_trades", filters={"symbol": "AMD", "side": "SELL"})
+    assert len(sells) == 1
+    assert sells[0]["run_id"] == f"hardstop:{wid}"
+    assert sells[0]["shares"] == pytest.approx(10.0)         # the FULL position
+    assert sells[0]["fill_quote"]["session"] == "regular"    # gate was consulted
+    assert store.select("desk_positions", filters={"symbol": "AMD"}) == []
+
+
+def test_hard_stop_gated_rejection_exec_failed_no_retry(store, monkeypatch):
+    import agent.broker as broker
+    from agent.brain import watch_list, watch_set
+    from agent.streamer import apply_sweep_results
+
+    _seed_position(store, "AMD", 10, 100.0, last_price=100.0)
+    monkeypatch.setattr(broker, "enabled", lambda: False)
+    wid = watch_set(store, symbol="AMD", below=90, reason="protect",
+                    hard=True)["id"]
+    _patch_broker(monkeypatch, _StopBroker(px=89.0, open_=False))  # gate: closed
+    watch = store.select("desk_watch", filters={"id": wid})[0]
+    apply_sweep_results(store, [{**watch, "tripped_price": 89.0}], [])
+
+    row = store.select("desk_watch", filters={"id": wid})[0]
+    assert row["status"] == "exec_failed"
+    assert "market closed" in row["result"]
+    assert row["honored_run_id"] is None
+    assert store.select("desk_trades",
+                        filters={"symbol": "AMD", "side": "SELL"}) == []
+    # single attempt: the sweep only ever reloads status='armed'
+    assert store.select("desk_watch", filters={"status": "armed"}) == []
+    # and the next trading cycle sees it with the tripped wires
+    out = watch_list(store)
+    assert [w["id"] for w in out["tripped"]] == [wid]
+
+
+def test_hard_stop_position_gone_marks_stale(store):
+    from agent.streamer import execute_hard_stop
+
+    rows = store.insert("desk_watch", {
+        "account": "agent", "symbol": "GONE", "kind": "hard_stop",
+        "level": 50.0, "reason": "x", "armed_at": datetime.utcnow(),
+        "status": "armed"})
+    r = execute_hard_stop(store, rows[0], 49.0)
+    assert not r["ok"]
+    row = store.select("desk_watch", filters={"id": rows[0]["id"]})[0]
+    assert row["status"] == "stale" and "gone" in row["result"]
+
+
+def test_alert_wires_never_trade_regression(store, monkeypatch):
+    """DEFAULT-OFF guarantee: plain above/below wires only flip status —
+    they must never reach the fill path, even through the new sweep."""
+    import agent.ledger as ledger_mod
+    from agent.brain import watch_set
+    from agent.streamer import apply_sweep_results
+
+    _seed_position(store, "AMD", 10, 100.0, last_price=100.0)
+    wid = watch_set(store, symbol="AMD", below=90, reason="alert only")["id"]
+
+    def _boom(*a, **k):
+        raise AssertionError("advisory wire must never reach the fill path")
+
+    monkeypatch.setattr(ledger_mod, "live_fill", _boom)
+    watch = store.select("desk_watch", filters={"id": wid})[0]
+    apply_sweep_results(store, [{**watch, "tripped_price": 89.0}], [])
+    row = store.select("desk_watch", filters={"id": wid})[0]
+    assert row["status"] == "tripped" and row["tripped_price"] == 89.0
+    assert store.select("desk_trades", filters={"side": "SELL"}) == []
+
+
 # ── wake-plan: the budget gate ──
 
 

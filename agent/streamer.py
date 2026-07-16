@@ -228,9 +228,13 @@ async def run_stream() -> None:
 #
 # The brain arms desk_watch rows on its way out of a cycle; this sweep
 # evaluates them against the in-memory tape every few seconds and marks
-# trips/expiries in the DB. FULLY isolated from the socket loop: it runs as
-# its own task, every DB touch is wrapped, and any failure degrades to "wires
-# get checked at the brain's next wake" — never to a dead tape.
+# trips/expiries in the DB. One kind — the opt-in 'hard_stop' — goes further
+# and EXECUTES a full-position sell through the ledger's normal live-fill
+# gates; plain above/below wires only ever flip status (default-off by
+# design: nothing trades unless the brain explicitly armed a hard stop on
+# that position). FULLY isolated from the socket loop: it runs as its own
+# task, every DB touch is wrapped, and any failure degrades to "wires get
+# checked at the brain's next wake" — never to a dead tape.
 
 WATCH_SWEEP_SECS = 5      # evaluate armed wires against the cache
 WATCH_REFRESH_SECS = 60   # re-read armed wires from the DB
@@ -240,7 +244,9 @@ def evaluate_watches(watches: list[dict], quotes: dict[str, dict],
                      now: datetime | None = None) -> tuple[list, list]:
     """Pure: (tripped, expired). A wire trips on the live MID crossing its
     level — the same tape the ledger prices fills from. Stale quotes never
-    trip a wire (a wire firing off a frozen tape is a false alarm)."""
+    trip a wire (a wire firing off a frozen tape is a false alarm).
+    ``hard_stop`` trips exactly like ``below`` (at-or-below the level); what
+    differs is what the sweep DOES with the trip, not how it's detected."""
     now = now or datetime.utcnow()
     tripped, expired = [], []
     for w in watches:
@@ -263,15 +269,86 @@ def evaluate_watches(watches: list[dict], quotes: dict[str, dict],
             continue
         mid = (bid + ask) / 2
         if ((w.get("kind") == "above" and mid >= float(w["level"]))
-                or (w.get("kind") == "below" and mid <= float(w["level"]))):
+                or (w.get("kind") in ("below", "hard_stop")
+                    and mid <= float(w["level"]))):
             tripped.append({**w, "tripped_price": round(mid, 4)})
     return tripped, expired
 
 
+def execute_hard_stop(store, watch: dict, tripped_price: float,
+                      now: datetime | None = None) -> dict:
+    """Execute ONE tripped hard_stop: a FULL-POSITION SELL through the
+    ledger's normal live-fill path — every gate stays in force (session,
+    spread, quote staleness, long-only). Exactly one attempt: whatever
+    happens, the wire leaves 'armed', so the sweep never retries — a gated
+    rejection lands as status='exec_failed' with the reason in ``result``
+    for the next trading cycle to see in watch-list and decide.
+
+    DEFAULT-OFF GUARANTEE: only a wire the brain explicitly armed with
+    kind='hard_stop' ever reaches this function; plain above/below wires
+    remain advisory alerts and can never trade."""
+    from agent import ledger, occ
+    from agent.models import ACCOUNT
+
+    now = now or datetime.utcnow()
+    sym = str(watch.get("symbol") or "").upper()
+    run_id = f"hardstop:{watch['id']}"
+    stamp = {"tripped_at": now, "tripped_price": tripped_price}
+    rows = store.select("desk_positions",
+                        filters={"account": ACCOUNT, "symbol": sym}, limit=1)
+    shares = float(rows[0]["shares"]) if rows else 0.0
+    if occ.is_option(sym) or shares <= 0:
+        why = ("not an equity/crypto long position" if occ.is_option(sym)
+               else "position already gone at trip time")
+        store.update("desk_watch", {"id": watch["id"]},
+                     {**stamp, "status": "stale", "result": why},
+                     returning=False)
+        logger.info("HARD STOP %s @ %.4f — stale (%s)", sym, tripped_price, why)
+        return {"ok": False, "status": "stale", "error": why}
+    r = ledger.live_fill(
+        store, symbol=sym, side="SELL", shares=shares, run_id=run_id,
+        rationale=(f"HARD STOP: full exit of {shares:g} {sym} — live mid "
+                   f"{tripped_price:g} hit the armed stop at "
+                   f"{float(watch.get('level') or 0):g} "
+                   f"({watch.get('reason') or 'no reason recorded'})"))
+    if r.get("ok"):
+        store.update("desk_watch", {"id": watch["id"]},
+                     {**stamp, "status": "executed", "honored_run_id": run_id,
+                      "result": f"sold {r['shares']:g} @ {r['price']:g}"},
+                     returning=False)
+        logger.warning("HARD STOP EXECUTED %s: sold %s @ %s (%s)",
+                       sym, r["shares"], r["price"], run_id)
+    else:
+        store.update("desk_watch", {"id": watch["id"]},
+                     {**stamp, "status": "exec_failed",
+                      "result": str(r.get("error") or "fill rejected")},
+                     returning=False)
+        logger.warning("HARD STOP FAILED %s @ %.4f — %s (no retry; the next "
+                       "cycle decides)", sym, tripped_price, r.get("error"))
+    return r
+
+
+def apply_sweep_results(store, tripped: list[dict], expired: list[dict],
+                        now: datetime | None = None) -> None:
+    """Write one sweep's verdicts: advisory wires flip to 'tripped', expired
+    wires to 'expired', and hard_stop wires execute (single attempt — their
+    status leaves 'armed' either way, so no sweep ever retries them)."""
+    now = now or datetime.utcnow()
+    for w in tripped:
+        if w.get("kind") == "hard_stop":
+            execute_hard_stop(store, w, w["tripped_price"], now=now)
+        else:
+            store.update("desk_watch", {"id": w["id"]},
+                         {"status": "tripped", "tripped_at": now,
+                          "tripped_price": w["tripped_price"]},
+                         returning=False)
+    for w in expired:
+        store.update("desk_watch", {"id": w["id"]},
+                     {"status": "expired"}, returning=False)
+
+
 async def run_watch_sweep() -> None:
     """The forever sweep task (companion to run_stream, never coupled to it)."""
-    from datetime import datetime as _dt
-
     armed: list[dict] = []
     last_refresh = 0.0
     while True:
@@ -289,22 +366,13 @@ async def run_watch_sweep() -> None:
                 if tripped or expired:
                     def _write():
                         from agent.store import get_store
-                        store = get_store()
-                        for w in tripped:
-                            store.update("desk_watch", {"id": w["id"]},
-                                         {"status": "tripped",
-                                          "tripped_at": _dt.utcnow(),
-                                          "tripped_price": w["tripped_price"]},
-                                         returning=False)
-                        for w in expired:
-                            store.update("desk_watch", {"id": w["id"]},
-                                         {"status": "expired"},
-                                         returning=False)
+                        apply_sweep_results(get_store(), tripped, expired)
                     await asyncio.to_thread(_write)
                     for w in tripped:
-                        logger.info("TRIPWIRE %s %s %s @ %.4f — %s",
-                                    w["symbol"], w["kind"], w["level"],
-                                    w["tripped_price"], w.get("reason"))
+                        if w.get("kind") != "hard_stop":  # hard stops log inside
+                            logger.info("TRIPWIRE %s %s %s @ %.4f — %s",
+                                        w["symbol"], w["kind"], w["level"],
+                                        w["tripped_price"], w.get("reason"))
                     done = {w["id"] for w in [*tripped, *expired]}
                     armed = [w for w in armed if w["id"] not in done]
         except asyncio.CancelledError:

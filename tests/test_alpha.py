@@ -65,7 +65,9 @@ def seed_backdated_book(store) -> None:
 
     save_decision(store, run_id="A", summary="entry",
                   picks=[{"symbol": "XYZ", "action": "buy", "why_now": "test",
-                          "rationale": "trend"}],
+                          "rationale": "trend",
+                          "prediction": "XYZ +5% within 10 sessions",
+                          "horizon_days": 10, "kill": "closes below 90"}],
                   rejected=[{"symbol": "ABC", "why_not": "falling knife"}])
     store.update("desk_decisions", {"run_id": "A"}, {"ts": ts_of(D_ENTRY)},
                  returning=False)
@@ -146,7 +148,9 @@ def test_closed_round_trip_gets_exit_bounded_window(store):
     d_exit = D_ENTRY + timedelta(days=1)
     seed_spy(store, {D_BASE: 600.0, d_exit: 606.0, TODAY: 612.0})
     save_decision(store, run_id="A", summary="round trip",
-                  picks=[{"symbol": "XYZ", "action": "buy"}])
+                  picks=[{"symbol": "XYZ", "action": "buy",
+                          "prediction": "XYZ +5% within 5 sessions",
+                          "horizon_days": 5, "kill": "closes below 95"}])
     store.update("desk_decisions", {"run_id": "A"}, {"ts": ts_of(D_ENTRY)},
                  returning=False)
     seed_trade(store, "A", "XYZ", "BUY", 10.0, 100.0, ts_of(D_ENTRY))
@@ -168,7 +172,9 @@ def test_option_pick_alpha_is_null_by_design(store):
     occ_sym = "NVDA270116C00200000"
     seed_spy(store, {D_BASE: 600.0, TODAY: 612.0})
     save_decision(store, run_id="O", summary="call",
-                  picks=[{"symbol": occ_sym, "action": "buy"}])
+                  picks=[{"symbol": occ_sym, "action": "buy",
+                          "prediction": "NVDA reclaims $210 pre-expiry",
+                          "horizon_days": 20, "kill": "NVDA closes below $180"}])
     store.update("desk_decisions", {"run_id": "O"}, {"ts": ts_of(D_ENTRY)},
                  returning=False)
     seed_trade(store, "O", occ_sym, "BUY", 2.0, 5.0, ts_of(D_ENTRY))
@@ -237,6 +243,58 @@ def test_empty_book_has_no_book_block(store):
 
     out = ledger.outcomes(store, days=30)
     assert out["book"] is None and out["runs"] == []
+
+
+# ── prediction registry enforcement (the write-side gate, F6) ──
+
+
+def test_registry_rejects_buy_pick_missing_prediction(store):
+    from agent.brain import save_decision
+
+    r = save_decision(store, run_id="E1", summary="no registry",
+                      picks=[{"symbol": "XYZ", "action": "buy",
+                              "why_now": "breakout"}])
+    assert not r["ok"] and "prediction registry" in r["error"]
+    assert store.select("desk_decisions", filters={"run_id": "E1"}) == []
+    # horizon must be an integer >= 1; kill must be non-null
+    r2 = save_decision(store, run_id="E1", picks=[
+        {"symbol": "XYZ", "action": "add", "prediction": "up 5%",
+         "horizon_days": 0, "kill": None}])
+    assert not r2["ok"] and "horizon_days" in r2["error"] and "kill" in r2["error"]
+    ok = save_decision(store, run_id="E1", picks=[
+        {"symbol": "XYZ", "action": "buy",
+         "prediction": "XYZ +5% within 10 sessions",
+         "horizon_days": 10, "kill": "closes below 90"}])
+    assert ok["ok"]
+
+
+def test_registry_exempts_holds_and_book_stance(store):
+    from agent.brain import save_decision
+
+    # hold/trim/exit picks manage what's already graded — nulls are fine,
+    # and BOOK is the whole-book stance pseudo-symbol (hold/stance only)
+    ok = save_decision(store, run_id="H1", summary="quiet cycle",
+                       picks=[{"symbol": "XYZ", "action": "hold"},
+                              {"symbol": "XYZ", "action": "trim"},
+                              {"symbol": "BOOK", "action": "hold"}])
+    assert ok["ok"], ok
+    bad = save_decision(store, run_id="H2", picks=[
+        {"symbol": "BOOK", "action": "buy", "prediction": "x",
+         "horizon_days": 5, "kill": "y"}])
+    assert not bad["ok"] and "BOOK" in bad["error"]
+    assert store.select("desk_decisions", filters={"run_id": "H2"}) == []
+
+
+def test_outcomes_skips_book_picks(store):
+    from agent import ledger
+    from agent.brain import save_decision
+
+    save_decision(store, run_id="B1", summary="stance",
+                  picks=[{"symbol": "BOOK", "action": "hold"},
+                         {"symbol": "XYZ", "action": "hold"}])
+    out = ledger.outcomes(store, days=30)
+    run = next(r for r in out["runs"] if r["run_id"] == "B1")
+    assert [p["symbol"] for p in run["picks"]] == ["XYZ"]  # BOOK never graded
 
 
 def test_portfolio_and_decision_endpoints(store, monkeypatch):

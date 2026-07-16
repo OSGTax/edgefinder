@@ -403,7 +403,27 @@ class Broker:
     def is_market_open(self) -> bool:
         return bool(getattr(self.trading.get_clock(), "is_open", False))
 
-    def session(self, symbol: str | None = None) -> str:
+    def calendar_day(self, day) -> dict | None:
+        """The equity trading calendar's row for ``day`` (an ET date):
+        ``{"date", "open", "close"}`` with open/close as naive ET datetimes
+        (16:00 close normally, 13:00 on half-days), or None when the market
+        has no session that day (weekend/holiday). Cached per date — the
+        calendar never changes intraday."""
+        key = str(day)
+        cache = getattr(self, "_calendar_cache", None)
+        if cache is None:
+            cache = self._calendar_cache = {}
+        if key not in cache:
+            from alpaca.trading.requests import GetCalendarRequest
+
+            rows = self.trading.get_calendar(GetCalendarRequest(start=day, end=day))
+            row = next((r for r in (rows or [])
+                        if str(getattr(r, "date", None)) == key), None)
+            cache[key] = ({"date": key, "open": row.open, "close": row.close}
+                          if row is not None else None)
+        return cache[key]
+
+    def session(self, symbol: str | None = None, *, now_utc=None) -> str:
         """Which session are we in RIGHT NOW: 'regular' | 'extended' |
         'closed' | 'crypto'.
 
@@ -424,15 +444,14 @@ class Broker:
         if bool(getattr(clk, "is_open", False)):
             return "regular"
         # `next_open` is a tz-aware UTC datetime; when it's today's ET-date's
-        # session, we are pre-market on a trading day. When `next_close` is
-        # today's ET-date, we are post-market on a trading day. Anything else
-        # (weekend, holiday, overnight-past-8pm) is closed.
-        from datetime import datetime, timezone, timedelta
-        now = datetime.now(timezone.utc)
+        # session, we are pre-market on a trading day. Post-market comes from
+        # the trading CALENDAR. Anything else (weekend, holiday,
+        # overnight-past-8pm) is closed.
+        from datetime import datetime, timezone
+        now = now_utc or datetime.now(timezone.utc)
         et_offset = _et_utc_offset(now)  # respects DST
         now_et = (now + et_offset).replace(tzinfo=None)
         nxt_open = getattr(clk, "next_open", None)
-        nxt_close = getattr(clk, "next_close", None)
 
         def _to_et(dt):
             if dt is None:
@@ -442,16 +461,22 @@ class Broker:
             return (dt.astimezone(timezone.utc) + et_offset).replace(tzinfo=None)
 
         no_ = _to_et(nxt_open)
-        nc_ = _to_et(nxt_close)
         # Pre-market: today (ET) matches next_open's ET date AND we're past 04:00.
         if no_ and now_et.date() == no_.date() and now_et.hour >= 4 and now_et < no_:
             return "extended"
-        # Post-market: next_close is later than next_open (we're between RTH and
-        # 20:00 ET on a trading day). Alpaca reports next_close AFTER next_open
-        # while the market is closed and about to open. When both refer to
-        # today's date and now > next_close, we're in the after-hours window.
-        if nc_ and now_et.date() == nc_.date() and now_et >= nc_ and now_et.hour < 20:
-            return "extended"
+        # Post-market: once RTH ends, Alpaca's clock flips next_close to the
+        # NEXT session's close, so the old "next_close is today" test was
+        # unsatisfiable — dead code that silently refused every 16:00-20:00
+        # exit as 'closed'. Derive it from the trading calendar instead: the
+        # market HAD a session today (ET) and we're between its actual close
+        # (16:00, or 13:00 on half-days — the calendar row knows) and 20:00.
+        if now_et.hour < 20:
+            try:
+                cal = self.calendar_day(now_et.date())
+            except Exception:
+                cal = None  # calendar unavailable → fail closed, never open
+            if cal is not None and now_et >= cal["close"]:
+                return "extended"
         return "closed"
 
     def is_close_soon(self, minutes: int = 15) -> bool:

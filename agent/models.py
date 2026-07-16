@@ -338,7 +338,10 @@ class DeskWatch(Base):
     seconds and marks trips; the brain reads them FIRST at its next wake.
     Cheap code watches continuously so expensive judgment only shows up when
     something it named actually happened. Written only by ``agent.brain
-    watch-set`` / ``watch-clear``; the streamer's only write is the trip.
+    watch-set`` / ``watch-clear``; the streamer writes the trip — and, for
+    the opt-in ``hard_stop`` kind ONLY, executes a full-position sell through
+    the ledger's normal live-fill gates (plain above/below wires stay
+    advisory, always).
     """
 
     __tablename__ = "desk_watch"
@@ -347,15 +350,20 @@ class DeskWatch(Base):
     account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
     run_id: Mapped[str | None] = mapped_column(String(40))
     symbol: Mapped[str] = mapped_column(String(24), index=True)
-    kind: Mapped[str] = mapped_column(String(10))  # above | below
+    kind: Mapped[str] = mapped_column(String(10))  # above | below | hard_stop
     level: Mapped[float] = mapped_column(Float)
     reason: Mapped[str] = mapped_column(Text)
     armed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     until: Mapped[datetime | None] = mapped_column(DateTime)  # expiry (UTC)
-    # armed | tripped | expired | disarmed
-    status: Mapped[str] = mapped_column(String(10), default="armed", index=True)
+    # armed | tripped | expired | disarmed | executed | exec_failed | stale
+    # (the last three are hard_stop outcomes)
+    status: Mapped[str] = mapped_column(String(12), default="armed", index=True)
     tripped_at: Mapped[datetime | None] = mapped_column(DateTime)
     tripped_price: Mapped[float | None] = mapped_column(Float)
+    # hard_stop execution receipt: the fill's run_id ("hardstop:{id}") on
+    # success, and a human-readable outcome (fill summary / gate rejection).
+    honored_run_id: Mapped[str | None] = mapped_column(String(40))
+    result: Mapped[str | None] = mapped_column(Text)
 
 
 class DeskWake(Base):
@@ -536,10 +544,17 @@ DESK_TABLE_DDL: list[str] = [
         reason TEXT NOT NULL,
         armed_at TIMESTAMP DEFAULT NOW(),
         until TIMESTAMP,
-        status VARCHAR(10) DEFAULT 'armed',
+        status VARCHAR(12) DEFAULT 'armed',
         tripped_at TIMESTAMP,
-        tripped_price FLOAT
+        tripped_price FLOAT,
+        honored_run_id VARCHAR(40),
+        result TEXT
     )""",
+    # Additive upgrades for desk_watch tables created before hard stops:
+    # 'exec_failed' is 11 chars, and the execution receipt needs two columns.
+    "ALTER TABLE desk_watch ALTER COLUMN status TYPE VARCHAR(12)",
+    "ALTER TABLE desk_watch ADD COLUMN IF NOT EXISTS honored_run_id VARCHAR(40)",
+    "ALTER TABLE desk_watch ADD COLUMN IF NOT EXISTS result TEXT",
     "CREATE INDEX IF NOT EXISTS idx_desk_watch_status ON desk_watch (account, status)",
     "ALTER TABLE desk_watch ENABLE ROW LEVEL SECURITY",
     """CREATE TABLE IF NOT EXISTS desk_wakes (

@@ -74,3 +74,15 @@ Checklist, in order:
 App-evolver additionally needs **git push** to origin/main (it ships desk
 changes) and reflection-agent needs only DB access (it writes the wiki via
 `agent.brain`, no file commits).
+
+## Tripwires between runs: alerts vs hard stops
+
+Because the trading brain is agent-paced, a **tripped alert wire**
+(`above`/`below` in `desk_watch`) does nothing on its own — the streamer
+only flips its status, and the trip is handled at the next owner-fired run.
+The one exception is the opt-in **`hard_stop`** kind: it is the only wire
+that acts by itself. When its level trips, the always-on streamer sells the
+whole position through the ledger's normal fill gates (one attempt; a gated
+rejection is recorded as `exec_failed` for the next run to handle). The
+brain arms one per position explicitly via `agent.brain watch-set --hard`;
+nothing else can ever trade between runs.

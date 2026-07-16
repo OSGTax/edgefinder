@@ -41,7 +41,9 @@ def test_two_run_attribution_and_since_pct(store):
 
     save_decision(store, run_id="A", summary="run A",
                   picks=[{"symbol": "XYZ", "action": "buy",
-                          "why_now": "breakout", "rationale": "trend"}])
+                          "why_now": "breakout", "rationale": "trend",
+                          "prediction": "XYZ +5% within 10 sessions",
+                          "horizon_days": 10, "kill": "closes below 90"}])
     save_decision(store, run_id="B", summary="run B",
                   picks=[{"symbol": "XYZ", "action": "trim",
                           "why_now": "extended", "rationale": "take profit"}])

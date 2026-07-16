@@ -32,6 +32,7 @@ def store(tmp_path, monkeypatch):
     store_mod._store = None
     from edgefinder.db.engine import Base, get_engine
     import agent.models  # noqa: F401
+    import edgefinder.db.models  # noqa: F401 — daily_bars for expiry-close settlement
     Base.metadata.create_all(get_engine())
     from agent.store import get_store
     return get_store()
@@ -158,6 +159,13 @@ def _patch_underlying(monkeypatch, prices):
     monkeypatch.setattr(ledger, "_latest_close", lambda s: prices.get(s))
 
 
+def _seed_expiry_close(store, symbol, day, px):
+    """The expiry-day daily bar — settle() prices intrinsic off THIS close."""
+    store.insert("daily_bars", {"symbol": symbol, "date": day, "open": px,
+                                "high": px, "low": px, "close": px,
+                                "volume": 1e6, "source": "test"}, returning=False)
+
+
 def test_settle_long_itm_and_otm(store, monkeypatch):
     from agent import ledger
     itm, otm = C("NVDA", 180, PAST), C("NVDA", 250, PAST)
@@ -167,9 +175,13 @@ def test_settle_long_itm_and_otm(store, monkeypatch):
                                      "dollars": 500.0, "run_id": "T",
                                      "ts": ledger._utcnow()}, returning=False)
     ledger.rebuild_positions(store)
-    _patch_underlying(monkeypatch, {"NVDA": 195.0})
+    # F10: the expiry-day close (195) decides; the runtime tape (500, which
+    # would put the 250C deep ITM) must not be consulted when the bar exists.
+    _seed_expiry_close(store, "NVDA", PAST, 195.0)
+    _patch_underlying(monkeypatch, {"NVDA": 500.0})
     out = ledger.settle(store)
     assert len(out["settled"]) == 2
+    assert all(a["basis"] == "expiry_close" for a in out["settled"])
     pos = {r["symbol"] for r in store.select("desk_positions")}
     assert itm not in pos and otm not in pos  # both gone
     # cash: -1000 premium, ITM paid out (195-180)*100 = 1500, OTM zero
@@ -185,7 +197,10 @@ def test_settle_covered_call_assignment(store, monkeypatch):
                                  "shares": 1, "price": 5.0, "dollars": 500.0,
                                  "run_id": "T", "ts": ledger._utcnow()}, returning=False)
     ledger.rebuild_positions(store)
-    _patch_underlying(monkeypatch, {"NVDA": 195.0})
+    # assignment decided at the EXPIRY close (195 → ITM); runtime 100 (OTM)
+    # must be irrelevant when the expiry-day bar exists
+    _seed_expiry_close(store, "NVDA", PAST, 195.0)
+    _patch_underlying(monkeypatch, {"NVDA": 100.0})
     ledger.settle(store)
     pos = {r["symbol"]: r["shares"] for r in store.select("desk_positions")}
     assert sym not in pos and "NVDA" not in pos  # shares called away
@@ -200,7 +215,10 @@ def test_settle_csp_assignment_books_shares(store, monkeypatch):
                                  "shares": 1, "price": 10.0, "dollars": 1000.0,
                                  "run_id": "T", "ts": ledger._utcnow()}, returning=False)
     ledger.rebuild_positions(store)
-    _patch_underlying(monkeypatch, {"SPY": 680.0})
+    # ITM at the expiry close (680 < 700); a runtime bounce to 800 (OTM)
+    # must not un-assign a put that finished in the money
+    _seed_expiry_close(store, "SPY", PAST, 680.0)
+    _patch_underlying(monkeypatch, {"SPY": 800.0})
     ledger.settle(store)
     pos = {r["symbol"]: r["shares"] for r in store.select("desk_positions")}
     assert pos.get("SPY") == 100.0  # shares put to us at the strike
@@ -216,13 +234,56 @@ def test_settle_spread_covered_short_cash_settles(store, monkeypatch):
                                      "shares": 1, "price": px, "dollars": px * 100,
                                      "run_id": "T", "ts": ledger._utcnow()}, returning=False)
     ledger.rebuild_positions(store)
-    _patch_underlying(monkeypatch, {"NVDA": 220.0})   # both ITM
+    _seed_expiry_close(store, "NVDA", PAST, 220.0)    # both ITM at expiry
+    _patch_underlying(monkeypatch, {"NVDA": 100.0})   # runtime crash — irrelevant
     ledger.settle(store)
     pos = {r["symbol"] for r in store.select("desk_positions")}
     assert not any(occ.is_option(s) for s in pos)
     assert "NVDA" not in pos                          # NO phantom share position
     # cash: +300 net credit at entry... (-300 +600) then long pays +1000, short costs -2000
     assert ledger.cash(store) == 100_000.0 + 300.0 + 1000.0 - 2000.0
+
+
+def test_settle_weekend_gap_uses_expiry_close(store, monkeypatch):
+    """F10 regression: OTM at Friday's close, ITM at Monday's mid — the old
+    run-time pricing gave a free weekend look-back. Must settle WORTHLESS
+    off the expiry-day bar, stamped settle_basis=expiry_close."""
+    from agent import ledger
+    sym = C("NVDA", 200, PAST)
+    store.insert("desk_trades", {"account": "agent", "symbol": sym, "side": "BUY",
+                                 "shares": 1, "price": 5.0, "dollars": 500.0,
+                                 "run_id": "T", "ts": ledger._utcnow()}, returning=False)
+    ledger.rebuild_positions(store)
+    _seed_expiry_close(store, "NVDA", PAST, 195.0)    # OTM when it expired
+    _patch_underlying(monkeypatch, {"NVDA": 210.0})   # ITM by Monday — too late
+    out = ledger.settle(store)
+    act = out["settled"][0]
+    assert act["basis"] == "expiry_close" and act["intrinsic"] == 0.0
+    # worthless: premium lost, no payout
+    assert ledger.cash(store) == 100_000.0 - 500.0
+    row = store.select("desk_trades",
+                       filters={"symbol": sym, "run_id": "settlement"})[0]
+    assert row["fill_quote"]["settle_basis"] == "expiry_close"
+    assert row["fill_quote"]["underlying_px"] == 195.0
+
+
+def test_settle_falls_back_to_runtime_price_when_bar_missing(store, monkeypatch):
+    """No expiry-day bar stored → the old live-mid/latest-close behavior,
+    honestly stamped settle_basis=runtime_price."""
+    from agent import ledger
+    sym = C("NVDA", 180, PAST)
+    store.insert("desk_trades", {"account": "agent", "symbol": sym, "side": "BUY",
+                                 "shares": 1, "price": 5.0, "dollars": 500.0,
+                                 "run_id": "T", "ts": ledger._utcnow()}, returning=False)
+    ledger.rebuild_positions(store)
+    _patch_underlying(monkeypatch, {"NVDA": 195.0})   # no daily_bars row seeded
+    out = ledger.settle(store)
+    act = out["settled"][0]
+    assert act["basis"] == "runtime_price"
+    assert ledger.cash(store) == 100_000.0 - 500.0 + 1500.0
+    row = store.select("desk_trades",
+                       filters={"symbol": sym, "run_id": "settlement"})[0]
+    assert row["fill_quote"]["settle_basis"] == "runtime_price"
 
 
 def test_state_and_mark_apply_multiplier(store, monkeypatch):
