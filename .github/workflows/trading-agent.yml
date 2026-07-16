@@ -63,6 +63,7 @@ jobs:
         run: pip install -e ".[dev]" --quiet
 
       - name: Run one trading cycle
+        id: cycle
         if: steps.gate.outputs.should_run == 'true'
         uses: anthropics/claude-code-action@v1
         timeout-minutes: 25
@@ -95,3 +96,18 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: python3 scripts/wake_gate.py --report-failure "${{ github.run_id }}"
+
+      # Owner's inbox: a brief report every time a cycle FINISHES (success
+      # or failure). Skipped when the gate said no cycle was due, and a
+      # silent no-op until the SMTP secrets exist — never fails the run.
+      - name: Email the owner the cycle report
+        if: always() && steps.gate.outputs.should_run == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CYCLE_REPORT_TO: ${{ secrets.CYCLE_REPORT_TO }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+        run: python3 scripts/cycle_report.py "${{ github.run_id }}" "${{ steps.cycle.outcome }}"
