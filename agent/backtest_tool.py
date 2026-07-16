@@ -2,9 +2,11 @@
 
 A small set of parametric rules the agent can compose, run through the KEPT
 pure backtest engine (``edgefinder.engine.backtest.run_backtest``) with the
-realistic cost model and total-return bars, benchmarked against SPY. The
-agent doesn't write Python strategies — it picks a rule + symbols + window
-and reads back honest return / Sharpe / drawdown / excess-vs-SPY.
+realistic cost model and total-return bars, benchmarked against TOTAL-RETURN
+SPY (dividend-adjusted like the strategy bars, as of 2026-07-16 — price-only
+SPY handed every strategy the dividend yield as phantom excess). The agent
+doesn't write Python strategies — it picks a rule + symbols + window and
+reads back honest return / Sharpe / drawdown / excess-vs-SPY.
 
 Rules (``--rule``):
   buyhold:SYM         hold one symbol at 100%
@@ -330,7 +332,11 @@ def run(symbols: list[str], rule: str, *, schedule: str = "monthly",
         start: date | None = None, end: date | None = None,
         costed: bool = True, div_adjust: bool = True,
         source: str = "auto") -> dict:
-    """Backtest ``rule`` over ``symbols`` and return an honest scorecard dict."""
+    """Backtest ``rule`` over ``symbols`` and return an honest scorecard dict.
+
+    The SPY benchmark matches the strategy bars' basis: total-return when
+    ``div_adjust`` (the default), price-only under ``--no-div`` — excess is
+    always TR-vs-TR or PR-vs-PR, never a mixed comparison."""
     from agent.data import load_bars, spy_series_df
 
     bars = load_bars(symbols, start=None, end=end, div_adjust=div_adjust, source=source)
@@ -338,7 +344,7 @@ def run(symbols: list[str], rule: str, *, schedule: str = "monthly",
     if not bars:
         return {"error": "no bars with enough history for the requested symbols"}
 
-    bench = spy_series_df()
+    bench = spy_series_df(total_return=div_adjust)
     out = run_prepared(bars, bench, rule, schedule=schedule, start=start,
                        costed=costed)
     out["end"] = str(end) if end else None

@@ -349,10 +349,23 @@ def _rest_universe(top_n: int, as_of: date | None) -> list[str]:
     return [s for _, s in scored[:top_n]]
 
 
-def spy_series_df() -> pd.DataFrame:
-    """Longest available SPY series for benchmarking (transport-aware)."""
-    if _use_rest():
-        bars = load_bars(["SPY"], div_adjust=False, source="auto")
+def spy_series_df(*, total_return: bool = False) -> pd.DataFrame:
+    """Longest available SPY series for benchmarking (transport-aware).
+
+    ``total_return=True`` dividend-adjusts the series through the SAME
+    ``load_bars`` path the strategy bars take, so backtest/lab excess is
+    TR-vs-TR. A price-only SPY against dividend-adjusted strategy bars hands
+    EVERY strategy the benchmark's dividend yield as phantom "excess"
+    (~+50pp compounded over 2006-2018) — the structural inflation fixed
+    2026-07-16. Missing SPY dividend rows degrade gracefully: the adjustment
+    is a no-op and TR ≈ PR (never a crash).
+
+    The default stays price-only for the callers where that is the honest
+    basis: the live book's vs-SPY (``agent.ledger``) books no dividend cash
+    on either side, so its price-vs-price comparison is deliberate.
+    """
+    if total_return or _use_rest():
+        bars = load_bars(["SPY"], div_adjust=total_return, source="auto")
         df = bars.get("SPY")
         if df is None or not len(df):
             return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])

@@ -133,15 +133,19 @@ def store(tmp_path, monkeypatch):
     return get_store()
 
 
-def seed_lab_row(store, rule, uni, sched, *, qualifies, score, ts=None):
+def seed_lab_row(store, rule, uni, sched, *, qualifies, score, ts=None,
+                 basis=None):
+    result = {"qualifies": qualifies, "score": score,
+              "in_sample_excess_pct": score,
+              "out_sample_excess_pct": score + 1}
+    if basis is not None:
+        result["universe_basis"] = basis
     store.insert("desk_backtests", {
         "account": "agent", "run_id": "lab-test",
         "ts": ts or datetime.utcnow(),
         "label": f"lab:{rule}@{uni}/{sched}",
         "spec": {"rule": rule, "universe": uni, "schedule": sched},
-        "result": {"qualifies": qualifies, "score": score,
-                   "in_sample_excess_pct": score,
-                   "out_sample_excess_pct": score + 1}}, returning=False)
+        "result": result}, returning=False)
 
 
 def test_leaderboard_ranks_by_worst_half_and_reports_tested(store):
@@ -187,6 +191,24 @@ def test_lab_endpoint_serves_leaderboard(store, monkeypatch):
         # The desk page carries the lab card + loader.
         page = c.get("/desk").text
         assert 'id="desk-lab"' in page
+
+
+def test_leaderboard_carries_universe_basis_and_flags_survivorship(store):
+    from agent.lab import SPLIT_DATE, leaderboard
+
+    seed_lab_row(store, "momentum:5", "top40", "monthly",
+                 qualifies=True, score=6.0, basis=f"as_of_{SPLIT_DATE}")
+    # A row persisted before the basis stamp existed — those sweeps all
+    # ranked their universe present-day, so it must be labeled as such.
+    seed_lab_row(store, "breakout:5", "mid200", "weekly",
+                 qualifies=True, score=4.0)
+
+    b = leaderboard(top=5)
+    by_rule = {e["rule"]: e for e in b["top"]}
+    assert by_rule["momentum:5"]["universe_basis"] == f"as_of_{SPLIT_DATE}"
+    assert (by_rule["breakout:5"]["universe_basis"]
+            == "present_day_survivorship_inflated")
+    assert "survivorship" in b["honesty"]
 
 
 def test_leaderboard_dedupes_to_newest_result(store):
@@ -286,3 +308,101 @@ def test_value_momentum_in_lab_grid():
     grid = build_grid()
     rules = {g["rule"] for g in grid}
     assert {"value_momentum:5", "value_momentum:8"} <= rules
+
+
+# ── universe basis: PIT-as-of-SPLIT_DATE with an honest fallback label ──
+
+
+def test_resolve_universe_prefers_split_date_ranking(monkeypatch):
+    import agent.data as agent_data
+    from agent import lab
+
+    calls = []
+
+    def fake_universe(n, *, as_of=None):
+        calls.append((n, as_of))
+        return [f"S{i}" for i in range(n)]
+
+    monkeypatch.setattr(lab, "_bars_near", lambda as_of: True)
+    monkeypatch.setattr(agent_data, "universe", fake_universe)
+    syms, basis = lab._resolve_universe("top20")
+    assert basis == f"as_of_{lab.SPLIT_DATE}"
+    assert calls == [(20, lab.SPLIT_DATE)]  # ranked at the boundary, once
+    assert "SPY" in syms
+
+
+def test_resolve_universe_falls_back_and_labels_survivorship(monkeypatch):
+    import agent.data as agent_data
+    from agent import lab
+
+    monkeypatch.setattr(lab, "_bars_near", lambda as_of: True)
+
+    def thin_pit(n, *, as_of=None):
+        if as_of is not None:
+            return ["LONE"]  # hot set holds almost nothing near 2018
+        return [f"S{i}" for i in range(n)]
+
+    monkeypatch.setattr(agent_data, "universe", thin_pit)
+    syms, basis = lab._resolve_universe("top40")
+    assert basis == "present_day_survivorship_inflated"
+    assert len([s for s in syms if s != "SPY"]) == 40  # present-day ranking
+
+    # mid200 slices ranks 41-240: a thin PIT slice trips its floor too
+    def thin_mid(n, *, as_of=None):
+        return [f"S{i}" for i in range(60 if as_of else n)]
+
+    monkeypatch.setattr(agent_data, "universe", thin_mid)
+    _, basis = lab._resolve_universe("mid200")
+    assert basis == "present_day_survivorship_inflated"
+
+
+def test_resolve_universe_survives_pit_ranking_errors(monkeypatch):
+    import agent.data as agent_data
+    from agent import lab
+
+    monkeypatch.setattr(lab, "_bars_near", lambda as_of: True)
+
+    def flaky(n, *, as_of=None):
+        if as_of is not None:
+            raise RuntimeError("no bars near as_of")
+        return [f"S{i}" for i in range(n)]
+
+    monkeypatch.setattr(agent_data, "universe", flaky)
+    syms, basis = lab._resolve_universe("top20")
+    assert basis == "present_day_survivorship_inflated"
+    assert len(syms) >= 20
+
+
+def test_sweep_stamps_universe_basis_on_results(store, monkeypatch):
+    import pandas as pd
+
+    import agent.backtest_tool as backtest_tool
+    import agent.data as agent_data
+    from agent import lab
+
+    # SQLite store has no SPY bars near 2018 → _bars_near probe misses →
+    # present-day fallback, and the label must say so end to end.
+    monkeypatch.setattr(
+        agent_data, "universe",
+        lambda n, *, as_of=None: [] if as_of else [f"S{i}" for i in range(n)])
+    frame = pd.DataFrame({
+        "date": [date(2006, 1, 2) + timedelta(days=i) for i in range(220)],
+        "open": [100.0] * 220, "high": [100.0] * 220, "low": [100.0] * 220,
+        "close": [100.0] * 220, "volume": [1e6] * 220})
+    monkeypatch.setattr(agent_data, "load_bars",
+                        lambda syms, **kw: {s: frame.copy() for s in syms})
+    monkeypatch.setattr(agent_data, "spy_series_df",
+                        lambda **kw: frame.copy())
+    monkeypatch.setattr(backtest_tool, "run_prepared",
+                        lambda *a, **kw: {"excess_return_pct": 5.0,
+                                          "sharpe": 1.0,
+                                          "max_drawdown_pct": -10.0})
+
+    res = lab.sweep(max_combos=1, offset=0)
+    assert res["tested"] == 1
+    assert res["top"][0]["universe_basis"] == "present_day_survivorship_inflated"
+    rows = [r for r in store.select("desk_backtests")
+            if str(r.get("label") or "").startswith("lab:")]
+    assert rows
+    assert (rows[0]["result"]["universe_basis"]
+            == "present_day_survivorship_inflated")

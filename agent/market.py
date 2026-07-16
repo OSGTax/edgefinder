@@ -111,7 +111,8 @@ def _movers(store, *, top_k: int = 8, min_coverage: int | None = None) -> dict:
 
 
 def compute_screens(rows: list[dict], *, top_exclude: int = 40,
-                    pool_max_rank: int = 1000) -> dict:
+                    pool_max_rank: int = 1000,
+                    split_syms: set[str] | None = None) -> dict:
     """Full-market discovery screens (pure logic over bar rows).
 
     The trader's research funnel starts from the top-40 dollar-volume list,
@@ -123,7 +124,12 @@ def compute_screens(rows: list[dict], *, top_exclude: int = 40,
       50-session average (uptrend gate at this window).
     - new_highs: within 2% of a fresh 70-session high with positive 3m return.
     ``rows``: dicts with symbol/date/close/volume, any order.
+    ``split_syms``: symbols with a split inside the lookback window — excluded
+    like the movers guard, because daily_bars stores RAW closes and a reverse
+    split fabricates a +900% "leader" in the exact screens the trading skill
+    shops from (a forward split, a fake crash the uptrend gates hide).
     """
+    split_syms = split_syms or set()
     series: dict[str, list[tuple[str, float, float]]] = {}
     for r in rows:
         c = r.get("close")
@@ -140,9 +146,13 @@ def compute_screens(rows: list[dict], *, top_exclude: int = 40,
     rank = {sym: i + 1 for i, sym in enumerate(ranked)}
 
     pool = []
+    splits_excluded: list[str] = []
     for sym, s in series.items():
         rk = rank.get(sym)
         if rk is None or rk <= top_exclude or rk > pool_max_rank:
+            continue
+        if sym in split_syms:
+            splits_excluded.append(sym)  # raw closes span a split — fake move
             continue
         closes = [c for _, c, _ in s]
         if len(closes) < 64 or closes[-1] < 5.0 \
@@ -161,14 +171,17 @@ def compute_screens(rows: list[dict], *, top_exclude: int = 40,
                     and p["ret_3m_pct"] > 0),
                    key=lambda p: -p["high_prox"])[:10]
     strip = ("above_50d", "high_prox")
-    return {"pool_size": len(pool),
-            "note": "3-month structure over dollar-volume ranks "
-                    f"{top_exclude + 1}-{pool_max_rank} of the fresh set — "
-                    "the leaders the top-40 funnel structurally misses",
-            "beyond_megacaps": [{k: v for k, v in p.items() if k not in strip}
-                                for p in beyond],
-            "new_highs": [{k: v for k, v in p.items() if k not in strip}
-                          for p in highs]}
+    out = {"pool_size": len(pool),
+           "note": "3-month structure over dollar-volume ranks "
+                   f"{top_exclude + 1}-{pool_max_rank} of the fresh set — "
+                   "the leaders the top-40 funnel structurally misses",
+           "beyond_megacaps": [{k: v for k, v in p.items() if k not in strip}
+                               for p in beyond],
+           "new_highs": [{k: v for k, v in p.items() if k not in strip}
+                         for p in highs]}
+    if splits_excluded:
+        out["splits_excluded"] = sorted(splits_excluded)
+    return out
 
 
 def _screens(store) -> dict:
@@ -177,7 +190,22 @@ def _screens(store) -> dict:
     rows = store.select("daily_bars", columns="symbol,date,close,volume",
                         filters={"date": ("gte", lo)},
                         order=[("date", "asc"), ("symbol", "asc")])
-    return compute_screens(rows)
+    # Same guard as _movers, over the screens' whole lookback: one batched
+    # query for every split executed inside the window (raw closes there
+    # embed the split as a fake move). Splits dated in the future haven't
+    # touched the closes yet. Effective as the nightly corp-actions ingest
+    # populates ticker_splits for the full fresh set (before that, only the
+    # ~15 hourly names ever had rows here).
+    split_syms: set[str] = set()
+    try:
+        srows = store.select("ticker_splits", columns="symbol,execution_date",
+                             filters={"execution_date": ("gte", lo.isoformat())})
+        hi = _et_today().isoformat()
+        split_syms = {r["symbol"] for r in srows
+                      if str(r.get("execution_date") or "")[:10] <= hi}
+    except Exception:  # noqa: BLE001 — split guard is best-effort
+        pass
+    return compute_screens(rows, split_syms=split_syms)
 
 
 def build_brief(*, top: int = 40) -> dict:

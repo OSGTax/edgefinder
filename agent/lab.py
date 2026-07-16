@@ -11,6 +11,12 @@ The honesty rules (multiple-comparisons discipline):
   split at SPLIT_DATE). A strategy "qualifies" only when it beats SPY net of
   costs in BOTH halves — a lucky fit rarely survives the half it wasn't
   fitted to.
+- The SPY benchmark is TOTAL-RETURN (dividend-adjusted, same basis as the
+  strategy bars, as of 2026-07-16): a price-only SPY handed every combo
+  ~+50pp of phantom in-sample excess (the compounded dividend yield).
+- Universe membership is ranked as of SPLIT_DATE when the local data allows;
+  otherwise the result is labeled survivorship-inflated (``universe_basis``
+  on every result row and leaderboard entry).
 - Ranking is by the WORST half's excess return (maximin), not the best —
   the number a skeptic would quote.
 - The leaderboard always reports how many combos were tested alongside the
@@ -51,9 +57,11 @@ RULES = (
 )
 SCHEDULES = ("weekly", "monthly")
 # Most-liquid slices of the hot set, plus mid200 (dollar-volume ranks 41-240):
-# a rule that only works on megacaps is riding fame, not edge — and deep-
-# history tests on today's top names carry survivorship shine that mid-tier
-# slices partially deflate.
+# a rule that only works on megacaps is riding fame, not edge. Membership is
+# ranked as of SPLIT_DATE when the hot set still holds bars there (see
+# _resolve_universe); when it doesn't, the sweep falls back to present-day
+# ranking and stamps the result survivorship-inflated — deep-history tests on
+# today's top names back-test tomorrow's survivors, which is free excess.
 UNIVERSES = ("top20", "top40", "top60", "mid200")
 
 
@@ -83,17 +91,58 @@ def score_combo(half_a: dict, half_b: dict) -> dict:
             "max_dd_out": half_b.get("max_drawdown_pct")}
 
 
-def _universe_symbols(name: str) -> list[str]:
+def _universe_symbols(name: str, as_of: date | None = None) -> list[str]:
     from agent import data
 
     if name == "mid200":
-        syms = data.universe(240)[40:]
+        syms = data.universe(240, as_of=as_of)[40:]
     else:
         n = {"top20": 20, "top40": 40, "top60": 60}[name]
-        syms = data.universe(n)
+        syms = data.universe(n, as_of=as_of)
     if "SPY" not in syms:
         syms = [*syms, "SPY"]  # regime gauge for regime_momentum; harmless else
     return syms
+
+
+def _bars_near(as_of: date) -> bool:
+    """Cheap probe: does the local hot set hold bars around ``as_of`` at all?
+    Anchored on SPY (always ingested). Without this, an as_of the hot set
+    can't cover would page a ~200k-row PIT ranking query on the REST lane
+    just to find the window empty — every sweep night, per universe."""
+    from datetime import timedelta
+
+    from agent.store import get_store
+
+    rows = get_store().select(
+        "daily_bars", columns="date",
+        filters={"symbol": "SPY", "date": ("gte", as_of - timedelta(days=10))},
+        order=[("date", "asc")], limit=1)
+    return bool(rows) and str(rows[0]["date"])[:10] <= as_of.isoformat()
+
+
+def _resolve_universe(name: str) -> tuple[list[str], str]:
+    """Universe symbols plus the honest ``universe_basis`` label.
+
+    Ranking membership as of TODAY back-tests tomorrow's survivors — free
+    excess for any long rule. So try a point-in-time ranking as of SPLIT_DATE
+    first (the out-sample half's information boundary). The hot set only
+    holds ~400 recent days, so a 2018 as_of usually finds no bars: when the
+    probe misses, the PIT ranking comes back too thin (fewer than half the
+    requested names), or anything raises, fall back to present-day ranking
+    and SAY SO in the label every result row carries. TODO: true
+    SPLIT_DATE-era (and 2006-era in-sample) PIT ranking needs R2-depth
+    frames — rank via ``edgefinder.engine.data.rank_top_universe`` over the
+    archive.
+    """
+    requested = 200 if name == "mid200" else int(name.removeprefix("top"))
+    try:
+        if _bars_near(SPLIT_DATE):
+            syms = _universe_symbols(name, as_of=SPLIT_DATE)
+            if len(syms) >= max(requested // 2, 5):
+                return syms, f"as_of_{SPLIT_DATE}"
+    except Exception:  # noqa: BLE001 — PIT ranking is best-effort
+        pass
+    return _universe_symbols(name), "present_day_survivorship_inflated"
 
 
 def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
@@ -115,8 +164,11 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
     order = grid[offset:] + grid[:offset]
 
     store = get_store()
-    bench = data.spy_series_df()
+    # Total-return SPY: the strategy bars are dividend-adjusted, so the
+    # benchmark must be too — excess is TR-vs-TR, never TR-vs-price.
+    bench = data.spy_series_df(total_return=True)
     bars_cache: dict[str, dict] = {}
+    basis_cache: dict[str, str] = {}
     tested = qualified = errors = 0
     results: list[dict] = []
 
@@ -126,7 +178,7 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
         uni = combo["universe"]
         try:
             if uni not in bars_cache:
-                syms = _universe_symbols(uni)
+                syms, basis_cache[uni] = _resolve_universe(uni)
                 bars = data.load_bars(syms, div_adjust=True, source="auto")
                 bars_cache[uni] = {s: df for s, df in bars.items()
                                    if df is not None and len(df) > 210}
@@ -141,6 +193,9 @@ def sweep(*, max_combos: int = 80, time_budget_secs: int = 2400,
                 bars, bench, combo["rule"], schedule=combo["schedule"],
                 start=SPLIT_DATE)
             verdict = score_combo(half_a, half_b)
+            # Stamp the membership basis on every result payload so the
+            # leaderboard/brief carry the survivorship caveat with the number.
+            verdict["universe_basis"] = basis_cache[uni]
             tested += 1
             qualified += 1 if verdict["qualifies"] else 0
             row = {**combo, **verdict}
@@ -231,13 +286,23 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
                             "in_sample_excess_pct": res.get("in_sample_excess_pct"),
                             "out_sample_excess_pct": res.get("out_sample_excess_pct"),
                             "sharpe_out": res.get("sharpe_out"),
-                            "max_dd_out": res.get("max_dd_out")})
+                            "max_dd_out": res.get("max_dd_out"),
+                            # rows persisted before the basis stamp were all
+                            # ranked present-day — label them honestly
+                            "universe_basis": res.get("universe_basis")
+                            or "present_day_survivorship_inflated"})
     entries.sort(key=lambda e: -(e.get("score") or -999))
+    survivorship = sum(1 for e in entries
+                       if e["universe_basis"] != f"as_of_{SPLIT_DATE}")
+    honesty = (f"top picks are {min(top, len(entries))} of "
+               f"{tested} tested — expect live shrinkage toward "
+               "the worst-half number")
+    if survivorship:
+        honesty += (f"; {survivorship} of {len(entries)} qualifiers ranked "
+                    "their universe present-day (survivorship-inflated)")
     return {"window_days": days, "combos_tested": tested,
             "qualified": len(entries),
-            "honesty": f"top picks are {min(top, len(entries))} of "
-                       f"{tested} tested — expect live shrinkage toward "
-                       "the worst-half number",
+            "honesty": honesty,
             "top": entries[:top]}
 
 

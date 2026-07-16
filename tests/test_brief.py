@@ -113,6 +113,57 @@ def test_compute_screens_surfaces_midtier_leaders():
     assert riser["rank"] > 40 and riser["ret_3m_pct"] > 20
 
 
+def test_compute_screens_excludes_split_symbols():
+    from agent.market import compute_screens
+
+    rows = []
+    days = [str(TODAY - timedelta(days=n)) for n in range(99, -1, -1)]
+    for i in range(45):
+        sym = f"MEGA{i:02d}"
+        for d in days:
+            rows.append({"symbol": sym, "date": d, "close": 100.0,
+                         "volume": 1e9 - i * 1e6})
+    # REVSPL did a 1:10 reverse split mid-window: raw closes jump 8 → 80,
+    # which screens as a fabricated +900% "leader" without the guard.
+    for j, d in enumerate(days):
+        rows.append({"symbol": "REVSPL", "date": d,
+                     "close": 8.0 if j < 60 else 80.0, "volume": 3e6})
+
+    # unguarded, the fake move tops the exact screen the trader shops from
+    unguarded = compute_screens(rows, top_exclude=40)
+    assert "REVSPL" in [e["symbol"] for e in unguarded["beyond_megacaps"]]
+
+    s = compute_screens(rows, top_exclude=40, split_syms={"REVSPL"})
+    assert "REVSPL" not in [e["symbol"] for e in s["beyond_megacaps"]]
+    assert "REVSPL" not in [e["symbol"] for e in s["new_highs"]]
+    assert s["splits_excluded"] == ["REVSPL"]
+
+
+def test_screens_guard_queries_splits_inside_window(store, monkeypatch):
+    import agent.market as market
+
+    seed_day(store, TODAY - timedelta(days=1), {"AAA": 100.0})
+    for sym, d in (("IN_WINDOW", TODAY - timedelta(days=30)),
+                   ("ANCIENT", TODAY - timedelta(days=400)),   # before window
+                   ("FUTURE", TODAY + timedelta(days=10))):    # not yet real
+        store.insert("ticker_splits", {"symbol": sym,
+                                       "execution_date": str(d),
+                                       "split_from": 1, "split_to": 10},
+                     returning=False)
+
+    captured = {}
+
+    def fake_compute(rows, *, split_syms=None, **kw):
+        captured["split_syms"] = split_syms
+        return {"pool_size": 0}
+
+    monkeypatch.setattr(market, "compute_screens", fake_compute)
+    market._screens(store)
+    # only splits that already executed inside the lookback window count —
+    # ancient ones don't touch these closes, future ones haven't yet
+    assert captured["split_syms"] == {"IN_WINDOW"}
+
+
 def test_brief_payload_carries_screens(store):
     from agent.market import build_brief
 

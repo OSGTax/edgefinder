@@ -7,9 +7,9 @@ idempotent and safe to re-run:
     universe (streamed seeds + held positions + last watchlist), snapshot
     option IV, and refresh Alpaca news headlines for those names.
   - ``alpaca-market`` (nightly) — enumerate Alpaca's whole tradable catalog
-    (~13k names), rank by dollar volume, and keep fresh daily-bar history for
-    the top-N (+ benchmarks/held/watchlist) so discovery + indicators see the
-    whole market.
+    (~13k names), rank by dollar volume, and keep fresh daily-bar history AND
+    corporate actions (splits/dividends) for the top-N (+ benchmarks/held/
+    watchlist) so discovery + indicators see the whole market, split-honest.
 
 When the R2_* creds are present, fresh DB bars are merge-synced into the
 grow-only R2 archive.
@@ -237,13 +237,21 @@ def _news_alpaca(store, symbols: list[str], *, limit: int = 15) -> dict:
     return {"fetched": fetched, "inserted": inserted}
 
 
+# Alpaca caps one corporate-announcements query at a 90-day window (see
+# broker.corporate_announcements), so longer lookbacks are walked in chunks.
+CA_WINDOW_DAYS = 90
+
+
 def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
                          fwd_days: int = 45) -> dict:
     """Ingest cash dividends + stock splits for ``symbols`` from Alpaca into the
     existing ``dividends`` / ``ticker_splits`` tables — the Polygon corporate-
-    actions replacement. Deduped by (symbol, date). Keeping the ``dividends``
-    table fed is what keeps total-return backtests honest; the same rows drive
-    the desk's upcoming-catalysts panel. Best-effort; one 90-day CA call."""
+    actions replacement. Deduped by (symbol, date), so re-runs and overlapping
+    windows stay idempotent. Keeping the ``dividends`` table fed is what keeps
+    total-return backtests honest; the same rows drive the desk's upcoming-
+    catalysts panel. Best-effort; ``back_days`` beyond Alpaca's 90-day CA cap
+    (the nightly passes its bar window, ~400d) is walked in ≤90-day chunks —
+    one failed window skips that window, never the pass."""
     from datetime import date as _date
 
     from agent import broker, occ
@@ -252,19 +260,32 @@ def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
     if not broker.enabled() or not wanted:
         return {"dividends": 0, "splits": 0}
     today = _date.today()
-    try:
-        cas = broker.Broker().corporate_announcements(
-            since=today - timedelta(days=back_days),
-            until=today + timedelta(days=fwd_days))
-    except Exception as exc:  # noqa: BLE001 — best-effort
-        logger.warning("corp actions fetch failed: %s", exc)
-        return {"error": str(exc)}
+    since = today - timedelta(days=back_days)
+    until = today + timedelta(days=fwd_days)
+    b = broker.Broker()
+    cas: list[dict] = []
+    windows = window_errors = 0
+    lo = since
+    while lo <= until:
+        hi = min(lo + timedelta(days=CA_WINDOW_DAYS), until)
+        windows += 1
+        try:
+            cas.extend(b.corporate_announcements(since=lo, until=hi))
+        except Exception as exc:  # noqa: BLE001 — one window can't abort the pass
+            logger.warning("corp actions window %s..%s failed: %s", lo, hi, exc)
+            window_errors += 1
+        lo = hi + timedelta(days=1)
+    if window_errors and not cas:
+        return {"error": f"all {windows} corporate-actions windows failed"}
+    # Dedup against what's already stored, bounded to the fetch window (every
+    # insertable row's ex-date lies inside it) — no giant IN() of the ~1000-name
+    # nightly universe, and no unbounded whole-table scan.
     ex_div = {(r["symbol"], str(r["ex_date"])[:10]) for r in store.select(
         "dividends", columns="symbol,ex_date",
-        filters={"symbol": ("in", sorted(wanted))}, limit=100000)}
+        filters={"ex_date": ("gte", since)}, limit=100000)}
     ex_split = {(r["symbol"], str(r["execution_date"])[:10]) for r in store.select(
         "ticker_splits", columns="symbol,execution_date",
-        filters={"symbol": ("in", sorted(wanted))}, limit=100000)}
+        filters={"execution_date": ("gte", since.isoformat())}, limit=100000)}
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     div_rows, split_rows, seen = [], [], set()
     for a in cas:
@@ -287,7 +308,8 @@ def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
         store.insert("dividends", div_rows, returning=False)
     if split_rows:
         store.insert("ticker_splits", split_rows, returning=False)
-    return {"dividends": len(div_rows), "splits": len(split_rows)}
+    return {"dividends": len(div_rows), "splits": len(split_rows),
+            "windows": windows, "window_errors": window_errors}
 
 
 def select_universe_symbols(day_rows, *, top_n: int, keep: set[str],
@@ -500,6 +522,18 @@ def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
         return summary
     summary["ingest"] = _ingest_history_batched(get_store(), b, universe,
                                                  max_days=max_days)
+    # Corporate actions for the SAME universe as the bar ingest, lookback
+    # matching the bar window: ticker_splits/dividends were previously fed
+    # only by the hourly ~15-name pass, so load-time split adjustment was a
+    # no-op for ~99% of researched names — every split inside the fresh set's
+    # research window read as a fake ±50-90% "move". Idempotent (deduped by
+    # symbol+date); best-effort like the news/edgar passes.
+    try:
+        summary["corp_actions"] = _corp_actions_alpaca(get_store(), universe,
+                                                       back_days=max_days)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("corp actions pass failed: %s", exc)
+        summary["corp_actions"] = f"error: {exc}"
     # Grow the R2 archive for the WHOLE ingested universe — not just the ~15
     # live names the hourly path syncs. Charts read R2 for long ranges (1y+) on
     # non-protected symbols, so an ingest that freshens the DB but leaves R2
