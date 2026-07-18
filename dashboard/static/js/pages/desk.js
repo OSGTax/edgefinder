@@ -5,7 +5,7 @@
    /api/desk/* endpoints; reuses the core charts/dom/fmt/net modules. */
 
 import { apiGet } from '../core/net.js';
-import { toEpochSec, fmtDollar, fmtPnl, fmtPct, fmtPrice, fmtNum, timeAgo, fmtDateTimeET }
+import { toEpochSec, fmtDollar, fmtPnl, fmtPct, fmtPrice, fmtNum, timeAgo, fmtDateTimeET, fmtDate }
   from '../core/fmt.js';
 import { h, svg, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
 import { createChart, colors } from '../core/charts.js';
@@ -450,6 +450,19 @@ function trendCell(st) {
   return h('td', { class: 'num', title: '30-day price trend' + range }, sparkline(st.spark, up));
 }
 
+/* How long the AI has held a position — a first-time visitor's natural next
+   question after seeing a gain/loss number ("since when?"). opened_at
+   already comes back on every /api/desk/portfolio row; this is the first
+   place it's rendered. */
+function heldCell(openedAt) {
+  if (!openedAt) return h('td', { class: 'num t-dim', text: '—' });
+  const days = Math.max(0, Math.floor((Date.now() - new Date(openedAt).getTime()) / 86400000));
+  const label = days < 1 ? '<1 day' : days === 1 ? '1 day'
+    : days < 90 ? `${days} days`
+    : days < 730 ? `${Math.round(days / 30)} mo` : `${(days / 365).toFixed(1)} yr`;
+  return h('td', { class: 'num t-dim', title: 'Bought ' + fmtDate(openedAt) }, label);
+}
+
 function equitiesTable(rows, stats) {
   stats = stats || {};
   const divs = deskLive.divs || {};
@@ -472,6 +485,7 @@ function equitiesTable(rows, stats) {
       h('th', { class: 'num', text: 'Now', title: 'Most recent market price' }),
       h('th', { class: 'num', text: 'Today', title: "The stock's move on the last completed trading session" }),
       h('th', { class: 'num', text: '30-day trend', title: 'The shape of the last 30 days; hover for the 52-week range' }),
+      h('th', { class: 'num', text: 'Held', title: 'How long the AI has held this position, since it first bought in' }),
       h('th', { class: 'num', text: 'Worth' }),
       h('th', { class: 'num', text: '% of account', title: 'How much of the whole account this holding represents' }),
       h('th', { class: 'num', text: 'Gain / loss', title: 'Profit or loss if sold at the current price' }))),
@@ -483,6 +497,7 @@ function equitiesTable(rows, stats) {
       h('td', { class: 'num', text: fmtPrice(p.last_price) }),
       dayChangeCell(stats[p.symbol]),
       trendCell(stats[p.symbol]),
+      heldCell(p.opened_at),
       h('td', { class: 'num', text: fmtDollar(p.market_value) }),
       // weight is a 0-1 fraction — scale to percent for display
       h('td', { class: 'num', text: fmtPct(p.weight * 100, { signed: false }) }),
