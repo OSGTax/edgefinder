@@ -527,6 +527,144 @@ class DeskOutcome(Base):
     graded_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+# ── the knowledge layer: claims, commitments, proposals (SCHEMA.md) ──
+
+
+class DeskClaim(Base):
+    """One behavior-influencing fact in the structured claims registry.
+
+    The source of truth the wiki's prose must cite (``[C-<id>]`` tokens):
+    prose can inform, only claims can justify. Tiers (observation → digest →
+    candidate → established) carry pre-registered ``promotion_criteria`` —
+    written at candidate creation, BEFORE results — and promotion is refused
+    in code unless stats recomputed from ``desk_outcomes`` meet them. No
+    confidence floats anywhere: ``stats`` holds recorded sample sizes.
+    Supersession, never deletion: status flips, ``superseded_by`` links, and
+    every transition lands in ``desk_claim_events``. ``decay_class`` defaults
+    are forced by ``kclass`` (risk_rule→never, system_mechanics→stable,
+    market_strategy→regime_conditional). Written only by ``agent.knowledge``.
+    """
+
+    __tablename__ = "desk_claims"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    # market_strategy | system_mechanics | operational | risk_rule
+    kclass: Mapped[str] = mapped_column(String(20))
+    # observation | digest | candidate | established
+    tier: Mapped[str] = mapped_column(String(16))
+    # candidate flagged to influence decisions under the exposure caps
+    experimental: Mapped[bool] = mapped_column(Boolean, default=False)
+    # active | superseded | retired | quarantined
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    statement: Mapped[str] = mapped_column(Text)  # one falsifiable sentence, tool-capped
+    # {"account":"paper", "universe":..., "regimes":[...], "strategy_versions":[...]}
+    scope: Mapped[dict | None] = mapped_column(JSON)
+    # typed machine-resolvable refs: outcome/decision/trade/backtest/wiki_history/probe
+    evidence: Mapped[list | None] = mapped_column(JSON)
+    # {"n":..,"wins":..,"losses":..,"avg_alpha_pct":..,"span":[..],"regimes":{..},"symbols":[..]}
+    stats: Mapped[dict | None] = mapped_column(JSON)
+    # thresholds registered at candidate creation; promotion refused without them
+    promotion_criteria: Mapped[dict | None] = mapped_column(JSON)
+    # regime_conditional | stable | never
+    decay_class: Mapped[str] = mapped_column(String(20))
+    expires_at: Mapped[date | None] = mapped_column(Date)   # required for regime_conditional
+    review_after: Mapped[date | None] = mapped_column(Date)
+    supersedes: Mapped[int | None] = mapped_column(Integer)
+    superseded_by: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_run_id: Mapped[str | None] = mapped_column(String(40))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now())
+    updated_run_id: Mapped[str | None] = mapped_column(String(40))
+
+
+class DeskClaimEvent(Base):
+    """One append-only lifecycle event on a claim — the typed counterpart to
+    the prose journal. Every created/promoted/demoted/superseded/retired/
+    quarantined/expired transition (plus evidence adds and proposal links)
+    lands here with a detail snapshot, so the traceable path from any
+    behavior-influencing fact to what happened to it is queryable without
+    prose archaeology. Written only by ``agent.knowledge``."""
+
+    __tablename__ = "desk_claim_events"
+    __table_args__ = (Index("idx_desk_claim_events_claim", "claim_id", "ts"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    claim_id: Mapped[int] = mapped_column(Integer, index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    run_id: Mapped[str | None] = mapped_column(String(40))
+    # created | evidence_added | promoted | demoted | superseded | retired |
+    # quarantined | expired | proposal_linked
+    event: Mapped[str] = mapped_column(String(20))
+    detail: Mapped[dict | None] = mapped_column(JSON)
+
+
+class DeskCommitment(Base):
+    """One structured falsification clause carried by a trim/exit/hold pick —
+    the fix for free-text promises ("re-add if it reclaims $X") that escape
+    the buy/add prediction registry and go silently unchecked (the AAPL
+    ~$500 lesson). Materialized by ``agent.brain decision`` from a pick's
+    ``commitment`` object; machine-checked by ``agent.ledger grade`` against
+    stored closes (same split-aware touch semantics as kill breaches);
+    fired-and-unhonored rows surface in ``brain context`` as obligations
+    until a later decision stamps ``honored_run_id`` — even when the honest
+    answer is "standing down, because Y"."""
+
+    __tablename__ = "desk_commitments"
+    __table_args__ = (Index("idx_desk_commit_status", "account", "status"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    run_id: Mapped[str] = mapped_column(String(40), index=True)  # creating decision
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    kind: Mapped[str] = mapped_column(String(16))       # reentry | stop | review
+    direction: Mapped[str | None] = mapped_column(String(6))  # above | below
+    level: Mapped[float | None] = mapped_column(Float)
+    until: Mapped[date | None] = mapped_column(Date)
+    text: Mapped[str] = mapped_column(Text)             # the clause, verbatim
+    # open | fired | honored | expired | withdrawn
+    status: Mapped[str] = mapped_column(String(12), default="open")
+    fired_date: Mapped[date | None] = mapped_column(Date)
+    fired_close: Mapped[float | None] = mapped_column(Float)
+    honored_run_id: Mapped[str | None] = mapped_column(String(40))
+    watch_id: Mapped[int | None] = mapped_column(Integer)  # linked advisory tripwire
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class DeskProposal(Base):
+    """One owner-approval request for a trading-behavior change derived from
+    learned facts (strategy pivots, cap raises, setup adoption). The agent
+    proposes with the justifying ``claim_ids`` and the exact intended
+    ``payload``; the owner approves out-of-band (GitHub issue comment with
+    verifiable authorship — `PROPOSAL-<id>` — or the weaker CLI fallback,
+    recorded in ``decided_via``). ``agent.brain state-set --bump`` requires an
+    approved proposal id or an audited ``--no-learned-basis`` escape hatch.
+    Written only by ``agent.knowledge``."""
+
+    __tablename__ = "desk_proposals"
+    __table_args__ = (Index("idx_desk_proposals_status", "account", "status"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    run_id: Mapped[str | None] = mapped_column(String(40))
+    title: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)             # plain-English what/why
+    claim_ids: Mapped[list | None] = mapped_column(JSON)
+    # params | rules | caps | setup_adoption
+    change_kind: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[dict | None] = mapped_column(JSON)  # exact intended diff
+    # pending | approved | rejected | expired | applied
+    status: Mapped[str] = mapped_column(String(12), default="pending")
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decided_by: Mapped[str | None] = mapped_column(String(60))
+    decided_via: Mapped[str | None] = mapped_column(String(12))  # github | cli
+    applied_run_id: Mapped[str | None] = mapped_column(String(40))
+    expires_at: Mapped[date | None] = mapped_column(Date)
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -794,4 +932,80 @@ DESK_TABLE_DDL: list[str] = [
     )""",
     "ALTER TABLE desk_dispatches ENABLE ROW LEVEL SECURITY",
     "ALTER TABLE desk_wakes ADD COLUMN IF NOT EXISTS dispatch_count INTEGER DEFAULT 0",
+    # v9.13.0 knowledge layer (SCHEMA.md): claims registry + lifecycle events +
+    # commitments + owner-approval proposals. Same lockdown as every desk_*
+    # table: RLS on, zero policies.
+    """CREATE TABLE IF NOT EXISTS desk_claims (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        kclass VARCHAR(20) NOT NULL,
+        tier VARCHAR(16) NOT NULL,
+        experimental BOOLEAN DEFAULT FALSE,
+        status VARCHAR(16) DEFAULT 'active',
+        statement TEXT NOT NULL,
+        scope JSON,
+        evidence JSON,
+        stats JSON,
+        promotion_criteria JSON,
+        decay_class VARCHAR(20) NOT NULL,
+        expires_at DATE,
+        review_after DATE,
+        supersedes INTEGER,
+        superseded_by INTEGER,
+        created_at TIMESTAMP DEFAULT NOW(),
+        created_run_id VARCHAR(40),
+        updated_at TIMESTAMP DEFAULT NOW(),
+        updated_run_id VARCHAR(40)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_claims_status ON desk_claims (account, status)",
+    "ALTER TABLE desk_claims ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_claim_events (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        claim_id INTEGER NOT NULL,
+        ts TIMESTAMP DEFAULT NOW(),
+        run_id VARCHAR(40),
+        event VARCHAR(20) NOT NULL,
+        detail JSON
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_claim_events_claim ON desk_claim_events (claim_id, ts)",
+    "ALTER TABLE desk_claim_events ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_commitments (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        run_id VARCHAR(40) NOT NULL,
+        symbol VARCHAR(24) NOT NULL,
+        kind VARCHAR(16) NOT NULL,
+        direction VARCHAR(6),
+        level FLOAT,
+        until DATE,
+        text TEXT NOT NULL,
+        status VARCHAR(12) DEFAULT 'open',
+        fired_date DATE,
+        fired_close FLOAT,
+        honored_run_id VARCHAR(40),
+        watch_id INTEGER,
+        created_at TIMESTAMP DEFAULT NOW()
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_commit_status ON desk_commitments (account, status)",
+    "ALTER TABLE desk_commitments ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_proposals (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        created_at TIMESTAMP DEFAULT NOW(),
+        run_id VARCHAR(40),
+        title VARCHAR(160) NOT NULL,
+        body TEXT NOT NULL,
+        claim_ids JSON,
+        change_kind VARCHAR(16) NOT NULL,
+        payload JSON,
+        status VARCHAR(12) DEFAULT 'pending',
+        decided_at TIMESTAMP,
+        decided_by VARCHAR(60),
+        decided_via VARCHAR(12),
+        applied_run_id VARCHAR(40),
+        expires_at DATE
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_proposals_status ON desk_proposals (account, status)",
+    "ALTER TABLE desk_proposals ENABLE ROW LEVEL SECURITY",
 ]
