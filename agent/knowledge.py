@@ -455,12 +455,19 @@ def claim_promote(store=None, *, claim_id: int, run_id: str | None = None,
                         f"min_span_sessions={effective.get('min_span_sessions')}")
     judged = stats["wins"] + stats["losses"]
     if "min_win_rate" in effective:
+        # A cautionary pattern ("X underperforms") is SUPPORTED by
+        # negative-alpha instances — its criteria declare win_is at
+        # registration so the gate scores the claim's own direction.
+        supporting = (stats["losses"]
+                      if effective.get("win_is") == "negative_alpha"
+                      else stats["wins"])
         if not judged:
             failures.append("no judged instances (all alpha null) — nothing "
                             "to win-rate")
-        elif stats["wins"] / judged < effective["min_win_rate"]:
-            failures.append(f"win_rate={stats['wins']}/{judged} < "
-                            f"{effective['min_win_rate']}")
+        elif supporting / judged < effective["min_win_rate"]:
+            failures.append(f"win_rate={supporting}/{judged} < "
+                            f"{effective['min_win_rate']} "
+                            f"(win_is={effective.get('win_is', 'positive_alpha')})")
     if effective.get("requires_probe_evidence") and not any(
             (r or {}).get("kind") == "probe" for r in c.get("evidence") or []):
         failures.append("system_mechanics needs at least one probe evidence ref")

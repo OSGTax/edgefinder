@@ -193,6 +193,23 @@ def test_registered_criteria_tighten_but_never_loosen(store):
     assert out["effective_criteria"]["min_n"] == 5
 
 
+def test_cautionary_claims_win_rate_scores_negative_alpha(store):
+    from agent.knowledge import claim_promote
+
+    # 4 of 5 instances UNDERPERFORMED — which is what this pattern predicts
+    refs = [_seed_graded_pick(
+        store, f"R{i}", s, alpha=(-2.0 if i else 1.0),
+        regime=("risk_on" if i % 2 else "neutral"),
+        ts=datetime(2026, 6, 1, 15, 0) + timedelta(days=i * 10))
+        for i, s in enumerate(["IWM", "LLY", "NVDA", "AVGO", "DDOG"])]
+    # without win_is, 1/5 positive alpha would refuse promotion
+    cid = _candidate(store, refs, criteria={"min_n": 5,
+                                            "win_is": "negative_alpha"})
+    out = claim_promote(store, claim_id=cid)
+    assert out["ok"], out
+    assert out["effective_criteria"]["win_is"] == "negative_alpha"
+
+
 def test_single_regime_scope_establishes_but_forces_expiry(store):
     from agent.knowledge import claim_promote, get_claim
 
