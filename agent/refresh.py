@@ -378,9 +378,18 @@ def _corp_actions_alpaca(store, symbols: list[str], *, back_days: int = 45,
             div_rows.append({"symbol": sym, "ex_date": ex_d, "cash_amount": a["cash"]})
         elif (a["ca_type"] == "split" and a["old_rate"] and a["new_rate"]
               and (sym, ex) not in ex_split):
-            split_rows.append({"symbol": sym, "execution_date": ex_d,
-                               "split_from": a["old_rate"], "split_to": a["new_rate"],
-                               "created_at": now})
+            frm, to = a["old_rate"], a["new_rate"]
+            # split_from/split_to are integer columns; Alpaca serves the
+            # ratio as a float (e.g. 1.0) and PostgREST's text encoding of
+            # that ("1.0") fails Postgres's integer input parser even
+            # though the value is whole — cast rather than corrupt/skip.
+            if float(frm).is_integer() and float(to).is_integer():
+                split_rows.append({"symbol": sym, "execution_date": ex_d,
+                                   "split_from": int(frm), "split_to": int(to),
+                                   "created_at": now})
+            else:
+                logger.warning("non-integer split ratio for %s %s: %s:%s",
+                               sym, ex, frm, to)
     div_ins, div_dupes = _insert_skip_dupes(store, "dividends", div_rows)
     split_ins, split_dupes = _insert_skip_dupes(store, "ticker_splits", split_rows)
     return {"dividends": div_ins, "splits": split_ins,
