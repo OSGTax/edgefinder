@@ -194,7 +194,7 @@ async def run_stream() -> None:
     creds = broker.resolve_creds()
     url = STREAM_URL.format(feed=creds["feed"])
 
-    await _warm(watch_symbols())
+    await _warm(await asyncio.to_thread(watch_symbols))  # DB read off the loop
     backoff = 1.0
     while True:
         try:
@@ -219,7 +219,8 @@ async def run_stream() -> None:
             logger.warning("SIP stream dropped (%s: %s) — retry in %.0fs",
                            type(exc).__name__, exc, backoff)
             if backoff >= 8:
-                await _warm(watch_symbols())  # keep the tape usable while down
+                # keep the tape usable while down (DB read off the loop)
+                await _warm(await asyncio.to_thread(watch_symbols))
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, 60.0)
 
@@ -451,12 +452,15 @@ def apply_sweep_results(store, tripped: list[dict], expired: list[dict],
         if w.get("kind") == "hard_stop":
             execute_hard_stop(store, w, w["tripped_price"], now=now)
         else:
-            store.update("desk_watch", {"id": w["id"]},
+            # conditional on still-armed (the claim_watch idiom): the sweep's
+            # cached list can be 60s stale, and an unconditional write would
+            # resurrect a wire the brain just disarmed
+            store.update("desk_watch", {"id": w["id"], "status": "armed"},
                          {"status": "tripped", "tripped_at": now,
                           "tripped_price": w["tripped_price"]},
                          returning=False)
     for w in expired:
-        store.update("desk_watch", {"id": w["id"]},
+        store.update("desk_watch", {"id": w["id"], "status": "armed"},
                      {"status": "expired"}, returning=False)
 
 
@@ -529,8 +533,10 @@ def dispatch_reason(wakes: list[dict], watches: list[dict],
     cap (from the dispatch ledger), the 8h due-window and per-wake attempt
     cap (immortal wakes are the classic infinite-loop cost trap), and
     EDGE-triggered trip detection — a tripped wire fires only if it tripped
-    AFTER the newest dispatch (level-triggered status would re-fire forever
-    on one un-cleared wire)."""
+    AFTER the newest SUCCESSFUL ('sent') dispatch. Level-triggered status
+    would re-fire forever on one un-cleared wire; comparing against ANY
+    newest attempt (the old rule) let a single FAILED POST silence a trip
+    permanently."""
     now = now or datetime.utcnow()
 
     def _dt(v):
@@ -557,10 +563,12 @@ def dispatch_reason(wakes: list[dict], watches: list[dict],
            if not w.get("honored_run_id")
            and int(w.get("dispatch_count") or 0) < DISPATCH_MAX_PER_WAKE
            and (t := _dt(w.get("at"))) is not None and lookback <= t <= now]
-    last_disp = disp_times[-1] if disp_times else datetime.min
+    sent_times = sorted(t for d in dispatches if d.get("status") == "sent"
+                        and (t := _dt(d.get("ts"))) is not None)
+    last_sent = sent_times[-1] if sent_times else datetime.min
     trips = [w for w in watches
              if w.get("status") in ("tripped", "exec_failed")
-             and (t := _dt(w.get("tripped_at"))) is not None and t > last_disp]
+             and (t := _dt(w.get("tripped_at"))) is not None and t > last_sent]
 
     if not due and not trips:
         return None
@@ -627,7 +635,10 @@ def _run_dispatch_once(store, now: datetime | None = None) -> dict | None:
                          order=[("at", "desc")], limit=60)
     watches = store.select("desk_watch", limit=100,
                            filters={"status": ("in", ["tripped", "exec_failed"])})
-    dispatches = store.select("desk_dispatches", order=[("ts", "desc")], limit=40)
+    # The read must cover a full ET day of rows or the DISPATCH_MAX_PER_DAY
+    # cap can never bind (the old limit=40 read made the 45/day cap dead
+    # code). 300 > the bucket-math ceiling of 86400/DISPATCH_MIN_GAP_SECS.
+    dispatches = store.select("desk_dispatches", order=[("ts", "desc")], limit=300)
     decision = dispatch_reason(wakes, watches, dispatches, now=now)
 
     # Terminal-resolve exhausted wakes so they can never loop the dispatcher:

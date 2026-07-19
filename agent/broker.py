@@ -64,6 +64,17 @@ def _et_utc_offset(utc_dt):
     return timedelta(hours=-4 if dst_on else -5)
 
 
+def _today_et():
+    """Today's ET calendar date. Process-local ``date.today()`` is already
+    'tomorrow' after ~20:00 ET on the UTC hosts this runs on — which shifted
+    option DTE math and the corporate-announcement window by a day every
+    evening."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("America/New_York")).date()
+
+
 # ── credentials ──────────────────────────────────────────────
 
 def resolve_creds() -> dict:
@@ -387,13 +398,13 @@ class Broker:
         """Cash dividends + stock splits from Alpaca (the retired Polygon
         corporate-actions replacement). Alpaca caps the window at 90 days, so
         callers pass a ≤90-day (since, until). Read-only."""
-        from datetime import date, timedelta
+        from datetime import timedelta
 
         from alpaca.trading.enums import CorporateActionType
         from alpaca.trading.requests import GetCorporateAnnouncementsRequest
 
-        since = since or (date.today() - timedelta(days=45))
-        until = until or (date.today() + timedelta(days=45))
+        since = since or (_today_et() - timedelta(days=45))
+        until = until or (_today_et() + timedelta(days=45))
         req = GetCorporateAnnouncementsRequest(
             ca_types=[CorporateActionType.DIVIDEND, CorporateActionType.SPLIT],
             since=since, until=until, symbol=symbol)
@@ -508,15 +519,16 @@ class Broker:
         the live underlying price, expiring within dte_max days. Each row:
         occ symbol, type, strike, expiry, dte, bid/ask/mid, IV, delta/theta.
         Sorted by (expiry, strike)."""
-        from datetime import date as _date, timedelta as _td
+        from datetime import timedelta as _td
 
         from alpaca.data.requests import OptionChainRequest
 
         underlying = underlying.upper().strip()
+        et_today = _today_et()
         uq = self.quotes([underlying]).get(underlying) or {}
         px = uq.get("mid") or uq.get("ask") or uq.get("bid")
         req_kwargs = {"underlying_symbol": underlying,
-                      "expiration_date_lte": _date.today() + _td(days=dte_max)}
+                      "expiration_date_lte": et_today + _td(days=dte_max)}
         if px:
             req_kwargs["strike_price_gte"] = round(px * (1 - moneyness), 2)
             req_kwargs["strike_price_lte"] = round(px * (1 + moneyness), 2)
@@ -535,7 +547,7 @@ class Broker:
             out.append({
                 "symbol": sym, "type": p["type"], "strike": p["strike"],
                 "expiry": p["expiry"].isoformat(),
-                "dte": (p["expiry"] - _date.today()).days,
+                "dte": (p["expiry"] - et_today).days,
                 "bid": bid, "ask": ask,
                 "mid": round((bid + ask) / 2, 4) if (bid and ask) else None,
                 "iv": _f(getattr(snap, "implied_volatility", None)),

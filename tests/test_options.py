@@ -148,7 +148,11 @@ def test_vertical_spread_coverage(store):
     r3 = ledger.record_trade(store, symbol=sp, side="SELL", shares=1,
                              price=12.0, fill_quote=q(11.9, 12.0))
     assert r3["ok"]
-    assert ledger.free_cash(store) == ledger.cash(store)  # spread ⇒ no CSP reserve
+    # a spread-covered short put reserves its MAX LOSS (the strike width),
+    # not zero — zero let a wide credit spread settle cash negative — and
+    # not the full strike (that's the uncovered CSP reservation)
+    assert ledger.free_cash(store) == pytest.approx(
+        ledger.cash(store) - (700 - 690) * 100)
 
 
 def test_expired_contract_rejected_at_fill(store):

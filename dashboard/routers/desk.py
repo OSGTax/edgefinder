@@ -484,31 +484,55 @@ def regime():
 
 @router.get("/movers")
 def movers(db: Session = Depends(get_db), top: int = Query(5, ge=1, le=15)):
-    """Top gainers / losers / most-active as of the last completed session.
+    """Top gainers / losers / most-active across the last two WELL-COVERED
+    sessions.
 
-    Computed read-only from the fresh daily-bar hot set (the ~500-name universe
-    the refresh keeps current) — biggest close-to-close moves and largest dollar
-    volume. No external calls; this is last-close data, not a live intraday tape
-    (the live tape is the SSE ``/stream``).
+    Computed read-only from the fresh daily-bar hot set — biggest
+    close-to-close moves and largest dollar volume. Same guards as the
+    nightly brief's movers (``agent.market._movers``): a session only
+    counts when it has a full-coverage bar set (today's partial intraday
+    top-up must never be one side of a market-wide comparison), and symbols
+    with a split between the two sessions are excluded — ``daily_bars``
+    stores RAW closes, so a 10:1 split would fabricate a -90% 'loser'.
+    No external calls; the live tape is the SSE ``/stream``.
     """
+    from datetime import timedelta as _td
+
     from sqlalchemy import func as safunc
 
-    from edgefinder.db.models import DailyBar
+    from agent import data as agent_data
+    from edgefinder.db.models import DailyBar, TickerSplit
 
-    latest = db.query(safunc.max(DailyBar.date)).scalar()
-    if latest is None:
-        return {"as_of": None, "prior": None,
-                "gainers": [], "losers": [], "most_active": []}
-    prior = (db.query(safunc.max(DailyBar.date))
-             .filter(DailyBar.date < latest).scalar())
+    empty = {"as_of": None, "prior": None,
+             "gainers": [], "losers": [], "most_active": []}
+    latest_any = db.query(safunc.max(DailyBar.date)).scalar()
+    if latest_any is None:
+        return empty
+    lo = latest_any - _td(days=7)
+    counts = (db.query(DailyBar.date, safunc.count(DailyBar.id))
+              .filter(DailyBar.date >= lo).group_by(DailyBar.date).all())
+    fat = sorted((d for d, n in counts if n >= agent_data.FULL_COVERAGE_MIN),
+                 reverse=True)
+    if len(fat) < 2:
+        return {**empty, "note":
+                "fewer than two full-coverage sessions in the last week — "
+                "movers need two comparable sessions"}
+    latest, prior = fat[0], fat[1]
+    split_syms: set[str] = set()
+    try:
+        srows = db.query(TickerSplit.symbol, TickerSplit.execution_date).all()
+        split_syms = {s for s, ed in srows
+                      if str(prior) < str(ed or "")[:10] <= str(latest)}
+    except Exception:  # noqa: BLE001 — split guard is best-effort
+        split_syms = set()
     cur = (db.query(DailyBar.symbol, DailyBar.close, DailyBar.volume)
            .filter(DailyBar.date == latest).all())
-    prev = {} if prior is None else {
-        s: c for s, c in db.query(DailyBar.symbol, DailyBar.close)
-        .filter(DailyBar.date == prior).all()}
+    prev = {s: c for s, c in db.query(DailyBar.symbol, DailyBar.close)
+            .filter(DailyBar.date == prior).all()}
     rows = []
     for sym, close, vol in cur:
-        if close is None or close < 1.0 or any(ch in sym for ch in (".", "/", "=")):
+        if (close is None or close < 1.0 or sym in split_syms
+                or any(ch in sym for ch in (".", "/", "="))):
             continue
         pc = prev.get(sym)
         chg = ((close - pc) / pc * 100.0) if pc else None
@@ -516,26 +540,33 @@ def movers(db: Session = Depends(get_db), top: int = Query(5, ge=1, le=15)):
                      "change_pct": round(chg, 2) if chg is not None else None,
                      "dollar_volume": round(close * (vol or 0.0))})
     with_chg = [r for r in rows if r["change_pct"] is not None]
-    return {
-        "as_of": str(latest), "prior": (str(prior) if prior else None),
+    out = {
+        "as_of": str(latest), "prior": str(prior),
         "gainers": sorted(with_chg, key=lambda r: -r["change_pct"])[:top],
         "losers": sorted(with_chg, key=lambda r: r["change_pct"])[:top],
         "most_active": sorted(rows, key=lambda r: -r["dollar_volume"])[:top],
     }
+    if split_syms:
+        out["splits_excluded"] = sorted(split_syms)
+    return out
 
 
 @router.get("/holding-stats")
 def holding_stats(db: Session = Depends(get_db),
                   spark_days: int = Query(30, ge=5, le=120)):
     """Per-held-name enrichment from the daily-bar hot set: last-session day
-    change, 52-week high/low, and a short close series for a sparkline. Read-only
-    (no external calls); options legs are skipped (not in daily_bars)."""
+    change, 52-week high/low, and a short close series for a sparkline.
+    ``daily_bars`` stores RAW closes, so bars BEFORE a split's execution date
+    are rebased onto the current share basis first — otherwise a held name's
+    day-change, 52-week range, and sparkline all fabricate the split as a
+    price move. Read-only (no external calls); options legs are skipped
+    (not in daily_bars)."""
     from datetime import timedelta
 
     from sqlalchemy import func as safunc
 
     from agent import occ
-    from edgefinder.db.models import DailyBar
+    from edgefinder.db.models import DailyBar, TickerSplit
 
     held = [s for (s,) in db.query(DeskPosition.symbol)
             .filter(DeskPosition.account == ACCOUNT).all() if not occ.is_option(s)]
@@ -546,15 +577,29 @@ def holding_stats(db: Session = Depends(get_db),
     if latest is None:
         return {"as_of": None, "symbols": {}}
     lo = latest - timedelta(days=400)  # ~252 trading days of headroom
-    rows = (db.query(DailyBar.symbol, DailyBar.close)
+    rows = (db.query(DailyBar.symbol, DailyBar.date, DailyBar.close)
             .filter(DailyBar.symbol.in_(held), DailyBar.date >= lo)
             .order_by(DailyBar.symbol, DailyBar.date).all())
-    series: dict[str, list[float]] = {}
-    for sym, close in rows:
+    series: dict[str, list[tuple[str, float]]] = {}
+    for sym, d, close in rows:
         if close is not None:
-            series.setdefault(sym, []).append(float(close))
+            series.setdefault(sym, []).append((str(d)[:10], float(close)))
+    splits_by_sym: dict[str, list[tuple[str, float]]] = {}
+    try:
+        for s, ed, frm, to in db.query(
+                TickerSplit.symbol, TickerSplit.execution_date,
+                TickerSplit.split_from, TickerSplit.split_to).all():
+            if s in series and frm and to and frm > 0 and to > 0:
+                splits_by_sym.setdefault(s, []).append(
+                    (str(ed or "")[:10], to / frm))
+    except Exception:  # noqa: BLE001 — split rebase is best-effort
+        splits_by_sym = {}
     out = {}
-    for sym, closes in series.items():
+    for sym, pts in series.items():
+        for ed, factor in splits_by_sym.get(sym, ()):
+            if ed and factor > 0:
+                pts = [(d, c / factor) if d < ed else (d, c) for d, c in pts]
+        closes = [c for _, c in pts]
         if len(closes) < 2:
             continue
         last, prev = closes[-1], closes[-2]
@@ -593,7 +638,9 @@ def holdings_dividends(db: Session = Depends(get_db)):
                           key=lambda r: str(r.ex_date))
         last = past[0] if past else None
         nxt = upcoming[0] if upcoming else None
-        ttm = round(sum(r.cash_amount or 0 for r in rows[:4]), 4)
+        # trailing means PAST ex-dates only — the newest-4 slice used to
+        # count a future declared dividend and drop an actual paid one
+        ttm = round(sum(r.cash_amount or 0 for r in past[:4]), 4)
         out.append({
             "symbol": sym, "has_dividend": True,
             "last_ex_date": str(last.ex_date) if last else None,
@@ -781,8 +828,12 @@ class _TokenBucket:
         ok = tokens >= 1.0
         self._buckets[key] = (tokens - 1.0 if ok else tokens, now)
         if len(self._buckets) > 2048:  # bound memory under key churn
-            self._buckets = {k: v for k, v in self._buckets.items()
-                             if v[0] < self.capacity - 1.0}
+            # stored token counts are frozen at each key's last touch —
+            # apply the refill before judging, or nothing ever prunes
+            self._buckets = {
+                k: (tk, ts) for k, (tk, ts) in self._buckets.items()
+                if min(self.capacity, tk + (now - ts) * self.refill)
+                < self.capacity - 1.0}
         return ok
 
     def reset(self) -> None:

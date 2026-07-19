@@ -40,7 +40,9 @@ def _mid(row: dict) -> float | None:
     if row.get("mid") is not None:
         return row["mid"]
     b, a = row.get("bid"), row.get("ask")
-    return round((b + a) / 2, 4) if (b and a) else None
+    # bid can legitimately be 0 on a deep-OTM one-sided market — `if b`
+    # would drop the quote entirely
+    return round((b + a) / 2, 4) if (b is not None and a is not None) else None
 
 
 def summarize_chain(rows: list[dict], spot: float, *,
@@ -81,12 +83,14 @@ def summarize_chain(rows: list[dict], spot: float, *,
         return next((r for r in rows_ if r["strike"] == strike), None)
 
     ac, ap = at(calls, atm), at(puts, atm)
-    ivs = [r["iv"] for r in (ac, ap) if r and r.get("iv")]
+    ivs = [r["iv"] for r in (ac, ap) if r and r.get("iv") is not None]
     out["atm_iv"] = round(sum(ivs) / len(ivs), 4) if ivs else None
 
-    # expected move ≈ ATM straddle cost / spot
+    # expected move ≈ ATM straddle cost / spot (the raw straddle — a common
+    # desk shorthand that runs ~15-25% WIDE of a 1-standard-deviation move;
+    # consumers must not label it 1σ)
     cm, pm = (_mid(ac) if ac else None), (_mid(ap) if ap else None)
-    if cm and pm:
+    if cm is not None and pm is not None:
         out["expected_move_dollars"] = round(cm + pm, 2)
         out["expected_move_pct"] = round((cm + pm) / spot * 100, 2)
     else:
@@ -94,7 +98,8 @@ def summarize_chain(rows: list[dict], spot: float, *,
 
     # 25-delta skew: put IV − call IV at |delta| nearest 0.25 (put fear gauge)
     def d25(rows_):
-        cands = [r for r in rows_ if r.get("delta") is not None and r.get("iv")]
+        cands = [r for r in rows_
+                 if r.get("delta") is not None and r.get("iv") is not None]
         return min(cands, key=lambda r: abs(abs(r["delta"]) - 0.25), default=None)
 
     c25, p25 = d25(calls), d25(puts)
@@ -132,7 +137,9 @@ def get_summary(symbol: str, *, dte_max: int = 45) -> dict:
         uq = b.quotes([symbol]).get(symbol) or {}
         spot = uq.get("mid") or uq.get("ask") or uq.get("bid")
         rows = b.option_chain(symbol, dte_max=dte_max)
-        out = summarize_chain(rows, spot)
+        # DTE on the ET calendar — date.today() on a UTC host is already
+        # tomorrow after ~20:00 ET
+        out = summarize_chain(rows, spot, today=broker._today_et())
         out["symbol"] = symbol
         out["as_of"] = datetime.now(timezone.utc).isoformat()
         _cache[symbol] = (now, out)
