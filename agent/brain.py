@@ -817,6 +817,17 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
     brief = _safe("brief", _brief, {"exists": False})
 
     wiki = _safe("wiki", lambda: get_wiki(store, account=account), {})
+
+    def _claims():
+        from agent import knowledge
+
+        return knowledge.context_claims(store, account=account)
+
+    # The tier-gated authority read (SCHEMA.md): established + experimental
+    # claims only. The wiki above stays fully visible — prose can inform,
+    # only these claims can justify a pick. Pre-deploy DBs degrade to errors.
+    claims = _safe("claims", _claims, {})
+
     strategy = _safe("strategy", lambda: get_state(store, account), {})
     if strategy.get("thesis"):
         strategy = {**strategy, "thesis": _clip(strategy["thesis"],
@@ -917,12 +928,13 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
 
     return {"as_of": str(_utcnow()),
             "note": "the cycle's working memory in one read — account header,"
-                    " brief, wiki, strategy, open predictions with their"
-                    " machine-graded facts, recent outcomes, tripped wires,"
-                    " due wakes. Free text is clipped; drill in with the"
-                    " individual tools.",
+                    " brief, wiki, tier-gated claims, strategy, open"
+                    " predictions with their machine-graded facts, recent"
+                    " outcomes, tripped wires, due wakes. Free text is"
+                    " clipped; drill in with the individual tools.",
             "account": account_out, "brief": brief, "wiki": wiki,
-            "strategy": strategy, "open_predictions": open_predictions,
+            "claims": claims, "strategy": strategy,
+            "open_predictions": open_predictions,
             "outcomes": outcomes_out, "watches": watches, "wakes": wakes,
             "errors": errors}
 

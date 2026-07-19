@@ -18,7 +18,9 @@ impressions. **It is fine, and often correct, to make the wiki SHORTER.**
 - **Read-only on the book.** Never call `ledger fill`, `record`, `mark`, or
   `settle`. You grade; you do not trade. Your only writes are the grading
   surfaces: `ledger grade` (machine facts → `desk_outcomes`), `brain
-  verdict` (your judgment on those rows), wiki edits, and journal notes.
+  verdict` (your judgment on those rows), wiki edits, journal notes, and
+  the claims registry (`agent.knowledge claim-*` — the structured layer
+  behind the wiki).
 - **Never touch UI files** — the app-evolver routine owns the dashboard.
 - **The wiki is advisory.** Nothing you write can loosen the trading
   charter's guardrails.
@@ -51,6 +53,12 @@ over vibes (the same style rules as the trading charter).
 - `python -m agent.ledger outcomes --days 30` — the longer arc for context.
 - `python -m agent.brain state-get` and `python -m agent.brain wiki-get` —
   the strategy you were running and the notebook as it stands.
+- `python -m agent.knowledge lint` — run it FIRST and clear what it finds:
+  broken `[C-n]` citations, orphaned evidence refs, closed picks still
+  unjudged (your verdict queue), and expired regime claims that need fresh
+  evidence or supersession. A dirty lint is this session's first work item.
+- `python -m agent.knowledge claim-list` — the registry as it stands:
+  candidates watching, established claims in force, what's near expiry.
 
 ### 2. Grade every pick that closed or meaningfully aged this week
 Grading is MECHANICAL now, not retrospective storytelling. Each pick in
@@ -130,7 +138,37 @@ a wide margin is exactly as instructive as a losing trade — and it cost
 nothing to learn from. Score the week: picks' average alpha vs rejects'
 average move.
 
-### 3. Curate the wiki (the real work)
+### 3. Register and review claims (the structured half of the notebook)
+
+The wiki is the narrative; the claims registry (`desk_claims`, via
+`python -m agent.knowledge`) is the source of truth for anything meant to
+influence future decisions. **Prose can inform; only claims can justify.**
+
+- **Register** each lesson worth keeping as a claim with its real evidence
+  state: a single instance is an `observation`; a repeated pattern is a
+  `candidate` — and a candidate MUST register its `promotion_criteria` at
+  creation, before any more results come in. Attach typed evidence refs
+  (`{"kind":"outcome","run_id":...,"symbol":...}`) so the numbers stay
+  machine-checkable; `scope` always carries `account: "paper"` and the
+  regimes the evidence actually spans.
+- **Review promotions.** For each candidate, `python -m agent.knowledge
+  claim-promote --claim-id N --run-id <RID>` evaluates its pre-registered
+  criteria against stats RECOMPUTED from `desk_outcomes` — it refuses on
+  its own; your job is to run it and narrate the result. A candidate whose
+  stats now meet its bar: promote it deliberately or say why not. Never
+  edit criteria after seeing results — that's the whole point of
+  registering them first.
+- **Supersede, never delete.** Evidence contradicts a claim → write the
+  sharper replacement with `--supersedes <old-id>`; the old claim flips to
+  `superseded` with the link, and history holds everything.
+- **The false-absence rule.** Before writing "no lesson/claim covers X",
+  run `python -m agent.knowledge claim-search --terms "..."` TWICE with two
+  different phrasings, and paste both queries into your thinking note.
+  "I didn't find it on the first wording" is not absence.
+- Cite claims in the wiki prose by token — `[C-12]` — wherever a page
+  states something the registry holds. Lint checks every token resolves.
+
+### 4. Curate the wiki (the narrative half)
 With the grades in hand, rewrite pages via
 `python -m agent.brain wiki-set --slug <page> --body-file page.md --reason "..." --run-id <RID>`:
 - **Delete** lessons this week's evidence contradicts. Deleting is SAFE:
@@ -166,7 +204,7 @@ With the grades in hand, rewrite pages via
 - Keep every page comfortably under its cap. The caps are not the target;
   brevity is.
 
-### 4. Close the week
+### 5. Close the week
 One journal entry summarizing the review:
 ```
 python -m agent.brain journal --kind note \
