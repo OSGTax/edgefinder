@@ -12,10 +12,23 @@ import re
 from datetime import date
 
 _OCC_RE = re.compile(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
+# Post-corp-action ADJUSTED contracts carry a digit-bearing root (AAPL1…,
+# 7-8 digits before the C/P where a standard symbol has exactly 6).
+# ``is_option`` is False for them on purpose — non-standard deliverables are
+# out of scope — but they must FAIL CLOSED at the fill gate, never fall
+# through to the equity path (multiplier 1, no expiry settlement, no
+# defined-risk checks). See ``agent.ledger.record_trade``.
+_ADJ_OCC_RE = re.compile(r"^[A-Z]{1,5}\d{1,2}\d{6}[CP]\d{8}$")
 
 
 def is_option(symbol: str) -> bool:
     return bool(_OCC_RE.match((symbol or "").strip().upper()))
+
+
+def is_adjusted_occ(symbol: str) -> bool:
+    """True for an OCC-shaped symbol whose root carries adjustment digits
+    (e.g. ``AAPL1250117C00150000``). Callers must reject these outright."""
+    return bool(_ADJ_OCC_RE.match((symbol or "").strip().upper()))
 
 
 def parse(symbol: str) -> dict:

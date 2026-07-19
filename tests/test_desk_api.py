@@ -167,13 +167,16 @@ def test_broker_health_no_keys(client, monkeypatch):
     assert body["keys_present"] is False and "keys" in body["error"]
 
 
-def test_desk_movers(client):
-    """Movers endpoint ranks gainers/losers/most-active from daily_bars."""
+def test_desk_movers(client, monkeypatch):
+    """Movers endpoint ranks gainers/losers/most-active from daily_bars
+    across the last two FULL-COVERAGE sessions (v9.13.0: same coverage
+    floor + split guard as the nightly brief's movers)."""
     from datetime import date, datetime, timezone
 
     import agent.data as agent_data
     from edgefinder.db.models import DailyBar
 
+    monkeypatch.setattr(agent_data, "FULL_COVERAGE_MIN", 3)
     now = datetime.now(timezone.utc)
     d0, d1 = date(2026, 7, 6), date(2026, 7, 7)
     seed = [
@@ -252,7 +255,9 @@ def test_desk_dividends(client):
     assert nvda["has_dividend"] is True
     assert nvda["next_ex_date"] == "2099-09-05"          # the only future ex-date
     assert nvda["last_ex_date"] == "2026-06-05"          # most recent past
-    assert nvda["ttm_amount"] == round(0.10 + 0.10 + 0.12, 4)
+    # trailing = PAST ex-dates only — the future declared 0.12 must not
+    # inflate a figure labelled "trailing" (v9.13.0 fix)
+    assert nvda["ttm_amount"] == round(0.10 + 0.10, 4)
 
 
 def test_desk_trades_include_fill_quote(client):

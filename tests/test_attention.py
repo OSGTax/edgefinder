@@ -666,9 +666,11 @@ def test_dispatch_reason_trips_are_edge_triggered():
     # no dispatches yet -> the trip fires
     d = dispatch_reason([], [trip], [], now=now)
     assert d and d["watch_ids"] == [7] and "NVDA" in d["reason"]
-    # a dispatch NEWER than the trip means it was already announced —
-    # a still-'tripped' wire must not re-fire forever (level vs edge)
-    newer = [{"ts": now - timedelta(minutes=20)}]
+    # a SUCCESSFUL dispatch NEWER than the trip means it was already
+    # announced — a still-'tripped' wire must not re-fire forever (level vs
+    # edge). Only status='sent' announces: a claimed/failed POST delivered
+    # nothing, and counting it silenced a trip permanently (v9.13.0 fix).
+    newer = [{"ts": now - timedelta(minutes=20), "status": "sent"}]
     assert dispatch_reason([], [trip], newer, now=now) is None
 
 
