@@ -275,15 +275,18 @@ def test_hard_stop_books_unbooked_split_before_selling(store, monkeypatch):
     import agent.broker as broker
     from agent import ledger
     from agent.brain import watch_set
+    from agent.ledger import _et_date, _utcnow
     from agent.streamer import apply_sweep_results
 
     _seed_position(store, "AMD", 10, 100.0, last_price=100.0, days_ago=5)
     monkeypatch.setattr(broker, "enabled", lambda: False)
     wid = watch_set(store, symbol="AMD", below=90, reason="protect",
                     hard=True)["id"]
-    # the split lands after arming; no settle has booked it yet
+    # the split lands after arming; no settle has booked it yet. Use the ET
+    # date the code rebases against (a UTC clock in the evening-ET window is
+    # a day ahead and would fall outside the rebase window).
     store.insert("ticker_splits", {
-        "symbol": "AMD", "execution_date": str(date.today()),
+        "symbol": "AMD", "execution_date": _et_date(_utcnow()),
         "split_from": 1, "split_to": 2}, returning=False)
     _patch_broker(monkeypatch, _StopBroker(px=49.0))  # rebased tape → trip
     watch = store.select("desk_watch", filters={"id": wid})[0]

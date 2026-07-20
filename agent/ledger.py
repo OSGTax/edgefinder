@@ -2202,6 +2202,117 @@ def _reconstruct_exit(trades: list[dict], sym: str, entry_fills: list[dict],
             "dominant_run": max(run_units, key=lambda r: run_units[r])}
 
 
+def _commitment_breach(store, symbol: str, direction: str, level: float,
+                       start_date: str, end_date: str,
+                       split_events: list[tuple[str, float]] | None = None
+                       ) -> tuple[str, float] | None:
+    """The FIRST stored daily close between the commitment's creation and its
+    deadline that touches its level in the stated direction — (date, close),
+    else None. Sibling of ``_kill_breached`` but two-sided: a ``below``
+    commitment (a re-entry floor, a stop) triggers on close <= level; an
+    ``above`` commitment (a re-add ceiling, "reclaims $325") triggers on
+    close >= level. Split-aware on the creation-day basis, same as the kill
+    sweep. None when no closes are stored — nothing to judge, never a fake
+    no."""
+    from datetime import date as _date
+
+    try:
+        rows = store.select(
+            "daily_bars", columns="date,close",
+            filters={"symbol": symbol,
+                     "date": [("gte", _date.fromisoformat(start_date[:10])),
+                              ("lte", _date.fromisoformat(end_date[:10]))]},
+            order=[("date", "asc")])
+    except Exception:  # noqa: BLE001 — unreadable history → null, not a guess
+        return None
+    for r in rows:
+        if not r.get("close"):
+            continue
+        d, c = str(r["date"])[:10], float(r["close"])
+        f = 1.0
+        for ed, x in (split_events or []):
+            if start_date[:10] < ed <= d:
+                f *= x
+        lvl = level / f
+        if (direction == "below" and c <= lvl) or \
+           (direction == "above" and c >= lvl):
+            return d, round(c, 4)
+    return None
+
+
+def sweep_commitments(store=None, *, account: str = ACCOUNT,
+                      split_events: dict | None = None,
+                      trades: list | None = None,
+                      today: str | None = None) -> dict:
+    """Machine-check open commitments (the structured falsification clauses on
+    trim/exit picks) against stored closes — the fix for free-text re-add
+    promises that used to go silently unchecked. A priced commitment whose
+    level is touched in its direction flips to ``fired`` with the breaching
+    date + close; an unpriced or price-untouched commitment past its ``until``
+    deadline flips to ``expired``. Fired-and-unhonored commitments are what
+    ``brain context`` then surfaces as obligations. Idempotent: only ``open``
+    rows are swept, and grade calls this each pass."""
+    from datetime import date as _date
+
+    store = store or _store()
+    try:
+        rows = store.select("desk_commitments",
+                            filters={"account": account, "status": "open"},
+                            order=[("id", "asc")], limit=500)
+    except Exception as exc:  # noqa: BLE001 — pre-deploy grace, like grade()
+        from agent.store import is_missing_table_error
+
+        if is_missing_table_error(exc):
+            return {"ok": True, "swept": 0, "fired": 0, "expired": 0,
+                    "note": "desk_commitments not migrated yet — skipped"}
+        raise
+    if not rows:
+        return {"ok": True, "swept": 0, "fired": 0, "expired": 0}
+
+    if trades is None:
+        trades = _trades(store, account)
+    if split_events is None:
+        split_events = _booked_split_events(trades)
+    today = today or _et_date(_utcnow()) or str(_utcnow().date())
+
+    # commitment start = its creating decision's date (the level was stated
+    # then); fall back to created_at, then to nothing swept.
+    dec_ts: dict[str, str] = {}
+    for d in store.select("desk_decisions", filters={"account": account},
+                          columns="run_id,ts", order=[("ts", "desc")],
+                          limit=200):
+        dec_ts.setdefault(str(d.get("run_id")), _et_date(d.get("ts")) or "")
+
+    fired = expired = 0
+    for c in rows:
+        sym = c.get("symbol")
+        start = dec_ts.get(str(c.get("run_id"))) \
+            or _et_date(c.get("created_at")) or ""
+        until = c.get("until")
+        until = str(until)[:10] if until else None
+        hit = None
+        if (c.get("level") is not None and c.get("direction") in
+                ("above", "below") and start):
+            end = min(until, today) if until else today
+            if end >= start:
+                hit = _commitment_breach(store, sym, c["direction"],
+                                         float(c["level"]), start, end,
+                                         split_events.get(sym))
+        if hit:
+            store.update("desk_commitments", {"id": c["id"]},
+                         {"status": "fired", "fired_date":
+                          _date.fromisoformat(hit[0]), "fired_close": hit[1]},
+                         returning=False)
+            fired += 1
+        elif until and today > until:
+            # deadline passed with no breach (or nothing to price-check) —
+            # the window closed; the clause did not fire.
+            store.update("desk_commitments", {"id": c["id"]},
+                         {"status": "expired"}, returning=False)
+            expired += 1
+    return {"ok": True, "swept": len(rows), "fired": fired, "expired": expired}
+
+
 # Open picks are always re-graded; --days only bounds how far back CLOSED
 # rows are refreshed (their facts are final once written).
 GRADE_OPEN_LOOKBACK_DAYS = 3650
@@ -2443,8 +2554,15 @@ def grade(store=None, *, days: int = 30, run_id: str | None = None,
                            "horizon_elapsed": (sessions >= h) if h else None,
                            "kill_level": kill_level,
                            "kill_breached": breached})
+    # Same pass, same split-aware close data: sweep the structured
+    # commitments (trim/exit falsification clauses) so a fired re-add promise
+    # becomes a tracked obligation instead of silent free text.
+    commitments = sweep_commitments(store, account=account,
+                                    split_events=split_events, trades=trades,
+                                    today=today)
     return {"ok": True, "as_of": today, "graded": len(graded),
-            "closed_rows_outside_window": skipped_closed, "rows": graded}
+            "closed_rows_outside_window": skipped_closed, "rows": graded,
+            "commitments": commitments}
 
 
 def save_backtest(label: str, result: dict, *, run_id: str | None = None,

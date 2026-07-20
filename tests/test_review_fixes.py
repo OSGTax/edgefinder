@@ -17,8 +17,13 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from agent import occ
+from agent.ledger import _et_date, _utcnow
 
-TODAY = date.today()
+# The ledger reasons in ET (a US-market book); a UTC container clock in the
+# 8pm-midnight ET window makes date.today() one day ahead of the code's
+# notion of "today" and breaks the strict split-rebase window check. Anchor
+# the tests to the SAME ET date the code uses.
+TODAY = date.fromisoformat(_et_date(_utcnow()))
 FUT = TODAY + timedelta(days=45)
 PAST = TODAY - timedelta(days=3)
 

@@ -140,6 +140,56 @@ OPENING_ACTIONS = ("buy", "add")
 # these actions make sense for it.
 BOOK_ACTIONS = ("hold", "stance")
 
+# Actions that CLOSE or reduce exposure — a trim/exit/hold that carries a
+# conditional re-entry/stop clause in its free text is exactly the case the
+# prediction registry never covered (the AAPL ~$500 miss, claim C-1). These
+# picks must carry a STRUCTURED commitment when a clause is detected, so the
+# grade sweep can machine-check it instead of it going silent.
+CLOSING_ACTIONS = ("trim", "exit", "hold")
+import re as _re  # noqa: E402
+
+# A conditional clause: a promise that depends on a future price/level move.
+# Broad on purpose — a false positive costs one small JSON object; a missed
+# clause costs another silent obligation.
+_CONDITIONAL_CLAUSE_RE = _re.compile(
+    r"\b(re-?add|re-?enter|re-?buy|reload|back in|add back|rebuy|"
+    r"if it (?:reclaims|closes|clears|breaks|holds|retakes|falls|drops)|"
+    r"if .{0,40}\b(?:reclaims|closes above|closes below|breaks|retakes)|"
+    r"\bunless\b|revisit if|reconsider if)",
+    _re.IGNORECASE)
+COMMITMENT_KINDS = ("reentry", "stop", "review")
+
+
+def _validate_commitment(sym: str, c) -> list[str]:
+    """Shape-check a pick's structured commitment. A priced commitment
+    (reentry/stop) needs a direction + positive level + integer
+    until_sessions; a review commitment is time-only. All need the verbatim
+    clause text."""
+    problems: list[str] = []
+    if not isinstance(c, dict):
+        return [f"{sym}: 'commitment' must be an object"]
+    kind = str(c.get("kind") or "").strip().lower()
+    if kind not in COMMITMENT_KINDS:
+        problems.append(f"{sym}: commitment.kind must be one of "
+                        f"{'/'.join(COMMITMENT_KINDS)}")
+    if not (isinstance(c.get("text"), str) and c["text"].strip()):
+        problems.append(f"{sym}: commitment.text must quote the clause verbatim")
+    u = c.get("until_sessions")
+    if not (isinstance(u, (int, float)) and not isinstance(u, bool)
+            and float(u) >= 1 and float(u).is_integer()):
+        problems.append(f"{sym}: commitment.until_sessions must be an integer "
+                        ">= 1 (the deadline in trading sessions)")
+    if kind in ("reentry", "stop"):
+        if str(c.get("direction") or "").lower() not in ("above", "below"):
+            problems.append(f"{sym}: a {kind} commitment needs direction "
+                            "above|below")
+        lvl = c.get("level")
+        if not (isinstance(lvl, (int, float)) and not isinstance(lvl, bool)
+                and float(lvl) > 0):
+            problems.append(f"{sym}: a {kind} commitment needs a positive "
+                            "price level to machine-check")
+    return problems
+
 
 def _validate_picks(picks: list | None) -> str | None:
     """The prediction registry, enforced at the write. Every pick needs a
@@ -170,6 +220,22 @@ def _validate_picks(picks: list | None) -> str | None:
                     f"{'/'.join(BOOK_ACTIONS)} action, got {action or 'none'!r}"
                     " — trades go on real symbols")
             continue
+        # A structured commitment, wherever it appears, must be well-formed.
+        if p.get("commitment") is not None:
+            problems.extend(_validate_commitment(sym, p.get("commitment")))
+        # A closing pick whose free text carries a conditional re-entry/stop
+        # clause MUST structure it — else it repeats the silent-obligation
+        # failure the commitments layer exists to end.
+        if action in CLOSING_ACTIONS and p.get("commitment") is None:
+            blob = " ".join(str(p.get(k) or "") for k in
+                            ("why_now", "rationale", "kill"))
+            if _CONDITIONAL_CLAUSE_RE.search(blob):
+                problems.append(
+                    f"{sym} ({action}): the rationale carries a conditional "
+                    "clause (a re-entry/stop promise) but no structured "
+                    "'commitment' {kind, direction, level, until_sessions, "
+                    "text} — structure it so the grade sweep can check it, "
+                    "or reword to drop the promise (claim C-1)")
         if action not in OPENING_ACTIONS:
             continue
         pred = p.get("prediction")
@@ -190,6 +256,64 @@ def _validate_picks(picks: list | None) -> str | None:
                 + ". Every buy/add pick needs prediction + horizon_days + "
                   "kill (SKILL.md step 6) — fill them in, don't drop the pick.")
     return None
+
+
+def _materialize_commitments(store, *, run_id: str, picks: list | None,
+                             account: str) -> list[dict]:
+    """Turn each pick's structured ``commitment`` into a ``desk_commitments``
+    row and arm a linked ADVISORY tripwire, so a fired clause wakes the agent
+    through the always-on sweep. Idempotent by (run_id, symbol): a re-save
+    never duplicates or clobbers a commitment that already fired. A missing
+    table (pre-deploy) degrades to a no-op — the decision itself still saved."""
+    from datetime import timedelta as _timedelta
+
+    made: list[dict] = []
+    try:
+        existing = {(r.get("run_id"), r.get("symbol")) for r in
+                    store.select("desk_commitments",
+                                 filters={"account": account, "run_id": run_id},
+                                 limit=200)}
+    except Exception as exc:  # noqa: BLE001 — pre-deploy grace
+        from agent.store import is_missing_table_error
+
+        if is_missing_table_error(exc):
+            return made
+        raise
+    for p in picks or []:
+        c = p.get("commitment")
+        if not isinstance(c, dict):
+            continue
+        sym = str(p.get("symbol") or "").strip().upper()
+        if not sym or (run_id, sym) in existing:
+            continue
+        kind = str(c.get("kind") or "").strip().lower()
+        direction = str(c.get("direction") or "").strip().lower() or None
+        level = c.get("level")
+        level = float(level) if isinstance(level, (int, float)) \
+            and not isinstance(level, bool) else None
+        u = int(c["until_sessions"])
+        until = (_utcnow() + _timedelta(days=round(u * 7 / 5))).date()
+        rows = store.insert("desk_commitments", {
+            "account": account, "run_id": run_id, "symbol": sym,
+            "kind": kind, "direction": direction, "level": level,
+            "until": until, "text": str(c.get("text") or "").strip(),
+            "status": "open", "created_at": _utcnow()})
+        cid = rows[0]["id"] if rows else None
+        watch_id = None
+        if level is not None and direction in ("above", "below"):
+            w = watch_set(
+                store, symbol=sym,
+                above=(level if direction == "above" else None),
+                below=(level if direction == "below" else None),
+                reason=f"commitment {cid} ({kind}): {str(c.get('text') or '')[:160]}",
+                until=until.isoformat(), run_id=run_id, account=account)
+            watch_id = w.get("id") if w.get("ok") else None
+            if watch_id and cid is not None:
+                store.update("desk_commitments", {"id": cid},
+                             {"watch_id": watch_id}, returning=False)
+        made.append({"id": cid, "symbol": sym, "kind": kind,
+                     "watch_id": watch_id})
+    return made
 
 
 def save_decision(store=None, *, run_id: str, regime: str | None = None,
@@ -220,10 +344,17 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
         # never stay paired with rewritten picks.
         store.update("desk_decisions", {"id": existing[0]["id"]},
                      {**values, "rejected": rejected}, returning=False)
-        return {"ok": True, "run_id": run_id, "id": existing[0]["id"]}
+        commitments = _materialize_commitments(store, run_id=run_id,
+                                               picks=picks, account=account)
+        return {"ok": True, "run_id": run_id, "id": existing[0]["id"],
+                "commitments": commitments}
     rows = store.insert("desk_decisions", {
         "account": account, "run_id": run_id, "ts": _utcnow(), **values})
-    return {"ok": True, "run_id": run_id, "id": (rows[0]["id"] if rows else None)}
+    commitments = _materialize_commitments(store, run_id=run_id, picks=picks,
+                                           account=account)
+    return {"ok": True, "run_id": run_id,
+            "id": (rows[0]["id"] if rows else None),
+            "commitments": commitments}
 
 
 # ── attention: tripwires + planned wakes ────────────────
@@ -902,6 +1033,26 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
 
     watches = _safe("watches", _watches, {})
 
+    def _commitments():
+        # Fired-and-unhonored FIRST — these are obligations the cycle must
+        # face (act, or record standing down). Open ones are still watching.
+        rows = store.select("desk_commitments", filters={"account": account},
+                            order=[("id", "desc")], limit=100)
+        fired, open_ = [], []
+        for r in rows:
+            if r.get("status") == "fired" and not r.get("honored_run_id"):
+                fired.append({k: (str(v) if hasattr(v, "isoformat") else v)
+                              for k, v in r.items()
+                              if k in ("id", "run_id", "symbol", "kind",
+                                       "direction", "level", "fired_date",
+                                       "fired_close", "text")})
+            elif r.get("status") == "open":
+                open_.append({k: r.get(k) for k in
+                              ("id", "symbol", "kind", "direction", "level")})
+        return {"fired_unhonored": fired, "open": open_}
+
+    commitments = _safe("commitments", _commitments, {})
+
     def _wakes():
         out = wake_due(store, account=account)
         now = _utcnow()
@@ -930,12 +1081,14 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
             "note": "the cycle's working memory in one read — account header,"
                     " brief, wiki, tier-gated claims, strategy, open"
                     " predictions with their machine-graded facts, recent"
-                    " outcomes, tripped wires, due wakes. Free text is"
-                    " clipped; drill in with the individual tools.",
+                    " outcomes, tripped wires, fired-unhonored commitments,"
+                    " due wakes. Free text is clipped; drill in with the"
+                    " individual tools.",
             "account": account_out, "brief": brief, "wiki": wiki,
             "claims": claims, "strategy": strategy,
             "open_predictions": open_predictions,
-            "outcomes": outcomes_out, "watches": watches, "wakes": wakes,
+            "outcomes": outcomes_out, "watches": watches,
+            "commitments": commitments, "wakes": wakes,
             "errors": errors}
 
 

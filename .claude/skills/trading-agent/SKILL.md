@@ -185,7 +185,11 @@ short, candid lines; this is the live "thinking" panel the owner watches.
 - **Act on what context surfaced.** Tripped tripwires come back in its
   `watches` section — each one is a level you told the streamer to watch
   because it mattered; address it (or explicitly stand down, in a thinking
-  note) before anything else, and clear wires that no longer matter.
+  note) before anything else, and clear wires that no longer matter. A
+  fired commitment (a re-entry/stop clause whose level was hit) comes back
+  in `commitments.fired_unhonored` — same rule, and it is code-tracked:
+  act or honor-with-a-reason (`agent.knowledge commitment-honor`) this
+  cycle; it will keep surfacing until you do.
 - **Drill in only where context flags something** — the individual tools
   exist for depth on ONE section, not for re-reading what context already
   handed you:
@@ -383,6 +387,24 @@ Write the run's dossier so the desk page renders it. Small JSON files:
   "hold"}` (hold/stance are the only actions BOOK accepts); it is exempt
   from the registry and skipped by outcome grading — never put a trade
   on BOOK.
+  **Commitments — the trim/exit counterpart to the registry.** When a
+  `trim`/`exit`/`hold` pick's rationale makes a CONDITIONAL promise ("re-add
+  if it reclaims $325", "back in above the 50-day", "unless it closes below
+  $190"), that promise must be STRUCTURED, not left in prose — the last time
+  it wasn't, a fired re-add clause went unnoticed and cost ~$500 (claim
+  `[C-1]`). Add a `commitment` object to the pick:
+  `{"kind":"reentry|stop|review","direction":"above|below","level":325.0,
+  "until_sessions":5,"text":"<the clause, verbatim>"}`. `agent.brain
+  decision` REJECTS a closing pick whose text carries a conditional clause
+  with no structured commitment. On save it books the commitment and arms a
+  linked advisory tripwire, so if the level is hit the streamer wakes you.
+  `ledger grade` sweeps commitments against stored closes; a fired one shows
+  up in `brain context` under `commitments.fired_unhonored` and stays there
+  until you face it. **Facing it is mandatory and can be "no":** when a fired
+  commitment surfaces, act on it OR record standing down —
+  `python -m agent.knowledge commitment-honor --commitment-id N --run-id <RID>
+  --note "why"` — but never let it go silent. A `review` commitment (no
+  price, just a date to look again) is time-only; reentry/stop need a level.
 - `watchlist.json` — near-misses: `[{"symbol","note"}]`.
 - `rejected.json` — the alternatives that LOST the slot:
   `[{"symbol","why_not"}]`. Your playbook already makes you name them —
