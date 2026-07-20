@@ -821,9 +821,12 @@ def proposal_mark_applied(store=None, *, proposal_id: int, run_id: str,
 
 
 def lint(store=None, *, account: str = ACCOUNT) -> dict:
-    """Step-2 scope: citation integrity, orphaned evidence, missing verdicts,
-    expired-but-active claims. Stats drift, tier violations, commitment and
-    hindsight checks extend this in step 7."""
+    """The code-checkable half of the honesty checklist: citation integrity,
+    orphaned evidence, missing verdicts, expired-but-active claims, stats
+    drift (recomputed vs stored, and prose numbers vs the registry), tier
+    violations, fired-unhonored commitments + un-structured clause sweep,
+    the hindsight window, and hygiene. Errors mean the loop is telling
+    itself something false; warnings are curation debt."""
     import re
 
     store = store or _store()
@@ -850,9 +853,16 @@ def lint(store=None, *, account: str = ACCOUNT) -> dict:
                 errors.append(f"wiki/{page.get('slug')} cites [C-{cid}] which "
                               f"is {c.get('status')} — update the prose")
 
-    # 2. picks[].claims ids in recent decisions resolve (tier gate = step 5)
+    # 2. picks[].claims ids in recent decisions resolve AND are allowed to
+    #    justify (belt-and-braces re-check of the step-5 write gate); plus a
+    #    legacy sweep for closing picks whose free text carries an
+    #    un-structured conditional clause.
     decisions = store.select("desk_decisions", filters={"account": account},
                              order=[("ts", "desc")], limit=40)
+    try:
+        from agent.brain import _CONDITIONAL_CLAUSE_RE, CLOSING_ACTIONS
+    except Exception:  # noqa: BLE001 — never let a lint import kill the pass
+        _CONDITIONAL_CLAUSE_RE = CLOSING_ACTIONS = None
     for d in decisions:
         for p in d.get("picks") or []:
             for cid in p.get("claims") or []:
@@ -865,6 +875,22 @@ def lint(store=None, *, account: str = ACCOUNT) -> dict:
                     warnings.append(f"decision {d.get('run_id')} pick "
                                     f"{p.get('symbol')} cites claim {cid} "
                                     f"({c.get('status')})")
+                elif not (c.get("tier") == "established"
+                          or c.get("experimental")):
+                    errors.append(f"decision {d.get('run_id')} pick "
+                                  f"{p.get('symbol')} cites {cid} (tier "
+                                  f"{c.get('tier')}) — only established/"
+                                  "experimental may justify a pick")
+            if _CONDITIONAL_CLAUSE_RE and CLOSING_ACTIONS \
+                    and str(p.get("action") or "").lower() in CLOSING_ACTIONS \
+                    and not p.get("commitment"):
+                blob = " ".join(str(p.get(k) or "") for k in
+                                ("why_now", "rationale", "kill"))
+                if _CONDITIONAL_CLAUSE_RE.search(blob):
+                    warnings.append(f"decision {d.get('run_id')} pick "
+                                    f"{p.get('symbol')} carries a conditional "
+                                    "clause in prose with no structured "
+                                    "commitment (pre-gate residue)")
 
     # 3. orphaned evidence + closed-unjudged refs on active claims
     for c in claims:
@@ -895,11 +921,192 @@ def lint(store=None, *, account: str = ACCOUNT) -> dict:
                 errors.append(f"claim {c['id']} expired {exp} but still "
                               "active — renew with fresh evidence or supersede")
 
+    # 6. stats drift — stored n vs recomputed n from the evidence refs
+    for c in claims:
+        if c.get("status") != "active" or not c.get("stats"):
+            continue
+        stored_n = (c.get("stats") or {}).get("n")
+        if not isinstance(stored_n, int):
+            continue
+        rc = recompute_stats(store, claim_id=c["id"], account=account)
+        if rc.get("ok") and rc["stats"]["n"] != stored_n:
+            warnings.append(f"claim {c['id']} stats drift: stored n={stored_n} "
+                            f"vs recomputed n={rc['stats']['n']} — re-promote "
+                            "or refresh the stored stats")
+
+    # 6b. prose-number drift — an (n=X) figure next to a [C-n] token in the
+    #     wiki that disagrees with the claim's stored n.
+    for page in pages:
+        body = page.get("body") or ""
+        for m in re.finditer(r"\[C-(\d+)\][^\n]{0,80}?\bn\s*=\s*(\d+)", body):
+            cid, prose_n = int(m.group(1)), int(m.group(2))
+            c = by_id.get(cid)
+            sn = (c.get("stats") or {}).get("n") if c else None
+            if isinstance(sn, int) and sn != prose_n:
+                warnings.append(f"wiki/{page.get('slug')} says [C-{cid}] n="
+                                f"{prose_n} but the claim's stored n={sn}")
+
+    # 7. hindsight window — evidence must predate the claim's creation
+    for c in claims:
+        created = _as_date(c.get("created_at"))
+        if not created:
+            continue
+        res = _resolve_evidence(store, c.get("evidence") or [], account)
+        for rid, dec in res["decisions"].items():
+            dts = _as_date(dec.get("ts"))
+            if dts and dts > created:
+                warnings.append(f"claim {c['id']} cites decision {rid} dated "
+                                f"{dts} AFTER the claim was created {created} "
+                                "— hindsight risk, verify the lesson was "
+                                "knowable at decision time")
+
+    # 8. fired-and-unhonored commitments — the obligations the loop owes
+    try:
+        commits = store.select("desk_commitments",
+                               filters={"account": account, "status": "fired"},
+                               limit=200)
+    except Exception:  # noqa: BLE001 — pre-deploy grace
+        commits = []
+    for cm in commits:
+        if not cm.get("honored_run_id"):
+            warnings.append(f"commitment {cm['id']} ({cm.get('symbol')}) fired "
+                            f"{cm.get('fired_date')} and is unhonored — face "
+                            "it or record standing down")
+
+    # 9. hygiene — market/risk claims missing a regime scope, empty evidence,
+    #    and proposals pending past their TTL.
+    for c in claims:
+        if c.get("status") != "active":
+            continue
+        scope = c.get("scope") or {}
+        if c.get("kclass") == "market_strategy" and not scope.get("regimes"):
+            warnings.append(f"claim {c['id']} (market_strategy) has no regime "
+                            "scope — a rule learned in one regime isn't yet a "
+                            "rule for another")
+        if not (c.get("evidence") or []):
+            warnings.append(f"claim {c['id']} has no evidence attached")
+    try:
+        pend = store.select("desk_proposals",
+                            filters={"account": account, "status": "pending"},
+                            limit=100)
+    except Exception:  # noqa: BLE001
+        pend = []
+    for pr in pend:
+        exp = _as_date(pr.get("expires_at"))
+        if exp and exp < today:
+            warnings.append(f"proposal {pr['id']} pending past its TTL "
+                            f"(expired {exp}) — expire or re-file it")
+
     return {"ok": not errors, "errors": errors, "warnings": warnings,
             "counts": {"claims": len(claims),
                        "active": sum(1 for c in claims
                                      if c.get("status") == "active"),
                        "errors": len(errors), "warnings": len(warnings)}}
+
+
+def loop_report(store=None, *, days: int = 7, account: str = ACCOUNT) -> dict:
+    """The loop-honesty instrument: was knowledge WRITTEN, PROMOTED, READ, and
+    did it CHANGE anything — over the last ``days``. Makes loop health
+    observable rather than assumed. Read-only; the reflection embeds it in the
+    Friday journal and the cycle report carries it weekly."""
+    store = store or _store()
+    since = str(_utcnow() - timedelta(days=days))
+    out: dict = {"window_days": days, "since": since}
+
+    claims = store.select("desk_claims", filters={"account": account},
+                          limit=1000) if _safe_table(store, "desk_claims") else []
+    events = store.select("desk_claim_events", filters={"account": account},
+                          order=[("id", "desc")], limit=1000) \
+        if _safe_table(store, "desk_claim_events") else []
+    recent_ev = [e for e in events if str(e.get("ts") or "") >= since]
+    ev_by_kind: dict[str, int] = {}
+    for e in recent_ev:
+        ev_by_kind[e.get("event")] = ev_by_kind.get(e.get("event"), 0) + 1
+
+    # tier census (the standing shape of the knowledge base)
+    tier_census: dict[str, int] = {}
+    for c in claims:
+        if c.get("status") == "active":
+            tier_census[c.get("tier")] = tier_census.get(c.get("tier"), 0) + 1
+
+    # was it READ → cited by decisions in the window?
+    cited = 0
+    decisions = store.select("desk_decisions", filters={"account": account},
+                             order=[("ts", "desc")], limit=200)
+    win_decisions = [d for d in decisions if str(d.get("ts") or "") >= since]
+    for d in win_decisions:
+        for p in d.get("picks") or []:
+            if p.get("claims"):
+                cited += 1
+
+    # commitments armed / fired / honored in the window
+    commits = store.select("desk_commitments", filters={"account": account},
+                           limit=500) if _safe_table(store, "desk_commitments") else []
+    c_armed = sum(1 for c in commits if str(c.get("created_at") or "") >= since)
+    c_fired = sum(1 for c in commits if str(c.get("fired_date") or "") >= since[:10])
+    c_unhonored = sum(1 for c in commits
+                      if c.get("status") == "fired" and not c.get("honored_run_id"))
+
+    # verdict coverage: closed outcomes with/without a verdict
+    outcomes = store.select("desk_outcomes",
+                            filters={"account": account, "status": "closed"},
+                            limit=500) if _safe_table(store, "desk_outcomes") else []
+    unjudged = sum(1 for o in outcomes if not o.get("verdict"))
+
+    # ungated (no-learned-basis) strategy changes in the window
+    journal = store.select("desk_journal",
+                           filters={"account": account,
+                                    "kind": "ungated-change"}, limit=200)
+    ungated = sum(1 for j in journal if str(j.get("ts") or "") >= since)
+
+    # proposal queue age
+    props = store.select("desk_proposals",
+                         filters={"account": account, "status": "pending"},
+                         limit=100) if _safe_table(store, "desk_proposals") else []
+
+    out.update({
+        "written": {"claim_events": len(recent_ev), "by_event": ev_by_kind},
+        "promoted": ev_by_kind.get("promoted", 0),
+        "superseded": ev_by_kind.get("superseded", 0),
+        "read": {"decisions_in_window": len(win_decisions),
+                 "picks_citing_claims": cited},
+        "tier_census": tier_census,
+        "commitments": {"armed": c_armed, "fired": c_fired,
+                        "unhonored_now": c_unhonored},
+        "verdicts": {"closed_outcomes": len(outcomes), "unjudged": unjudged},
+        "ungated_changes": ungated,
+        "proposals_pending": len(props),
+        "health": _loop_health(cited, tier_census, unjudged, c_unhonored),
+    })
+    return out
+
+
+def _safe_table(store, table: str) -> bool:
+    try:
+        store.select(table, limit=1)
+        return True
+    except Exception:  # noqa: BLE001 — missing table / unreadable
+        return False
+
+
+def _loop_health(cited: int, tier_census: dict, unjudged: int,
+                 unhonored: int) -> list[str]:
+    """Short, honest flags on loop health — the things a human should look at."""
+    flags = []
+    if not tier_census:
+        flags.append("no active claims — the knowledge base is empty")
+    if cited == 0:
+        flags.append("no pick cited a claim this window — knowledge is being "
+                     "written but maybe not read")
+    if unjudged:
+        flags.append(f"{unjudged} closed pick(s) still unjudged — verdict "
+                     "coverage is behind")
+    if unhonored:
+        flags.append(f"{unhonored} fired commitment(s) unhonored")
+    if not flags:
+        flags.append("loop nominal: claims present, cited, judged, no open "
+                     "obligations")
+    return flags
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
@@ -997,6 +1204,10 @@ def main(argv: list[str] | None = None) -> None:
     sy.add_argument("--id", type=int, required=True, dest="proposal_id")
 
     sub.add_parser("lint")
+    lr = sub.add_parser("loop-report",
+                        help="loop-honesty instrument: what was learned, "
+                             "promoted, read, changed over --days")
+    lr.add_argument("--days", type=int, default=7)
     sub.add_parser("context-claims")
 
     args = p.parse_args(argv)
@@ -1054,6 +1265,8 @@ def main(argv: list[str] | None = None) -> None:
         out = proposal_sync(store, proposal_id=args.proposal_id)
     elif args.cmd == "lint":
         out = lint(store)
+    elif args.cmd == "loop-report":
+        out = loop_report(store, days=args.days)
     elif args.cmd == "context-claims":
         out = context_claims(store)
     else:  # pragma: no cover

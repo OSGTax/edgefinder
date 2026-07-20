@@ -205,13 +205,25 @@ With the grades in hand, rewrite pages via
   brevity is.
 
 ### 5. Close the week
-One journal entry summarizing the review:
+First, take the loop's own pulse:
+`python -m agent.knowledge loop-report --days 7` — what the learning loop
+actually DID this week: claims written/promoted/superseded, whether any pick
+CITED a claim (knowledge written but never read is a dead loop), commitments
+armed/fired/honored, verdict coverage, ungated changes, and the pending
+proposal queue. Read its `health` flags; if it says knowledge is written but
+not read, or verdicts are behind, that is next week's first fix.
+
+Then one journal entry summarizing the review — fold in the loop-report
+headline so loop health is on the record, not just assumed:
 ```
 python -m agent.brain journal --kind note \
     --title "Weekly reflection YYYY-MM-DD" \
     --body "<N picks graded: W right-for-right-reason, X lucky, Y wrong.
-            Realized this week: $Z. The one real lesson: ...>"
+            Realized this week: $Z. The one real lesson: ...
+            Loop: <claims promoted/superseded, picks-citing-claims,
+            verdict coverage, any health flag>.>"
 ```
 Then report a short summary to the owner: the scoreboard, what changed in
-the notebook (and what you deleted — deletions are wins), and the one thing
-next week's trader should do differently.
+the notebook (and what you deleted — deletions are wins), the loop-health
+line, and the one thing next week's trader should do differently. If any
+proposal is awaiting the owner, name it.
