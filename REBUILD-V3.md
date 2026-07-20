@@ -66,6 +66,20 @@ An **autonomous AI paper-trading desk**, private to the owner:
    will save, and opt-in hard stops execute through the same fill gates as
    any trade (the entry-friction bands overridden explicitly, on the
    receipt).
+7. **The agent cannot teach itself into authority** (v9.13–v9.19, design
+   in `SCHEMA.md`): what it learns lives in a tiered claims registry
+   (`desk_claims`) with recorded sample sizes — no self-assessed
+   confidence anywhere — and only claims that earned `established` tier
+   through criteria REGISTERED BEFORE the results (or explicitly
+   experimental ones, under hard exposure caps) may justify a pick; the
+   decision save enforces it. A trim/exit's conditional promise must be a
+   structured commitment the grade pass machine-checks — a fired one nags
+   every cycle until faced. Raising its own caps or pivoting the strategy
+   requires the OWNER's approved proposal (or an audited no-learned-basis
+   declaration); tightening is always free. Nothing is deleted — claims
+   supersede; risk rules never decay; regime-conditional claims expire
+   unless renewed. `agent.knowledge lint` and `loop-report` keep the
+   whole loop observable instead of assumed.
 
 ## Runtime layout
 
