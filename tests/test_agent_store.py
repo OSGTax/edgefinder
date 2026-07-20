@@ -123,7 +123,8 @@ def test_brain_state_and_decision_upsert_on_fake_store():
     store = FakeStore()
     assert brain.get_state(store)["version"] == 0
     brain.set_state(store, name="v1", thesis="a", rules={"x": 1}, params={"k": 5}, bump=True)
-    brain.set_state(store, name="v2", thesis="b", bump=True)
+    brain.set_state(store, name="v2", thesis="b", bump=True,
+                    no_learned_basis="test fixture pivot")
     s = brain.get_state(store)
     assert s["version"] == 2 and s["name"] == "v2"
     # tweak (no bump) edits the latest row in place

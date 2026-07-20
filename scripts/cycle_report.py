@@ -75,9 +75,14 @@ def gather(gh_run_id: str, now: datetime | None = None) -> dict:
     nxt = rows("desk_wakes", "at,reason", [("honored_run_id", "is.null"),
                ("at", f"gte.{now.isoformat()}")], "at.asc", 1)
     eq = rows("desk_equity", "ts,equity,return_pct", [], "ts.desc", 1)
+    try:
+        props = rows("desk_proposals", "id,title,change_kind",
+                     [("status", "eq.pending")], "id.desc", 5)
+    except Exception:  # noqa: BLE001 — a missing/empty table must not blank the report
+        props = []
     return {"decision": dec[0] if dec else None, "matched_run": matched,
             "fills": fills, "next_wake": nxt[0] if nxt else None,
-            "equity": eq[0] if eq else None}
+            "equity": eq[0] if eq else None, "pending_proposals": props}
 
 
 def _fmt_et(ts: str) -> str:
@@ -138,6 +143,18 @@ def compose(gh_run_id: str, conclusion: str, facts: dict,
                      f"{(nxt.get('reason') or '')[:120]}")
     else:
         lines.append("Next check-in: none pending (floor slots / tripwires).")
+
+    props = facts.get("pending_proposals") or []
+    if props:
+        lines.append("")
+        lines.append(f"OWNER ACTION — {len(props)} proposal(s) awaiting your "
+                     "approval (a learned-behavior change is on hold until you "
+                     "decide):")
+        for p in props:
+            lines.append(f"  PROPOSAL-{p.get('id')} [{p.get('change_kind')}]: "
+                         f"{(p.get('title') or '')[:80]}")
+        lines.append("  Approve by commenting 'approve' on the PROPOSAL-<id> "
+                     "issue, or run: agent.knowledge proposal-approve --id <id>")
 
     lines.append(f"Log: https://github.com/OSGTax/edgefinder/actions/runs/"
                  f"{gh_run_id}")

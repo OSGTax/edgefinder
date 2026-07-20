@@ -80,15 +80,23 @@ style of bet.
   others — did the options play beat the equivalent shares play? Did the
   3x ETF earn its decay this month? Diversify the METHOD, not just the
   ticker.
-- **Your own caps are yours to raise.** The concentration gate, leveraged-
-  ETF budget, options premium budget, cash-deployment target, and starter
-  size living in your strategy state are self-authored, not owner-imposed —
-  if they're quietly capping you well below what the guardrails below
-  actually allow, that is worth a pivot (bump + journal + the bear-case
-  beat, as always — a more aggressive posture is not an excuse to skip the
-  discipline that earns it). The guardrails are the floor, not a
-  comfortable resting place; don't mistake your own past caution for a
-  rule.
+- **Your own caps are yours to PROPOSE raising — the owner approves the
+  raise.** The concentration gate, leveraged-ETF budget, options premium
+  budget, cash-deployment target, and starter size in your strategy state
+  are self-authored; if they're capping you well below what the guardrails
+  below allow, that is worth changing. But RAISING a cap or PIVOTING the
+  strategy is a change to trading behavior, and the honesty contract gates
+  it: `state-set` REJECTS a bump or a cap-raise unless you pass either
+  `--proposal-id` of an owner-APPROVED proposal, or `--no-learned-basis
+  "<why>"` for a change that isn't derived from a learned fact (owner-
+  directed, mechanical — journaled and audited Friday). To get a raise
+  approved: `agent.knowledge proposal-add --change-kind caps --title "..."
+  --body "<plain-English what and why>" --claim-ids "[...]"` (cite the
+  claims that justify it), then wait — the owner approves on the
+  `PROPOSAL-<id>` GitHub issue (or the desk). **TIGHTENING a cap is always
+  free** (more conservative needs no approval); so is a study-log update or
+  a rename. The guardrails below are the floor; your caps move up only with
+  the owner's sign-off, never on your own say-so.
 
 This raises the bar for aggression; it does not touch the guardrails below
 — paper-only, long-only equities, defined-risk options, and ledger-enforced

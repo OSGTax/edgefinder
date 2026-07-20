@@ -72,13 +72,82 @@ def get_state(store=None, account: str = "agent") -> dict:
             "updated_at": str(row["updated_at"]) if row.get("updated_at") else None}
 
 
+# The self-authored caps whose RAISING (loosening) is a learned-behavior
+# change — gated on owner approval (SCHEMA.md outcome 6). Tightening any of
+# them is always free; only a looser cap needs a proposal or an explicit
+# no-learned-basis declaration. Keys match desk_strategy_state.params.
+GATED_CAP_KEYS = (
+    "concentration_gate_pct", "starter_position_pct",
+    "options_premium_budget_pct_of_book", "leveraged_etf_single_gate_pct",
+    "leveraged_etf_total_gate_pct", "cash_deployment_target_pct",
+    "downside_play_premium_per_position_pct", "universe_top_n", "max_names")
+
+
+def _raised_caps(cur_params: dict | None, new_params: dict | None) -> list[str]:
+    """Gated cap keys whose new value exceeds the current one (a loosening).
+    A newly-introduced cap key counts as a raise from absent."""
+    cur = cur_params or {}
+    new = new_params or {}
+    raised = []
+    for k in GATED_CAP_KEYS:
+        if k not in new:
+            continue
+        nv, cv = new.get(k), cur.get(k)
+        if not isinstance(nv, (int, float)) or isinstance(nv, bool):
+            continue
+        if cv is None or (isinstance(cv, (int, float)) and not isinstance(
+                cv, bool) and nv > cv):
+            raised.append(k)
+    return raised
+
+
 def set_state(store=None, *, name: str, thesis: str | None = None,
               rules: dict | None = None, params: dict | None = None,
-              bump: bool = False, account: str = "agent") -> dict:
+              bump: bool = False, run_id: str | None = None,
+              proposal_id: int | None = None,
+              no_learned_basis: str | None = None,
+              account: str = "agent") -> dict:
     """Update the living strategy. ``bump`` writes a NEW version row (a pivot);
-    otherwise the latest row is updated in place (a tweak)."""
+    otherwise the latest row is updated in place (a tweak).
+
+    OWNER-APPROVAL GATE (SCHEMA.md outcome 6): a pivot, or an in-place tweak
+    that RAISES any self-authored cap, is a change to trading behavior. It
+    requires EITHER ``proposal_id`` of an approved ``desk_proposals`` row
+    (which facts justified it live in that proposal's ``claim_ids``) OR an
+    explicit ``no_learned_basis`` reason — the audited escape hatch for a
+    change NOT derived from a learned fact (owner-directed, mechanical). The
+    escape hatch is journaled for the Friday reflection to audit. Tightening
+    a cap, renaming, or a study-log update is ungated."""
     store = store or _store()
     cur = get_state(store, account)
+    raised = _raised_caps(cur.get("params"), params) if cur.get("exists") else []
+    gated = bump or bool(raised)
+    if gated and cur.get("exists"):
+        why = "a strategy pivot (bump)" if bump else \
+            f"raising the caps {raised}"
+        if proposal_id is not None:
+            from agent import knowledge
+
+            appr = knowledge.proposal_mark_applied(
+                store, proposal_id=proposal_id, run_id=run_id or "unknown",
+                account=account)
+            if not appr.get("ok"):
+                return {"ok": False, "error":
+                        f"{why} needs an APPROVED proposal: {appr['error']}"}
+        elif no_learned_basis and str(no_learned_basis).strip():
+            add_journal(store, kind="ungated-change",
+                        title=f"Ungated strategy change: {why}",
+                        body=f"no-learned-basis: {no_learned_basis.strip()}. "
+                             f"run_id={run_id}. Raised={raised or 'n/a'}. "
+                             "Audited by the Friday reflection.",
+                        account=account)
+        else:
+            return {"ok": False, "error":
+                    f"{why} is a change to trading behavior — it needs owner "
+                    "approval. File a proposal (agent.knowledge proposal-add), "
+                    "get it approved, and pass --proposal-id; OR, if this is "
+                    "NOT derived from a learned fact (owner-directed or "
+                    "mechanical), declare it with --no-learned-basis \"<why>\"."}
     if bump or not cur["exists"]:
         version = (cur["version"] or 0) + 1
         store.insert("desk_strategy_state", {
@@ -96,7 +165,12 @@ def set_state(store=None, *, name: str, thesis: str | None = None,
             values["params"] = params
         store.update("desk_strategy_state", {"id": row["id"]}, values, returning=False)
         version = row["version"]
-    return {"ok": True, "version": version, "name": name}
+    out = {"ok": True, "version": version, "name": name}
+    if gated and cur.get("exists"):
+        out["gated_change"] = why
+        out["authorized_by"] = (f"proposal {proposal_id}" if proposal_id
+                                is not None else "no-learned-basis")
+    return out
 
 
 # ── journal ─────────────────────────────────────────────
@@ -1205,6 +1279,11 @@ def main(argv: list[str] | None = None) -> None:
     ss.add_argument("--rules-file", default=None)
     ss.add_argument("--params-file", default=None)
     ss.add_argument("--bump", action="store_true")
+    ss.add_argument("--run-id", default=None)
+    ss.add_argument("--proposal-id", type=int, default=None,
+                    help="an APPROVED proposal authorizing this pivot/cap-raise")
+    ss.add_argument("--no-learned-basis", default=None,
+                    help="declare this change is NOT learned-derived (audited)")
 
     jr = sub.add_parser("journal")
     jr.add_argument("--kind", required=True, choices=["pivot", "tweak", "note"])
@@ -1308,7 +1387,8 @@ def main(argv: list[str] | None = None) -> None:
         print(json.dumps(set_state(
             store, name=args.name, thesis=args.thesis,
             rules=_load_json(args.rules_file), params=_load_json(args.params_file),
-            bump=args.bump), indent=2))
+            bump=args.bump, run_id=args.run_id, proposal_id=args.proposal_id,
+            no_learned_basis=args.no_learned_basis), indent=2))
     elif args.cmd == "journal":
         print(json.dumps(add_journal(
             store, kind=args.kind, title=args.title, body=args.body,

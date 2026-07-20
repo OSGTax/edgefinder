@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     github_dispatch_repo: str = "OSGTax/edgefinder"
     github_dispatch_workflow: str = "trading-agent.yml"
 
+    # ── OWNER APPROVAL (v9.17.0) ─────────────────────
+    # Learned-behavior changes (strategy pivots, cap raises) need the owner's
+    # approval, filed as a proposal and approved out-of-band. The GitHub
+    # channel verifies AUTHORSHIP: only a comment/label by github_owner_login
+    # on issue PROPOSAL-<id> counts. github_read_token needs issues:read on
+    # this repo (the Actions GITHUB_TOKEN has it; the dispatch PAT does NOT).
+    # Empty read token => the GitHub sync is unavailable and the owner
+    # approves via the CLI fallback instead.
+    github_owner_login: str = "OSGTax"
+    github_read_token: str = ""
+
     # ── LIVE BROKER (Alpaca paper + real-time data) ──
     # The account of record for live paper trading and the real-time quote
     # source. Keys are paper keys; data feed "sip" = full consolidated tape

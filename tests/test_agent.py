@@ -175,7 +175,8 @@ def test_brain_state_journal_decision(seeded):
     assert s["version"] == 1 and s["name"] == "trend-follow"
 
     brain.set_state(store, name="trend-follow v2", thesis="ride winners, cut losers",
-                    rules={"hold_above": "ema_200"}, params={"k": 8}, bump=True)
+                    rules={"hold_above": "ema_200"}, params={"k": 8}, bump=True,
+                    no_learned_basis="test fixture pivot")
     assert brain.get_state(store)["version"] == 2
 
     brain.add_journal(store, kind="pivot", title="raised K to 8",
@@ -199,6 +200,11 @@ def test_brain_state_journal_decision(seeded):
     try:
         assert sess.query(DeskDecision).count() == 1
         assert sess.query(DeskThinking).count() == 1
-        assert sess.query(DeskJournal).count() == 1
+        # two journal rows: the explicit pivot note above, plus the
+        # audited "ungated-change" note the no_learned_basis bump writes
+        # (the owner-approval gate's escape-hatch receipt).
+        assert sess.query(DeskJournal).count() == 2
+        assert sess.query(DeskJournal).filter_by(
+            kind="ungated-change").count() == 1
     finally:
         sess.close()

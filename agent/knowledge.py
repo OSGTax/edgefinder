@@ -655,6 +655,168 @@ def proposal_list(store=None, *, status: str | None = None,
             "proposals": [_row_out(r) for r in rows]}
 
 
+def proposal_get(store=None, *, proposal_id: int,
+                 account: str = ACCOUNT) -> dict | None:
+    store = store or _store()
+    rows = store.select("desk_proposals", filters={"id": proposal_id,
+                                                   "account": account})
+    return rows[0] if rows else None
+
+
+def _decide_proposal(store, *, proposal_id: int, status: str, by: str,
+                     via: str, account: str) -> dict:
+    p = proposal_get(store, proposal_id=proposal_id, account=account)
+    if not p:
+        return {"ok": False, "error": f"proposal {proposal_id} not found"}
+    if p.get("status") not in ("pending",):
+        return {"ok": False,
+                "error": f"proposal {proposal_id} is already "
+                         f"{p.get('status')} — only a pending proposal decides"}
+    store.update("desk_proposals", {"id": proposal_id},
+                 {"status": status, "decided_by": by, "decided_via": via,
+                  "decided_at": _utcnow()}, returning=False)
+    return {"ok": True, "id": proposal_id, "status": status,
+            "decided_by": by, "decided_via": via}
+
+
+def proposal_approve(store=None, *, proposal_id: int, by: str = "owner",
+                     account: str = ACCOUNT) -> dict:
+    """CLI approval fallback (the owner, working in a session/Codespace).
+    Weaker than the GitHub channel — no cryptographic authorship — so it
+    records ``decided_via='cli'`` for the audit. The agent must NEVER call
+    this; it is an owner action."""
+    return _decide_proposal(store, proposal_id=proposal_id, status="approved",
+                            by=by, via="cli", account=account)
+
+
+def proposal_reject(store=None, *, proposal_id: int, by: str = "owner",
+                    account: str = ACCOUNT) -> dict:
+    return _decide_proposal(store, proposal_id=proposal_id, status="rejected",
+                            by=by, via="cli", account=account)
+
+
+# An approving signal on the GitHub issue: a comment body starting with
+# "approve"/"approved"/"lgtm", or an "approved" label. Authorship is what
+# matters — only the repo owner's login counts (see proposal_sync).
+_APPROVE_RE = __import__("re").compile(
+    r"^\s*(approve[d]?|lgtm|ship it)\b", __import__("re").IGNORECASE)
+
+
+def _fetch_github_issue(repo: str, title: str, token: str) -> dict | None:
+    """Find the open issue titled ``title`` and return its author-attributed
+    comments + labels. stdlib urllib, matching agent.streamer's dispatch
+    call. Returns None when the issue isn't found or the read fails."""
+    import urllib.parse
+    import urllib.request
+
+    def _get(path: str):
+        url = f"https://api.github.com/repos/{repo}/{path}"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+
+    try:
+        q = urllib.parse.quote(f'repo:{repo} in:title "{title}"')
+        found = _get(f"../../search/issues?q={q}")
+        items = [i for i in found.get("items", [])
+                 if (i.get("title") or "").strip() == title]
+        if not items:
+            return None
+        issue = items[0]
+        num = issue["number"]
+        comments = _get(f"issues/{num}/comments")
+        return {
+            "labels": [{"name": lb.get("name"),
+                        "user": (issue.get("user") or {}).get("login")}
+                       for lb in issue.get("labels", [])],
+            "comments": [{"user": (c.get("user") or {}).get("login"),
+                          "body": c.get("body") or ""} for c in comments],
+        }
+    except Exception:  # noqa: BLE001 — network/parse failure → unavailable
+        return None
+
+
+def proposal_sync(store=None, *, proposal_id: int, fetch=None,
+                  owner: str | None = None, account: str = ACCOUNT) -> dict:
+    """Reconcile a pending proposal with its GitHub issue ``PROPOSAL-<id>``.
+    Approves ONLY when an approving comment (or an ``approved`` label) was
+    authored by the repo owner's login — not the agent's token identity, not
+    a bot. ``fetch`` is injectable for testing; the default reads the live
+    issue with the issues:read token. Idempotent: a non-pending proposal is
+    returned unchanged."""
+    from config.settings import settings
+
+    store = store or _store()
+    p = proposal_get(store, proposal_id=proposal_id, account=account)
+    if not p:
+        return {"ok": False, "error": f"proposal {proposal_id} not found"}
+    if p.get("status") != "pending":
+        return {"ok": True, "id": proposal_id, "status": p.get("status"),
+                "note": "already decided — nothing to sync"}
+    owner = (owner or settings.github_owner_login or "").strip().lower()
+    if not owner:
+        return {"ok": False, "error": "no github_owner_login configured"}
+    fetcher = fetch
+    if fetcher is None:
+        token = (settings.github_read_token
+                 or __import__("os").environ.get("GITHUB_TOKEN") or "").strip()
+        if not token:
+            return {"ok": False, "error":
+                    "no issues:read token (github_read_token / GITHUB_TOKEN) — "
+                    "use the CLI fallback: knowledge proposal-approve"}
+        repo = settings.github_dispatch_repo
+        data = _fetch_github_issue(repo, f"PROPOSAL-{proposal_id}", token)
+    else:
+        data = fetcher(f"PROPOSAL-{proposal_id}")
+    if not data:
+        return {"ok": True, "id": proposal_id, "status": "pending",
+                "note": "no PROPOSAL issue found or read failed — still pending"}
+
+    def _by_owner(login):
+        return (login or "").strip().lower() == owner
+
+    approved = any(
+        _by_owner(lb.get("user")) and (lb.get("name") or "").lower() == "approved"
+        for lb in data.get("labels", [])) or any(
+        _by_owner(c.get("user")) and _APPROVE_RE.match(c.get("body") or "")
+        for c in data.get("comments", []))
+    rejected = any(
+        _by_owner(c.get("user"))
+        and __import__("re").match(r"^\s*reject", c.get("body") or "",
+                                   __import__("re").IGNORECASE)
+        for c in data.get("comments", []))
+    if approved:
+        return _decide_proposal(store, proposal_id=proposal_id,
+                                status="approved", by=owner, via="github",
+                                account=account)
+    if rejected:
+        return _decide_proposal(store, proposal_id=proposal_id,
+                                status="rejected", by=owner, via="github",
+                                account=account)
+    return {"ok": True, "id": proposal_id, "status": "pending",
+            "note": f"no approving comment/label by {owner} yet"}
+
+
+def proposal_mark_applied(store=None, *, proposal_id: int, run_id: str,
+                          account: str = ACCOUNT) -> dict:
+    """Stamp the run that consumed an approved proposal — one approval, one
+    application (the set_state gate calls this)."""
+    store = store or _store()
+    p = proposal_get(store, proposal_id=proposal_id, account=account)
+    if not p:
+        return {"ok": False, "error": f"proposal {proposal_id} not found"}
+    if p.get("status") != "approved":
+        return {"ok": False,
+                "error": f"proposal {proposal_id} is {p.get('status')}, "
+                         "not approved — cannot apply"}
+    store.update("desk_proposals", {"id": proposal_id},
+                 {"status": "applied", "applied_run_id": run_id},
+                 returning=False)
+    return {"ok": True, "id": proposal_id, "status": "applied"}
+
+
 # ── lint: the code-checkable half of the honesty checklist ───────────────
 
 
@@ -821,6 +983,19 @@ def main(argv: list[str] | None = None) -> None:
     pl = sub.add_parser("proposal-list")
     pl.add_argument("--status")
 
+    ap = sub.add_parser("proposal-approve",
+                        help="OWNER action — CLI approval fallback")
+    ap.add_argument("--id", type=int, required=True, dest="proposal_id")
+    ap.add_argument("--by", default="owner")
+
+    rp = sub.add_parser("proposal-reject", help="OWNER action")
+    rp.add_argument("--id", type=int, required=True, dest="proposal_id")
+    rp.add_argument("--by", default="owner")
+
+    sy = sub.add_parser("proposal-sync",
+                        help="reconcile a pending proposal with its GitHub issue")
+    sy.add_argument("--id", type=int, required=True, dest="proposal_id")
+
     sub.add_parser("lint")
     sub.add_parser("context-claims")
 
@@ -871,6 +1046,12 @@ def main(argv: list[str] | None = None) -> None:
                            payload=_json_arg(args.payload), run_id=args.run_id)
     elif args.cmd == "proposal-list":
         out = proposal_list(store, status=args.status)
+    elif args.cmd == "proposal-approve":
+        out = proposal_approve(store, proposal_id=args.proposal_id, by=args.by)
+    elif args.cmd == "proposal-reject":
+        out = proposal_reject(store, proposal_id=args.proposal_id, by=args.by)
+    elif args.cmd == "proposal-sync":
+        out = proposal_sync(store, proposal_id=args.proposal_id)
     elif args.cmd == "lint":
         out = lint(store)
     elif args.cmd == "context-claims":
