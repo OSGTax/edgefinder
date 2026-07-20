@@ -92,10 +92,13 @@ style of bet.
   directed, mechanical — journaled and audited Friday). To get a raise
   approved: `agent.knowledge proposal-add --change-kind caps --title "..."
   --body "<plain-English what and why>" --claim-ids "[...]"` (cite the
-  claims that justify it), then wait — the owner approves on the
-  `PROPOSAL-<id>` GitHub issue (or the desk). **TIGHTENING a cap is always
-  free** (more conservative needs no approval); so is a study-log update or
-  a rename. The guardrails below are the floor; your caps move up only with
+  claims that justify it), then `agent.knowledge proposal-publish --id N`
+  (opens the `PROPOSAL-<id>` GitHub issue the owner replies on; if it soft-
+  fails the owner can still approve via CLI), then wait. On a later cycle,
+  `agent.knowledge proposal-sync --id N` picks up the owner's reply — only
+  the owner's own comment/label counts. **TIGHTENING a cap is always free**
+  (more conservative needs no approval); so is a study-log update or a
+  rename. The guardrails below are the floor; your caps move up only with
   the owner's sign-off, never on your own say-so.
 
 This raises the bar for aggression; it does not touch the guardrails below

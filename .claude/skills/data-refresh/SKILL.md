@@ -101,6 +101,14 @@ print(f"R2: {n} objects, {tot/1e9:.2f} GB / 10 GB")
 PY
 ```
 
+### 5. Knowledge-registry lint (report-only)
+`python -m agent.knowledge lint` — the nightly integrity read of the claims
+registry (broken citations, orphaned evidence, expired regime claims, unjudged
+closed picks, unhonored commitments). **Report-only from this routine**: you
+never edit claims or the wiki — if lint reports errors, say so in your summary
+so the next trading cycle or the Friday reflection (whose job it is) fixes
+them. A clean lint is one line; a dirty one is worth naming loudly.
+
 ## Guardrails
 - **Data only.** This routine never touches the book, the strategy, or UI
   files — it maintains the market-data asset the whole system reads. Its ONE

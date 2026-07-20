@@ -29,6 +29,7 @@ CLI (JSON out), mirroring agent.brain:
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timedelta, timezone
 
 # ── policy constants (SCHEMA.md §5 — owner adjusts here) ─────────────────
@@ -698,8 +699,8 @@ def proposal_reject(store=None, *, proposal_id: int, by: str = "owner",
 # An approving signal on the GitHub issue: a comment body starting with
 # "approve"/"approved"/"lgtm", or an "approved" label. Authorship is what
 # matters — only the repo owner's login counts (see proposal_sync).
-_APPROVE_RE = __import__("re").compile(
-    r"^\s*(approve[d]?|lgtm|ship it)\b", __import__("re").IGNORECASE)
+_APPROVE_RE = re.compile(r"^\s*(approve[d]?|lgtm|ship it)\b", re.IGNORECASE)
+_REJECT_RE = re.compile(r"^\s*reject", re.IGNORECASE)
 
 
 def _fetch_github_issue(repo: str, title: str, token: str) -> dict | None:
@@ -783,9 +784,7 @@ def proposal_sync(store=None, *, proposal_id: int, fetch=None,
         _by_owner(c.get("user")) and _APPROVE_RE.match(c.get("body") or "")
         for c in data.get("comments", []))
     rejected = any(
-        _by_owner(c.get("user"))
-        and __import__("re").match(r"^\s*reject", c.get("body") or "",
-                                   __import__("re").IGNORECASE)
+        _by_owner(c.get("user")) and _REJECT_RE.match(c.get("body") or "")
         for c in data.get("comments", []))
     if approved:
         return _decide_proposal(store, proposal_id=proposal_id,
@@ -797,6 +796,72 @@ def proposal_sync(store=None, *, proposal_id: int, fetch=None,
                                 account=account)
     return {"ok": True, "id": proposal_id, "status": "pending",
             "note": f"no approving comment/label by {owner} yet"}
+
+
+def proposal_publish(store=None, *, proposal_id: int, post=None,
+                     account: str = ACCOUNT) -> dict:
+    """Open the ``PROPOSAL-<id>`` GitHub issue the owner approves on — the
+    step that completes the approval channel (without it the owner only has
+    the CLI fallback). Uses the workflow's ``GITHUB_TOKEN`` (issues:write in
+    Actions); ``post`` is injectable for tests. Idempotent-by-title: if the
+    sync later finds an issue with this title it reconciles regardless of
+    who created it, and publishing twice is prevented by checking for an
+    existing issue first. Failure is soft — the proposal stays pending and
+    approvable via CLI."""
+    import os
+    import urllib.request
+
+    from config.settings import settings
+
+    store = store or _store()
+    p = proposal_get(store, proposal_id=proposal_id, account=account)
+    if not p:
+        return {"ok": False, "error": f"proposal {proposal_id} not found"}
+    if p.get("status") != "pending":
+        return {"ok": False, "error":
+                f"proposal {proposal_id} is {p.get('status')} — only pending "
+                "proposals publish"}
+    title = f"PROPOSAL-{proposal_id}"
+    body = (f"{p.get('title')}\n\n{p.get('body')}\n\n"
+            f"- change_kind: {p.get('change_kind')}\n"
+            f"- justifying claims: "
+            f"{', '.join('[C-%s]' % c for c in p.get('claim_ids') or []) or 'none'}\n"
+            f"- expires: {p.get('expires_at')}\n\n"
+            "Reply **approve** (or add the `approved` label) to authorize; "
+            "**reject** to decline. Only the repo owner's reply counts — the "
+            "agent then applies it via `state-set --proposal-id "
+            f"{proposal_id}`.")
+    if post is None:
+        token = (settings.github_read_token
+                 or os.environ.get("GITHUB_TOKEN") or "").strip()
+        if not token:
+            return {"ok": False, "error":
+                    "no GitHub token with issues:write — the owner can still "
+                    "approve via: knowledge proposal-approve --id "
+                    f"{proposal_id}"}
+        repo = settings.github_dispatch_repo
+
+        def post(t, b):  # noqa: ANN001 — matches the injectable signature
+            existing = _fetch_github_issue(repo, t, token)
+            if existing is not None:
+                return {"already": True}
+            req = urllib.request.Request(
+                f"https://api.github.com/repos/{repo}/issues",
+                data=json.dumps({"title": t, "body": b}).encode(),
+                method="POST",
+                headers={"Authorization": f"Bearer {token}",
+                         "Accept": "application/vnd.github+json",
+                         "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                return {"status": resp.status}
+    try:
+        result = post(title, body)
+    except Exception as exc:  # noqa: BLE001 — soft failure, CLI still works
+        return {"ok": False, "error": f"issue create failed: {exc}"}
+    return {"ok": True, "id": proposal_id, "issue": title,
+            "result": result,
+            "note": "owner approves on the issue; next cycle runs "
+                    "proposal-sync to pick it up"}
 
 
 def proposal_mark_applied(store=None, *, proposal_id: int, run_id: str,
@@ -827,8 +892,6 @@ def lint(store=None, *, account: str = ACCOUNT) -> dict:
     violations, fired-unhonored commitments + un-structured clause sweep,
     the hindsight window, and hygiene. Errors mean the loop is telling
     itself something false; warnings are curation debt."""
-    import re
-
     store = store or _store()
     errors: list[str] = []
     warnings: list[str] = []
@@ -1203,6 +1266,11 @@ def main(argv: list[str] | None = None) -> None:
                         help="reconcile a pending proposal with its GitHub issue")
     sy.add_argument("--id", type=int, required=True, dest="proposal_id")
 
+    pub = sub.add_parser("proposal-publish",
+                         help="open the PROPOSAL-<id> GitHub issue for the "
+                              "owner to approve on")
+    pub.add_argument("--id", type=int, required=True, dest="proposal_id")
+
     sub.add_parser("lint")
     lr = sub.add_parser("loop-report",
                         help="loop-honesty instrument: what was learned, "
@@ -1263,6 +1331,8 @@ def main(argv: list[str] | None = None) -> None:
         out = proposal_reject(store, proposal_id=args.proposal_id, by=args.by)
     elif args.cmd == "proposal-sync":
         out = proposal_sync(store, proposal_id=args.proposal_id)
+    elif args.cmd == "proposal-publish":
+        out = proposal_publish(store, proposal_id=args.proposal_id)
     elif args.cmd == "lint":
         out = lint(store)
     elif args.cmd == "loop-report":

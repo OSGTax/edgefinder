@@ -2,8 +2,22 @@
 
 > Phase 3 of the knowledge-layer upgrade. Executes the design in `SCHEMA.md`
 > against the findings in `STATE.md`. All three documents were approved by the
-> owner 2026-07-19. Implementation belongs to the code-editing session, in
-> step order, one soak at a time.
+> owner 2026-07-19.
+>
+> **STATUS: COMPLETE (2026-07-20).** All steps shipped and deployed:
+> step 0 (verdict backfill, prod data), step 1 = v9.13.0 (schema), step 2 =
+> v9.14.0 (agent/knowledge.py, advisory claims in context), step 3
+> (remediation run `remediate-2026-07-19` — 9 claims registered, wiki cites
+> `[C-n]`, lint 0/0, owner-reviewed), step 4 = v9.15.0 (commitments gate),
+> step 5 = v9.16.0 (tier authority + experimental caps), step 6 = v9.17.0
+> (owner-approval gate + GitHub PROPOSAL sync + skill-mandate
+> reconciliation), step 7 = v9.18.0 (full lint + loop-report), step 8 =
+> v9.19.0 (`/api/desk/claims` + `/api/desk/proposals` + the desk Knowledge
+> card; `proposal-publish` completing the approval channel; nightly
+> report-only lint in data-refresh). Deviation of record: GEV's backfilled
+> verdict is NOT_YET (final/unjudgeable — the reflection's prose called it
+> a process mistake, not a refuted thesis), not FALSE as sketched.
+> This file is kept as the record of the rollout, not live guidance.
 
 ## Context
 

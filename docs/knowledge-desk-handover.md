@@ -1,11 +1,11 @@
-# Handover: the knowledge layer on `/desk` (Step 8, for the app-evolver)
+# The knowledge layer on `/desk` — API reference
 
-The knowledge-layer rebuild (STATE.md → SCHEMA.md → PLAN.md, steps 0–7) is
-live. The last step is a **read-only `/desk` surface** for the claims registry
-and the owner-approval queue. Per the skill boundaries the trading-side code
-does not touch UI files, so this is the **app-evolver's** to deliver — one
-small, announced improvement, tested, with a "What's New" note. This doc is
-the contract to build against; nothing here requires a schema or ledger change.
+> **IMPLEMENTED in v9.19.0** (owner-directed dev session, 2026-07-20): the
+> endpoints below plus the "Claims registry" card on `/desk`
+> (`dashboard/templates/desk.html`, `static/js/pages/desk.js` `loadClaims`).
+> This doc stays as the API reference; the app-evolver may still iterate on
+> the card's presentation (its normal one-small-improvement lane), reading
+> this contract.
 
 ## What to build
 

@@ -690,3 +690,51 @@ def test_portfolio_response_is_ttl_cached(client):
     desk_router._portfolio_cache = None
     fresh = client.get("/api/desk/portfolio").json()
     assert fresh["cash"] == pytest.approx(first["cash"] - 1000.0)
+
+
+def test_claims_and_proposals_endpoints(client):
+    """The knowledge-layer projections: claims with tier authority visible,
+    proposals with pending-first ordering. Read-only; no confidence floats."""
+    from agent.knowledge import claim_add, proposal_add
+    import agent.data as agent_data
+    from agent.store import get_store
+    import agent.store as store_mod
+
+    store_mod._store = None
+    store = get_store()
+    est = claim_add(store, kclass="risk_rule", tier="established",
+                    statement="honor fired kills same-cycle",
+                    scope={"account": "paper"},
+                    evidence=[{"kind": "probe", "note": "AAPL ~$500"}])
+    claim_add(store, kclass="market_strategy", tier="candidate",
+              statement="momentum diverges from mark",
+              scope={"account": "paper", "regimes": ["risk_on"]},
+              evidence=[{"kind": "probe", "note": "IWM/LLY"}],
+              promotion_criteria={"min_n": 5})
+    proposal_add(store, title="Raise concentration to 35",
+                 body="why", change_kind="caps", claim_ids=[est["id"]])
+
+    c = client.get("/api/desk/claims").json()
+    assert c["summary"]["active"] == 2
+    assert c["summary"]["by_tier"] == {"established": 1, "candidate": 1}
+    # established sorts first (authority first), statements carry no
+    # confidence field at all
+    assert c["claims"][0]["tier"] == "established"
+    assert c["claims"][0]["cite"] == f"[C-{est['id']}]"
+    assert "confidence" not in c["claims"][0]
+    assert c["claims"][1]["regimes"] == ["risk_on"]
+
+    p = client.get("/api/desk/proposals").json()
+    assert p["pending"] == 1
+    assert p["proposals"][0]["ref"].startswith("PROPOSAL-")
+    assert p["proposals"][0]["status"] == "pending"
+    assert p["proposals"][0]["claim_ids"] == [est["id"]]
+
+    # inactive claims stay out of the default view
+    from agent.knowledge import claim_quarantine
+    claim_quarantine(store, claim_id=est["id"], reason="test")
+    c2 = client.get("/api/desk/claims").json()
+    assert c2["summary"]["active"] == 1
+    assert all(r["status"] == "active" for r in c2["claims"])
+    c3 = client.get("/api/desk/claims?include_inactive=true").json()
+    assert any(r["status"] == "quarantined" for r in c3["claims"])

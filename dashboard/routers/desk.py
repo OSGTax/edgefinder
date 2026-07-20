@@ -468,6 +468,76 @@ def wiki(db: Session = Depends(get_db)):
                        "updated_at": _iso(r.updated_at)} for r in rows]}
 
 
+@router.get("/claims")
+def claims(db: Session = Depends(get_db),
+           include_inactive: bool = Query(False)):
+    """The structured claims registry behind the wiki (v9.18 knowledge layer)
+    — every behavior-influencing fact with its tier, class, recorded sample
+    sizes (never a confidence score; none exist), scope, decay, and status.
+    Only ``established`` and ``experimental``-flagged claims may justify a
+    pick; candidates/observations are watch-only — the panel shows which is
+    which. Read-only projection of ``desk_claims``."""
+    from agent.models import DeskClaim
+
+    q = db.query(DeskClaim).filter(DeskClaim.account == ACCOUNT)
+    rows = q.all()
+    if not include_inactive:
+        rows = [r for r in rows if r.status == "active"]
+    tier_order = {"established": 0, "candidate": 1, "observation": 2,
+                  "digest": 3}
+    rows.sort(key=lambda r: (0 if r.status == "active" else 1,
+                             tier_order.get(r.tier, 9), r.id))
+    by_tier: dict = {}
+    by_class: dict = {}
+    for r in rows:
+        if r.status == "active":
+            by_tier[r.tier] = by_tier.get(r.tier, 0) + 1
+            by_class[r.kclass] = by_class.get(r.kclass, 0) + 1
+    return {
+        "claims": [{
+            "id": r.id, "cite": f"[C-{r.id}]", "kclass": r.kclass,
+            "tier": r.tier, "experimental": bool(r.experimental),
+            "status": r.status, "statement": r.statement,
+            "regimes": (r.scope or {}).get("regimes"),
+            "stats": r.stats or {}, "evidence_count": len(r.evidence or []),
+            "decay_class": r.decay_class,
+            "expires_at": str(r.expires_at) if r.expires_at else None,
+            "superseded_by": r.superseded_by,
+            "updated_at": _iso(r.updated_at)} for r in rows],
+        "summary": {"active": sum(1 for r in rows if r.status == "active"),
+                    "by_tier": by_tier, "by_class": by_class,
+                    "experimental": sum(1 for r in rows
+                                        if r.status == "active"
+                                        and r.experimental)},
+    }
+
+
+@router.get("/proposals")
+def proposals(db: Session = Depends(get_db)):
+    """The owner-approval queue — learned-behavior changes (pivots, cap
+    raises) the agent has proposed and their decisions. Pending first; the
+    desk shows these so the owner sees what's waiting without opening
+    GitHub. Read-only; approvals happen on the PROPOSAL-<id> issue or the
+    owner CLI, never from the web."""
+    from agent.models import DeskProposal
+
+    rows = (db.query(DeskProposal)
+            .filter(DeskProposal.account == ACCOUNT)
+            .order_by(desc(DeskProposal.id)).limit(50).all())
+    rows.sort(key=lambda r: (0 if r.status == "pending" else 1, -r.id))
+    return {
+        "proposals": [{
+            "id": r.id, "ref": f"PROPOSAL-{r.id}", "title": r.title,
+            "change_kind": r.change_kind, "status": r.status,
+            "claim_ids": r.claim_ids or [], "created_at": _iso(r.created_at),
+            "decided_at": _iso(r.decided_at) if r.decided_at else None,
+            "decided_via": r.decided_via,
+            "expires_at": str(r.expires_at) if r.expires_at else None}
+            for r in rows],
+        "pending": sum(1 for r in rows if r.status == "pending"),
+    }
+
+
 @router.get("/regime")
 def regime():
     """A compact market-regime read (SPY/QQQ/IWM trend) for the header chip.

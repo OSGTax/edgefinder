@@ -51,6 +51,22 @@ rules). The agent's operating manual is
    falsifiable prediction + horizon + kill before the decision saves, and
    opt-in hard stops sell through the same fill gates as any trade (the
    entry-friction bands overridden explicitly, on the receipt).
+6. **Learning is tier-gated (v9.13–v9.18, `SCHEMA.md`):** the structured
+   claims registry (`desk_claims`, via `agent.knowledge`) is the source of
+   truth for every behavior-influencing fact — the wiki is the narrative and
+   must cite claims by `[C-n]` token. Prose can inform; ONLY claims can
+   justify: a pick may cite only an active `established` (or
+   `experimental`-flagged, exposure-capped) claim — enforced at decision
+   save. Candidates promote only through pre-registered criteria evaluated
+   against stats recomputed from `desk_outcomes` (no confidence floats
+   anywhere; recorded sample sizes only). A trim/exit pick whose text makes
+   a conditional promise must structure it as a commitment
+   (`desk_commitments` — machine-swept by `grade`, surfaced until honored).
+   Strategy pivots and cap RAISES need an owner-approved proposal
+   (`desk_proposals`, `PROPOSAL-<id>` GitHub issue) or an audited
+   `--no-learned-basis`; tightening is always free. Supersede, never
+   delete; risk rules never decay; regime claims expire unless renewed.
+   `agent.knowledge lint` + `loop-report` keep the loop observable.
 
 ## Runtime layout
 
@@ -88,6 +104,8 @@ edgefinder/
 │   ├── backtest_tool.py        #   ground ideas: parametric rules vs SPY, net of costs
 │   ├── ledger.py               #   the paper book: live-quote fills, settle, mark, outcomes
 │   ├── brain.py                #   strategy state, journal, thinking feed, decision, wiki
+│   ├── knowledge.py            #   the claims registry: tiers/promotion, commitments,
+│   │                           #   owner proposals, lint, loop-report (SCHEMA.md)
 │   ├── broker.py               #   Alpaca DATA-READER (read-only): quotes, clock, chains
 │   ├── streamer.py             #   the always-on SIP WebSocket → QuoteCache (Render)
 │   ├── refresh.py              #   Alpaca bar ingest: hourly top-up / nightly full-market
@@ -142,7 +160,13 @@ One Supabase Postgres database, two namespaces:
   cron floor in the workflow re-seeds a dropped chain),
   `desk_outcomes` (machine-graded pick facts written by `agent.ledger
   grade`; the weekly reflection's verdicts live here via `agent.brain
-  verdict`, next to the numbers they judged).
+  verdict`, next to the numbers they judged), and the knowledge layer
+  (v9.13+, written only by `agent.knowledge`): `desk_claims` (the tiered
+  claims registry — see honesty-contract §6), `desk_claim_events`
+  (append-only lifecycle audit), `desk_commitments` (structured
+  trim/exit falsification clauses, machine-swept by `grade`), and
+  `desk_proposals` (the owner-approval queue for learned-behavior
+  changes).
 - **Kept market-data tables** (`edgefinder/db/models.py`, read-only inputs):
   `daily_bars` (raw bars; splits applied at load), `index_daily` (FROZEN at
   the 2026-06 cutover — SPY benchmarks read `daily_bars` instead),
@@ -212,6 +236,10 @@ python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 \
     --rationale "..." --run-id 2026-07-07T14:30   # books at the LIVE quote
 python -m agent.ledger outcomes --days 14         # picks vs predictions vs SPY (alpha)
 python -m agent.ledger grade                      # machine facts per pick → desk_outcomes
+python -m agent.knowledge claim-list              # the claims registry (tiers = authority)
+python -m agent.knowledge claim-promote --claim-id N  # pre-registered gate, code-evaluated
+python -m agent.knowledge lint                    # registry integrity (run at reflection)
+python -m agent.knowledge loop-report --days 7    # was knowledge written/promoted/READ?
 
 # Dashboard
 uvicorn dashboard.app:app --reload   # http://localhost:8000/ → /desk
@@ -232,7 +260,8 @@ alpha), `equity`, `decision/latest`, `thinking`, `backtests`, `strategy`,
 `stream` (SSE live ticks), `options/{symbol}`, `options/{symbol}/history`,
 `broker-health`, `data-health` (bar-coverage freshness — the desk pill),
 `brief` (the nightly research pack), `watch` (tripwires + planned wakes —
-the attention system), `whatsnew`, `trades`.
+the attention system), `claims` (the tiered claims registry), `proposals`
+(the owner-approval queue), `whatsnew`, `trades`.
 
 `/api/symbols/{sym}/bars?range=&indicators=` and `/api/symbols/{sym}/events`
 power the chart page. `/api/health` returns status + version.

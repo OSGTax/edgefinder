@@ -188,3 +188,28 @@ def test_sync_no_issue_stays_pending(store, monkeypatch):
     p = proposal_add(store, title="t", body="b", change_kind="caps")
     r = proposal_sync(store, proposal_id=p["id"], fetch=lambda title: None)
     assert r["status"] == "pending"
+
+
+def test_publish_opens_the_issue_once_and_soft_fails(store):
+    from agent.knowledge import proposal_add, proposal_approve, proposal_publish
+
+    p = proposal_add(store, title="t", body="b", change_kind="caps",
+                     claim_ids=[1])
+    posted = []
+    r = proposal_publish(store, proposal_id=p["id"],
+                         post=lambda t, b: posted.append((t, b)) or {"status": 201})
+    assert r["ok"] and r["issue"] == f"PROPOSAL-{p['id']}"
+    assert posted and posted[0][0] == f"PROPOSAL-{p['id']}"
+    assert "[C-1]" in posted[0][1] and "approve" in posted[0][1]
+
+    # a poster that raises -> soft failure, proposal still pending+CLI-approvable
+    p2 = proposal_add(store, title="t2", body="b", change_kind="caps")
+    def boom(t, b):
+        raise RuntimeError("api down")
+    r2 = proposal_publish(store, proposal_id=p2["id"], post=boom)
+    assert not r2["ok"] and "failed" in r2["error"]
+    assert proposal_approve(store, proposal_id=p2["id"])["ok"]
+
+    # a decided proposal does not publish
+    r3 = proposal_publish(store, proposal_id=p2["id"], post=lambda t, b: {})
+    assert not r3["ok"] and "only pending" in r3["error"]

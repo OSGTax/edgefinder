@@ -1283,6 +1283,92 @@ async function loadWiki() {
   } catch (err) { renderError(el, err, loadWiki); }
 }
 
+/* ── Claims registry: the structured facts behind the notebook, plus the
+   owner-approval queue. Tier carries AUTHORITY: established/experimental
+   claims may justify trades; candidates/observations are watch-only. Stats
+   are recorded sample sizes — there is no confidence score to render, by
+   design. ── */
+const CLAIM_TIER = {
+  established: { label: 'in force', pill: 'up' },
+  candidate: { label: 'candidate — watch-only', pill: 'neutral' },
+  observation: { label: 'observation — watch-only', pill: 'neutral' },
+  digest: { label: 'digest', pill: 'neutral' },
+};
+const CLAIM_CLASS = {
+  risk_rule: 'risk rule', market_strategy: 'market pattern',
+  system_mechanics: 'system fact', operational: 'ops incident',
+};
+
+function claimStatsText(stats) {
+  const bits = [];
+  if (typeof stats.n === 'number') bits.push('n=' + stats.n);
+  if (typeof stats.wins === 'number' && typeof stats.losses === 'number'
+      && (stats.wins + stats.losses) > 0) {
+    bits.push(stats.wins + 'W/' + stats.losses + 'L');
+  }
+  if (typeof stats.avg_alpha_pct === 'number') {
+    bits.push('avg alpha ' + fmtPct(stats.avg_alpha_pct));
+  }
+  return bits.join(' · ');
+}
+
+async function loadClaims() {
+  const el = document.getElementById('desk-claims');
+  const metaEl = document.getElementById('desk-claims-meta');
+  if (!el) return;
+  skeleton(el);
+  try {
+    const [c, p] = await Promise.all([
+      apiGet('/api/desk/claims').catch(() => null),
+      apiGet('/api/desk/proposals').catch(() => null),
+    ]);
+    clear(el);
+    const rows = (c && c.claims) || [];
+    const pending = (p && p.proposals || []).filter(x => x.status === 'pending');
+    if (metaEl) {
+      const s = (c && c.summary) || {};
+      metaEl.textContent = s.active
+        ? s.active + ' active' + (pending.length
+          ? ' · ' + pending.length + ' awaiting owner' : '')
+        : '';
+    }
+    if (pending.length) {
+      const strip = h('div', { class: 'desk-claims-approvals' },
+        h('span', { class: 'c-pill warn', text: 'awaiting your approval' }));
+      for (const pr of pending) {
+        strip.append(h('span', { class: 'desk-claims-approval-item',
+          text: pr.ref + ' [' + pr.change_kind + '] ' + pr.title }));
+      }
+      el.append(strip);
+    }
+    if (!rows.length) {
+      renderEmpty(el, 'No claims registered yet — they appear as the AI turns measured results into structured facts.');
+      return;
+    }
+    for (const r of rows) {
+      const tier = CLAIM_TIER[r.tier] || CLAIM_TIER.digest;
+      const head = h('div', { class: 'desk-claim-head' },
+        h('span', { class: 'desk-claim-cite t-dim', text: r.cite }),
+        h('span', { class: 'c-pill ' + (r.experimental ? 'warn' : tier.pill),
+          text: r.experimental ? 'experimental — size-capped' : tier.label }),
+        h('span', { class: 'c-pill neutral',
+          text: CLAIM_CLASS[r.kclass] || r.kclass }));
+      if (r.expires_at) {
+        head.append(h('span', { class: 't-dim desk-claim-exp',
+          text: 'expires ' + r.expires_at + ' unless renewed' }));
+      }
+      const stats = claimStatsText(r.stats || {});
+      const foot = h('div', { class: 'desk-claim-foot t-dim' },
+        h('span', { text: (stats ? stats + ' · ' : '')
+          + r.evidence_count + ' evidence ref(s)' }));
+      el.append(h('div', { class: 'desk-claim' },
+        head,
+        h('p', { class: 'desk-claim-statement', text: r.statement }),
+        foot));
+    }
+  } catch (err) { renderError(el, err, loadClaims); }
+}
+
 /* ── live stream consumer: real-time SIP quotes over SSE.
    No tape card anymore (v9.5.0) — ticks feed the hero (account value,
    index chips) and the holdings rows. Full quote detail lives on each
@@ -1513,7 +1599,7 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadWhatsNew(), loadFills(), loadWiki(),
-    loadLab(), loadWatch(), loadPredictions(),
+    loadLab(), loadWatch(), loadPredictions(), loadClaims(),
   ]);
 }
 
@@ -1627,4 +1713,4 @@ wireSegs();
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki(); loadLab(); loadWatch(); loadPredictions(); }, 60_000);
+setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki(); loadLab(); loadWatch(); loadPredictions(); loadClaims(); }, 60_000);
