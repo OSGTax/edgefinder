@@ -367,8 +367,8 @@ Write the run's dossier so the desk page renders it. Small JSON files:
 - `weights.json` — the executed `{symbol: weight}`.
 - `picks.json` — per-name dossiers:
   `{"symbol","action","why_now","rationale","evidence":{...},"news":[...],
-  "prediction","horizon_days","kill"}`. The last three are the
-  **prediction registry** and are REQUIRED on every buy/add:
+  "prediction","horizon_days","kill","claims":[...]}`. The prediction-registry
+  three (below) are REQUIRED on every buy/add:
   - `prediction` — one falsifiable sentence about what happens and why
     ("AVGO reclaims $410 within 10 sessions on AI-capex follow-through"),
     not a vibe ("looks strong").
@@ -405,6 +405,17 @@ Write the run's dossier so the desk page renders it. Small JSON files:
   `python -m agent.knowledge commitment-honor --commitment-id N --run-id <RID>
   --note "why"` — but never let it go silent. A `review` commitment (no
   price, just a date to look again) is time-only; reentry/stop need a level.
+  **`claims` — cite the knowledge that justifies the pick.** Context hands
+  you the tier-gated `claims` section (established facts + experimental
+  candidates, each with its `[C-n]` id). When a learned fact drove a pick,
+  put its id in the pick's `claims` list. **Prose can inform; only claims
+  can justify** — and the save enforces it: a pick may only cite an
+  ACTIVE, `established` (or `experimental`-flagged) claim. Citing a
+  candidate is rejected — a candidate is watch-only until it earns
+  promotion in the Friday reflection. Experimental-cited weight is capped
+  (5% per claim, 10% of book total); a breach rejects the save, so size
+  experimental theses small. Most picks cite nothing and that's fine — cite
+  only what genuinely justified the decision, never to decorate it.
 - `watchlist.json` — near-misses: `[{"symbol","note"}]`.
 - `rejected.json` — the alternatives that LOST the slot:
   `[{"symbol","why_not"}]`. Your playbook already makes you name them —

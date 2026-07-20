@@ -220,6 +220,14 @@ def _validate_picks(picks: list | None) -> str | None:
                     f"{'/'.join(BOOK_ACTIONS)} action, got {action or 'none'!r}"
                     " — trades go on real symbols")
             continue
+        # Claim citations, when present, must be a list of integer ids
+        # (existence + tier are checked store-side in save_decision).
+        cl = p.get("claims")
+        if cl is not None:
+            if not isinstance(cl, list) or not all(
+                    isinstance(x, int) and not isinstance(x, bool) for x in cl):
+                problems.append(f"{sym}: 'claims' must be a list of integer "
+                                "claim ids (the [C-n] tokens they justify)")
         # A structured commitment, wherever it appears, must be well-formed.
         if p.get("commitment") is not None:
             problems.extend(_validate_commitment(sym, p.get("commitment")))
@@ -255,6 +263,92 @@ def _validate_picks(picks: list | None) -> str | None:
                 + "; ".join(problems)
                 + ". Every buy/add pick needs prediction + horizon_days + "
                   "kill (SKILL.md step 6) — fill them in, don't drop the pick.")
+    return None
+
+
+def _validate_claim_citations(store, *, picks: list | None,
+                              target_weights: dict | None,
+                              account: str) -> str | None:
+    """Tier authority (SCHEMA.md outcome 2): a pick may only CITE claims that
+    are allowed to justify a decision — active, and either ``established`` or
+    flagged ``experimental``. Sub-established claims stay watch-only in the
+    wiki prose. Experimental claims additionally obey exposure caps
+    (per-claim and total, against ``target_weights``) — a same-cycle
+    detective check: fills already booked, so a breach forces remediation
+    this cycle rather than silently riding. Returns an error string or None.
+    Pre-deploy grace: an unreachable claims table degrades to advisory
+    (no rejection)."""
+    from agent.knowledge import (
+        EXPERIMENTAL_PER_CLAIM_WEIGHT_CAP as _EXP_PER_CAP,
+        EXPERIMENTAL_TOTAL_WEIGHT_CAP as _EXP_TOTAL_CAP)
+
+    cited = {cid for p in (picks or []) for cid in (p.get("claims") or [])}
+    if not cited:
+        return None
+    try:
+        rows = store.select("desk_claims", filters={"account": account},
+                            limit=1000)
+    except Exception as exc:  # noqa: BLE001 — pre-deploy grace
+        from agent.store import is_missing_table_error
+
+        if is_missing_table_error(exc):
+            return None
+        raise
+    by_id = {r["id"]: r for r in rows}
+    problems: list[str] = []
+    for p in picks or []:
+        sym = str(p.get("symbol") or "").strip().upper()
+        for cid in (p.get("claims") or []):
+            c = by_id.get(cid)
+            if c is None:
+                problems.append(f"{sym}: cites claim {cid} — no such claim")
+            elif c.get("status") != "active":
+                problems.append(f"{sym}: cites claim {cid} which is "
+                                f"{c.get('status')} — cite the active "
+                                "successor, not a retired/superseded claim")
+            elif not (c.get("tier") == "established" or c.get("experimental")):
+                problems.append(
+                    f"{sym}: cites claim {cid} (tier {c.get('tier')}) — only "
+                    "established or experimental-flagged claims may justify a "
+                    "pick; a candidate stays watch-only until it earns "
+                    "promotion")
+    if problems:
+        return ("claim-citation check rejected the save: "
+                + "; ".join(problems)
+                + ". Prose can inform; only claims can justify (SCHEMA.md).")
+
+    # Experimental exposure caps — per-claim and total, on abs weights.
+    tw = target_weights or {}
+    exp_ids = {cid for cid in cited
+               if by_id.get(cid) and by_id[cid].get("experimental")}
+    if exp_ids:
+        def _w(p):
+            return abs(float(tw.get(str(p.get("symbol") or "").upper(), 0.0)))
+
+        per_claim: dict[int, float] = {}
+        total_syms: dict[str, float] = {}
+        for p in picks or []:
+            pc = [cid for cid in (p.get("claims") or []) if cid in exp_ids]
+            if not pc:
+                continue
+            sym = str(p.get("symbol") or "").upper()
+            total_syms[sym] = _w(p)
+            for cid in pc:
+                per_claim[cid] = per_claim.get(cid, 0.0) + _w(p)
+        cap_problems = [
+            f"claim {cid} carries {w:.1%} of book (experimental per-claim "
+            f"cap {_EXP_PER_CAP:.0%})"
+            for cid, w in per_claim.items() if w > _EXP_PER_CAP + 1e-9]
+        total = sum(total_syms.values())
+        if total > _EXP_TOTAL_CAP + 1e-9:
+            cap_problems.append(
+                f"experimental theses total {total:.1%} of book (cap "
+                f"{_EXP_TOTAL_CAP:.0%})")
+        if cap_problems:
+            return ("experimental exposure cap breached: "
+                    + "; ".join(cap_problems)
+                    + ". Trim the experimental-cited weight this cycle, or "
+                      "promote the claim through the gate before sizing up.")
     return None
 
 
@@ -324,6 +418,11 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
                   decision_date: date | None = None, account: str = "agent") -> dict:
     store = store or _store()
     err = _validate_picks(picks)
+    if err:
+        return {"ok": False, "error": err}
+    err = _validate_claim_citations(store, picks=picks,
+                                    target_weights=target_weights,
+                                    account=account)
     if err:
         return {"ok": False, "error": err}
     values = {
