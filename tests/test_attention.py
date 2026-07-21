@@ -199,6 +199,58 @@ def test_evaluate_watches_hard_stop_trips_at_or_below():
     assert [w["id"] for w in tripped] == [1]
 
 
+def test_stale_hardstop_symbols_flags_missing_and_stale_only():
+    """The REST top-up must target exactly the hard-stopped names the WS tape
+    can't trip on — missing or stale — and never advisory wires or fresh ones."""
+    from agent.streamer import stale_hardstop_symbols
+
+    watches = [
+        {"id": 1, "symbol": "AMD", "kind": "hard_stop", "level": 90.0},   # missing
+        {"id": 2, "symbol": "PANW", "kind": "hard_stop", "level": 336.0}, # stale
+        {"id": 3, "symbol": "AVGO", "kind": "hard_stop", "level": 358.0}, # fresh
+        {"id": 4, "symbol": "SPY", "kind": "below", "level": 700.0},      # advisory (skip)
+    ]
+    quotes = {"PANW": _q(340.0, 340.2, age_secs=3600),
+              "AVGO": _q(386.0, 386.2),
+              "SPY": _q(690.0, 690.2, age_secs=3600)}  # stale but advisory → ignored
+    assert stale_hardstop_symbols(watches, quotes) == ["AMD", "PANW"]
+    # a healthy tape (every hard-stop fresh) means zero REST calls
+    fresh = {"AMD": _q(95.0, 95.2), "PANW": _q(340.0, 340.2),
+             "AVGO": _q(386.0, 386.2)}
+    assert stale_hardstop_symbols(watches, fresh) == []
+
+
+def test_stale_hardstop_symbols_dedupes_repeated_symbol():
+    from agent.streamer import stale_hardstop_symbols
+
+    watches = [
+        {"id": 1, "symbol": "AMD", "kind": "hard_stop", "level": 90.0},
+        {"id": 2, "symbol": "AMD", "kind": "hard_stop", "level": 88.0},
+    ]
+    assert stale_hardstop_symbols(watches, {}) == ["AMD"]
+
+
+def test_hardstop_distances_reports_gap_and_freshness():
+    """Heartbeat payload: an armed-but-never-firing stop must be observable —
+    distance-to-trip, quote age, and whether that quote is fresh enough to
+    trip. A stale quote reads fresh=False (the silent-skip we're surfacing)."""
+    from agent.streamer import hardstop_distances
+
+    watches = [
+        {"id": 1, "symbol": "AVGO", "kind": "hard_stop", "level": 358.0},
+        {"id": 2, "symbol": "PANW", "kind": "hard_stop", "level": 336.0},
+        {"id": 3, "symbol": "SPY", "kind": "below", "level": 700.0},  # not a hard stop
+    ]
+    quotes = {"AVGO": _q(386.0, 386.2),                       # +7.9%, fresh
+              "PANW": _q(335.0, 335.2, age_secs=3600)}        # -0.28%, STALE
+    out = hardstop_distances(watches, quotes)
+    assert [d["symbol"] for d in out] == ["AVGO", "PANW"]     # advisory excluded
+    avgo = out[0]
+    assert avgo["distance_pct"] == pytest.approx(7.85, abs=0.05) and avgo["fresh"]
+    panw = out[1]
+    assert panw["distance_pct"] < 0 and panw["fresh"] is False
+
+
 def test_hard_stop_executes_full_position_sell(store, monkeypatch):
     import agent.broker as broker
     from agent.brain import watch_set

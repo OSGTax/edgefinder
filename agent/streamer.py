@@ -242,6 +242,14 @@ async def run_stream() -> None:
 WATCH_SWEEP_SECS = 5      # evaluate armed wires against the cache
 WATCH_REFRESH_SECS = 60   # re-read armed wires from the DB
 WATCH_EXEC_STALE_SECS = 600  # an 'executing' claim older than this is a crash
+# A hard stop is the ONE wire that trades unattended, so it must never go
+# blind: if the WS cache has no fresh quote for a hard-stopped name (thin
+# tape, a name outside the seed universe, a socket gap), the sweep tops it up
+# with a live REST quote rather than silently skipping the level. Throttled so
+# a persistently stale name costs at most one REST call per interval, and only
+# ever fires for hard_stop wires that are actually stale (healthy WS = no-op).
+WATCH_REST_TOPUP_SECS = 10   # >= this long between REST top-up rounds
+WATCH_HEARTBEAT_SECS = 300   # log a sweep heartbeat (per-wire distance-to-trip)
 
 
 def evaluate_watches(watches: list[dict], quotes: dict[str, dict],
@@ -277,6 +285,62 @@ def evaluate_watches(watches: list[dict], quotes: dict[str, dict],
                     and mid <= float(w["level"]))):
             tripped.append({**w, "tripped_price": round(mid, 4)})
     return tripped, expired
+
+
+def _quote_max_age() -> float:
+    """The freshness window ``evaluate_watches`` demands of a quote before it
+    may trip a wire (kept in one place so the top-up and the trip agree)."""
+    return settings.stream_stale_secs * 6
+
+
+def stale_hardstop_symbols(watches: list[dict], quotes: dict[str, dict],
+                           *, now: float | None = None,
+                           max_age: float | None = None) -> list[str]:
+    """Symbols of armed ``hard_stop`` wires whose cached quote is missing or
+    too old to trip (>``max_age`` seconds). These are the names the sweep must
+    top up with a live REST quote — a hard stop is the only wire that trades
+    unattended, so it can never be allowed to go blind on a stale tape. Pure;
+    de-duplicated; advisory wires are ignored (they only flip status)."""
+    now = time.time() if now is None else now
+    max_age = _quote_max_age() if max_age is None else max_age
+    out: list[str] = []
+    for w in watches:
+        if w.get("kind") != "hard_stop":
+            continue
+        sym = str(w.get("symbol") or "").upper()
+        if not sym or sym in out:
+            continue
+        e = quotes.get(sym) or {}
+        recv = e.get("recv")
+        if recv is None or (now - recv) > max_age:
+            out.append(sym)
+    return out
+
+
+def hardstop_distances(watches: list[dict], quotes: dict[str, dict],
+                       *, now: float | None = None) -> list[dict]:
+    """Per armed hard_stop wire: how close the live mid is to its kill level
+    and how fresh the quote is — the sweep heartbeat's payload, so a stop
+    that is armed-but-never-firing is visible instead of a silent black box."""
+    now = time.time() if now is None else now
+    max_age = _quote_max_age()
+    out: list[dict] = []
+    for w in watches:
+        if w.get("kind") != "hard_stop":
+            continue
+        sym = str(w.get("symbol") or "").upper()
+        e = quotes.get(sym) or {}
+        bid, ask, recv = e.get("bid"), e.get("ask"), e.get("recv")
+        age = None if recv is None else round(now - recv, 1)
+        mid = round((bid + ask) / 2, 4) if (bid and ask) else None
+        level = float(w["level"])
+        dist_pct = (round((mid - level) / level * 100, 2)
+                    if mid is not None and level else None)
+        out.append({"symbol": sym, "level": level, "mid": mid,
+                    "distance_pct": dist_pct, "age_secs": age,
+                    "fresh": age is not None and age <= max_age
+                    and bool(bid and ask), "src": e.get("src")})
+    return out
 
 
 def claim_watch(store, watch_id: int, values: dict | None = None) -> bool:
@@ -464,10 +528,24 @@ def apply_sweep_results(store, tripped: list[dict], expired: list[dict],
                      {"status": "expired"}, returning=False)
 
 
+def _rest_quotes(symbols: list[str]) -> dict[str, dict]:
+    """Live REST latest-quotes for the sweep's hard-stop top-up (blocking SDK
+    → runs in a thread). Error-safe: a failed fetch degrades to an empty dict
+    so the sweep just re-tries next round — never dies on a broker blip."""
+    try:
+        from agent import broker
+        return broker.Broker().quotes(symbols)
+    except Exception:  # noqa: BLE001 — a broker blip must not kill the sweep
+        logger.exception("hard-stop REST top-up failed for %s", symbols)
+        return {}
+
+
 async def run_watch_sweep() -> None:
     """The forever sweep task (companion to run_stream, never coupled to it)."""
     armed: list[dict] = []
     last_refresh = 0.0
+    last_topup = 0.0
+    last_heartbeat = 0.0
     while True:
         try:
             if time.time() - last_refresh > WATCH_REFRESH_SECS:
@@ -483,6 +561,25 @@ async def run_watch_sweep() -> None:
                 last_refresh = time.time()
             if armed:
                 snap = {s: dict(e) for s, e in cache._q.items()}
+                # A hard stop trades unattended, so it must never go blind on a
+                # thin/gapped tape: top up any stale hard-stopped name with a
+                # live REST quote (throttled; healthy WS names never qualify).
+                stale_hs = stale_hardstop_symbols(armed, snap)
+                if stale_hs and time.time() - last_topup >= WATCH_REST_TOPUP_SECS:
+                    fresh = await asyncio.to_thread(_rest_quotes, stale_hs)
+                    for sym, q in fresh.items():
+                        if q.get("bid") and q.get("ask"):
+                            snap[sym.upper()] = {**q, "recv": time.time(),
+                                                 "src": "rest_topup"}
+                    last_topup = time.time()
+                    if fresh:
+                        logger.info("hard-stop REST top-up: %s", stale_hs)
+                if time.time() - last_heartbeat > WATCH_HEARTBEAT_SECS:
+                    hs = hardstop_distances(armed, snap)
+                    if hs:
+                        logger.info("watch-sweep heartbeat: %d armed, "
+                                    "hard-stops=%s", len(armed), hs)
+                    last_heartbeat = time.time()
                 tripped, expired = evaluate_watches(armed, snap)
                 if tripped or expired:
                     def _write():
