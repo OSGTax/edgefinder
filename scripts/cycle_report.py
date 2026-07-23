@@ -80,9 +80,35 @@ def gather(gh_run_id: str, now: datetime | None = None) -> dict:
                      [("status", "eq.pending")], "id.desc", 5)
     except Exception:  # noqa: BLE001 — a missing/empty table must not blank the report
         props = []
+    loop_health = _loop_health_snapshot(rows, now)
     return {"decision": dec[0] if dec else None, "matched_run": matched,
             "fills": fills, "next_wake": nxt[0] if nxt else None,
-            "equity": eq[0] if eq else None, "pending_proposals": props}
+            "equity": eq[0] if eq else None, "pending_proposals": props,
+            "loop_health": loop_health}
+
+
+def _loop_health_snapshot(rows, now: datetime) -> list[str]:
+    """A tiny, dependency-free echo of agent.knowledge.loop_report's two
+    starkest health flags (empty registry / written-but-not-read) — so the
+    owner sees knowledge-loop health every cycle this email fires, not just
+    once a week at the Friday reflection. Best-effort: any read failure
+    degrades to no flags, same convention as the rest of this script."""
+    try:
+        since = (now - timedelta(days=7)).isoformat()
+        claims = rows("desk_claims", "id", [("status", "eq.active")],
+                      "id.desc", 1)
+        recent_dec = rows("desk_decisions", "picks",
+                          [("ts", f"gte.{since}")], "ts.desc", 200)
+        cited = sum(1 for d in recent_dec
+                    for p in (d.get("picks") or []) if p.get("claims"))
+        flags = []
+        if not claims:
+            flags.append("no active claims — the knowledge base is empty")
+        if cited == 0:
+            flags.append("no pick has cited a claim in the last 7 days")
+        return flags
+    except Exception:  # noqa: BLE001 — best-effort, never blocks the report
+        return []
 
 
 def _fmt_et(ts: str) -> str:
@@ -156,6 +182,11 @@ def compose(gh_run_id: str, conclusion: str, facts: dict,
         lines.append("  Approve by commenting 'approve' on the PROPOSAL-<id> "
                      "issue, or run: agent.knowledge proposal-approve --id <id>")
 
+    health = facts.get("loop_health") or []
+    if health:
+        lines.append("")
+        lines.append("Knowledge loop: " + "; ".join(health))
+
     lines.append(f"Log: https://github.com/OSGTax/edgefinder/actions/runs/"
                  f"{gh_run_id}")
     lines.append("Desk: https://edgefinder-pm8h.onrender.com/desk")
@@ -192,7 +223,7 @@ def main() -> None:
         facts = gather(gh_run_id)
     except Exception as exc:  # noqa: BLE001 — report the outage, don't crash
         facts = {"decision": None, "matched_run": False, "fills": [],
-                 "next_wake": None, "equity": None}
+                 "next_wake": None, "equity": None, "loop_health": []}
         print(f"cycle_report: gather failed ({exc}); sending bare notice",
               file=sys.stderr)
     subject, body = compose(gh_run_id, conclusion, facts)

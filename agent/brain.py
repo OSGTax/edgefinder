@@ -539,11 +539,19 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
 # after wake-plan says ok, so the cap and minimum gap are enforced and every
 # planned check-in is on the record for the desk.
 
-WAKE_MAX_PER_DAY = 30     # self-scheduled wakes per ET day. Sized for the rolling
+WAKE_MAX_PER_DAY = 40     # self-scheduled wakes per ET day. Sized for the rolling
                           # chain (v9.12.0): prep + a 15-60-min chain across the
-                          # session + wrap needs up to ~28. The dispatcher honors
+                          # session + wrap needs up to ~28. Raised from 30
+                          # (2026-07-23, owner-directed) for headroom when the
+                          # chain leans toward the tight end of its range more
+                          # often — comfortably under the 60-row wake reads in
+                          # this module and wake_due(). The dispatcher honors
                           # every plan, so the cap IS the cadence ceiling.
-WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes
+WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes — kept as the FLOOR:
+                          # a cycle itself can run close to 10 minutes end to
+                          # end, and GH Actions serializes cycles (no two run
+                          # concurrently), so a shorter gap risks a wake coming
+                          # due while the prior cycle is still running.
 
 
 def watch_set(store=None, *, symbol: str, above: float | None = None,

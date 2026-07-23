@@ -281,6 +281,22 @@ def test_context_claims_is_tier_gated_and_bounded(store):
     assert out["caps"]["experimental_total_weight"] == 0.10
 
 
+def test_context_claims_surfaces_observation_tier_as_watch_only(store):
+    from agent.knowledge import claim_add, context_claims
+
+    claim_add(store, kclass="risk_rule", tier="established", statement="est",
+              scope={"account": "paper"},
+              evidence=[{"kind": "probe", "note": "n"}])
+    claim_add(store, kclass="operational", tier="observation",
+              statement="worth watching", scope={"account": "paper"})
+    out = context_claims(store)
+    # authority unchanged: only the established claim can justify a pick
+    assert {c["statement"] for c in out["claims"]} == {"est"}
+    # but the observation claim is now visible, clearly marked watch-only
+    assert out["watch_only"][0]["statement"] == "worth watching"
+    assert out["watch_only"][0]["tier"] == "observation"
+
+
 def test_brain_context_carries_claims_section(store):
     from agent.brain import context
     from agent.knowledge import claim_add

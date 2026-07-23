@@ -55,7 +55,19 @@ RULES = (
     # is 2009-2017 — judge their split-sample consistency accordingly.
     + [f"value_momentum:{k}" for k in (5, 8)]
 )
-SCHEDULES = ("weekly", "monthly")
+SCHEDULES = ("daily", "weekly", "monthly")
+# "daily" added 2026-07-23 (owner-directed: lean toward more turnover). The
+# engine has always supported it (edgefinder/engine/backtest.py's
+# _is_rebalance) but the sweep never tested it, so there was zero backtested
+# evidence either way for a faster rebalance cadence. Costed exactly like
+# every other schedule (CostModel + flat cost_bps=2.0 per trade) so a daily
+# rule has to earn its place net of the extra round-trips, not just gross.
+
+STREAK_CLAIM_THRESHOLD = 3
+# Consecutive qualifying nights (newest first, within leaderboard()'s window)
+# before a combo is flagged toward a candidate claim. agent.lab stays
+# read-only evidence — "you produce evidence, not orders" — so this only
+# flags; the strategy-lab skill decides whether to actually file the claim.
 # Most-liquid slices of the hot set, plus mid200 (dollar-volume ranks 41-240):
 # a rule that only works on megacaps is riding fame, not edge. Membership is
 # ranked as of SPLIT_DATE when the hot set still holds bars there (see
@@ -286,7 +298,13 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
     """The current lab leaderboard from recent persisted sweeps.
 
     Dedupes by (rule, universe, schedule) keeping the newest result, keeps
-    qualifiers only, ranks by worst-half excess. Always reports tested count."""
+    qualifiers only, ranks by worst-half excess. Always reports tested count.
+    Also tracks each combo's QUALIFICATION STREAK (consecutive qualifying
+    results, newest first, within the window): a combo that keeps
+    requalifying night after night is real signal the claims registry has
+    no automatic way to see today, so a long streak is flagged (see
+    ``flagged_for_claim`` on the return) for the strategy-lab skill to turn
+    into a candidate claim."""
     from datetime import datetime, timedelta, timezone
 
     from agent.store import get_store
@@ -297,6 +315,7 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
     rows = store.select("desk_backtests", filters={"account": "agent"},
                         order=[("ts", "desc")], limit=500)
     seen: set[tuple] = set()
+    history: dict[tuple, list[bool]] = {}
     entries, tested = [], 0
     for r in rows:
         label = str(r.get("label") or "")
@@ -306,11 +325,15 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
             continue
         spec = r.get("spec") or {}
         key = (spec.get("rule"), spec.get("universe"), spec.get("schedule"))
+        res = r.get("result") or {}
+        # Newest-first per combo across EVERY row in the window, independent
+        # of the dedup below (which only controls what goes into ``entries``)
+        # — the streak needs the full history, not just the newest result.
+        history.setdefault(key, []).append(bool(res.get("qualifies")))
         if key in seen:
             continue
         seen.add(key)
         tested += 1
-        res = r.get("result") or {}
         if res.get("qualifies"):
             entry = {"rule": spec.get("rule"),
                      "universe": spec.get("universe"),
@@ -330,6 +353,17 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
                 entry["benchmark_div_from"] = res["benchmark_div_from"]
             entries.append(entry)
     entries.sort(key=lambda e: -(e.get("score") or -999))
+    for e in entries:
+        streak = 0
+        for qualified in history.get((e["rule"], e["universe"], e["schedule"]), []):
+            if not qualified:
+                break
+            streak += 1
+        e["qualified_streak"] = streak
+    flagged_for_claim = [
+        {"rule": e["rule"], "universe": e["universe"], "schedule": e["schedule"],
+         "qualified_streak": e["qualified_streak"], "score": e["score"]}
+        for e in entries if e["qualified_streak"] >= STREAK_CLAIM_THRESHOLD]
     survivorship = sum(1 for e in entries
                        if e["universe_basis"] != f"as_of_{SPLIT_DATE}")
     # Benchmark dividend coverage starting AFTER the in-sample start means
@@ -353,6 +387,7 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
     return {"window_days": days, "combos_tested": tested,
             "qualified": len(entries),
             "honesty": honesty,
+            "flagged_for_claim": flagged_for_claim,
             "top": entries[:top]}
 
 

@@ -115,6 +115,18 @@ with NO bear-case row is itself a mistake — log it on the `mistakes` page
 with the run id, regardless of whether the trade worked. Discipline that
 only applies when convenient is not discipline.
 
+**Audit toolkit diversity.** Owner direction (2026-07-15, restated
+2026-07-23): the book should run several concurrent STYLES — trend
+equities, leveraged-ETF expression, options structures — not just one.
+Count the distinct instrument styles actually used this week (plain equity
+shares vs. leveraged/inverse ETFs vs. options structures). If the week was
+equities-only again, that is itself a discipline gap — log it on the
+`mistakes` page by name (which lenses got studied in `study_log` but never
+turned into a fill, and why) exactly like a missed bear-case, not a
+neutral outcome. If the toolkit WAS used, grade it like any other pick:
+did the options play beat the equivalent shares play, did the leveraged
+ETF earn its decay — cite the numbers.
+
 **Audit fundamentals citations.** Since v9.4.0 picks may cite SEC-filed
 numbers (EPS, growth, P/E, FCF) as evidence. For each graded pick whose
 rationale cited one, verify the citation against what was knowable on the

@@ -153,9 +153,11 @@ One Supabase Postgres database, two namespaces:
   budget ledger for self-scheduled check-ins — the brain owns its own
   attention: since v9.12.0 it runs a ROLLING CHAIN all session (every
   market-hours cycle plans the next, 15–60 min out; prep ~9:00 ET, wrap
-  post-close; max 30 wakes/ET-day, 15-min gap), and the always-on
-  streamer MACHINE-FIRES a GitHub Actions trading cycle when a wake
-  comes due or a tripwire trips (≤45 dispatches/ET-day, ≥5-min gap) —
+  post-close; max 40 wakes/ET-day, 15-min gap — the floor stays 15 min
+  since a cycle itself can run close to 10 min and GH Actions serializes
+  cycles), and the always-on streamer MACHINE-FIRES a GitHub Actions
+  trading cycle when a wake comes due or a tripwire trips (≤60
+  dispatches/ET-day, ≥5-min gap) —
   `desk_dispatches` is that loop's at-most-once ledger; a half-hour
   cron floor in the workflow re-seeds a dropped chain),
   `desk_outcomes` (machine-graded pick facts written by `agent.ledger

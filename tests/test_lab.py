@@ -229,6 +229,36 @@ def test_leaderboard_dedupes_to_newest_result(store):
     assert b["qualified"] == 0  # tonight's verdict wins; stale wins don't linger
 
 
+def test_leaderboard_tracks_qualification_streak_and_flags_it(store):
+    from agent.lab import STREAK_CLAIM_THRESHOLD, leaderboard
+
+    now = datetime.utcnow()
+    for i in range(STREAK_CLAIM_THRESHOLD):
+        seed_lab_row(store, "momentum:5", "top40", "monthly",
+                     qualifies=True, score=5.0,
+                     ts=now - timedelta(days=STREAK_CLAIM_THRESHOLD - i))
+    b = leaderboard(top=5)
+    entry = next(e for e in b["top"] if e["rule"] == "momentum:5")
+    assert entry["qualified_streak"] == STREAK_CLAIM_THRESHOLD
+    assert any(f["rule"] == "momentum:5" for f in b["flagged_for_claim"])
+
+
+def test_leaderboard_streak_stops_at_a_failed_night(store):
+    from agent.lab import leaderboard
+
+    now = datetime.utcnow()
+    seed_lab_row(store, "momentum:5", "top40", "monthly",
+                 qualifies=True, score=5.0, ts=now - timedelta(days=3))
+    seed_lab_row(store, "momentum:5", "top40", "monthly",
+                 qualifies=False, score=-1.0, ts=now - timedelta(days=2))
+    seed_lab_row(store, "momentum:5", "top40", "monthly",
+                 qualifies=True, score=5.0, ts=now - timedelta(days=1))
+    b = leaderboard(top=5)
+    entry = next(e for e in b["top"] if e["rule"] == "momentum:5")
+    assert entry["qualified_streak"] == 1  # only the newest night counts
+    assert not any(f["rule"] == "momentum:5" for f in b["flagged_for_claim"])
+
+
 # ── value_momentum: PIT fundamentals gate (validation-passed 2026-07-14) ──
 
 

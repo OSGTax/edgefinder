@@ -28,9 +28,12 @@ scheduled slot only when a wake is due OR it's desk hours (9:00–4:30 ET)
 with no cycle in the last 25 minutes — a healthy chain makes floor slots
 free. Cycles authenticate with the owner's Max subscription
 (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`). Guards: >=5-min
-dispatch gap + 45/ET-day cap (DB-enforced, `desk_dispatches`), 3 attempts
-per wake then terminal, wake budget 30/ET-day. Expected volume: ~15–25
-cycles/trading day. Failures journal loudly to the desk. The claude.ai
+dispatch gap + 60/ET-day cap (DB-enforced, `desk_dispatches`), 3 attempts
+per wake then terminal, wake budget 40/ET-day (raised from 30/45
+2026-07-23; the 15-min gap floor is unchanged — a cycle itself runs close
+to 10 min and GH Actions serializes cycles, so the floor is the real
+ceiling, not the daily count). Expected volume: ~15–25 cycles/trading day.
+Failures journal loudly to the desk. The claude.ai
 trading Routine remains as a fallback during transition and should be
 retired after a week of proven autonomous fires.
 

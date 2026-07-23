@@ -63,6 +63,25 @@ def test_gather_falls_back_to_recent_window(monkeypatch):
     assert facts["decision"]["summary"] == "hold"
 
 
+def test_gather_surfaces_loop_health_flags(monkeypatch):
+    monkeypatch.setattr(cycle_report, "_rest", _fake_rest(lambda path, spec: []))
+    facts = cycle_report.gather("123", NOW)
+    assert any("no active claims" in f for f in facts["loop_health"])
+    assert any("no pick has cited" in f for f in facts["loop_health"])
+
+
+def test_gather_loop_health_clean_when_claims_cited(monkeypatch):
+    def tables(path, spec):
+        if path == "desk_claims":
+            return [{"id": 1}]
+        if path == "desk_decisions" and spec.get("select") == ["picks"]:
+            return [{"picks": [{"symbol": "NVDA", "claims": [1]}]}]
+        return []
+    monkeypatch.setattr(cycle_report, "_rest", _fake_rest(tables))
+    facts = cycle_report.gather("123", NOW)
+    assert facts["loop_health"] == []
+
+
 def test_compose_success_with_fills():
     facts = {
         "matched_run": True,
@@ -89,6 +108,14 @@ def test_compose_failure_leads_with_failure():
     assert "FAILED" in subject
     assert "No fills this cycle." in body
     assert "none pending" in body
+
+
+def test_compose_renders_loop_health():
+    facts = {"matched_run": False, "decision": None, "fills": [],
+             "next_wake": None, "equity": None,
+             "loop_health": ["no active claims — the knowledge base is empty"]}
+    _, body = cycle_report.compose("789", "success", facts, NOW)
+    assert "Knowledge loop: no active claims" in body
 
 
 def test_send_without_config_is_a_noop(monkeypatch):

@@ -48,7 +48,35 @@ Run id: `lab-YYYY-MM-DD`. Narrate with
    21-year figures to a price rule's as if the exposure were equal.
 4. `python -m agent.lab leaderboard --top 10` — sanity-check the standing
    board the brief will carry tomorrow (it reads the last 14 days of lab
-   rows, deduped to the newest per combo).
+   rows, deduped to the newest per combo). **Check its `flagged_for_claim`
+   list** — combos that have now qualified 3+ consecutive nights running.
+   That repetition is exactly the kind of evidence the claims registry
+   exists for, and today nothing files it automatically (`agent.lab` stays
+   read-only evidence, by design — "you produce evidence, not orders").
+   For each flagged combo, first check it isn't already covered
+   (`agent.knowledge claim-search --terms "<rule> <universe>"` — search
+   TWICE with different phrasings before concluding there's no existing
+   claim), then file a CANDIDATE claim yourself, flagged `--experimental`
+   so the trader may cite it (small, capped — 5% per claim / 10% of book,
+   same as any experimental claim) while it's still backtest-only evidence
+   with no live track record:
+   ```
+   python -m agent.knowledge claim-add --kclass market_strategy \
+       --tier candidate --experimental \
+       --statement "<rule> on <universe>/<schedule> has qualified N
+       consecutive lab nights (worst-half excess X%) -- backtest evidence
+       only, no live paper track record yet" \
+       --scope '{"account":"paper","regimes":["risk_on"]}' \
+       --evidence '[{"kind":"probe","date":"<today>","note":"leaderboard
+       flagged_for_claim: N consecutive qualifying nights, score X"}]' \
+       --criteria '{"min_n":5,"min_symbols":3,"min_regimes":2,
+       "min_span_sessions":20,"min_win_rate":0.6}' --run-id <RID>
+   ```
+   Promotion to full `established` still goes through the normal gate at
+   Friday's reflection, evaluated against REAL `desk_outcomes` once the
+   trader has actually traded it — this only unlocks the SMALL, capped
+   experimental slot, it doesn't vouch for live performance the rule
+   hasn't had yet.
 5. **Rebuild the brief so tomorrow carries TONIGHT's board:**
    `python -m agent.market brief-build` — it upserts tonight's brief in
    place. The data-refresh routine built it before your sweep ran; without

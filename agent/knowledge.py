@@ -48,7 +48,6 @@ DECAY_BY_KCLASS = {
 }
 
 STATEMENT_MAX_CHARS = 400
-CANDIDATE_MIN_N = 2  # one instance is an observation ("watching")
 
 ESTABLISH_DEFAULTS: dict[str, dict] = {
     "market_strategy": {"min_n": 5, "min_symbols": 3, "min_regimes": 2,
@@ -548,18 +547,24 @@ def claim_quarantine(store=None, *, claim_id: int, reason: str,
 
 def context_claims(store=None, *, account: str = ACCOUNT) -> dict:
     """The bounded advisory read: ONLY established claims and
-    experimental-flagged candidates reach decision context (outcome 2 —
-    visibility is the wiki's job; authority is tier-gated here)."""
+    experimental-flagged candidates reach decision context with CITATION
+    AUTHORITY (outcome 2 — visibility is the wiki's job; authority is
+    tier-gated here). Observation/digest-tier claims carry no authority but
+    are surfaced read-only in ``watch_only`` (2026-07-23) — before this they
+    were invisible to the hourly cycle entirely unless it separately ran
+    claim-list, which nothing prompted it to do."""
     store = store or _store()
     rows = store.select("desk_claims",
                         filters={"account": account, "status": "active"},
                         order=[("id", "asc")], limit=500)
-    injectable, candidates = [], 0
+    injectable, candidates, watchable = [], 0, []
     for r in rows:
         if r.get("tier") == "established" or r.get("experimental"):
             injectable.append(r)
         elif r.get("tier") == "candidate":
             candidates += 1
+        elif r.get("tier") in ("observation", "digest"):
+            watchable.append(r)
     out = []
     for r in injectable[:CONTEXT_MAX_CLAIMS]:
         stats = r.get("stats") or {}
@@ -573,15 +578,22 @@ def context_claims(store=None, *, account: str = ACCOUNT) -> dict:
             "losses": stats.get("losses"),
             "expires_at": str(r["expires_at"]) if r.get("expires_at") else None,
         })
-    return {"note": "established + experimental claims only — the tiers that "
-                    "may JUSTIFY a pick (cite ids in picks[].claims). "
-                    "Candidates stay watch-only in the wiki prose.",
+    watch_only = [{"id": r["id"], "cite": f"[C-{r['id']}]",
+                   "kclass": r.get("kclass"), "tier": r.get("tier"),
+                   "statement": (r.get("statement") or "")[:CONTEXT_STATEMENT_CLIP]}
+                  for r in watchable[:CONTEXT_MAX_CLAIMS]]
+    return {"note": "established + experimental claims may JUSTIFY a pick "
+                    "(cite ids in picks[].claims). watch_only holds "
+                    "observation/digest-tier claims for AWARENESS ONLY — "
+                    "never cite these, they carry no authority (candidates "
+                    "stay out of this read entirely; they're watch-only in "
+                    "the wiki prose, not here).",
             "caps": {"experimental_per_claim_weight":
                      EXPERIMENTAL_PER_CLAIM_WEIGHT_CAP,
                      "experimental_total_weight":
                      EXPERIMENTAL_TOTAL_WEIGHT_CAP},
             "count": len(out), "candidates_watching": candidates,
-            "claims": out}
+            "claims": out, "watch_only": watch_only}
 
 
 # ── commitments (materialization gate arrives with brain step 4) ─────────

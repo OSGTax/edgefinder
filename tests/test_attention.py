@@ -683,8 +683,13 @@ def test_dispatch_daily_cap(store):
     now = datetime(2026, 7, 16, 20, 0)
     wakes = [{"id": 1, "at": now - timedelta(minutes=5),
               "honored_run_id": None, "dispatch_count": 0}]
-    # cap spent across the same ET day, all outside the min-gap
-    spent = [{"ts": now - timedelta(minutes=20 + 15 * i)}
+    # cap spent across the same ET day, all outside the min-gap (only the
+    # entry nearest `now` -- i=0 at 20min out -- needs to clear the 5-min
+    # gap; a 1-min step keeps the WHOLE seeded span comfortably inside one
+    # ET-day no matter how large DISPATCH_MAX_PER_DAY grows, unlike the old
+    # 15-min step which silently crossed a day boundary once the constant
+    # was raised past ~44 and made the cap look unenforced, 2026-07-23)
+    spent = [{"ts": now - timedelta(minutes=20 + i)}
              for i in range(DISPATCH_MAX_PER_DAY)]
     assert dispatch_reason(wakes, [], spent, now=now) is None
 

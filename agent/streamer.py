@@ -517,7 +517,12 @@ DISPATCH_PERIOD_SECS = 60          # how often the dispatcher looks
 DISPATCH_MIN_GAP_SECS = 300        # >=5 min between dispatches (the bucket) — tight
                                    # enough that a trip between chain cycles isn't
                                    # held at the door for long (v9.12.0)
-DISPATCH_MAX_PER_DAY = 45          # per ET day — chain + trips + retry headroom
+DISPATCH_MAX_PER_DAY = 60          # per ET day — chain + trips + retry headroom.
+                                   # Raised from 45 (2026-07-23, owner-directed)
+                                   # in lockstep with brain.WAKE_MAX_PER_DAY's
+                                   # 30->40 bump (same ~1.5x ratio); still well
+                                   # under the 288-bucket ceiling the limit=300
+                                   # read below assumes at DISPATCH_MIN_GAP_SECS.
 DISPATCH_MAX_PER_WAKE = 3          # then the wake is stamped missed:auto
 DISPATCH_WAKE_LOOKBACK_HOURS = 8   # same "due" definition as brain.wake_due
 
