@@ -1301,15 +1301,21 @@ const CLAIM_CLASS = {
 
 function claimStatsText(stats) {
   const bits = [];
-  if (typeof stats.n === 'number') bits.push('n=' + stats.n);
+  const glossary = [];
+  if (typeof stats.n === 'number') {
+    bits.push('n=' + stats.n);
+    glossary.push('n = the number of past trades used to test this claim');
+  }
   if (typeof stats.wins === 'number' && typeof stats.losses === 'number'
       && (stats.wins + stats.losses) > 0) {
     bits.push(stats.wins + 'W/' + stats.losses + 'L');
+    glossary.push('W/L = how many of those trades came out a win vs. a loss');
   }
   if (typeof stats.avg_alpha_pct === 'number') {
     bits.push('avg alpha ' + fmtPct(stats.avg_alpha_pct));
+    glossary.push('avg alpha = the average return vs. the S&P 500 across those trades');
   }
-  return bits.join(' · ');
+  return { text: bits.join(' · '), title: glossary.join('. ') };
 }
 
 async function loadClaims() {
@@ -1358,9 +1364,16 @@ async function loadClaims() {
           text: 'expires ' + r.expires_at + ' unless renewed' }));
       }
       const stats = claimStatsText(r.stats || {});
-      const foot = h('div', { class: 'desk-claim-foot t-dim' },
-        h('span', { text: (stats ? stats + ' · ' : '')
-          + r.evidence_count + ' evidence ref(s)' }));
+      const foot = h('div', { class: 'desk-claim-foot t-dim' });
+      if (stats.text) {
+        foot.append(h('span', { title: stats.title, text: stats.text }),
+          h('span', { text: ' · ' }));
+      }
+      foot.append(h('span', {
+        title: 'Evidence ref(s) = the backtests or logged trades the AI is '
+          + 'citing as support for this claim.',
+        text: r.evidence_count + ' evidence ref(s)',
+      }));
       el.append(h('div', { class: 'desk-claim' },
         head,
         h('p', { class: 'desk-claim-statement', text: r.statement }),
