@@ -124,3 +124,78 @@ def test_uncited_picks_are_unaffected(store):
                               "prediction": "up", "horizon_days": 10,
                               "kill": "x"}])
     assert r["ok"], r
+
+
+# ── context truncation must not starve new or capped claims ──────────────
+
+def test_context_truncation_is_prioritised_not_oldest_first(store):
+    """The cap bounds prompt growth, but slicing an id-ASCENDING list meant
+    the oldest 20 claims filled every slot and everything registered since
+    was invisible — a newly written claim could never influence a cycle,
+    which defeats the write-then-read loop the registry exists for."""
+    from agent import knowledge
+
+    # three risk rules, then enough established claims to overflow the cap
+    risk = [_established(store, statement=f"risk {i}") for i in range(3)]
+    for i in range(knowledge.CONTEXT_MAX_CLAIMS + 5):
+        _established(store, kclass="operational", statement=f"op {i}")
+    # the claim under test, registered LAST and expiring SOONEST
+    newest = _candidate(store, experimental=True)
+
+    cc = knowledge.context_claims(store)
+    ids = [c["id"] for c in cc["claims"]]
+
+    assert cc["count"] == knowledge.CONTEXT_MAX_CLAIMS
+    assert cc["truncated"] == cc["injectable_total"] - cc["count"] > 0
+    assert newest in ids, "the newest experimental claim must survive the cap"
+    for r in risk:
+        assert r in ids, "risk rules must never be starved out"
+
+
+def test_soonest_expiring_experimental_wins_its_band(store):
+    """Within the experimental band the one about to lapse is the urgent
+    one — ordering that band by id re-created the starvation one level down."""
+    from agent.knowledge import claim_add, context_claims, CONTEXT_MAX_CLAIMS
+
+    def _exp(stmt, expires):
+        r = claim_add(store, kclass="market_strategy", tier="candidate",
+                      statement=stmt, scope={"account": "paper"},
+                      evidence=[{"kind": "probe", "note": "n"}],
+                      promotion_criteria={"min_n": 5}, experimental=True,
+                      expires_at=expires)
+        assert r["ok"], r
+        return r["id"]
+
+    # fill the cap with far-dated experimental claims first
+    for i in range(CONTEXT_MAX_CLAIMS + 3):
+        _exp(f"far {i}", "2099-01-01")
+    urgent = _exp("expires tomorrow", "2026-07-30")
+
+    ids = [c["id"] for c in context_claims(store)["claims"]]
+    assert urgent in ids and ids[0] == urgent
+
+
+def test_experimental_band_cannot_starve_established(store):
+    """Strict band ordering just moves starvation down a level: with enough
+    experimental claims to overrun the cap on their own, every plain
+    established claim — including one registered seconds ago — became
+    unreadable. Bands are interleaved so neither can be starved to zero."""
+    from agent.knowledge import (claim_add, context_claims,
+                                 CONTEXT_MAX_CLAIMS)
+
+    # more experimental claims than the whole cap
+    for i in range(CONTEXT_MAX_CLAIMS + 9):
+        r = claim_add(store, kclass="market_strategy", tier="candidate",
+                      statement=f"exp {i}", scope={"account": "paper"},
+                      evidence=[{"kind": "probe", "note": "n"}],
+                      promotion_criteria={"min_n": 5}, experimental=True,
+                      expires_at="2099-01-01")
+        assert r["ok"], r
+    fresh = _established(store, kclass="system_mechanics",
+                        statement="a fact registered after the flood")
+
+    cc = context_claims(store)
+    ids = [c["id"] for c in cc["claims"]]
+    assert fresh in ids, "a plain established claim must survive the cap"
+    assert any(c.get("experimental") for c in cc["claims"]), \
+        "the experimental band must still be represented too"

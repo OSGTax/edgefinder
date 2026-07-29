@@ -46,11 +46,22 @@ def _mid(row: dict) -> float | None:
 
 
 def summarize_chain(rows: list[dict], spot: float, *,
-                    today: date | None = None) -> dict:
+                    today: date | None = None, expiry: str | None = None,
+                    min_dte: int | None = None) -> dict:
     """Reduce broker.option_chain rows to the trader's read (pure).
 
     Returns {spot, expiry, dte, atm_strike, atm_iv, expected_move_pct,
     expected_move_dollars, skew_25d, calls_table, puts_table, expiries}.
+
+    FOCUS SELECTION: by default the nearest expiry at least ``MIN_FOCUS_DTE``
+    out, which skips 0-2 DTE noise for the general read. Two explicit
+    overrides exist for event trading, where the shortest-dated contract is
+    the *point* (a scheduled release is priced into the expiry that spans it):
+    ``expiry`` pins an exact date, ``min_dte`` relaxes the floor (pass 0 for
+    same-day). An ``expiry`` absent from the chain falls back to the normal
+    rule rather than returning an empty read, and stamps
+    ``expiry_requested`` so the caller can see it did not get what it asked
+    for — a silently substituted expiry would misprice an event structure.
     """
     today = today or date.today()
     out: dict = {"spot": spot, "available": bool(rows), "expiries": []}
@@ -63,9 +74,15 @@ def summarize_chain(rows: list[dict], spot: float, *,
         by_expiry.setdefault(r["expiry"], []).append(r)
     out["expiries"] = sorted(by_expiry)
 
-    focus = next((e for e in sorted(by_expiry)
-                  if (date.fromisoformat(e) - today).days >= MIN_FOCUS_DTE),
-                 sorted(by_expiry)[-1])
+    floor = MIN_FOCUS_DTE if min_dte is None else min_dte
+    if expiry and expiry in by_expiry:
+        focus = expiry
+    else:
+        if expiry:
+            out["expiry_requested"] = expiry
+        focus = next((e for e in sorted(by_expiry)
+                      if (date.fromisoformat(e) - today).days >= floor),
+                     sorted(by_expiry)[-1])
     frows = by_expiry[focus]
     dte = (date.fromisoformat(focus) - today).days
     out.update(expiry=focus, dte=dte)
@@ -119,12 +136,19 @@ def summarize_chain(rows: list[dict], spot: float, *,
     return out
 
 
-def get_summary(symbol: str, *, dte_max: int = 45) -> dict:
+def get_summary(symbol: str, *, dte_max: int = 45, expiry: str | None = None,
+                min_dte: int | None = None) -> dict:
     """Live chain summary for an underlying (60s cached). Graceful when keys
-    are absent or the chain fails: {"available": False, "error": ...}."""
+    are absent or the chain fails: {"available": False, "error": ...}.
+
+    ``expiry`` / ``min_dte`` pass through to ``summarize_chain`` — see there.
+    They are part of the CACHE KEY on purpose: keyed on symbol alone, a
+    same-day event read would be served a cached 3-DTE summary and quietly
+    price the wrong contract."""
     symbol = symbol.upper().strip()
     now = time.time()
-    hit = _cache.get(symbol)
+    key = (symbol, dte_max, expiry, min_dte)
+    hit = _cache.get(key)
     if hit and now - hit[0] < _CACHE_TTL:
         return hit[1]
     try:
@@ -139,10 +163,11 @@ def get_summary(symbol: str, *, dte_max: int = 45) -> dict:
         rows = b.option_chain(symbol, dte_max=dte_max)
         # DTE on the ET calendar — date.today() on a UTC host is already
         # tomorrow after ~20:00 ET
-        out = summarize_chain(rows, spot, today=broker._today_et())
+        out = summarize_chain(rows, spot, today=broker._today_et(),
+                              expiry=expiry, min_dte=min_dte)
         out["symbol"] = symbol
         out["as_of"] = datetime.now(timezone.utc).isoformat()
-        _cache[symbol] = (now, out)
+        _cache[key] = (now, out)
         return out
     except Exception as exc:  # noqa: BLE001 — the page must degrade, not 500
         logger.warning("options summary failed for %s: %s", symbol, exc)

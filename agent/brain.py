@@ -1278,18 +1278,27 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
 
     wakes = _safe("wakes", _wakes, {})
 
+    def _fomc():
+        from agent import market
+
+        return market.next_fomc()
+
+    # Scheduled macro events are the one thing the bar history cannot imply.
+    # Cheap, pure, and always present so a cycle never has to remember to ask.
+    fomc = _safe("fomc", _fomc, {})
+
     return {"as_of": str(_utcnow()),
             "note": "the cycle's working memory in one read — account header,"
                     " brief, wiki, tier-gated claims, strategy, open"
                     " predictions with their machine-graded facts, recent"
                     " outcomes, tripped wires, fired-unhonored commitments,"
-                    " due wakes. Free text is clipped; drill in with the"
-                    " individual tools.",
+                    " due wakes, next scheduled macro event. Free text is"
+                    " clipped; drill in with the individual tools.",
             "account": account_out, "brief": brief, "wiki": wiki,
             "claims": claims, "strategy": strategy,
             "open_predictions": open_predictions,
             "outcomes": outcomes_out, "watches": watches,
-            "commitments": commitments, "wakes": wakes,
+            "commitments": commitments, "wakes": wakes, "fomc": fomc,
             "errors": errors}
 
 

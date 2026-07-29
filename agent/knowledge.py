@@ -565,8 +565,52 @@ def context_claims(store=None, *, account: str = ACCOUNT) -> dict:
             candidates += 1
         elif r.get("tier") in ("observation", "digest"):
             watchable.append(r)
+    # PRIORITISED, BAND-FAIR truncation. The cap exists to bound prompt
+    # growth, but slicing an id-ASCENDING list meant the oldest 20 claims
+    # filled every slot and everything registered since was invisible — a
+    # newly written claim could never influence a cycle, which quietly
+    # defeats the whole write-then-read loop.
+    #
+    # Three bands, by what a cycle cannot afford to miss:
+    #   0. risk rules — they never decay and are always taken in full;
+    #   1. experimental — under active test AND exposure-capped, so the
+    #      cycle has to see them to size against the cap at all. Ordered
+    #      soonest-EXPIRING first: a claim about to lapse is either about
+    #      to be acted on or about to die.
+    #   2. the rest, NEWEST first — recent learning outranks stale.
+    #
+    # Bands 1 and 2 are then interleaved ROUND-ROBIN across the remaining
+    # slots rather than taken in strict band order. Strict ordering just
+    # moves the starvation down a level: with 29 experimental claims on the
+    # live book, band 1 alone overran the cap and every plain established
+    # claim — including freshly registered system_mechanics facts — became
+    # unreadable. A band that can be starved to zero will be.
+    far = date(9999, 12, 31)
+    risk, experimental_band, rest = [], [], []
+    for r in injectable:
+        if r.get("kclass") == "risk_rule":
+            risk.append(r)
+        elif r.get("experimental"):
+            experimental_band.append(r)
+        else:
+            rest.append(r)
+    experimental_band.sort(key=lambda r: (_as_date(r.get("expires_at")) or far,
+                                          -r["id"]))
+    rest.sort(key=lambda r: -r["id"])
+
+    selected = risk[:CONTEXT_MAX_CLAIMS]
+    i = j = 0
+    while len(selected) < CONTEXT_MAX_CLAIMS and (i < len(experimental_band)
+                                                  or j < len(rest)):
+        if i < len(experimental_band):
+            selected.append(experimental_band[i])
+            i += 1
+        if len(selected) < CONTEXT_MAX_CLAIMS and j < len(rest):
+            selected.append(rest[j])
+            j += 1
+    dropped = max(0, len(injectable) - len(selected))
     out = []
-    for r in injectable[:CONTEXT_MAX_CLAIMS]:
+    for r in selected:
         stats = r.get("stats") or {}
         out.append({
             "id": r["id"], "cite": f"[C-{r['id']}]",
@@ -593,6 +637,7 @@ def context_claims(store=None, *, account: str = ACCOUNT) -> dict:
                      "experimental_total_weight":
                      EXPERIMENTAL_TOTAL_WEIGHT_CAP},
             "count": len(out), "candidates_watching": candidates,
+            "injectable_total": len(injectable), "truncated": dropped,
             "claims": out, "watch_only": watch_only}
 
 
