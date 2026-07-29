@@ -25,6 +25,7 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     # pages: / is the desk now (307 redirect), /desk is the page itself
     ("/", [], {307}),
     ("/desk", [], {200}),
+    ("/trades", [], {200}),
     # /api/desk/* — the read-only projections of the desk_* tables
     ("/api/desk/portfolio", ["cash", "equity", "positions"], {200}),
     ("/api/desk/equity", [], {200}),                       # bare list shape
@@ -51,6 +52,7 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/api/desk/watch", ["watches", "wakes"], {200}),
     ("/api/desk/whatsnew", ["entries", "new_count"], {200}),
     ("/api/desk/trades?limit=5", [], {200}),               # bare list shape
+    ("/api/desk/trade-history?limit=5", ["rows", "realized_pnl"], {200}),
     # symbol workstation API (404 acceptable when the symbol has no bars
     # in the target environment)
     ("/api/symbols/SPY/bars?range=3m", ["bars", "source"], {200, 404}),

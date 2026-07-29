@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block title %}Trades — EdgeFinder{% endblock %}
+
+{% block content %}
+<div class="c-card">
+  <div class="c-card-header">
+    <span>Trade history</span>
+    <span class="spacer"></span>
+    <span id="trades-total" class="t-dim"></span>
+  </div>
+  <div class="c-card-body" id="trades-table"></div>
+  <div class="c-card-body">
+    <p class="t-dim" id="trades-note">
+      Profit is what a trade realized when it closed shares or contracts it
+      already held, measured against the position's average cost rather than
+      any one purchase. Trades that only opened a position show no profit.
+      Open positions, dividend credits and the $0.65-per-contract option fee
+      are not included here — the desk page has the whole-account number.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module" src="/static/js/pages/trades.js"></script>
+{% endblock %}

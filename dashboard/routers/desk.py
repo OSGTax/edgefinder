@@ -1124,3 +1124,70 @@ def trades(db: Session = Depends(get_db), limit: int = Query(100, le=1000)):
              "shares": r.shares, "price": r.price, "dollars": r.dollars,
              "rationale": r.rationale, "run_id": r.run_id,
              "fill_quote": r.fill_quote or None} for r in rows]
+
+
+def _history_row(t: dict, realized: dict | None) -> dict:
+    """One human-readable row of the /trades history.
+
+    ``date`` is the ET SESSION date, not the viewer's calendar date: fills are
+    stored naive-UTC and extended-hours fills to 20:00 ET are allowed, so a
+    19:30 ET fill is already next-day in UTC and would render a day late for
+    any non-ET reader. Corp-action rows are BOOKED whenever `settle` next runs,
+    so they date by their own effective date instead (``_adj_effective_date``).
+    """
+    from agent import ledger, occ
+
+    sym = str(t["symbol"])
+    src = ledger._fq(t).get("src")
+    kind = {"split_adjustment": "split", "dividend": "dividend",
+            "expiry_settlement": "expiry"}.get(src, "trade")
+    is_opt = occ.is_option(sym)
+    return {
+        "id": t.get("id"),
+        # effective date for corp actions, else the ET session date
+        "date": ledger._adj_effective_date(t) or ledger._et_date(t.get("ts")),
+        "t": _iso_any(t.get("ts")),
+        "symbol": sym,
+        "underlying": occ.parse(sym)["underlying"] if is_opt else sym,
+        "label": occ.describe(sym) if is_opt else sym,
+        "side": t.get("side"),
+        "kind": kind,
+        "shares": float(t.get("shares") or 0.0),
+        "dollars": float(t.get("dollars") or 0.0),
+        # absent from the map = closed nothing. null, never 0.0 — a zero here
+        # would paint an opening buy bright green via upDownClass(0).
+        "realized": None if realized is None else round(realized["pnl"], 2),
+        "closed_units": None if realized is None else realized["closed_units"],
+    }
+
+
+@router.get("/trade-history")
+def trade_history(limit: int = Query(200, ge=1, le=1000)):
+    """The simple human history behind /trades: every fill, and the profit it
+    realized.
+
+    Reads through ``get_store()`` (NOT ``Depends(get_db)``) because this is a
+    LEDGER-derived endpoint like /portfolio: on the rest transport ``get_db``
+    falls back to a local SQLite URL and would serve an EMPTY history with a
+    200 while /desk shows the real book.
+
+    The replay is deliberately UNBOUNDED — average cost is path-dependent, so
+    ``limit`` slices the already-annotated display list and NEVER the input to
+    ``realized_fills``. No response cache: it is O(n) over a small table on a
+    page nobody polls.
+    """
+    from agent import ledger
+    from agent.store import get_store
+
+    trades = ledger._trades(get_store(), ACCOUNT)   # canonical (ts, id) order
+    pnl = ledger.realized_fills(trades)             # replay the WHOLE ledger
+    rows = [_history_row(t, pnl.get(t.get("id"))) for t in trades]
+    # newest first by the DISPLAYED date, so a corp action booked late still
+    # sorts next to the fills it modified
+    rows.sort(key=lambda r: (r["date"] or "", r["t"] or "", r["id"] or 0),
+              reverse=True)
+    return {"rows": rows[:limit],
+            "realized_pnl": round(sum(r["realized"] for r in rows
+                                      if r["realized"] is not None), 2),
+            "closing_fills": len(pnl),
+            "total": len(rows)}

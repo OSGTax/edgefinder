@@ -1,7 +1,8 @@
 """Page routes — the trading desk (home) and the symbol chart page.
 
-Greenfield rebuild: the old portfolio/strategies/screener/trades/picks/lab/ops
-pages were removed in the cutover. ``/`` redirects to the desk.
+Greenfield rebuild: the old portfolio/strategies/screener/picks/lab/ops pages
+were removed in the cutover. ``/`` redirects to the desk. ``/trades`` is the
+one page brought back (v9.22.0) — a simple human-readable fill history.
 """
 
 from pathlib import Path
@@ -23,6 +24,13 @@ async def home():
 @router.get("/desk", response_class=HTMLResponse)
 async def desk_page(request: Request):
     return templates.TemplateResponse(request=request, name="desk.html")
+
+
+@router.get("/trades", response_class=HTMLResponse)
+async def trades_page(request: Request):
+    """A plain, human-readable fill history: what was bought/sold, and the
+    profit each trade realized. Deliberately not a dashboard."""
+    return templates.TemplateResponse(request=request, name="trades.html")
 
 
 @router.get("/symbol", response_class=HTMLResponse)

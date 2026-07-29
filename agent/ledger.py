@@ -215,9 +215,19 @@ def _compute_book(trades: list[dict]) -> dict[str, dict]:
     return book
 
 
-def _realized_pnl(trades: list[dict]):
+def _realized_pnl(trades: list[dict], *, per_fill: list[dict] | None = None):
     """Replay the avg-cost stream and ACCUMULATE realized P&L on reductions
     (``_compute_book`` discards it — this is the read-only twin that keeps it).
+
+    ``per_fill``, when supplied, additionally collects
+    ``{id, pnl, closed_units}`` for every fill that actually CLOSED units —
+    the SAME number booked here, never recomputed by a second replay that
+    could drift (``realized_fills`` and the /trades page read it). The return
+    arity is unchanged, so existing call sites are untouched. The
+    ``closed_units > EPS_SHARES`` guard matters: a dividend row is booked
+    ``side="SELL", shares=0.0`` and so falls into the reducing branch with
+    ``closing == 0`` — without the guard every dividend would surface as a
+    closed trade worth $0.00.
 
     Returns ``(by_run_symbol, by_symbol)`` where a reduction of ``closing``
     units books ``closing * (px - avg) * sign * mult`` — sign +1 closing a
@@ -268,6 +278,9 @@ def _realized_pnl(trades: list[dict]):
         avg = b["cost"] / abs(cur)
         sign = 1.0 if cur > 0 else -1.0
         pnl = closing * (float(t["price"]) - avg) * sign * _mult(sym)
+        if per_fill is not None and closing > EPS_SHARES:
+            per_fill.append({"id": t.get("id"), "pnl": pnl,
+                             "closed_units": closing})
         key = (t.get("run_id"), sym)
         by_run_symbol[key] = by_run_symbol.get(key, 0.0) + pnl
         by_symbol[sym] = by_symbol.get(sym, 0.0) + pnl
@@ -280,6 +293,37 @@ def _realized_pnl(trades: list[dict]):
         if not occ.is_option(sym) and b["shares"] < 0:
             b["shares"], b["cost"] = 0.0, 0.0  # equities never go short
     return by_run_symbol, by_symbol
+
+
+def realized_fills(trades: list[dict]) -> dict[int, dict]:
+    """Realized P&L keyed by the ``desk_trades`` id of the fill that BOOKED it.
+
+    ``trades`` MUST be the account's FULL ledger in replay order (the
+    ``(ts, id)`` key ``_trades`` applies). Average cost is path-dependent, so
+    a truncated list silently mis-prices every row rather than failing —
+    replaying only the newest rows lands each SELL on a flat book and books
+    ZERO. Slice for display AFTER calling this, never before.
+
+    Values are ``{"pnl": float, "closed_units": float}``. ``pnl`` already has
+    the option x100 multiplier applied (``_mult``) — never multiply again
+    downstream. It is GROSS of the per-contract option fee, matching
+    ``by_symbol`` and ``run_realized_pnl``; fees net out through cash.
+
+    A fill that closed nothing (an opening leg, a dividend row, a split
+    adjustment, a duplicate equity exit on a flat book) is simply ABSENT —
+    callers must render that as "no realized profit", never as 0.00.
+    """
+    sink: list[dict] = []
+    _realized_pnl(trades, per_fill=sink)
+    out: dict[int, dict] = {}
+    for f in sink:
+        if f["id"] is None:
+            # Impossible via the ORM (id is a primary key); loud beats a
+            # header total that quietly stops matching by_symbol.
+            raise ValueError("realized_fills: a trade row is missing its id — "
+                             "cannot attribute realized P&L")
+        out[f["id"]] = {"pnl": f["pnl"], "closed_units": f["closed_units"]}
+    return out
 
 
 def _adjust_closes_for_dividends(closes: list[tuple[str, float]],
