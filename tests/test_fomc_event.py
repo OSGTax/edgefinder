@@ -173,10 +173,16 @@ def test_summary_cache_is_keyed_by_expiry(monkeypatch):
         def option_chain(self, sym, dte_max=60):
             return CHAIN
 
-    fake = type("M", (), {"enabled": staticmethod(lambda: True),
-                          "Broker": _B,
-                          "_today_et": staticmethod(lambda: TODAY)})
-    monkeypatch.setitem(__import__("sys").modules, "agent.broker", fake)
+    # Patch the real module object, NOT sys.modules: get_summary does
+    # `from agent import broker`, which resolves the attribute already bound
+    # on the `agent` package once anything has imported it. A sys.modules
+    # swap is therefore silently ignored whenever an earlier test in the
+    # session imported agent.broker first — order-dependent, and it passes
+    # alone while failing in a full run.
+    import agent.broker as broker
+    monkeypatch.setattr(broker, "enabled", lambda: True)
+    monkeypatch.setattr(broker, "Broker", _B)
+    monkeypatch.setattr(broker, "_today_et", lambda: TODAY)
 
     assert od.get_summary("SPY")["expiry"] == "default"
     assert od.get_summary("SPY", expiry=E0)["expiry"] == E0  # not the cached one
