@@ -237,6 +237,9 @@ python -m agent.lab leaderboard              # current honest winners
 python -m agent.ledger fill --symbol NVDA --side buy --notional 5000 \
     --rationale "..." --run-id 2026-07-07T14:30   # books at the LIVE quote
 python -m agent.ledger outcomes --days 14         # picks vs predictions vs SPY (alpha)
+python -m agent.ledger liquidity-audit            # READ-ONLY: spread/override
+                                                  # forensics on every past fill +
+                                                  # mid-vs-touch phantom P&L
 python -m agent.ledger grade                      # machine facts per pick → desk_outcomes
 python -m agent.knowledge claim-list              # the claims registry (tiers = authority)
 python -m agent.knowledge claim-promote --claim-id N  # pre-registered gate, code-evaluated

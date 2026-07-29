@@ -2034,6 +2034,182 @@ def _latest_mark_meta(store, account: str = ACCOUNT) -> dict | None:
     return meta if isinstance(meta, dict) else None
 
 
+# Reporting-only thresholds for ``liquidity_audit``. These enforce NOTHING —
+# they exist so the audit can say "this fill would fail a 25% cap" without a
+# gate being in place yet. Deliberately separate from the live constants: a
+# reporting threshold that silently became a gate would be the exact kind of
+# quiet behavior change this tool exists to catch.
+AUDIT_SPREAD_FLAG_EQ = 0.01
+AUDIT_SPREAD_FLAG_OPT = 0.25
+AUDIT_SPREAD_FLAG_OPT_CENTS = 0.10
+
+
+def liquidity_audit(store=None, account: str = ACCOUNT,
+                    *, quotes: dict[str, dict] | None = None) -> dict:
+    """READ-ONLY forensic: did our fills and marks tell the truth about
+    liquidity?
+
+    Two questions, both answered from data we already have:
+
+    1. **Did any past fill book a price the market would not have given us?**
+       Replays every ``desk_trades`` row's stored ``fill_quote`` receipt —
+       spread at the moment of the fill, session, and any warning or override
+       that was stamped on it. Flags rows that WOULD fail a candidate gate;
+       enforces nothing.
+    2. **Do our marks overstate what the book could be liquidated for?**
+       Every position is marked at the mid, while fills price at the touch
+       (BUY at the ask, SELL at the bid). The difference is unrealized P&L
+       that could not actually be realized — small on a liquid book, large on
+       a wide one. This reports it in dollars instead of assuming it away.
+
+    Strictly non-mutating: ``store.select`` plus the pure ``_compute_book``.
+    It deliberately does NOT call ``rebuild_positions`` (which reconciles the
+    projection, i.e. writes) or ``mark`` (which inserts an equity row) — an
+    audit that moved the thing it audits would be worthless.
+
+    ``quotes`` injects a quote map for tests; live callers leave it None and
+    the current touch is fetched read-only from the broker. When no quote is
+    available the position is reported with ``touch: null`` rather than
+    silently falling back to the mid.
+    """
+    from agent import occ
+
+    store = store or _store()
+    trades = _trades(store, account)
+
+    fills, flagged = [], []
+    for t in trades:
+        f = _fq(t)
+        if not f:
+            continue  # settlement / corp-action / legacy row: no quote receipt
+        bid, ask = f.get("bid"), f.get("ask")
+        if not (bid and ask) or ask <= 0:
+            continue
+        bid, ask = float(bid), float(ask)
+        spread_abs = ask - bid
+        spread_pct = spread_abs / ask
+        is_opt = occ.is_option(t["symbol"])
+        # Options quote in cents: a 1c-wide penny contract is 50% "wide" and
+        # perfectly tradeable, so the option flag needs BOTH the fraction and
+        # an absolute floor before it means anything (same fraction-OR-cents
+        # shape as LIVE_BAND_OPT / LIVE_BAND_OPT_CENTS).
+        if is_opt:
+            wide = (spread_pct > AUDIT_SPREAD_FLAG_OPT
+                    and spread_abs > AUDIT_SPREAD_FLAG_OPT_CENTS)
+        else:
+            wide = spread_pct > AUDIT_SPREAD_FLAG_EQ
+        warns = f.get("warnings") or []
+        row = {"id": t.get("id"), "ts": str(t.get("ts")), "symbol": t["symbol"],
+               "side": t["side"], "price": float(t["price"]),
+               "dollars": float(t["dollars"]),
+               "bid": bid, "ask": ask,
+               "spread_pct": round(spread_pct * 100, 4),
+               "spread_abs": round(spread_abs, 4),
+               "session": f.get("session"), "src": f.get("src"),
+               "is_option": is_opt,
+               "bid_size": f.get("bid_size"), "ask_size": f.get("ask_size"),
+               "warnings": warns, "wide_at_fill": wide}
+        fills.append(row)
+        if wide or warns:
+            flagged.append(row)
+
+    overrides = [r for r in fills
+                 if any("override" in w or "allowed by" in w
+                        for w in r["warnings"])]
+    widest = sorted(fills, key=lambda r: -r["spread_pct"])[:10]
+
+    # --- marks: mid vs the touch we would actually liquidate into ---
+    book = {s: b for s, b in _compute_book(trades).items()
+            if abs(b["shares"]) > EPS_SHARES}
+    if quotes is None:
+        quotes = _live_touch_quotes(list(book))
+    positions, no_quote = [], []
+    mid_value = touch_value = 0.0
+    for sym, b in sorted(book.items()):
+        q = quotes.get(sym) or {}
+        bid, ask = q.get("bid"), q.get("ask")
+        sh, m = b["shares"], _mult(sym)
+        if not (bid and ask) or ask <= 0:
+            no_quote.append(sym)
+            positions.append({"symbol": sym, "shares": sh, "touch": None,
+                              "mid": None, "phantom_pnl": None})
+            continue
+        bid, ask = float(bid), float(ask)
+        mid = (bid + ask) / 2
+        # The side we would EXIT into: a long sells at the bid, a short buys
+        # back at the ask. That is the honest liquidation price.
+        touch = bid if sh > 0 else ask
+        mv_mid, mv_touch = sh * mid * m, sh * touch * m
+        mid_value += mv_mid
+        touch_value += mv_touch
+        positions.append({
+            "symbol": sym, "shares": sh, "is_option": occ.is_option(sym),
+            "bid": bid, "ask": ask,
+            "spread_pct": round((ask - bid) / ask * 100, 4),
+            "mid": round(mid, 4), "touch": round(touch, 4),
+            "market_value_mid": round(mv_mid, 2),
+            "market_value_touch": round(mv_touch, 2),
+            # positive == the mid flatters us versus a real exit
+            "phantom_pnl": round(mv_mid - mv_touch, 2)})
+
+    c = cash(store, account)
+    equity_mid = c + mid_value
+    phantom = mid_value - touch_value
+    return {
+        "ok": True, "as_of": _utcnow().isoformat(), "account": account,
+        "fills": {
+            "total_rows": len(trades),
+            "with_quote_receipt": len(fills),
+            "wide_at_fill": sum(1 for r in fills if r["wide_at_fill"]),
+            "with_warnings": sum(1 for r in fills if r["warnings"]),
+            "with_overrides": len(overrides),
+            "widest": widest,
+            "flagged": flagged,
+            "thresholds": {"equity_spread_pct": AUDIT_SPREAD_FLAG_EQ * 100,
+                           "option_spread_pct": AUDIT_SPREAD_FLAG_OPT * 100,
+                           "option_spread_cents": AUDIT_SPREAD_FLAG_OPT_CENTS,
+                           "enforced": False},
+        },
+        "marks": {
+            "positions": positions,
+            "unquoted": no_quote,
+            "cash": round(c, 2),
+            "equity_mid_marked": round(equity_mid, 2),
+            "equity_touch_marked": round(c + touch_value, 2),
+            "phantom_pnl": round(phantom, 2),
+            "phantom_pnl_bps_of_equity": (round(phantom / equity_mid * 10_000, 2)
+                                          if equity_mid else 0.0),
+        },
+    }
+
+
+def _live_touch_quotes(symbols: list[str]) -> dict[str, dict]:
+    """Full bid/ask quotes for the audit (equities + OPRA contracts).
+
+    Sibling of ``_live_mids``, which returns only the mid — the audit needs
+    both sides to price the liquidation touch. Empty dict on any failure: an
+    audit that cannot reach the feed reports ``unquoted``, it does not guess.
+    """
+    if not symbols:
+        return {}
+    from agent import occ
+
+    opts = [s for s in symbols if occ.is_option(s)]
+    eqs = [s for s in symbols if not occ.is_option(s)]
+    out: dict[str, dict] = {}
+    try:
+        from agent import broker
+
+        b = broker.Broker()
+        if eqs:
+            out.update(b.quotes(eqs))
+        if opts:
+            out.update(b.option_quotes(opts))
+    except Exception:  # noqa: BLE001 — read-only tool, degrade to "unquoted"
+        pass
+    return out
+
+
 def state(store=None, account: str = ACCOUNT) -> dict:
     """Full account snapshot: cash, positions (marked), equity, P&L — plus
     the latest mark's provenance summary (``mark_meta``, see ``mark``)."""
@@ -2636,6 +2812,33 @@ def _warn_if_degraded(st: dict) -> None:
               "quote/close feed before trusting P&L.", file=sys.stderr)
 
 
+# Loud-warning thresholds for the audit CLI (stderr only — stdout stays clean
+# JSON). Reporting, never enforcement.
+AUDIT_WARN_PHANTOM_BPS = 25.0
+
+
+def _warn_if_phantom(out: dict) -> None:
+    """Loud stderr warning when the mid-marked book materially overstates what
+    a real exit would return, or when a past fill crossed a candidate gate."""
+    import sys
+
+    marks = out.get("marks") or {}
+    bps = marks.get("phantom_pnl_bps_of_equity") or 0.0
+    if bps > AUDIT_WARN_PHANTOM_BPS:
+        print(f"WARNING: mid-marking flatters the book by "
+              f"${marks.get('phantom_pnl'):,.2f} ({bps:.1f} bps of equity) — "
+              "that unrealized P&L could not be realized at these quotes.",
+              file=sys.stderr)
+    fills = out.get("fills") or {}
+    if fills.get("with_overrides"):
+        print(f"NOTE: {fills['with_overrides']} past fill(s) used a friction "
+              "override; see fills.flagged for the stamped receipts.",
+              file=sys.stderr)
+    if marks.get("unquoted"):
+        print(f"NOTE: no live quote for {', '.join(marks['unquoted'])} — "
+              "reported as unquoted rather than mid-marked.", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -2655,6 +2858,10 @@ def main(argv: list[str] | None = None) -> None:
                     help="bounds CLOSED-row re-grades only; still-open picks "
                          "always refresh regardless of the window")
     gd.add_argument("--run-id", default=None)
+    sub.add_parser("liquidity-audit",
+                   help="READ-ONLY: spread/override forensics on every past "
+                        "fill + mid-vs-touch phantom P&L on the open book "
+                        "(enforces nothing, writes nothing)")
     fil = sub.add_parser("fill", help="book a fill AT THE LIVE QUOTE (the agent's path)")
     fil.add_argument("--symbol", required=True)
     fil.add_argument("--side", required=True, choices=["buy", "sell", "BUY", "SELL"])
@@ -2696,6 +2903,10 @@ def main(argv: list[str] | None = None) -> None:
     elif args.cmd == "grade":
         print(json.dumps(grade(store, days=args.days, run_id=args.run_id),
                          indent=2))
+    elif args.cmd == "liquidity-audit":
+        out = liquidity_audit(store)
+        _warn_if_phantom(out)
+        print(json.dumps(out, indent=2))
     elif args.cmd == "fill":
         print(json.dumps(live_fill(
             store, symbol=args.symbol, side=args.side, shares=args.shares,
