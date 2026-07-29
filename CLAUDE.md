@@ -28,6 +28,14 @@ rules). The agent's operating manual is
    gates with both overrides passed explicitly and stamped on the fill's
    receipt — honesty by the receipt, never by refusing the exit. Missing,
    short, or stale (>5 sessions) reference history warns and allows.
+   **Option ENTRIES** additionally clear a spread cap that must fail BOTH a
+   fraction and a cents floor (>25% AND >$0.10 — a 1c-wide penny contract is
+   "50% wide" and perfectly tradeable), overridable with `--allow-illiquid`;
+   quoted depth at the touch and unmeasurable-ADV size are RECORDED on the
+   receipt but not yet enforced, pending coverage evidence. Every one of
+   these gates is **entries-only**: an exposure-REDUCING fill (a long selling
+   down, a short leg bought back) is exempt by construction, because a gate
+   that blocks an exit turns a wide market into assignment risk.
 2. **Alpaca is DATA-ONLY.** `agent/broker.py` has no write methods, by
    design — orders are never submitted to Alpaca; the book is ours
    (`desk_*` tables).

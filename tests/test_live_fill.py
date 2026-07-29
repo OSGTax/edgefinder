@@ -381,9 +381,10 @@ def test_live_fill_adv_gate_short_history_warns_and_allows(store_bars, monkeypat
 
 
 def test_live_fill_gates_skip_options_and_crypto(store, monkeypatch):
-    """C1a/c: options liquidity is the chain's problem (OPRA spread and
-    staleness caps); crypto has no daily_bars history — neither asset class
-    hits the equity friction gates."""
+    """C1a/c: options liquidity is judged on the chain itself (OPRA spread,
+    staleness, and since v9.25.0 quoted depth); crypto has no daily_bars
+    history — neither asset class hits the EQUITY friction gates (stored-close
+    band, ADV size)."""
     from agent import ledger, occ
     from datetime import date, timedelta
     _patch_broker(monkeypatch, FakeBroker(open_=False, session_="closed",
@@ -393,7 +394,12 @@ def test_live_fill_gates_skip_options_and_crypto(store, monkeypatch):
     sym = occ.build("NVDA", date.today() + timedelta(days=45), "C", 200)
     _patch_broker(monkeypatch, FakeBroker(bid=5.4, ask=5.5))
     ro = ledger.live_fill(store, symbol=sym, side="buy", shares=1)
-    assert ro["ok"] and "warnings" not in ro
+    assert ro["ok"], ro
+    # no EQUITY-gate warning may appear on an option fill. (A depth note may:
+    # this fixture publishes no sizes, which the option path now says out loud
+    # rather than passing over in silence.)
+    assert not [w for w in (ro["fill_quote"].get("warnings") or [])
+                if "stored" in w or "ADV" in w or "close" in w]
 
 
 def test_option_live_fill_fee_and_cash_replay(store, monkeypatch):
@@ -591,3 +597,150 @@ def test_fill_receipt_tolerates_a_feed_without_sizes(store, monkeypatch):
     assert r["ok"] is True
     assert r["fill_quote"]["bid_size"] is None
     assert r["fill_quote"]["ask_size"] is None
+
+
+# ── v9.25.0: option ENTRY liquidity gates (exit-safe by construction) ──
+
+
+def _opt_buy(store, monkeypatch, symbol, contracts, bid, ask, **kw):
+    """Open an option position through the live path at a given quote."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker(bid=bid, ask=ask,
+                                          bid_size=kw.pop("bid_size", 999.0),
+                                          ask_size=kw.pop("ask_size", 999.0)))
+    return ledger.live_fill(store, symbol=symbol, side="buy",
+                            shares=contracts, **kw)
+
+
+def test_option_entry_refused_when_spread_fails_fraction_and_cents(store, monkeypatch):
+    """1.40/2.00 — 30% wide and 60c absolute. Paying that to OPEN is a loss
+    taken at the click."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker(bid=1.40, ask=2.00,
+                                          bid_size=999.0, ask_size=999.0))
+    r = ledger.live_fill(store, symbol="AMD260821C00550000", side="buy",
+                         shares=1)
+    assert not r["ok"]
+    assert "option spread" in r["error"] and "entry cap" in r["error"]
+
+
+def test_option_entry_allows_a_penny_wide_contract(store, monkeypatch):
+    """0.01/0.02 is 50% wide but ONE CENT absolute — genuinely tradeable, and
+    a pure percentage cap would wrongly refuse it. This is the real quote on
+    SPY260729P00725000 that motivated the fraction-AND-cents shape."""
+    r = _opt_buy(store, monkeypatch, "SPY260821P00725000", 5, 0.01, 0.02)
+    assert r["ok"], r
+
+
+def test_option_entry_records_but_does_not_block_thin_depth(store, monkeypatch):
+    """Live OPRA quotes 1 contract on deep-ITM SPY strikes at a 2-3% spread —
+    the spread cap alone waves through an order 5x the displayed size. That is
+    a real hole, but no historical fill carries depth yet, so the finding is
+    RECORDED on the receipt rather than enforced against an unmeasured
+    threshold."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker(bid=137.64, ask=141.40,
+                                          bid_size=1.0, ask_size=1.0))
+    r = ledger.live_fill(store, symbol="SPY260821C00590000", side="buy",
+                         shares=5)
+    assert r["ok"], r
+    assert any(w.startswith("DEPTH:") and "walk the book" in w
+               for w in r["fill_quote"]["warnings"])
+    # the depth that justified the flag is on the row for later analysis
+    assert r["fill_quote"]["ask_size"] == 1.0
+
+
+def test_option_depth_gate_skipped_when_the_feed_shows_no_size(store, monkeypatch):
+    """Missing depth warns and allows — a feed that stopped publishing size
+    must not brick trading."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker(bid=5.00, ask=5.10))  # sizes None
+    r = ledger.live_fill(store, symbol="SPY260821C00700000", side="buy",
+                         shares=3)
+    assert r["ok"], r
+    assert any("no quoted size" in w for w in r["fill_quote"]["warnings"])
+
+
+def test_option_gates_never_block_a_long_exit(store, monkeypatch):
+    """THE exit-safety property. Open tight, then try to sell into a market
+    that is both very wide AND showing almost no size — the exit must clear
+    with NO override."""
+    from agent import ledger
+    assert _opt_buy(store, monkeypatch, "SPY260821C00700000", 5,
+                    5.00, 5.10)["ok"]
+    # market widens to 1.05/2.00 — 47.5% and $0.95, far past the ENTRY cap
+    # (25% AND $0.10) but inside the pre-existing 50% degenerate bound
+    _patch_broker(monkeypatch, FakeBroker(bid=1.05, ask=2.00,
+                                          bid_size=1.0, ask_size=1.0))
+    r = ledger.live_fill(store, symbol="SPY260821C00700000", side="sell",
+                         shares=5)
+    assert r["ok"], r
+    assert r["price"] == round(1.05 * 0.9999, 4)      # still books at the bid
+
+
+def test_option_gates_never_strand_a_short_leg(store, monkeypatch):
+    """The dangerous case: a SHORT leg bought back. Refusing this converts a
+    wide market into assignment risk on a book that claims defined-risk."""
+    from agent import ledger
+    # cash-secured put, opened tight
+    _patch_broker(monkeypatch, FakeBroker(bid=4.00, ask=4.10,
+                                          bid_size=999.0, ask_size=999.0))
+    assert ledger.live_fill(store, symbol="SPY260821P00050000", side="sell",
+                            shares=5)["ok"]
+    # buy it back into a 47%-wide, 1-contract market — must clear
+    _patch_broker(monkeypatch, FakeBroker(bid=1.05, ask=2.00,
+                                          bid_size=1.0, ask_size=1.0))
+    r = ledger.live_fill(store, symbol="SPY260821P00050000", side="buy",
+                         shares=5)
+    assert r["ok"], r
+
+
+def test_option_entry_gate_still_applies_when_adding_to_a_long(store, monkeypatch):
+    """An ADD is an entry, not a reduction — same sign as the holding, so the
+    gates still bite."""
+    from agent import ledger
+    assert _opt_buy(store, monkeypatch, "SPY260821C00700000", 1,
+                    5.00, 5.10)["ok"]
+    _patch_broker(monkeypatch, FakeBroker(bid=1.40, ask=2.00,
+                                          bid_size=999.0, ask_size=999.0))
+    r = ledger.live_fill(store, symbol="SPY260821C00700000", side="buy",
+                         shares=1)
+    assert not r["ok"] and "option spread" in r["error"]
+
+
+# ── v9.25.0: unknown-ADV entries are capped, not waved through ──
+
+
+def test_unknown_adv_flags_an_oversized_entry_without_blocking_it(store, monkeypatch):
+    """A name with no stored history still fills — refusing would contradict
+    the documented warn-and-allow contract and could throttle a live book on a
+    thin-coverage lane. The receipt now names the size a cap would question."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker())          # NVDA 130.00/130.20
+    r = ledger.live_fill(store, symbol="NVDA", side="buy", notional=10_000)
+    assert r["ok"], r
+    assert any("UNMEASURED LIQUIDITY" in w for w in r["fill_quote"]["warnings"])
+
+
+def test_unknown_adv_small_entry_is_not_flagged(store, monkeypatch):
+    """Under the reference cap there is nothing to report beyond the existing
+    skip notice."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker())
+    r = ledger.live_fill(store, symbol="NVDA", side="buy", notional=1_000)
+    assert r["ok"], r
+    assert not any("UNMEASURED LIQUIDITY" in w
+                   for w in r["fill_quote"]["warnings"])
+
+
+def test_unknown_adv_exit_is_never_flagged_as_oversized(store, monkeypatch):
+    """Long-only means we must always be able to get out; an exit is not an
+    entry and must not even be reported as one."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker())
+    assert ledger.live_fill(store, symbol="NVDA", side="buy",
+                            notional=2_000)["ok"]
+    r = ledger.live_fill(store, symbol="NVDA", side="sell", shares=15)
+    assert r["ok"], r
+    assert not any("UNMEASURED LIQUIDITY" in w
+                   for w in r["fill_quote"]["warnings"])

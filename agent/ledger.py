@@ -52,7 +52,23 @@ MULTIPLIER = 100
 # The equity spread cap tightens outside RTH — thinner tape, wider quotes.
 MAX_SPREAD_EQ = 0.05
 MAX_SPREAD_EQ_EXT = 0.02
+# Options: the fraction alone is not a liquidity test. OPRA quotes in cents,
+# so a 0.01/0.02 contract is "50% wide" and perfectly tradeable, while a
+# 1.40/2.00 contract is only 30% wide and genuinely illiquid. An option quote
+# is refused only when it fails BOTH the fraction and an absolute-cents floor
+# — the same fraction-OR-cents shape as LIVE_BAND_OPT / LIVE_BAND_OPT_CENTS
+# above. MAX_SPREAD_OPT stays the outer bound for the degenerate-quote check.
 MAX_SPREAD_OPT = 0.50
+MAX_SPREAD_OPT_ENTRY = 0.25
+MAX_SPREAD_OPT_ENTRY_CENTS = 0.10
+# Depth at the touch, as a multiple of the size quoted on the side being taken
+# (ask_size for a BUY, bid_size for a SELL). 1.0 == "do not claim more than the
+# market is showing". Live OPRA routinely quotes 1 contract on deep-ITM SPY
+# strikes at a 2-3% spread, so the spread cap alone waves through an order 5x
+# the displayed size. REPORTING THRESHOLD ONLY today: an entry over it is
+# flagged on the receipt, not refused — depth has only been recorded since
+# v9.24.0, so there is no history to pick an enforceable number from yet.
+MAX_TOUCH_PARTICIPATION = 1.0
 # Crypto: 24/7, no options, fractional (lot size ≪ 1 unit). Alpaca crypto
 # spreads on the top pairs (BTC/USD, ETH/USD) hover well under 1%; low-volume
 # pairs can reach 2-3%. 3% cap catches genuine dislocation without over-
@@ -90,6 +106,14 @@ CLOSE_BAND_STALE_SESSIONS = 5
 ADV_SESSIONS = 20
 ADV_MIN_SESSIONS = 10
 ADV_MAX_NOTIONAL_PCT = 0.01
+# When a name has too little stored history to compute ADV at all (a new
+# listing, or one outside the hot set) the size gate skips — a free pass for
+# exactly the population most likely to be thin. REPORTING REFERENCE ONLY: an
+# entry above this notional is flagged as unmeasured liquidity, not refused.
+# Enforcing it would contradict the documented warn-and-allow contract above,
+# and on a lane with thin bar coverage it could throttle a live book — worse
+# than the harm it prevents. Raise it to a gate only with coverage evidence.
+UNKNOWN_ADV_MAX_NOTIONAL = 2_500.0
 # Options pay a flat per-contract fee (OPRA/regulatory + commission) on every
 # fill booked through record_trade: BUY dollars = gross + fee, SELL dollars =
 # gross − fee (floored at 0), with the fee stamped inside fill_quote. The
@@ -1332,12 +1356,69 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
             return {"ok": False, "error": "notional too small for one contract",
                     "contract_cost": per_unit}
 
+    warnings: list[str] = []
+
+    # Does this order REDUCE an existing position (a long selling down, or a
+    # short leg being bought back)? Exposure-reducing orders are exempt from
+    # the entry-liquidity gates below — precedent is the close-soon carve-out
+    # above, which already refuses to strand a short option leg through the
+    # close. A gate that blocks an exit converts a wide market into a forced
+    # hold, which on a short leg means assignment: strictly worse than the
+    # bad entry the gate exists to prevent.
+    held = _held_shares(store, symbol)
+    order_signed = shares if side == "BUY" else -shares
+    is_reduction = abs(held) > EPS_SHARES and (held > 0) != (order_signed > 0)
+
+    # Option ENTRY liquidity gates. Options carry no ADV history to size
+    # against (see the friction-gate note above), so the touch itself is the
+    # only liquidity evidence available: how wide is it, and how much size is
+    # actually showing.
+    if is_opt and not is_reduction:
+        spread_abs = ask - bid
+        spread_pct = spread_abs / ask
+        if (spread_pct > MAX_SPREAD_OPT_ENTRY
+                and spread_abs > MAX_SPREAD_OPT_ENTRY_CENTS):
+            if not allow_illiquid:
+                return {"ok": False, "error":
+                        f"option spread {spread_pct:.1%} (${spread_abs:.2f}) "
+                        f"exceeds the entry cap of "
+                        f"{MAX_SPREAD_OPT_ENTRY:.0%} AND "
+                        f"${MAX_SPREAD_OPT_ENTRY_CENTS:.2f} — paying this "
+                        "much of the spread to open is a loss taken at the "
+                        "click; pick a liquid strike or override with "
+                        "--allow-illiquid",
+                        "bid": bid, "ask": ask,
+                        "spread_pct": round(spread_pct, 4),
+                        "spread_abs": round(spread_abs, 4), "session": sess}
+            warnings.append(f"option spread {spread_pct:.1%} "
+                            f"(${spread_abs:.2f}) allowed by override")
+        touch_size = q.get("ask_size") if side == "BUY" else q.get("bid_size")
+        try:
+            touch_size = float(touch_size) if touch_size is not None else 0.0
+        except (TypeError, ValueError):
+            touch_size = 0.0
+        # DEPTH: report-only for now. The hole is real — live OPRA quotes 1
+        # contract on deep-ITM SPY strikes at a 2-3% spread — but no
+        # historical fill carries depth (v9.24.0 only just started stamping
+        # it), so there is no evidence yet for where the threshold belongs.
+        # Enforcing an unmeasured gate on a live book is the same mistake as
+        # re-basing marks off a single snapshot. Flip to a refusal once the
+        # receipts show what it would actually catch.
+        if touch_size <= 0:
+            warnings.append(
+                f"no quoted size on the {'ask' if side == 'BUY' else 'bid'} "
+                f"for {symbol} — depth unknown")
+        elif shares > MAX_TOUCH_PARTICIPATION * touch_size:
+            warnings.append(
+                f"DEPTH: {shares:g} contracts vs {touch_size:g} quoted at the "
+                f"{'ask' if side == 'BUY' else 'bid'} — this size would walk "
+                "the book, not fill at the touch (recorded, not enforced)")
+
     # Equity friction gates — an INDEPENDENT price reference (yesterday's
     # stored close) and a size-vs-liquidity check. The in-quote band inside
     # record_trade checks the price against the very quote it was computed
     # from, which a wrong quote passes trivially; these gates are the checks
     # a wrong quote or an unfillable size actually fails.
-    warnings: list[str] = []
     if not (is_opt or is_cx):
         last_close, close_date = _latest_stored_close(store, symbol)
         if last_close is None:
@@ -1394,8 +1475,21 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
         order_notional = shares * price
         adv, adv_sessions = _avg_dollar_volume(store, symbol)
         if adv is None:
-            warnings.append(f"only {adv_sessions} stored session(s) for "
-                            f"{symbol} — ADV size gate skipped")
+            # Report-only, deliberately. Refusing here would contradict the
+            # documented warn-and-allow contract above (and its test), and on
+            # a lane with thin bar coverage it could throttle the live book —
+            # a bigger harm than the one it prevents. The warning now names
+            # the size an unknown-liquidity cap WOULD have questioned, so the
+            # audit can show how often that actually happens before anyone
+            # turns it into a refusal.
+            over = (not is_reduction
+                    and order_notional > UNKNOWN_ADV_MAX_NOTIONAL)
+            warnings.append(
+                f"only {adv_sessions} stored session(s) for {symbol} — ADV "
+                "size gate skipped"
+                + (f"; UNMEASURED LIQUIDITY: ${order_notional:,.0f} entry "
+                   f"exceeds the ${UNKNOWN_ADV_MAX_NOTIONAL:,.0f} reference "
+                   "cap (recorded, not enforced)" if over else ""))
         elif order_notional > ADV_MAX_NOTIONAL_PCT * adv:
             if not allow_illiquid:
                 return {"ok": False, "error":
