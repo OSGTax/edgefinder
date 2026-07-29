@@ -805,19 +805,39 @@ def wake_honor(store=None, *, wake_id: int, run_id: str,
     """Stamp a due wake-plan as honored by this run — exactly once, CAS.
 
     Under machine firing two cycles can overlap (a dispatch and the cron
-    floor); the conditional update (WHERE honored_run_id IS NULL) lets
-    exactly one win. The loser gets ok:False and must STAND DOWN on that
-    wake — another live cycle owns it."""
+    floor); the conditional update lets exactly one win. The loser gets
+    ok:False and must STAND DOWN on that wake — another live cycle owns it.
+
+    ``run_id`` must be NON-EMPTY. Argparse's ``required=True`` only checks
+    the flag is present, so ``--run-id ""`` (a shell variable that didn't
+    survive between tool calls) used to write an empty string straight into
+    ``honored_run_id`` — and that value is FALSY, so `wake_due` kept
+    reporting the wake as due forever, while the old ``IS NULL`` claim
+    filter could never match it. The row was stuck: permanently due,
+    permanently unclaimable (wakes #99/#108, 2026-07-24). Reject a blank id
+    at the door, and compare-and-swap against the value actually observed
+    so rows already poisoned that way can still be recovered."""
     store = store or _store()
+    run_id = (run_id or "").strip()
+    if not run_id:
+        return {"ok": False,
+                "error": "--run-id must be a non-empty run id — a blank one "
+                         "poisons the wake row (it reads as unhonored "
+                         "forever but can never be claimed)"}
     rows = store.select("desk_wakes",
                         filters={"account": account, "id": wake_id}, limit=1)
     if not rows:
         return {"ok": False, "error": f"no wake id {wake_id}"}
-    if rows[0].get("honored_run_id"):
+    current = rows[0].get("honored_run_id")
+    if current:
         return {"ok": False, "error": f"wake {wake_id} already honored by "
-                                      f"{rows[0]['honored_run_id']}"}
+                                      f"{current}"}
+    # CAS on the value we just observed — NULL normally, or the empty string
+    # a pre-fix cycle may have left behind. Both mean "unhonored" to
+    # wake_due, so both must be claimable; matching the observed value keeps
+    # the update conditional, so concurrent cycles still can't both win.
     claimed = store.update("desk_wakes",
-                           {"id": wake_id, "honored_run_id": None},
+                           {"id": wake_id, "honored_run_id": current},
                            {"honored_run_id": run_id}, returning=True)
     if len(claimed) != 1:
         return {"ok": False, "error": f"wake {wake_id} claimed by a "

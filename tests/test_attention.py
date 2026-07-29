@@ -719,3 +719,49 @@ def test_wake_honor_is_compare_and_swap(store):
     assert b["ok"] is False and "cycle-A" in b["error"] or "claimed" in b.get("error", "")
     rows = store.select("desk_wakes", filters={"id": wid})
     assert rows[0]["honored_run_id"] == "cycle-A"
+
+
+def test_wake_honor_rejects_blank_run_id(store):
+    """A blank run id must never reach the row.
+
+    argparse's required=True only checks the flag is PRESENT, so `--run-id ""`
+    (a shell variable that didn't survive between tool calls) used to write an
+    empty string into honored_run_id — falsy, so wake_due reported the wake
+    due forever, while the IS NULL claim filter could never match it."""
+    from agent.brain import wake_honor, wake_plan
+
+    base = datetime.utcnow() + timedelta(minutes=60)
+    wid = wake_plan(store, at=base.isoformat(), reason="blank run id")["id"]
+    for bad in ("", "   ", None):
+        res = wake_honor(store, wake_id=wid, run_id=bad)
+        assert res["ok"] is False
+        assert "non-empty" in res["error"]
+    # the row is untouched, so a real cycle can still claim it
+    assert not store.select("desk_wakes", filters={"id": wid})[0][
+        "honored_run_id"]
+    assert wake_honor(store, wake_id=wid, run_id="cycle-A")["ok"] is True
+
+
+def test_wake_honor_recovers_a_row_poisoned_with_empty_string(store):
+    """Rows already poisoned before the fix must still be claimable.
+
+    Regression for wakes #99/#108 (2026-07-24), which sat permanently due and
+    permanently unclaimable across 10+ cycles."""
+    from agent.brain import wake_due, wake_honor, wake_plan
+
+    past = datetime.utcnow() - timedelta(minutes=30)
+    wid = wake_plan(store, at=(datetime.utcnow() + timedelta(
+        minutes=60)).isoformat(), reason="poisoned")["id"]
+    # simulate the pre-fix damage: due in the past, honored_run_id == ""
+    store.update("desk_wakes", {"id": wid},
+                 {"honored_run_id": "", "at": past}, returning=False)
+
+    # the symptom: falsy honored_run_id keeps it reported as due
+    assert any(e["id"] == wid for e in wake_due(store)["due"])
+    # the fix: it is claimable again, exactly once
+    ok = wake_honor(store, wake_id=wid, run_id="cycle-A")
+    assert ok["ok"] is True
+    assert store.select("desk_wakes", filters={"id": wid})[0][
+        "honored_run_id"] == "cycle-A"
+    assert wake_honor(store, wake_id=wid, run_id="cycle-B")["ok"] is False
+    assert not any(e["id"] == wid for e in wake_due(store)["due"])
