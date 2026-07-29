@@ -38,6 +38,73 @@ def _parse_date(v: str | None) -> date | None:
     return date.fromisoformat(v) if v else None
 
 
+# ── the FOMC calendar ───────────────────────────────────────
+#
+# Scheduled macro events are the one thing a bar-history reader cannot infer
+# from its own data: nothing in daily_bars says "the Fed speaks at 14:00 ET
+# today". These are the STATEMENT RELEASE days — the second day of each
+# two-day meeting, which is the day the tape actually moves. Transcribed
+# from federalreserve.gov/monetarypolicy/fomccalendars.htm (verified
+# 2026-07-29); the Fed publishes years ahead and calls them tentative until
+# confirmed at the preceding meeting, so treat a far-dated entry as a plan,
+# not a promise.
+#
+# The table is deliberately finite and the read FAILS LOUD when it runs off
+# the end (``known: false``) rather than returning "no event coming" — a
+# silent empty answer would read as "nothing scheduled" forever once the
+# calendar lapses, which is exactly the failure a trading cycle must not
+# inherit from a stale constant.
+
+FOMC_RELEASE_DAYS: tuple[str, ...] = (
+    # 2026
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
+    "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+    # 2027
+    "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-09",
+    "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08",
+)
+# The statement hits the wire at 14:00 ET; the presser follows at 14:30.
+FOMC_RELEASE_HOUR_ET = 14
+FOMC_RELEASE_MINUTE_ET = 0
+
+
+def next_fomc(today: date | None = None, *, now: datetime | None = None) -> dict:
+    """The next (or current) FOMC statement day — the cycle's event clock.
+
+    Pure given ``today``/``now`` so it unit-tests without a clock. Returns
+    ``known: False`` once the table lapses, which is a prompt to top up
+    ``FOMC_RELEASE_DAYS``, not a statement that no meeting is scheduled.
+
+    ``minutes_to_release`` is signed and only present on the release day
+    itself: positive before 14:00 ET, negative after. A cycle deciding
+    whether it is inside an entry window reads that, not the wall clock.
+    """
+    now = now or datetime.now(ET)
+    today = today or now.date()
+    days = [date.fromisoformat(d) for d in FOMC_RELEASE_DAYS]
+    through = days[-1]
+    upcoming = [d for d in days if d >= today]
+    if not upcoming:
+        return {"known": False, "calendar_through": str(through),
+                "note": "FOMC calendar lapsed — top up FOMC_RELEASE_DAYS "
+                        "from federalreserve.gov before trusting event timing"}
+    nxt = upcoming[0]
+    is_today = nxt == today
+    out = {
+        "known": True,
+        "date": str(nxt),
+        "days_until": (nxt - today).days,
+        "is_release_day": is_today,
+        "release_et": f"{FOMC_RELEASE_HOUR_ET:02d}:{FOMC_RELEASE_MINUTE_ET:02d}",
+        "calendar_through": str(through),
+    }
+    if is_today:
+        rel = now.replace(hour=FOMC_RELEASE_HOUR_ET, minute=FOMC_RELEASE_MINUTE_ET,
+                          second=0, microsecond=0)
+        out["minutes_to_release"] = round((rel - now).total_seconds() / 60)
+    return out
+
+
 # ── the nightly research pack (desk_briefs) ─────────────────
 #
 # Built once per night by the data-refresh routine, right after the ingest,
@@ -386,6 +453,9 @@ def main(argv: list[str] | None = None) -> None:
 
     sub.add_parser("brief")
 
+    fo = sub.add_parser("fomc")
+    fo.add_argument("--as-of", default=None)
+
     args = p.parse_args(argv)
 
     if args.cmd == "regime":
@@ -408,6 +478,8 @@ def main(argv: list[str] | None = None) -> None:
         out = build_brief(top=args.top)
     elif args.cmd == "brief":
         out = get_brief()
+    elif args.cmd == "fomc":
+        out = next_fomc(_parse_date(args.as_of))
     print(json.dumps(out, indent=2, default=str))
 
 
