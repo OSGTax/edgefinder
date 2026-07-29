@@ -24,7 +24,7 @@ configure_logging()
 
 logger = logging.getLogger(__name__)
 
-__version__ = "9.23.1"
+__version__ = "9.23.2"
 
 
 @asynccontextmanager
