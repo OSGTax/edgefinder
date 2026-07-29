@@ -565,6 +565,32 @@ def context_claims(store=None, *, account: str = ACCOUNT) -> dict:
             candidates += 1
         elif r.get("tier") in ("observation", "digest"):
             watchable.append(r)
+    # PRIORITISED truncation. The cap exists to bound prompt growth, but
+    # slicing an id-ASCENDING list meant the oldest 20 claims filled every
+    # slot and everything registered since was invisible — a newly written
+    # claim could never influence a cycle, which quietly defeats the whole
+    # write-then-read loop. Order by what a cycle cannot afford to miss:
+    #   1. risk rules — they never decay and must never be starved out;
+    #   2. experimental — under active test AND exposure-capped, so the
+    #      cycle has to see them to size against the cap at all;
+    #   3. the rest, NEWEST first — recent learning outranks stale.
+    # Truncation is also reported now instead of being silent.
+    # Within the experimental band, SOONEST-EXPIRING first (then newest):
+    # a claim about to lapse is either about to be acted on or about to die,
+    # and either way the cycle has to see it. Ordering that band by id
+    # ascending re-created the same starvation one level down — the newest
+    # experimental claim, which is precisely the one under test, fell off.
+    far = date(9999, 12, 31)
+
+    def _rank(r):
+        if r.get("kclass") == "risk_rule":
+            return (0, far, r["id"])
+        if r.get("experimental"):
+            return (1, _as_date(r.get("expires_at")) or far, -r["id"])
+        return (2, far, -r["id"])
+
+    injectable.sort(key=_rank)
+    dropped = max(0, len(injectable) - CONTEXT_MAX_CLAIMS)
     out = []
     for r in injectable[:CONTEXT_MAX_CLAIMS]:
         stats = r.get("stats") or {}
@@ -593,6 +619,7 @@ def context_claims(store=None, *, account: str = ACCOUNT) -> dict:
                      "experimental_total_weight":
                      EXPERIMENTAL_TOTAL_WEIGHT_CAP},
             "count": len(out), "candidates_watching": candidates,
+            "injectable_total": len(injectable), "truncated": dropped,
             "claims": out, "watch_only": watch_only}
 
 
