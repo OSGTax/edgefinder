@@ -1380,7 +1380,17 @@ const INDEX_CHIPS = ['SPY', 'QQQ', 'IWM'];
 function renderTape(snap) {
   const quotes = snap.quotes || {};
   const syms = Object.keys(quotes);
-  if (!syms.length) return;
+
+  // Honesty gate (v9.21.2). The server states `connected` on EVERY frame and
+  // keeps emitting ~1/s even while the SIP socket is down — so frame arrival
+  // alone proves nothing, and the arrival-based watchdog below never fired.
+  // A dead tape read as LIVE for 13 days (2026-07-16 → 07-29) because this
+  // function used to `return` on an empty quote set BEFORE touching the pill.
+  // Decide the pill from the DATA, not from the fact a frame showed up.
+  if (snap.connected === false || !syms.length) {
+    setLivePill('delayed');
+    return;
+  }
 
   // Live index chips in the hero: the market's pulse without a card.
   const chipsEl = document.getElementById('desk-hero-indices');

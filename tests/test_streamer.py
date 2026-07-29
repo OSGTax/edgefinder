@@ -118,3 +118,64 @@ def test_warm_refreshes_stale_and_warmed_entries(monkeypatch):
     c.update_quote("IWM", 296.0, 296.1, 1, 1, None)
     c.warm({"IWM": {"bid": 1.0, "ask": 1.1, "mid": 1.05}})
     assert c.get("IWM")["bid"] == 296.0
+
+
+def test_held_symbols_excludes_option_contracts(monkeypatch):
+    """OCC options must never reach the stock SIP tape.
+
+    Alpaca rejects the WHOLE batch on one non-stock symbol
+    ("invalid symbol: QQQ260821P00650000"), which took down both the REST
+    warm (leaving the cache EMPTY) and the WebSocket subscription, with the
+    retry loop re-sending the same poisoned list forever. Regression for the
+    dead tape of 2026-07-16 → 07-29.
+    """
+    from agent import streamer
+
+    rows = [{"symbol": "AAPL"}, {"symbol": "QQQ"},
+            {"symbol": "QQQ260821P00650000"},   # long put
+            {"symbol": "AMD260821C00520000"},   # spread leg
+            {"symbol": "SOXS"}]
+
+    class _Store:
+        def select(self, *a, **k):
+            return rows
+
+    # the real get_store is lru_cache-wrapped and conftest's teardown calls
+    # .cache_clear() — the stand-in has to carry one too
+    def _fake_get_store(*a, **k):
+        return _Store()
+    _fake_get_store.cache_clear = lambda: None
+    monkeypatch.setattr("agent.store.get_store", _fake_get_store)
+
+    held = streamer._held_symbols()
+    assert held == ["AAPL", "QQQ", "SOXS"]
+    assert not [s for s in held if len(s) > 6 and any(c.isdigit() for c in s)]
+
+    # and the full subscription set stays option-free
+    monkeypatch.setattr(streamer, "_held_symbols", lambda: held, raising=False)
+    assert "QQQ260821P00650000" not in streamer.watch_symbols()
+
+
+def test_warm_falls_back_per_symbol_when_batch_fails(monkeypatch):
+    """One unquotable symbol must cost one quote, not the whole cache."""
+    import asyncio
+
+    from agent import streamer
+
+    bad = "QQQ260821P00650000"
+
+    class _Broker:
+        def quotes(self, syms):
+            if bad in syms:
+                raise RuntimeError("code=400, invalid symbol: " + bad)
+            return {s: {"bid": 1.0, "ask": 1.1, "mid": 1.05} for s in syms}
+
+    monkeypatch.setattr("agent.broker.Broker", lambda *a, **k: _Broker())
+    streamer.cache = streamer.QuoteCache()
+
+    asyncio.run(streamer._warm(["SPY", "QQQ", bad, "NVDA"]))
+
+    snap = streamer.cache.snapshot()
+    # the good names survived the bad one
+    assert set(snap["quotes"]) == {"SPY", "QQQ", "NVDA"}
+    assert snap["symbols"] == 3

@@ -45,13 +45,26 @@ def stream_symbols() -> list[str]:
 
 
 def _held_symbols() -> list[str]:
-    """Symbols the agent currently holds — they always belong on the tape."""
+    """EQUITY symbols the agent currently holds — they belong on the tape.
+
+    OCC option symbols are EXCLUDED. ``desk_positions`` keeps options in the
+    same ``symbol`` column as equities, but this tape is the stock SIP feed:
+    options live on OPRA, a different subscription entirely. Alpaca rejects
+    the WHOLE batch when one symbol is not a stock —
+    ``invalid symbol: QQQ260821P00650000`` — so a single held option used to
+    take down both the REST warm (leaving the cache EMPTY) and the WebSocket
+    subscription, with the retry loop re-sending the same poisoned list
+    forever. That is what silently killed the live tape from 2026-07-16 (the
+    first option position) until 2026-07-29.
+    """
     try:
+        from agent import occ
         from agent.models import ACCOUNT
         from agent.store import get_store
 
         rows = get_store().select("desk_positions", filters={"account": ACCOUNT})
-        return sorted({str(r["symbol"]).upper() for r in rows})
+        return sorted({s for s in (str(r["symbol"]).upper() for r in rows)
+                       if not occ.is_option(s)})
     except Exception:  # noqa: BLE001 — the tape must not die on a DB blip
         return []
 
@@ -129,15 +142,43 @@ cache = QuoteCache()
 
 
 async def _warm(symbols: list[str]) -> None:
-    """REST latest-quotes into the cache (blocking SDK → thread)."""
+    """REST latest-quotes into the cache (blocking SDK → thread).
+
+    Defence in depth: Alpaca fails the WHOLE batch on one unquotable symbol,
+    which used to leave the cache completely EMPTY and the desk with nothing
+    to mark against. On a batch failure, fall back to warming symbol by
+    symbol so one bad ticker costs one quote instead of all of them, and
+    NAME the offenders in the log so the next occurrence is diagnosable
+    without code archaeology.
+    """
+    from agent import broker
+
     try:
-        from agent import broker
         b = broker.Broker()
+    except Exception:  # noqa: BLE001 — no broker → nothing to warm
+        logger.exception("Quote cache warm failed to build a broker")
+        return
+    try:
         quotes = await asyncio.to_thread(b.quotes, symbols)
         cache.warm(quotes)
         logger.info("Quote cache warmed: %d symbols", len(quotes))
-    except Exception:
-        logger.exception("Quote cache warm failed (stream will still populate)")
+        return
+    except Exception as exc:  # noqa: BLE001 — fall back to per-symbol
+        logger.warning("Batch quote warm failed (%s: %s) — retrying per symbol",
+                       type(exc).__name__, str(exc)[:200])
+
+    quotes: dict = {}
+    bad: list[str] = []
+    for sym in symbols:
+        try:
+            quotes.update(await asyncio.to_thread(b.quotes, [sym]))
+        except Exception:  # noqa: BLE001 — skip the offender, keep the rest
+            bad.append(sym)
+    if quotes:
+        cache.warm(quotes)
+    logger.warning("Quote cache warmed per-symbol: %d ok, %d unquotable%s",
+                   len(quotes), len(bad),
+                   (" — " + ", ".join(bad[:10])) if bad else "")
 
 
 async def _watch_new_holdings(ws, subscribed: set[str]) -> None:
