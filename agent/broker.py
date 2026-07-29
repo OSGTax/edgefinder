@@ -542,6 +542,7 @@ class Broker:
                 continue
             q = getattr(snap, "latest_quote", None)
             g = getattr(snap, "greeks", None)
+            tr = getattr(snap, "latest_trade", None)
             bid = _f(getattr(q, "bid_price", None)) if q else None
             ask = _f(getattr(q, "ask_price", None)) if q else None
             out.append({
@@ -550,6 +551,16 @@ class Broker:
                 "dte": (p["expiry"] - et_today).days,
                 "bid": bid, "ask": ask,
                 "mid": round((bid + ask) / 2, 4) if (bid and ask) else None,
+                # Quoted depth + last print. Alpaca's OptionsSnapshot carries
+                # NO open interest, so last-trade recency is the only
+                # "does this contract actually trade?" signal available here —
+                # a tight quote on a contract whose last print is days old is
+                # a market maker's placeholder, not liquidity.
+                "bid_size": _f(getattr(q, "bid_size", None)) if q else None,
+                "ask_size": _f(getattr(q, "ask_size", None)) if q else None,
+                "last": _f(getattr(tr, "price", None)) if tr else None,
+                "last_t": (str(getattr(tr, "timestamp", None))
+                           if tr and getattr(tr, "timestamp", None) else None),
                 "iv": _f(getattr(snap, "implied_volatility", None)),
                 "delta": _f(getattr(g, "delta", None)) if g else None,
                 "theta": _f(getattr(g, "theta", None)) if g else None,

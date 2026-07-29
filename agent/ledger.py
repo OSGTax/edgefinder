@@ -102,6 +102,12 @@ OPTION_FEE_PER_CONTRACT = 0.65
 # (no live quote, no stored close), the equity snapshot is flagged degraded —
 # still written (an outage must not stop the curve), but loudly visible.
 MARK_DEGRADED_COST_PCT = 20.0
+# A mark is called WIDE when its quote's relative spread exceeds this — the
+# mid is then materially above what a real exit would return. Reporting only
+# (mark_meta.wide_marked); it gates nothing and does not change the booked
+# mark. 2% keeps ordinary near-the-money option spreads out of the list while
+# still catching the genuinely unrealizable ones.
+MARK_WIDE_SPREAD = 0.02
 
 
 def _mult(symbol: str) -> int:
@@ -1412,7 +1418,13 @@ def live_fill(store=None, *, symbol: str, side: str, shares: float | None = None
     else:
         src = "alpaca_sip_rest"
     snapshot = {"bid": bid, "ask": ask, "mid": q.get("mid"), "t": q.get("t"),
-                "src": src, "slippage_bp": slippage_bp, "session": sess}
+                "src": src, "slippage_bp": slippage_bp, "session": sess,
+                # Quoted DEPTH at the touch. normalize_quote has always
+                # returned these and the fill has always thrown them away, so
+                # "could this size actually have filled here?" was
+                # unanswerable after the fact. Recorded, not enforced — the
+                # size gate is a later, exit-safe phase.
+                "bid_size": q.get("bid_size"), "ask_size": q.get("ask_size")}
     if warnings:
         # the receipt, not just the return value: overridden/degraded gates
         # must be visible on the persisted row (H1 — a protective exit that
@@ -1951,7 +1963,16 @@ def mark(store=None, *, prices: dict[str, float] | None = None,
     MARK_DEGRADED_COST_PCT of position value the meta carries
     ``"degraded": true`` — the snapshot still writes (an outage must not
     stop the equity curve; visibility is the fix) and the CLI warns loudly.
-    Caller-supplied ``prices`` count as live (they are explicit marks)."""
+    Caller-supplied ``prices`` count as live (they are explicit marks).
+
+    LIQUIDATION OBSERVATION (v9.24.0): the booked ``equity`` is unchanged and
+    still mid-based, but the meta also carries ``touch_equity`` — the same
+    book valued at the side we would actually exit into (long → bid, short →
+    ask) — plus the ``phantom_pnl`` between them and a ``wide_marked`` list.
+    Recording only: a mid mark on a wide quote is unrealizable P&L, and this
+    turns that from an argument into a measured series. Best-effort by
+    design — if the touch quotes are unavailable the observation is simply
+    absent and the snapshot is otherwise identical."""
     store = store or _store()
     positions = rebuild_positions(store, account)
     src: dict[str, str] = {}
@@ -1963,11 +1984,19 @@ def mark(store=None, *, prices: dict[str, float] | None = None,
             src.setdefault(sym, "close")
     else:
         src = {s: "live" for s in prices}
+    # A second, read-only batch quote purely for the observation. Deliberately
+    # NOT folded into the pricing path above: _live_mids is the seam the mark
+    # tests monkeypatch and `settle` shares, and re-plumbing it to fix a
+    # reporting gap would risk the booked number to add a field.
+    touch_q = _live_touch_quotes(list(positions)) if positions else {}
     now = _utcnow()
     pos_value = 0.0
     counts = {"live": 0, "close": 0, "cost": 0}
     cost_marked: list[str] = []
     cost_value = total_value = 0.0
+    touch_value = 0.0
+    touch_n = 0
+    wide_marked: list[str] = []
     for sym, p in positions.items():
         tier = src.get(sym, "live") if prices.get(sym) else "cost"
         px = prices.get(sym) or p["avg_price"]
@@ -1979,15 +2008,39 @@ def mark(store=None, *, prices: dict[str, float] | None = None,
         if tier == "cost":
             cost_marked.append(sym)
             cost_value += abs(mv)
+        # Observation only — never feeds mv/pos_value above.
+        tq = touch_q.get(sym) or {}
+        bid, ask = tq.get("bid"), tq.get("ask")
+        if bid and ask and float(ask) > 0:
+            bid, ask = float(bid), float(ask)
+            touch = bid if p["shares"] > 0 else ask
+            touch_value += p["shares"] * touch * _mult(sym)
+            touch_n += 1
+            if (ask - bid) / ask > MARK_WIDE_SPREAD:
+                wide_marked.append(sym)
+        else:
+            # no two-sided quote: carry the booked mark so touch_equity stays
+            # a whole-book number rather than a partial one
+            touch_value += mv
         store.update("desk_positions", {"account": account, "symbol": sym},
                      {"last_price": px, "marked_at": now}, returning=False)
     cost_pct = round(cost_value / total_value * 100, 2) if total_value else 0.0
     mark_meta: dict = {"sources": counts, "cost_marked": sorted(cost_marked),
-                       "cost_marked_value_pct": cost_pct}
+                       "cost_marked_value_pct": cost_pct,
+                       "mark_basis": "mid"}
     if cost_pct > MARK_DEGRADED_COST_PCT:
         mark_meta["degraded"] = True
+    if touch_n:
+        mark_meta.update(
+            touch_quoted=touch_n,
+            touch_positions_value=round(touch_value, 2),
+            # positive == the mid flatters us versus a real exit
+            phantom_pnl=round(pos_value - touch_value, 2),
+            wide_marked=sorted(wide_marked))
     c = cash(store, account)
     equity = round(c + pos_value, 2)
+    if touch_n:
+        mark_meta["touch_equity"] = round(c + touch_value, 2)
     snap = {
         "account": account, "ts": now, "cash": c,
         "positions_value": round(pos_value, 2), "equity": equity,

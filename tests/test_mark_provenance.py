@@ -97,6 +97,75 @@ def test_state_surfaces_latest_mark_meta(store, monkeypatch):
     assert ledger.state(store)["mark_meta"] is None
 
 
+def test_touch_observation_never_moves_the_booked_equity(store, monkeypatch):
+    """THE Phase-B contract: adding the liquidation observation must not change
+    a single booked number. Same book, same mids, wildly different touch
+    quotes → identical equity."""
+    from agent import ledger
+    _buy(store, "AAA", 10, 100.0)
+    monkeypatch.setattr(ledger, "_live_mids", lambda syms: {"AAA": 110.0})
+    monkeypatch.setattr(ledger, "_latest_closes", lambda syms: {})
+
+    monkeypatch.setattr(ledger, "_live_touch_quotes", lambda syms: {})
+    without = ledger.mark(store)
+    monkeypatch.setattr(ledger, "_live_touch_quotes",
+                        lambda syms: {"AAA": {"bid": 50.0, "ask": 170.0}})
+    with_obs = ledger.mark(store)
+
+    assert without["equity"] == with_obs["equity"]
+    assert without["positions_value"] == with_obs["positions_value"]
+    assert without["cash"] == with_obs["cash"]
+    # the observation is absent without quotes, present with them
+    assert "touch_equity" not in without["mark_meta"]
+    assert with_obs["mark_meta"]["touch_equity"] < with_obs["equity"]
+    assert with_obs["mark_meta"]["mark_basis"] == "mid"
+
+
+def test_touch_observation_uses_the_exit_side_per_position_sign(store, monkeypatch):
+    """A long exits at the bid, a short buys back at the ask — both directions
+    make the mid look better than reality, so phantom_pnl is positive for
+    each."""
+    from agent import ledger
+    _buy(store, "AAA", 100, 10.0)                       # long 100 shares
+    r = ledger.record_trade(store, symbol="SPY260821P00050000", side="SELL",
+                            shares=5, price=4.0, fill_quote=q(4.0))
+    assert r["ok"], r                                   # cash-secured put
+    monkeypatch.setattr(ledger, "_live_mids",
+                        lambda syms: {"AAA": 10.0, "SPY260821P00050000": 5.0})
+    monkeypatch.setattr(ledger, "_latest_closes", lambda syms: {})
+    monkeypatch.setattr(ledger, "_live_touch_quotes", lambda syms: {
+        "AAA": {"bid": 9.0, "ask": 11.0},                     # mid 10.0
+        "SPY260821P00050000": {"bid": 4.0, "ask": 6.0},        # mid 5.0
+    })
+    meta = ledger.mark(store)["mark_meta"]
+    # long: 100*(10.0-9.0) = 100 ; short: 5*100*(6.0-5.0) = 500
+    assert meta["phantom_pnl"] == pytest.approx(600.0)
+    assert meta["touch_quoted"] == 2
+    # both quotes are >2% wide
+    assert meta["wide_marked"] == ["AAA", "SPY260821P00050000"]
+
+
+def test_touch_observation_carries_unquoted_positions_at_the_booked_mark(
+        store, monkeypatch):
+    """A position with no two-sided quote contributes its booked mark, so
+    touch_equity stays a whole-book figure instead of a misleading partial."""
+    from agent import ledger
+    _buy(store, "AAA", 10, 100.0)
+    _buy(store, "BBB", 10, 100.0)
+    monkeypatch.setattr(ledger, "_live_mids",
+                        lambda syms: {"AAA": 100.0, "BBB": 100.0})
+    monkeypatch.setattr(ledger, "_latest_closes", lambda syms: {})
+    monkeypatch.setattr(ledger, "_live_touch_quotes",
+                        lambda syms: {"AAA": {"bid": 99.0, "ask": 101.0}})
+    st = ledger.mark(store)
+    meta = st["mark_meta"]
+    assert meta["touch_quoted"] == 1                  # only AAA had a quote
+    # AAA 10@99 = 990 + BBB carried at its booked 1,000 = 1,990
+    assert meta["touch_positions_value"] == pytest.approx(1990.0)
+    assert meta["phantom_pnl"] == pytest.approx(10.0)
+    assert meta["wide_marked"] == []                  # ~2% exactly, not over
+
+
 def test_mark_survives_missing_mark_meta_column(store, capsys):
     """L1 pre-deploy grace: a DB that predates the mark_meta column must not
     crash mid-write — the insert retries WITHOUT provenance and prints a

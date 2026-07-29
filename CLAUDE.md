@@ -47,7 +47,11 @@ rules). The agent's operating manual is
 5. **The scoreboard cannot flatter:** SPY comparisons are TOTAL RETURN on
    both sides (lab and ledger), every equity snapshot records its mark
    provenance (live/close/cost — degraded marks recorded on every snapshot;
-   desk surface in a later phase), every buy/add pick must register a
+   desk surface in a later phase) plus a LIQUIDATION OBSERVATION
+   (`mark_basis`, `touch_equity`, `phantom_pnl`, `wide_marked`: the booked
+   equity stays mid-based, and the meta says what the same book is worth at
+   the side we would actually exit into — a re-base is owner-proposal work,
+   never a silent one), every buy/add pick must register a
    falsifiable prediction + horizon + kill before the decision saves, and
    opt-in hard stops sell through the same fill gates as any trade (the
    entry-friction bands overridden explicitly, on the receipt).

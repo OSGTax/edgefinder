@@ -30,8 +30,9 @@ def store(tmp_path, monkeypatch):
 class FakeBroker:
     """Market open, NVDA quoted 130.00 / 130.20 with a fresh-now timestamp."""
     def __init__(self, open_=True, bid=130.0, ask=130.2, session_=None,
-                 close_soon=False, quote_t=None):
+                 close_soon=False, quote_t=None, bid_size=None, ask_size=None):
         self._open, self._bid, self._ask = open_, bid, ask
+        self._bid_size, self._ask_size = bid_size, ask_size
         # Default session tracks is_market_open unless explicitly set — so a
         # test that only says `open_=False` still sees the "closed" session.
         self._session = session_ if session_ is not None else (
@@ -57,6 +58,7 @@ class FakeBroker:
         t = self._quote_t or datetime.now(timezone.utc).isoformat()
         return {s: {"symbol": s, "bid": self._bid, "ask": self._ask,
                     "mid": round((self._bid + self._ask) / 2, 4),
+                    "bid_size": self._bid_size, "ask_size": self._ask_size,
                     "t": t} for s in symbols}
 
     def option_quotes(self, symbols):
@@ -559,3 +561,33 @@ def test_broker_is_close_soon(monkeypatch):
     # not open → never "close soon"
     b._trading = _Trading(False, soon)
     assert b.is_close_soon(minutes=15) is False
+
+
+def test_fill_stamps_quoted_depth_on_the_receipt(store, monkeypatch):
+    """v9.24.0: bid_size/ask_size have always been on the normalized quote and
+    were always discarded, leaving "could this size have filled here?"
+    unanswerable after the fact. Now they ride on the persisted receipt.
+    Recorded, NOT enforced — an order far larger than the quoted size still
+    books; the size gate is a later, exit-safe phase."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker(bid_size=1.0, ask_size=2.0))
+    r = ledger.live_fill(store, symbol="NVDA", side="buy", shares=500,
+                         rationale="depth stamp")
+    assert r["ok"] is True                      # not gated
+    assert r["fill_quote"]["bid_size"] == 1.0
+    assert r["fill_quote"]["ask_size"] == 2.0
+    row = store.select("desk_trades", filters={"symbol": "NVDA"})[0]
+    fq = row["fill_quote"]
+    assert (fq["bid_size"], fq["ask_size"]) == (1.0, 2.0)
+
+
+def test_fill_receipt_tolerates_a_feed_without_sizes(store, monkeypatch):
+    """A quote with no size fields records None rather than failing the fill —
+    depth is an observation in this phase, never a precondition."""
+    from agent import ledger
+    _patch_broker(monkeypatch, FakeBroker())     # no sizes supplied
+    r = ledger.live_fill(store, symbol="NVDA", side="buy", notional=1000,
+                         rationale="no sizes")
+    assert r["ok"] is True
+    assert r["fill_quote"]["bid_size"] is None
+    assert r["fill_quote"]["ask_size"] is None

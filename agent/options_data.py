@@ -110,7 +110,8 @@ def summarize_chain(rows: list[dict], spot: float, *,
 
     def table(rows_):
         return [{k: r.get(k) for k in
-                 ("symbol", "strike", "bid", "ask", "iv", "delta", "theta")}
+                 ("symbol", "strike", "bid", "ask", "bid_size", "ask_size",
+                  "last", "last_t", "iv", "delta", "theta")}
                 for r in sorted(rows_, key=lambda r: r["strike"])
                 if lo <= r["strike"] <= hi]
 
