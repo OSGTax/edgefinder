@@ -55,14 +55,51 @@ equities but tighter than options); shares are fractional. Options aren't a
 crypto concept, so those doctrines simply don't apply. Enumerate available
 pairs with `agent.broker assets --crypto`.
 
-## Owner mandate: more aggressive, more concurrent experiments (2026-07-15)
+## Owner mandate: the scarce resource is graded outcomes (2026-07-29)
 
-This is paper money at live prices — the cost of being wrong is a graded
-lesson, not a real dollar loss. "Lean aggressive" has so far been true in
-name only: every fill to date has been a plain equity buy, and the options
-doctrine below has never once been used. The owner's direction is explicit:
-lean harder into the toolkit you already have, and stop converging on one
-style of bet.
+**Read this before you talk yourself out of a trade.**
+
+This is paper money at live prices. The cost of being wrong is a graded
+lesson; the cost of being *absent* is nothing learned. With near-unlimited
+research capacity, a whole-market scan, live news, 21 years of backtest
+history and a book that cannot go bankrupt, the binding constraint on this
+desk is **graded outcomes, not capital**. A cycle that studies ten names and
+fills none has converted compute into nothing.
+
+The owner reviewed the 2026-07-24 reflection and named the failure directly:
+1 of 107 decisions cited a claim, two consecutive weeks landed zero fills
+outside plain equity shares despite a mandated options study slot, TSLA was
+rejected eight separate times in one session awaiting "confirmation," and
+DELL was passed three cycles running as "no fresh catalyst" while the
+catalyst sat in the news feed (+16.3% missed). The direction, verbatim:
+*"MORE AGGRESSIVE, ITS FAKE MONEY WE AREN'T LOSING OUR SHIRTS."*
+
+**"Wait for confirmation" is the most expensive habit on this desk.**
+Confirmation costs a graded outcome and buys nothing a 0.5% trial would not
+have told you sooner, with a kill wire attached. Strategy v6 exists to
+remove the structural cause: when the book held 3–8 names, a slot cost 12%
+of equity and waiting was rational. The book now runs 25–60 positions
+across three sleeves, so a new idea costs 0.5% and hesitation has no
+excuse.
+
+- **Filters SIZE DOWN; they do not skip.** Parabolic, overbought, extended,
+  unconfirmed base, stale catalyst, rolling over — none of these produce a
+  pass any more. They produce a **trial-size position (0.5–1.25%) with a
+  kill wire**. Only three things still produce a true pass: a structural
+  guardrail violation, stale/unavailable data, or an identical trial
+  already open on that name. "I don't like the setup" is an argument for
+  0.5%, not for zero.
+- **Use the whole toolkit every cycle, not just shares.** Before defaulting
+  to a share position, ask whether an options structure or a leveraged ETF
+  expresses the SAME thesis with a better risk/reward shape. The
+  once-per-session options/leveraged-ETF slot is now a **deployment** slot:
+  it ends in a fill or in a specific *structural* reason none was available
+  — never "nothing looked good."
+- **Run the book as many concurrent trials.** Deliberately hold positions
+  expressed in different STYLES at once (trend equities, leveraged-ETF
+  expression, options structures) so each is its own falsifiable experiment
+  the Friday reflection grades against the others. Diversify the METHOD,
+  not just the ticker.
 
 - **Use the whole toolkit every cycle, not just shares.** Before defaulting
   to a share position, ask whether an options structure (long call/put,
@@ -310,10 +347,19 @@ state-get` → merge → `state-set`: date, slice, names, lens, one-line
 verdicts — reset the list at each prep cycle) so later cycles see what
 today already covered and rotate onward.
 
-Studying is NOT a license to trade — the evidence bar for fills (backtest
-or leaderboard grounding, live quote, prediction + kill) is unchanged. The
-study rotation's product is the notebook: by the wrap cycle, the day
-should have put 10–20 names under 4–6 different lenses on the record.
+**Studying IS a license to trade small (v6).** The evidence bar now scales
+with position size (`params.evidence_bar_by_position_pct`): under 1.5%, a
+qualifying lab-leaderboard rule OR a named study-rotation observation is
+sufficient grounding — prediction, horizon and kill stay mandatory, but no
+per-name backtest. Full backtest grounding starts at 1.5%; the bear-case
+beat at 8%. Making a $500 trial carry the paperwork of a $12k conviction
+bet is friction that buys no safety — the risk is already bounded by the
+size. So a study slice that ends in "explicit pass" on every name is now
+the exception that needs justifying, not the default: **most slices should
+end in at least one trial fill.** The rotation's product is the notebook
+AND the book: by the wrap cycle, the day should have put 10–20 names under
+4–6 lenses on the record *and* converted the interesting ones into graded
+positions.
 
 ### 3. Ground it (phase: research)
 **Start from the Strategy Lab leaderboard in your brief**
@@ -352,6 +398,32 @@ date.
 Choose the **target book**: `{symbol: weight}`. Full discretion — any number
 of names, any sizing within the guardrails. Per held name: hold / add /
 trim / exit.
+
+**Decide against the sleeve targets (v6).** The book runs three sleeves at
+once (`params.sleeves`) — CORE (~58%, 8–10 names at 5–8%), TRIAL (~28%,
+30–40 positions at 0.5–1.25%), TACTICAL (~12%, options/leveraged/hedges).
+Read the current book against those targets first; **a sleeve materially
+below target is a gap to close THIS SESSION**, not an observation to log.
+Tag every position to its sleeve in the rationale.
+
+- **Fill floor.** Each market session opens at least
+  `params.min_new_positions_per_session` new positions, at least
+  `params.min_trial_positions_per_session` of them trial-sleeve. This is a
+  floor, not a target. **If the session ends short, the wrap cycle MUST log
+  it on the wiki `mistakes` page by name** — which candidates were studied
+  and not taken, and why — exactly as an oversize with no bear-case is
+  logged. "Nothing qualified today" is not a neutral outcome and not an
+  acceptable close to a session: with the whole liquid market in scope and
+  a 0.5% minimum size, it is a statement about the trader, not the tape.
+- **Funding comes from trimming the core toward its band, index ETFs
+  first.** Broad-market ETF weight is the least aggressive thing the book
+  can hold — it guarantees beta and forecloses alpha. Trim it before
+  trimming a single-name winner. Sells first, then buys, same cycle.
+- **Trial exits are MECHANICAL** — kill breached, or horizon elapsed
+  (`params.trial_max_hold_sessions`). That is what makes 40 concurrent
+  trials tractable instead of 40 discretionary decisions per cycle: they
+  are **fire-and-grade, not fire-and-watch**. Do not spend cycle time
+  re-deliberating open trials; let the kill wire and the horizon do it.
 
 **The bear-case beat (required before the big moves).** The trigger is
 computed, not vibed: before a strategy PIVOT (any `state-set --bump`), or
