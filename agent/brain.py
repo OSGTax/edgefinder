@@ -857,7 +857,12 @@ def wake_honor(store=None, *, wake_id: int, run_id: str,
 
 WIKI_SLUGS = ("playbook", "setups", "lessons", "mistakes", "postmortems",
               "market-notes")
-WIKI_PAGE_MAX_CHARS = 8000    # ~2k tokens per page
+# The page cap bounds ONE page; the total bounds the whole wiki's contribution
+# to every cycle's prompt. Raising the page cap alone (8000 -> 10000) relieves a
+# single page pressed against its ceiling WITHOUT widening the prompt budget —
+# the total is deliberately unchanged, so the trade is fewer maxed pages, not
+# more tokens. TOTAL // PAGE is how many pages can be maxed at once (now 4).
+WIKI_PAGE_MAX_CHARS = 10000   # ~2.5k tokens per page
 WIKI_TOTAL_MAX_CHARS = 40000  # ~10k tokens total — bounded prompt growth, forever
 
 

@@ -23,7 +23,7 @@ def test_empty_wiki(store):
     from agent.brain import get_wiki
     w = get_wiki(store)
     assert w["pages"] == [] and w["total_chars"] == 0
-    assert w["caps"] == {"page": 8000, "total": 40000}
+    assert w["caps"] == {"page": 10000, "total": 40000}
     assert w["slugs"] == ["playbook", "setups", "lessons", "mistakes",
                           "postmortems", "market-notes"]
 
@@ -65,21 +65,26 @@ def test_page_and_total_caps(store):
     from agent.brain import (WIKI_PAGE_MAX_CHARS, WIKI_TOTAL_MAX_CHARS,
                              set_wiki)
 
-    assert WIKI_PAGE_MAX_CHARS == 8000 and WIKI_TOTAL_MAX_CHARS == 40000
+    assert WIKI_PAGE_MAX_CHARS == 10000 and WIKI_TOTAL_MAX_CHARS == 40000
     over = set_wiki(store, slug="playbook", body="x" * (WIKI_PAGE_MAX_CHARS + 1))
     assert not over["ok"] and "size cap" in over["error"]
     assert store.select("desk_wiki") == []
     assert store.select("desk_journal", filters={"kind": "wiki"}) == []
 
-    # fill five pages to within 100 chars of the total, then the sixth must
-    # respect the TOTAL cap (its body alone is comfortably under the page cap)
-    for slug in ("playbook", "setups", "lessons", "mistakes"):
+    # Fill the wiki to within 100 chars of the TOTAL, then the next page must
+    # be refused on the total cap even though its own body is far under the
+    # page cap. Expressed in terms of the constants so tuning either one does
+    # not silently invalidate the test.
+    from agent.brain import WIKI_SLUGS
+
+    n_full = WIKI_TOTAL_MAX_CHARS // WIKI_PAGE_MAX_CHARS
+    for slug in WIKI_SLUGS[:n_full - 1]:
         assert set_wiki(store, slug=slug, body="x" * WIKI_PAGE_MAX_CHARS)["ok"]
     room = 100
-    assert set_wiki(store, slug="postmortems",
+    assert set_wiki(store, slug=WIKI_SLUGS[n_full - 1],
                     body="x" * (WIKI_TOTAL_MAX_CHARS
-                                - 4 * WIKI_PAGE_MAX_CHARS - room))["ok"]
-    blocked = set_wiki(store, slug="market-notes", body="x" * (room + 1))
+                                - (n_full - 1) * WIKI_PAGE_MAX_CHARS - room))["ok"]
+    blocked = set_wiki(store, slug=WIKI_SLUGS[n_full], body="x" * (room + 1))
     assert not blocked["ok"] and "prune another page" in blocked["error"]
     # a rewrite that SHRINKS a page is always allowed
     assert set_wiki(store, slug="playbook", body="short now")["ok"]
@@ -87,17 +92,24 @@ def test_page_and_total_caps(store):
 
 
 def test_total_cap_math_across_all_six_pages(store):
-    """The total cap holds across the full six-slug wiki: five maxed pages fit
-    exactly; the sixth then has zero headroom until another page shrinks."""
+    """The total cap holds across the full six-slug wiki: TOTAL // PAGE maxed
+    pages fit exactly; the next one then has zero headroom until another page
+    shrinks. The page cap must divide the total exactly, so 'maxed pages' is a
+    whole number and the ceiling is reachable rather than stranding a
+    remainder no page can use."""
     from agent.brain import (WIKI_PAGE_MAX_CHARS, WIKI_SLUGS,
                              WIKI_TOTAL_MAX_CHARS, get_wiki, set_wiki)
 
     assert len(WIKI_SLUGS) == 6
-    assert 5 * WIKI_PAGE_MAX_CHARS == WIKI_TOTAL_MAX_CHARS
-    for slug in WIKI_SLUGS[:5]:
+    assert WIKI_TOTAL_MAX_CHARS % WIKI_PAGE_MAX_CHARS == 0
+    n_full = WIKI_TOTAL_MAX_CHARS // WIKI_PAGE_MAX_CHARS
+    # the total must stay reachable without maxing every page — otherwise the
+    # cap stops being a curation forcing-function and becomes a hard wall
+    assert n_full < len(WIKI_SLUGS)
+    for slug in WIKI_SLUGS[:n_full]:
         assert set_wiki(store, slug=slug, body="x" * WIKI_PAGE_MAX_CHARS)["ok"]
     assert get_wiki(store)["total_chars"] == WIKI_TOTAL_MAX_CHARS
-    blocked = set_wiki(store, slug=WIKI_SLUGS[5], body="x")
+    blocked = set_wiki(store, slug=WIKI_SLUGS[n_full], body="x")
     assert not blocked["ok"] and "prune another page" in blocked["error"]
     # shrink one page → the sixth fits, and the total stays under the cap
     assert set_wiki(store, slug=WIKI_SLUGS[0], body="lean")["ok"]
