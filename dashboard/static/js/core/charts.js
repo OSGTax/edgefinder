@@ -34,9 +34,32 @@ onThemeChange(() => {
   for (const { chart } of registry) chart.applyOptions(baseOptions());
 });
 
+/* Phone price axis: "102000.00" is ~90px of a 390px-wide chart spent on two
+   decimals nobody reads on an equity curve. Compact to "102k" and reclaim the
+   width for the actual plot. Scoped to narrow viewports on purpose — desktop
+   has the room, and the crosshair label shares this formatter, so the precision
+   trade only makes sense where space is genuinely scarce. */
+function compactPrice(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return String(v);
+  const a = Math.abs(n);
+  if (a >= 1000) {
+    const k = n / 1000;
+    // 102.4k below 10k so a small move is still visible; 102k above
+    return (a >= 10000 ? Math.round(k) : k.toFixed(1)) + 'k';
+  }
+  return a >= 1 ? n.toFixed(2) : n.toFixed(4);
+}
+
+function isNarrow() {
+  return typeof window !== 'undefined'
+    && window.matchMedia('(max-width: 640px)').matches;
+}
+
 function baseOptions() {
   const c = chartColors();
   return {
+    ...(isNarrow() ? { localization: { priceFormatter: compactPrice } } : {}),
     layout: {
       background: { type: 'solid', color: 'transparent' },
       textColor: c.text,

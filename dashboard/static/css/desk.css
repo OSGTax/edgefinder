@@ -94,21 +94,65 @@
   font-size: var(--t-fs-xl); font-weight: 700; color: var(--t-text);
 }
 
+/* min-width: 0 on both — a flex item defaults to min-width:auto, which means
+   it refuses to shrink below its content and pushes the overflow up to the
+   page instead. Without these the hero's chip row inflates the whole
+   document's width on a phone. */
 .desk-hero-foot {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  min-width: 0;
 }
 .desk-hero-foot .spacer { flex: 1; }
-.desk-hero-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.desk-hero-chips { display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
 
+/* Phone hero: the numbers should out-shout their labels, and the whole card
+   should leave room for the book underneath it. Measured 448px before this —
+   the entire first screen for seven figures. */
 @media (max-width: 640px) {
   .desk-hero { padding: 14px; }
   .desk-hero-value { font-size: 28px; }
   .desk-hero-today { font-size: var(--t-fs-base); }
   .desk-hero-stats {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px 14px; margin-top: 12px; padding-top: 12px;
+    /* three across: five stats become 3+2 instead of three full rows */
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px 10px; margin: 12px 0 10px; padding-top: 12px;
   }
-  .desk-hero-stats dd { font-size: var(--t-fs-lg); }
+  .desk-hero-stats dd { font-size: var(--t-fs-base); }
+  /* Demote the label: smaller, tighter tracking, and drop the dotted
+     "hover me" underline — it advertises a tooltip that a touch device can
+     never show, so on a phone it is pure noise competing with the value. */
+  .desk-hero-stats dt {
+    /* 11px is the floor, not a suggestion — base.css raises --t-fs-xs to 12px
+       on phones precisely so nothing sits under it. Going to 10px to buy a
+       third column would undo that deliberate readability decision. */
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    border-bottom: none;
+    cursor: default;
+    line-height: 1.25;
+  }
+  .desk-hero-live { margin-top: 4px; }
+}
+
+/* Below ~360px three columns start hyphenating labels like "CASH ON HAND";
+   drop back to two. */
+@media (max-width: 360px) {
+  .desk-hero-stats { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* The ticker in a pick/outcome header navigates to /symbol/<sym> — it is a
+   real tap target, and measured 41x22 / 38x20. Giving it the 44px minimum
+   also lifts the whole header row off its cramped ~22px, which is the right
+   answer for a row that IS the primary thing you reach for on a phone. */
+@media (max-width: 640px) {
+  html .desk-pick-sym,
+  html .desk-outcome-sym {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    /* width too — a one-letter ticker like "V" is otherwise a ~12px target */
+    min-width: 44px;
+  }
 }
 
 /* ── ANCHOR NAV: sticky just below the topnav ──

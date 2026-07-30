@@ -278,28 +278,49 @@ a:hover { text-decoration: underline; }
 /* ── Mobile readability floor (Pixel-portrait pass) ──
    Push the base type up 1px so labels / chips / cells sit above the mobile
    comfort floor, and give interactive controls the 44×44 minimum every
-   touch guidelines call for. Desktop is untouched. */
+   touch guidelines call for. Desktop is untouched.
+
+   NOTE ON THE `html` PREFIX — it is load-bearing, do not "simplify" it away.
+   A media query adds NO specificity. `.c-seg button { min-height: 28px }` in
+   components.css and `.c-btn`/`.c-chip` there both have the same specificity
+   as the rules below, and components.css + desk.css load AFTER this file
+   (see base.html / desk.html), so the later declaration won every tie and
+   this entire block silently did nothing for those three selectors —
+   measured: segmented buttons still 28px tall at 390px wide. Prefixing with
+   `html` buys one element of specificity, which beats a single-class rule
+   from any later sheet without touching markup. */
 @media (max-width: 640px) {
   :root {
     --t-fs-xs: 12px;
     --t-fs-sm: 13px;
     --t-fs-base: 14px;
   }
-  .desk-anchor,
-  .desk-collapse,
-  .c-chip,
-  .c-seg button,
-  .c-btn,
-  .desk-wn-btn,
-  .desk-wn-dismiss,
-  .desk-opt-select {
+  html .desk-anchor,
+  html .desk-collapse,
+  html .c-chip,
+  html .c-seg button,
+  html .c-btn,
+  html .theme-toggle,
+  html .desk-wn-btn,
+  html .desk-wn-dismiss,
+  html .desk-opt-select {
     min-height: 44px;
   }
   /* The inline-row controls (chip, seg, btn) also need width headroom so
      a single-char × / arrow isn't a 20px hit target. */
-  .desk-wn-dismiss,
-  .desk-collapse {
+  html .desk-wn-dismiss,
+  html .theme-toggle,
+  html .desk-collapse {
     min-width: 44px;
+  }
+  /* A min-height alone leaves the label crammed against the top edge on
+     controls that are not already flex-centred. */
+  html .c-seg button,
+  html .c-btn,
+  html .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 }
 

@@ -21,6 +21,13 @@
   color: var(--t-text);
 }
 .c-card-header .spacer { margin-left: auto; }
+/* On a phone the title and an inline segmented control fight over ~390px, and
+   because .c-seg sets overflow:hidden for its rounded ends the loser is
+   silently CLIPPED — "History" was cut mid-word. Let the header wrap so the
+   control drops to its own line instead of being amputated. */
+@media (max-width: 640px) {
+  html .c-card-header { flex-wrap: wrap; }
+}
 .c-card-body { padding: var(--t-pad-card); }
 .c-card-body.tight { padding: 0; }
 
@@ -94,12 +101,20 @@
 }
 
 /* ── pills ── */
+/* max-width/min-width keep a long single-line pill from escaping its
+   container: the strategy pill ("Strategy v6 · aggressive barbell: …") ran
+   160px past a 390px viewport, and because it lives in the hero — a .c-card
+   but NOT a .desk-card — none of the min-width:0 / overflow-x rules in
+   desk.css reached it. That one pill was the entire page-level horizontal
+   overflow on mobile. */
 .c-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 1px 8px;
   border-radius: 999px;
+  max-width: 100%;
+  min-width: 0;
   font-size: var(--t-fs-xs);
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -111,6 +126,29 @@
 .c-pill.info { color: var(--t-info); background: var(--t-info-dim); }
 .c-pill.neutral { color: var(--t-text-2); background: var(--t-surface-3); }
 .c-pill.sealed { color: var(--t-text-2); background: var(--t-surface-3); border: 1px dashed var(--t-border-strong); }
+
+/* On a phone a long pill WRAPS rather than truncating. Ellipsis would be the
+   tidier look, but the full text of these pills lives only in `title` — and a
+   touch device has no hover, so truncating genuinely destroys information the
+   reader cannot recover. A wrapped pill drops the 999px radius so two lines
+   read as deliberate instead of like a squashed capsule. */
+@media (max-width: 640px) {
+  html .c-pill {
+    white-space: normal;
+    border-radius: var(--t-radius-sm);
+    padding: 3px 8px;
+    align-items: flex-start;
+  }
+  /* Same reasoning for chips carrying a sentence rather than a label — one
+     measured 2,064px wide, turning a single prediction into a sideways swipe
+     inside its card. Chips in an explicitly horizontal .scroll rail keep
+     nowrap: there, sideways IS the intended axis. */
+  html .c-chips:not(.scroll) > .c-chip {
+    white-space: normal;
+    border-radius: var(--t-radius-sm);
+    text-align: left;
+  }
+}
 
 /* ── chips (filters / ranges / toggles) ── */
 .c-chips { display: flex; gap: 6px; flex-wrap: wrap; }

@@ -71,6 +71,15 @@
   .ch-pane.tall { height: 55vh; }
 }
 
+/* Phones: 55vh (≈464px on a 390×844 handset) is most of the screen for one
+   equity curve, and with the card header, explainer and legend above it the
+   book got pushed entirely below the fold. A curve reads fine at ~40% of that
+   on a phone. Kept as a separate ≤640px step so tablets keep the taller pane. */
+@media (max-width: 640px) {
+  .ch-pane.tall { height: clamp(200px, 30vh, 280px); }
+  .ch-pane.price { height: clamp(240px, 42vh, 380px); }
+}
+
 /* ── symbol workstation layout ── */
 .sym-layout { display: flex; flex-direction: column; gap: 10px; }
 .sym-header {

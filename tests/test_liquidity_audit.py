@@ -27,6 +27,20 @@ def store(tmp_path, monkeypatch):
     return get_store()
 
 
+def occ(underlying, type_, strike, *, days=30):
+    """An OCC symbol that expires `days` from TODAY.
+
+    Never hard-code an expiry in a test: `record_trade` refuses an expired
+    contract ("… is expired — run `settle`"), so a literal like
+    SPY260729P00725000 passes until that date and then fails forever after —
+    which is exactly what happened here the day after it was written.
+    """
+    from datetime import date, timedelta
+    from agent import occ as occ_mod
+    return occ_mod.build(underlying, date.today() + timedelta(days=days),
+                         type_, strike)
+
+
 def fq(bid, ask, **extra):
     d = {"bid": bid, "ask": ask, "mid": round((bid + ask) / 2, 4),
          "t": "2026-07-29T14:00:00+00:00", "src": "test", "session": "regular"}
@@ -73,14 +87,17 @@ def test_audit_option_flag_needs_both_fraction_and_cents(store):
     a 1c-wide penny contract is 50% 'wide' and perfectly tradeable, so it must
     NOT flag; a 30%-wide $2.00 contract must."""
     from agent import ledger
-    # 0.01 / 0.02 — 50% wide, 1 cent absolute. Real: SPY260729P00725000.
-    _fill(store, "SPY260729P00725000", "BUY", 5, 0.02, (0.01, 0.02))
+    # 0.01 / 0.02 — 50% wide, 1 cent absolute. Modelled on the real
+    # SPY260729P00725000 that was open on the live book when this was written.
+    penny = occ("SPY", "P", 725)
     # 1.40 / 2.00 — 30% wide, 60 cents absolute.
-    _fill(store, "AMD260821C00550000", "BUY", 1, 2.00, (1.40, 2.00))
+    wide = occ("AMD", "C", 550)
+    _fill(store, penny, "BUY", 5, 0.02, (0.01, 0.02))
+    _fill(store, wide, "BUY", 1, 2.00, (1.40, 2.00))
     out = ledger.liquidity_audit(store, quotes={})
     flagged = {r["symbol"] for r in out["fills"]["flagged"]}
-    assert "AMD260821C00550000" in flagged
-    assert "SPY260729P00725000" not in flagged
+    assert wide in flagged
+    assert penny not in flagged
 
 
 def test_audit_surfaces_stamped_overrides_and_warnings(store):
@@ -100,11 +117,13 @@ def test_audit_prices_the_liquidation_touch_not_the_mid(store):
     Mid-marking flatters both, and the audit puts a dollar figure on it."""
     from agent import ledger
     _fill(store, "LONGY", "BUY", 100, 10.0, (9.9, 10.0))
-    # short leg: a cash-secured put (the ledger rejects anything undefined)
-    _fill(store, "SPY260821P00050000", "SELL", 5, 4.0, (4.0, 4.1))
+    # short leg: a cash-secured put (the ledger rejects anything undefined).
+    # Low strike so the CSP cash reservation fits the test account.
+    csp = occ("SPY", "P", 50)
+    _fill(store, csp, "SELL", 5, 4.0, (4.0, 4.1))
     out = ledger.liquidity_audit(store, quotes={
-        "LONGY": {"bid": 9.0, "ask": 11.0},                    # mid 10.0
-        "SPY260821P00050000": {"bid": 4.0, "ask": 6.0},        # mid 5.0
+        "LONGY": {"bid": 9.0, "ask": 11.0},   # mid 10.0
+        csp: {"bid": 4.0, "ask": 6.0},        # mid 5.0
     })
     by = {p["symbol"]: p for p in out["marks"]["positions"]}
     # long 100 @ mid 10.0 = 1000, at the bid 9.0 = 900 → 100 of phantom P&L
@@ -112,8 +131,8 @@ def test_audit_prices_the_liquidation_touch_not_the_mid(store):
     assert by["LONGY"]["phantom_pnl"] == pytest.approx(100.0)
     # short 5 contracts: mid -5.0*500 = -2500, at the ask -6.0*500 = -3000
     # → the mid understates the cost to close by 500
-    assert by["SPY260821P00050000"]["touch"] == 6.0
-    assert by["SPY260821P00050000"]["phantom_pnl"] == pytest.approx(500.0)
+    assert by[csp]["touch"] == 6.0
+    assert by[csp]["phantom_pnl"] == pytest.approx(500.0)
     assert out["marks"]["phantom_pnl"] == pytest.approx(600.0)
     assert (out["marks"]["equity_mid_marked"]
             - out["marks"]["equity_touch_marked"]) == pytest.approx(600.0)

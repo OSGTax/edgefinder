@@ -260,7 +260,12 @@ async function loadHeader() {
 function ensureEquityChart() {
   if (equityChart) return;
   const el = document.getElementById('desk-equity-chart');
-  equityChart = createChart(el, { height: 320 });
+  // No explicit height: #desk-equity-chart is a CSS-sized .ch-pane.tall, and
+  // the shared ResizeObserver in charts.js is built to track a sized
+  // container on both axes. Passing a pixel height here just got overwritten
+  // on the first observer callback, so the responsive height lives in
+  // charts.css alone — one source of truth.
+  equityChart = createChart(el);
   const c = colors();
   // benchmark first so the account curve draws over it
   spySeries = equityChart.addLineSeries({

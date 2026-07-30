@@ -59,29 +59,15 @@ function initThemeButtons() {
   }
 }
 
-async function loadIndices() {
-  try {
-    const data = await apiGet('/api/benchmarks/comparison?days=5');
-    const el = document.getElementById('topnav-indices');
-    if (!el || !data.indices) return;
-    el.replaceChildren();
-    for (const sym of ['SPY', 'QQQ', 'VIX']) {
-      const series = data.indices[sym];
-      if (!series || series.length < 2) continue;
-      const chg = series[series.length - 1] - series[series.length - 2];
-      const wrap = document.createElement('div');
-      wrap.className = 'topnav-index';
-      const s1 = document.createElement('span');
-      s1.className = 'sym';
-      s1.textContent = sym;
-      const s2 = document.createElement('span');
-      s2.className = 'num ' + (chg >= 0 ? 't-up' : 't-down');
-      s2.textContent = `${chg >= 0 ? '▲' : '▼'}${Math.abs(chg).toFixed(2)}%`;
-      wrap.append(s1, s2);
-      el.append(wrap);
-    }
-  } catch { /* decorative */ }
-}
+/* The index strip that used to live here fetched /api/benchmarks/comparison,
+   a workbench-era route that no longer exists — it 404s in production, and
+   the failure was swallowed by a bare `catch { /* decorative */ }`, so
+   #topnav-indices has been permanently empty on every viewport while still
+   costing a doomed request on every page load. Removed rather than
+   re-pointed: the desk already publishes the same read as /api/desk/regime,
+   surfaced in the hero's market-mood pill, and the strip is display:none
+   below 768px anyway. #topnav-indices stays in base.html as an empty slot —
+   deleting the markup is a separate cleanup. */
 
 async function loadHealthDot() {
   try {
@@ -100,6 +86,5 @@ document.addEventListener('DOMContentLoaded', () => {
   initTabbar();
   initSheet();
   initThemeButtons();
-  loadIndices();
   loadHealthDot();
 });
