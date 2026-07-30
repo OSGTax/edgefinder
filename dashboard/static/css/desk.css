@@ -247,6 +247,55 @@
 .desk-card .c-card-body { min-width: 0; overflow-x: auto; }
 .desk-card .c-card-body.tight { overflow: visible; }
 
+/* Collapsed-card peek: the count of what is inside, shown ONLY while
+   collapsed. Expanded, the content itself is the answer and a count would
+   just be chrome. */
+.desk-card-peek {
+  margin-left: auto;
+  font-size: var(--t-fs-xs);
+  font-weight: 600;
+  color: var(--t-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.desk-card:not(.collapsed) .desk-card-peek { display: none; }
+
+/* ── explainer disclosure (mobile) ──
+   Every panel leads with a plain-English .c-card-sub. That framing is the
+   point of a public desk, but on a phone it is a paragraph of prose before
+   any data, on ten panels. Below 768px it collapses behind an ⓘ in the
+   header. The button is injected by JS only where a .c-card-sub exists, so
+   desktop markup and behaviour are untouched. */
+.desk-info-btn { display: none; }
+@media (max-width: 768px) {
+  html .desk-info-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--t-text-3);
+    font-size: var(--t-fs-base);
+    cursor: pointer;
+    line-height: 1;
+  }
+  html .desk-info-btn[aria-expanded="true"] { color: var(--t-accent); }
+  /* Big hit area, small visual. The 44px minimum drew a conspicuous empty
+     box around an 11px chevron next to every card title; drop the border on
+     phones and keep the target. */
+  html .desk-collapse {
+    border-color: transparent;
+    font-size: var(--t-fs-base);
+  }
+  /* hidden by default on mobile; the button reveals it */
+  html .desk-card .c-card-sub,
+  html .desk-topcard .c-card-sub { display: none; }
+  html .desk-card.desk-info-open .c-card-sub { display: block; }
+}
+
 /* ═══════════════════════════════════════════════════════════════
    End redesign v8.7 block. Legacy per-panel styles below.
    ═══════════════════════════════════════════════════════════════ */

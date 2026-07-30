@@ -1616,6 +1616,54 @@ async function loadAll() {
     loadDecision(), loadWhatsNew(), loadFills(), loadWiki(),
     loadLab(), loadWatch(), loadPredictions(), loadClaims(),
   ]);
+  refreshPeeks();
+}
+
+/* ── collapsed-card peek ──
+   A collapsed card that shows only its title has not solved anything — it has
+   moved the information behind a tap the reader has no reason to make. Each
+   collapsed card therefore carries a one-line count of what is inside, so
+   "Claims registry · 109 claims" is legible without opening it.
+
+   The selector per card is EXPLICIT. A generic "count rows, else list items,
+   else children" fallback was tried first and produced "1 wires", "1 picks",
+   "1 notes" — it counted each renderer's single wrapper div — plus "2 marks"
+   for an equity card whose own header already says 249. A confidently wrong
+   count is worse than no count, so a card with no spec simply gets no peek. */
+const PEEK_SPEC = {
+  positions: { sel: 'tbody > tr', one: 'holding', many: 'holdings' },
+  decision: { sel: '.desk-pick', one: 'pick', many: 'picks' },
+  thinking: { sel: '.desk-feed-line', one: 'note', many: 'notes' },
+  lab: { sel: '.desk-lab-entry', one: 'entry', many: 'entries' },
+  // NOT here on purpose: equity, watch, predictions, wiki, claims and fills
+  // each already populate a `#desk-<key>-meta` span in their header — "109
+  // active", "35 open · 9 closed · 50% hit rate", "57 most recent". Those are
+  // richer than any count this could compute, and adding a second number
+  // wrapped a redundant line into every header, costing the exact vertical
+  // space collapsing is meant to reclaim. The guard below enforces that
+  // generally, so a card that GAINS a meta later silently stops duplicating.
+};
+
+function refreshPeeks() {
+  for (const card of document.querySelectorAll('.desk-card[data-collapse-key]')) {
+    const key = card.getAttribute('data-collapse-key');
+    const spec = PEEK_SPEC[key];
+    const header = card.querySelector('.c-card-header');
+    const body = card.querySelector('.c-card-body');
+    let peek = header && header.querySelector('.desk-card-peek');
+    const drop = () => { if (peek) peek.remove(); };
+    if (!spec || !header || !body) { drop(); continue; }
+    // already says what is inside → no second opinion
+    const meta = header.querySelector('[id$="-meta"]');
+    if (meta && meta.textContent.trim()) { drop(); continue; }
+    const n = body.querySelectorAll(spec.sel).length;
+    if (!n) { drop(); continue; }
+    if (!peek) {
+      peek = h('span', { class: 'desk-card-peek' });
+      header.append(peek);
+    }
+    peek.textContent = n + ' ' + (n === 1 ? spec.one : spec.many);
+  }
 }
 
 /* ── card collapse: chevron in each card header toggles visibility,
@@ -1630,7 +1678,69 @@ function saveCollapseSet(set) {
   try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...set])); }
   catch (e) { /* private mode, quota — silent */ }
 }
+/* Cards that arrive COLLAPSED on a phone. These are the long-form corpora —
+   the wiki pages, the 100+ entry claims registry, the thinking feed, the
+   outcome ledger, the lab board. Rendered open they measured ~60,000px at
+   390px wide: 71 phone screens, with the account and the book buried at the
+   top of a scroll nobody finishes. Desktop first-visit behaviour is
+   deliberately untouched — there the width earns the length.
+
+   Left OPEN on purpose: equity (the curve), positions (the book), decision
+   (what it just did) — what a phone glance is actually for.
+
+   `watch` is collapsed despite being live state: 21 armed wires rendered
+   3,257px, nearly four phone screens, and its peek ("21 wires") already
+   answers the only question a glance asks — are the tripwires armed. */
+const MOBILE_COLLAPSED = ['watch', 'thinking', 'predictions', 'lab', 'wiki',
+  'claims'];
+const MOBILE_Q = '(max-width: 768px)';
+
+/* Rather than branch the collapse logic on viewport, stamp the SAME
+   data-collapsed="1" attribute the template uses for opt-in defaults. Every
+   downstream path — the persisted-preference check below, and the toggle
+   handler's `'!' + key` "user explicitly opened this" record — then works
+   unchanged. A parallel mobile code path would have had to re-implement both,
+   and would have re-collapsed a card the reader had deliberately opened. */
+function applyMobileCollapseDefaults() {
+  if (!window.matchMedia(MOBILE_Q).matches) return;
+  for (const key of MOBILE_COLLAPSED) {
+    const card = document.querySelector(
+      '.desk-card[data-collapse-key="' + key + '"]');
+    if (card && !card.hasAttribute('data-collapsed')) {
+      card.setAttribute('data-collapsed', '1');
+    }
+  }
+}
+
+/* Inject the ⓘ disclosure for each panel's plain-English explainer. Added in
+   JS rather than the template so all ten card headers stay untouched and the
+   button only ever exists where there is actually a .c-card-sub to reveal.
+   CSS keeps it display:none above 768px, so desktop is unaffected. */
+function wireInfoToggles() {
+  for (const card of document.querySelectorAll('.desk-card, .desk-topcard')) {
+    const header = card.querySelector('.c-card-header');
+    const sub = card.querySelector('.c-card-sub');
+    if (!header || !sub || header.querySelector('.desk-info-btn')) continue;
+    const btn = h('button', {
+      class: 'desk-info-btn', type: 'button', text: 'ⓘ',
+      title: 'What is this panel?', 'aria-expanded': 'false',
+      'aria-label': 'Explain this panel',
+    });
+    btn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      const open = card.classList.toggle('desk-info-open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    // Sit next to the TITLE, not at the end of the header. Appended last it
+    // landed after the meta text, and since the header wraps on a phone that
+    // pushed a second 44px-tall line into every one of the ten card headers.
+    const title = header.querySelector('.c-card-title, h3, h4');
+    if (title) title.after(btn); else header.append(btn);
+  }
+}
+
 function wireCollapse() {
+  applyMobileCollapseDefaults();
   const cards = document.querySelectorAll('.desk-card[data-collapse-key]');
   const persisted = loadCollapseSet();
   // First-visit defaults come from data-collapsed="1"; user prefs override.
@@ -1723,9 +1833,16 @@ function wireSegs() {
 }
 
 wireCollapse();
+wireInfoToggles();
 wireAnchorNav();
 wireSegs();
 loadAll();
 startTape();
 // refresh the live panels periodically (the agent updates several times/day)
-setInterval(() => { loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki(); loadLab(); loadWatch(); loadPredictions(); loadClaims(); }, 60_000);
+setInterval(() => {
+  loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki();
+  loadLab(); loadWatch(); loadPredictions(); loadClaims();
+  // counts move as the agent works — a stale peek on a collapsed card is a
+  // quietly wrong number, which is worse than no number
+  setTimeout(refreshPeeks, 1500);
+}, 60_000);
