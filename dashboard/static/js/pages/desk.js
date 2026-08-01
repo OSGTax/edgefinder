@@ -1294,14 +1294,20 @@ async function loadWiki() {
    are recorded sample sizes — there is no confidence score to render, by
    design. ── */
 const CLAIM_TIER = {
-  established: { label: 'in force', pill: 'up' },
-  candidate: { label: 'candidate — watch-only', pill: 'neutral' },
-  observation: { label: 'observation — watch-only', pill: 'neutral' },
-  digest: { label: 'digest', pill: 'neutral' },
+  established: { label: 'in force', pill: 'up',
+    tip: 'Proven across enough real trades that the AI may cite it to justify a trade on its own.' },
+  candidate: { label: 'candidate — watch-only', pill: 'neutral',
+    tip: 'Being tracked and measured, but not yet proven enough to justify a trade by itself.' },
+  observation: { label: 'observation — watch-only', pill: 'neutral',
+    tip: 'A pattern the AI has noticed but hasn’t validated yet — logged for reference only, not tradeable.' },
+  digest: { label: 'digest', pill: 'neutral',
+    tip: 'A summarized batch of raw evidence, not yet turned into a trackable claim.' },
 };
 const CLAIM_CLASS = {
-  risk_rule: 'risk rule', market_strategy: 'market pattern',
-  system_mechanics: 'system fact', operational: 'ops incident',
+  risk_rule: ['risk rule', 'A rule about how much risk to take or when to cut losses — these never expire or get looser.'],
+  market_strategy: ['market pattern', 'A pattern about how the market tends to behave — expires unless renewed with fresh evidence.'],
+  system_mechanics: ['system fact', 'A fact about how the AI’s own tools or process work, not a claim about the market.'],
+  operational: ['ops incident', 'A note about something that went wrong operationally (e.g. a data outage), not a trading pattern.'],
 };
 
 function claimStatsText(stats) {
@@ -1352,12 +1358,16 @@ async function loadClaims() {
     }
     for (const r of rows) {
       const tier = CLAIM_TIER[r.tier] || CLAIM_TIER.digest;
+      const [klassLabel, klassTip] = CLAIM_CLASS[r.kclass] || [r.kclass, null];
       const head = h('div', { class: 'desk-claim-head' },
         h('span', { class: 'desk-claim-cite t-dim', text: r.cite }),
-        h('span', { class: 'c-pill ' + (r.experimental ? 'warn' : tier.pill),
-          text: r.experimental ? 'experimental — size-capped' : tier.label }),
-        h('span', { class: 'c-pill neutral',
-          text: CLAIM_CLASS[r.kclass] || r.kclass }));
+        pill(
+          r.experimental ? 'experimental — size-capped' : tier.label,
+          r.experimental ? 'warn' : tier.pill,
+          r.experimental
+            ? 'Allowed to influence trades, but only at a strictly smaller position size until it earns full standing.'
+            : tier.tip),
+        pill(klassLabel, 'neutral', klassTip));
       if (r.expires_at) {
         head.append(h('span', { class: 't-dim desk-claim-exp',
           text: 'expires ' + r.expires_at + ' unless renewed' }));
