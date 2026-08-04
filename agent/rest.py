@@ -17,6 +17,7 @@ have RLS enabled). Configure via env: ``SUPABASE_URL`` +
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import time
@@ -53,6 +54,19 @@ def _jsonable(value):
     return value
 
 
+def _read_body(resp) -> str:
+    """Read a (possibly gzip-encoded) HTTP response body to text.
+
+    Works for both successful responses and ``HTTPError`` objects — once we
+    advertise ``Accept-Encoding: gzip``, error bodies can arrive compressed
+    too, and a RestError must still carry readable diagnostics.
+    """
+    raw = resp.read()
+    if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+        raw = gzip.decompress(raw)
+    return raw.decode()
+
+
 class Rest:
     """Minimal CRUD over a Supabase PostgREST endpoint.
 
@@ -76,6 +90,9 @@ class Rest:
             "Authorization": f"Bearer {self.key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            # Supabase bills egress on wire bytes; repetitive JSON rows
+            # compress ~8-10x, and urllib does not ask for gzip on its own.
+            "Accept-Encoding": "gzip",
         }
         if prefer:
             h["Prefer"] = prefer
@@ -119,9 +136,9 @@ class Rest:
         for attempt in range(attempts):
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    return resp.status, resp.read().decode()
+                    return resp.status, _read_body(resp)
             except urllib.error.HTTPError as exc:
-                raise RestError(exc.code, exc.read().decode()) from None
+                raise RestError(exc.code, _read_body(exc)) from None
             except (urllib.error.URLError, ConnectionError, TimeoutError):
                 if attempt == attempts - 1:
                     raise

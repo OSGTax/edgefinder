@@ -82,14 +82,18 @@ def test_lint_flags_unstructured_clause_and_unhonored_commitment(store):
 
 def test_lint_flags_hindsight_and_hygiene(store):
     from agent.knowledge import claim_add, lint
-    # a claim created BEFORE the decision it cites → hindsight risk
+    # a claim created BEFORE the decision it cites → hindsight risk. The
+    # decision must be dated AFTER the claim's created_at (now), so build it
+    # relative to the clock — a fixed future date rots into a pass once the
+    # wall clock crosses it (this test broke on 2026-08-02 exactly that way).
+    future = datetime.utcnow() + timedelta(days=30)
     store.insert("desk_decisions", {
-        "account": "agent", "run_id": "RF", "ts": datetime(2026, 8, 1, 15, 0),
+        "account": "agent", "run_id": "RF", "ts": future,
         "regime": "risk_on",
         "picks": [{"symbol": "X", "action": "buy"}]}, returning=False)
     store.insert("desk_outcomes", {
         "account": "agent", "run_id": "RF", "symbol": "X",
-        "grade_date": date(2026, 8, 1), "alpha_pct": 1.0, "status": "open"},
+        "grade_date": future.date(), "alpha_pct": 1.0, "status": "open"},
         returning=False)
     claim_add(store, kclass="operational", tier="observation",
               statement="future-cited", scope={"account": "paper"},

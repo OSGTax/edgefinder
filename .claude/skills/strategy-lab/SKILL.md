@@ -77,11 +77,15 @@ Run id: `lab-YYYY-MM-DD`. Narrate with
    trader has actually traded it — this only unlocks the SMALL, capped
    experimental slot, it doesn't vouch for live performance the rule
    hasn't had yet.
-5. **Rebuild the brief so tomorrow carries TONIGHT's board:**
-   `python -m agent.market brief-build` — it upserts tonight's brief in
-   place. The data-refresh routine built it before your sweep ran; without
-   this rebuild the trader reads a leaderboard one night stale. If the
-   build output's `errors` list is non-empty, re-run it once.
+5. **Refresh the brief's leaderboard so tomorrow carries TONIGHT's board:**
+   `python -m agent.market brief-lab-refresh` — it patches ONLY the
+   `lab_leaderboard` section of tonight's existing brief in place (the
+   data-refresh routine built the full brief before your sweep ran; a
+   second full rebuild re-scanned the whole hot set for identical output
+   and was the system's single biggest duplicated Supabase read). If no
+   brief exists for today the command falls back to a full `brief-build`
+   on its own — either way the trader never reads a leaderboard one night
+   stale. If the output shows an error, re-run it once.
 6. Close with one `brain think` summary line: tested N, qualified M, top
    rule + its worst-half excess, and anything the trader should notice
    tomorrow. If the sweep errored badly (many combos failing), say so

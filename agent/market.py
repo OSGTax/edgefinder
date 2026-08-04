@@ -17,6 +17,7 @@ CLI:
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -184,12 +185,60 @@ def compute_screens(rows: list[dict], *, top_exclude: int = 40,
     return out
 
 
+def _screens_rows_from_r2(lo: date) -> list[dict] | None:
+    """The screens' bar rows from the R2 parquet archive, or None.
+
+    The whole-market screens window (~100 trading days x ~1000 symbols) is
+    the single largest read in the system, and Supabase bills every byte of
+    it as egress — twice nightly, it was the top driver of the 2026-08
+    exceed_egress_quota outage. The nightly ingest merge-syncs the SAME bars
+    into R2 before the brief builds, and R2 egress is free, so this reads
+    the identical window from the archive instead. Returns None (caller
+    falls back to the daily_bars query) when the R2 creds are absent —
+    tests, dev boxes — so behavior everywhere else is unchanged.
+    """
+    if not all(os.getenv(k) for k in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
+                                      "R2_ENDPOINT", "R2_BUCKET")):
+        return None
+    from edgefinder.data.barstore import BarStore
+
+    bs = BarStore()
+    manifest = bs.read_manifest()
+    lo_s = lo.isoformat()
+    syms = sorted(s for s, e in manifest.items()
+                  if isinstance(e, dict)
+                  and str(e.get("max_date") or "")[:10] >= lo_s)
+    if not syms:
+        return None  # empty/legacy manifest — the DB is the better source
+    frames = bs.load_window(syms, start=lo, max_workers=16)
+    rows: list[dict] = []
+    for sym, df in frames.items():
+        for d, c, v in zip(df["date"], df["close"], df["volume"]):
+            if c is None or c != c:  # NaN close — unusable for the screens
+                continue
+            rows.append({"symbol": sym, "date": d, "close": float(c),
+                         "volume": float(v) if v == v and v is not None else 0.0})
+    return rows or None
+
+
 def _screens(store) -> dict:
-    """Gather ~100 trading days of the fresh set and compute the screens."""
+    """Gather ~100 trading days of the fresh set and compute the screens.
+
+    Source order: the R2 archive first (identical bars, zero Supabase
+    egress), the daily_bars table as the fallback — same window, same
+    compute, so the output only differs in its ``source`` stamp.
+    """
     lo = _et_today() - timedelta(days=150)
-    rows = store.select("daily_bars", columns="symbol,date,close,volume",
-                        filters={"date": ("gte", lo)},
-                        order=[("date", "asc"), ("symbol", "asc")])
+    source = "r2"
+    try:
+        rows = _screens_rows_from_r2(lo)
+    except Exception:  # noqa: BLE001 — archive hiccup must not kill the brief
+        rows = None
+    if rows is None:
+        source = "db"
+        rows = store.select("daily_bars", columns="symbol,date,close,volume",
+                            filters={"date": ("gte", lo)},
+                            order=[("date", "asc"), ("symbol", "asc")])
     # Same guard as _movers, over the screens' whole lookback: one batched
     # query for every split executed inside the window (raw closes there
     # embed the split as a fake move). Splits dated in the future haven't
@@ -205,7 +254,9 @@ def _screens(store) -> dict:
                       if str(r.get("execution_date") or "")[:10] <= hi}
     except Exception:  # noqa: BLE001 — split guard is best-effort
         pass
-    return compute_screens(rows, split_syms=split_syms)
+    out = compute_screens(rows, split_syms=split_syms)
+    out["source"] = source
+    return out
 
 
 def build_brief(*, top: int = 40) -> dict:
@@ -318,6 +369,46 @@ def build_brief(*, top: int = 40) -> dict:
             "errors": errors}
 
 
+def refresh_brief_lab() -> dict:
+    """Patch TONIGHT's brief with a fresh Strategy Lab leaderboard, in place.
+
+    The lab routine runs ~2h after data-refresh built the full brief; a
+    second full build re-scanned the whole hot set (movers + screens) for
+    identical output — pure duplicated egress. This recomputes ONLY the
+    ``lab_leaderboard`` section from tonight's persisted sweeps and updates
+    the existing row. If tonight's brief is missing (data-refresh failed),
+    it falls back to a FULL build so the trader never reads a stale board —
+    functionality is identical either way, only the redundant re-scan goes.
+    """
+    from agent import lab
+    from agent.store import get_store
+
+    store = get_store()
+    today = _et_today()
+    rows = store.select("desk_briefs",
+                        filters={"account": ACCOUNT, "brief_date": today},
+                        limit=1)
+    if not rows:
+        out = build_brief()
+        out["lab_refresh"] = "full build — no brief existed for today"
+        return out
+    payload = rows[0].get("payload") or {}
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    payload["lab_leaderboard"] = lab.leaderboard(top=8)
+    # A "lab: ..." error recorded by the earlier full build is superseded now.
+    payload["errors"] = [e for e in payload.get("errors", [])
+                         if not str(e).startswith("lab:")]
+    built_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    store.update("desk_briefs", {"id": rows[0]["id"]},
+                 {"payload": payload, "built_at": built_at}, returning=False)
+    board = payload["lab_leaderboard"] or {}
+    return {"ok": True, "brief_date": str(today),
+            "lab_refresh": "patched in place",
+            "lab_qualified": board.get("qualified"),
+            "lab_top": len(board.get("top") or [])}
+
+
 def get_brief() -> dict:
     """The latest research pack, with an honest staleness flag.
 
@@ -385,6 +476,7 @@ def main(argv: list[str] | None = None) -> None:
     bb.add_argument("--top", type=int, default=40)
 
     sub.add_parser("brief")
+    sub.add_parser("brief-lab-refresh")
 
     args = p.parse_args(argv)
 
@@ -406,6 +498,8 @@ def main(argv: list[str] | None = None) -> None:
                                                          as_of=_parse_date(args.as_of))}
     elif args.cmd == "brief-build":
         out = build_brief(top=args.top)
+    elif args.cmd == "brief-lab-refresh":
+        out = refresh_brief_lab()
     elif args.cmd == "brief":
         out = get_brief()
     print(json.dumps(out, indent=2, default=str))

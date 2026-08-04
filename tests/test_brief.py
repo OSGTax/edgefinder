@@ -164,6 +164,91 @@ def test_screens_guard_queries_splits_inside_window(store, monkeypatch):
     assert captured["split_syms"] == {"IN_WINDOW"}
 
 
+def test_screens_uses_r2_when_available(store, monkeypatch):
+    import agent.market as market
+
+    sentinel = [{"symbol": "R2SYM", "date": str(TODAY), "close": 10.0,
+                 "volume": 1.0}]
+    monkeypatch.setattr(market, "_screens_rows_from_r2", lambda lo: sentinel)
+    captured = {}
+
+    def fake_compute(rows, *, split_syms=None, **kw):
+        captured["rows"] = rows
+        return {"pool_size": 0}
+
+    monkeypatch.setattr(market, "compute_screens", fake_compute)
+    out = market._screens(store)
+    assert captured["rows"] is sentinel   # the archive fed the compute
+    assert out["source"] == "r2"
+
+
+def test_screens_falls_back_to_db_on_r2_failure(store, monkeypatch):
+    import agent.market as market
+
+    seed_day(store, TODAY - timedelta(days=1), {"AAA": 100.0})
+
+    def boom(lo):
+        raise RuntimeError("r2 down")
+
+    monkeypatch.setattr(market, "_screens_rows_from_r2", boom)
+    captured = {}
+
+    def fake_compute(rows, *, split_syms=None, **kw):
+        captured["rows"] = rows
+        return {"pool_size": 0}
+
+    monkeypatch.setattr(market, "compute_screens", fake_compute)
+    out = market._screens(store)
+    assert out["source"] == "db"          # archive hiccup never kills the brief
+    assert captured["rows"] and captured["rows"][0]["symbol"] == "AAA"
+
+
+def test_screens_r2_helper_opts_out_without_creds():
+    # conftest strips the R2_* env — the helper must return None (caller
+    # falls back to the DB), never attempt a network call.
+    from agent.market import _screens_rows_from_r2
+
+    assert _screens_rows_from_r2(TODAY - timedelta(days=150)) is None
+
+
+def test_brief_lab_refresh_patches_board_in_place(store, monkeypatch):
+    import agent.market as market
+    from agent import lab
+
+    for i in range(1, 3):
+        seed_day(store, TODAY - timedelta(days=i), {"AAA": 100.0, "SPY": 600.0})
+    market.build_brief(top=3)
+    before = store.select("desk_briefs", filters={"account": "agent"})[0]["payload"]
+
+    fresh = {"window_days": 14, "combos_tested": 42, "qualified": 1,
+             "honesty": "x", "flagged_for_claim": [],
+             "top": [{"rule": "momentum:5"}]}
+    monkeypatch.setattr(lab, "leaderboard", lambda top=8: fresh)
+    out = market.refresh_brief_lab()
+    assert out["ok"] and out["lab_refresh"] == "patched in place"
+    assert out["lab_top"] == 1
+
+    rows = store.select("desk_briefs", filters={"account": "agent"})
+    assert len(rows) == 1                  # patched in place, no second row
+    after = rows[0]["payload"]
+    assert after["lab_leaderboard"] == fresh
+    # every other section of the earlier full build survives untouched
+    assert after["screens"] == before["screens"]
+    assert after["movers"] == before["movers"]
+    assert after["trend_roster"] == before["trend_roster"]
+
+
+def test_brief_lab_refresh_full_build_when_brief_missing(store):
+    import agent.market as market
+
+    for i in range(1, 3):
+        seed_day(store, TODAY - timedelta(days=i), {"AAA": 100.0, "SPY": 600.0})
+    out = market.refresh_brief_lab()
+    assert out["ok"] and "full build" in out["lab_refresh"]
+    rows = store.select("desk_briefs", filters={"account": "agent"})
+    assert len(rows) == 1
+
+
 def test_brief_payload_carries_screens(store):
     from agent.market import build_brief
 

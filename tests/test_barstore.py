@@ -70,6 +70,19 @@ class TestBarStore:
         assert bars["AAA"]["date"].iloc[0] == date(2024, 1, 1)   # real date objs
         assert bars["AAA"]["close"].iloc[-1] == 129.0
 
+    def test_load_window_slices_and_omits_out_of_range(self, store, session):
+        store.sync(session)
+        # Window starts mid-series: only bars >= start survive, missing
+        # symbols and symbols with no rows in the window are omitted.
+        bars = store.load_window(["AAA", "BBB", "MISSING"],
+                                 start=date(2024, 1, 21))
+        assert set(bars) == {"AAA", "BBB"}
+        assert len(bars["AAA"]) == 10                      # 30 days, last 10
+        assert bars["AAA"]["date"].iloc[0] == date(2024, 1, 21)
+        assert bars["AAA"]["close"].iloc[-1] == 129.0      # newest bar kept
+        # A start past every bar drops the symbol entirely (no empty frames).
+        assert store.load_window(["AAA"], start=date(2025, 1, 1)) == {}
+
     def test_sync_is_incremental_and_idempotent(self, store, session):
         store.sync(session)
         again = store.sync(session)

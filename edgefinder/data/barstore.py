@@ -146,6 +146,31 @@ class BarStore:
                     out[sym] = df
         return out
 
+    def load_window(self, symbols: list[str], *, start,
+                    max_workers: int = 8) -> dict[str, pd.DataFrame]:
+        """Like :meth:`load`, but keep only bars dated >= ``start``.
+
+        Each symbol's full-history frame is sliced the moment it arrives and
+        the full frame discarded, so a ~1000-symbol recent-window read (the
+        nightly screens) never holds 21 years x 1000 names in memory — peak
+        is ``max_workers`` full frames plus the accumulated slices.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _one(sym: str):
+            df = self._get_frame(_bar_key(sym))
+            if df is None or not len(df):
+                return sym, None
+            df = df[df["date"] >= start]
+            return sym, (df.reset_index(drop=True) if len(df) else None)
+
+        out: dict[str, pd.DataFrame] = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for sym, df in pool.map(_one, symbols):
+                if df is not None:
+                    out[sym] = df
+        return out
+
     def sync(self, session, symbols: list[str] | None = None) -> dict:
         """MERGE new/changed DB rows into R2. The store is GROW-ONLY.
 
