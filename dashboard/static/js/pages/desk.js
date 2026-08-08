@@ -440,6 +440,15 @@ function sparkline(series, up) {
   }, svg('polyline', { points: pts, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linejoin': 'round' }));
 }
 
+/* Gain/loss as a percent of what was actually paid for the position —
+   the number a non-professional reader reaches for first ("up 12%"),
+   which a dollar figure alone doesn't convey. */
+function pnlPct(p, mult = 1) {
+  const cost = Math.abs(p.avg_price * p.shares * mult);
+  if (!cost) return null;
+  return (p.unrealized_pnl / cost) * 100;
+}
+
 function dayChangeCell(st) {
   if (!st || st.day_change_pct == null) return h('td', { class: 'num t-dim', text: '—' });
   const c = st.day_change_pct;
@@ -479,7 +488,7 @@ function equitiesTable(rows, stats) {
       h('th', { class: 'num', text: '30-day trend', title: 'The shape of the last 30 days; hover for the 52-week range' }),
       h('th', { class: 'num', text: 'Worth' }),
       h('th', { class: 'num', text: '% of account', title: 'How much of the whole account this holding represents' }),
-      h('th', { class: 'num', text: 'Gain / loss', title: 'Profit or loss if sold at the current price' }))),
+      h('th', { class: 'num', text: 'Gain / loss', title: 'Profit or loss if sold at the current price, in dollars and as a percent of what was paid' }))),
     h('tbody', {}, ...rows.map(p => h('tr', {},
       h('td', {}, h('a', { href: '/symbol/' + p.symbol, class: 'c-link', text: p.symbol }),
         divNote(p.symbol)),
@@ -491,8 +500,9 @@ function equitiesTable(rows, stats) {
       h('td', { class: 'num', text: fmtDollar(p.market_value) }),
       // weight is a 0-1 fraction — scale to percent for display
       h('td', { class: 'num', text: fmtPct(p.weight * 100, { signed: false }) }),
-      h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
-        text: fmtPnl(p.unrealized_pnl) })))));
+      h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down') },
+        h('div', { text: fmtPnl(p.unrealized_pnl) }),
+        h('div', { class: 'desk-pos-pctgl', text: fmtPct(pnlPct(p)) }))))));
 }
 
 function optionsTable(rows) {
@@ -504,7 +514,7 @@ function optionsTable(rows) {
       h('th', { class: 'num', text: 'Days left', title: 'Days until the contract expires' }),
       h('th', { class: 'num', text: 'Paid' }), h('th', { class: 'num', text: 'Now' }),
       h('th', { class: 'num', text: 'Worth' }),
-      h('th', { class: 'num', text: 'Gain / loss' }))),
+      h('th', { class: 'num', text: 'Gain / loss', title: 'Profit or loss if closed at the current price, in dollars and as a percent of what was paid' }))),
     h('tbody', {}, ...rows.map(p => {
       const o = occParse(p.symbol);
       const short = p.shares < 0;
@@ -516,8 +526,9 @@ function optionsTable(rows) {
         h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
         h('td', { class: 'num', text: fmtPrice(p.last_price) }),
         h('td', { class: 'num', text: fmtDollar(p.market_value) }),
-        h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
-          text: fmtPnl(p.unrealized_pnl) }));
+        h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down') },
+          h('div', { text: fmtPnl(p.unrealized_pnl) }),
+          h('div', { class: 'desk-pos-pctgl', text: fmtPct(pnlPct(p, 100)) })));
     })));
 }
 

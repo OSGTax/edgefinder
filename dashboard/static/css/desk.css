@@ -581,6 +581,9 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 /* holdings: the per-row next-dividend note */
 .desk-pos-div { font-size: var(--t-fs-xs); cursor: help; white-space: nowrap; }
 
+/* holdings: the gain/loss percent line under the dollar figure */
+.desk-pos-pctgl { font-size: var(--t-fs-xs); opacity: 0.85; }
+
 /* ── v9.10 Phase E: honest desk ── */
 
 /* LIVE pill truth: DELAYED / CLOSED variants — muted, no pulse. The green
