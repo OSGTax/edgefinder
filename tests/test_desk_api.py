@@ -1,11 +1,81 @@
-"""Smoke the trading-desk page + /api/desk/* endpoints on a seeded SQLite DB."""
+"""Smoke the trading-desk page + /api/desk/* endpoints on a seeded SQLite DB.
+
+REBUILD-V4 era model: the Alpaca paper account is the book of record, so the
+account-shaped endpoints (/portfolio, /open-orders, /broker-health) are
+exercised BOTH ways — with a canned ``agent.trade.Trade`` double (conftest
+strips creds, so nothing ever dials a real broker) and degraded (the double
+raises, the endpoint must answer ``available: false``, never 500). Fills
+come from the ``desk_orders`` mirror; the equity curve stitches the frozen
+``era1_*`` archive to ``desk_portfolio_history``.
+"""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import copy
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+
+NOW = datetime.now(timezone.utc)
+FILL_TS = (NOW - timedelta(days=10)).isoformat()
+
+
+def _canned_state():
+    return {
+        "account": "agent", "paper": True,
+        "cash": 88000.0, "equity": 101000.0,
+        "buying_power": 88000.0, "options_buying_power": 88000.0,
+        "starting_capital": 100000.0,
+        "total_pnl": 1000.0, "total_return_pct": 1.0,
+        "positions_value": 13000.0,
+        "positions": [{
+            "symbol": "NVDA", "asset_class": "us_equity",
+            "qty": 100.0, "qty_available": 100.0,
+            "avg_entry_price": 120.0, "current_price": 130.0,
+            "market_value": 13000.0, "cost_basis": 12000.0,
+            "unrealized_pl": 1000.0, "unrealized_plpc": 0.0833,
+            "change_today": None, "side": "long", "weight": 0.128713,
+        }],
+    }
+
+
+def canned_trade(monkeypatch, *, state=None, open_orders=None, fail=False):
+    """Patch agent.trade.Trade with a canned double; returns the state dict
+    so tests can mutate it in place (TTL-cache assertions)."""
+    st = state if state is not None else _canned_state()
+    orders = list(open_orders or [])
+
+    class _FakeTrade:
+        def __init__(self, *a, **k):
+            if fail:
+                raise RuntimeError("trade creds not set on this host")
+
+        def state(self):
+            return copy.deepcopy(st)
+
+        def account(self):
+            return {"status": "ACTIVE", "cash": st["cash"],
+                    "equity": st["equity"], "paper": True}
+
+        def positions(self):
+            return copy.deepcopy(st["positions"])
+
+        def orders(self, status="open", limit=100, **k):
+            return copy.deepcopy(orders)
+
+    monkeypatch.setattr("agent.trade.Trade", _FakeTrade)
+    return st
+
+
+def _reset_desk_caches(desk_router):
+    desk_router._options_allow = None
+    desk_router._options_bucket.reset()
+    desk_router._session_cache = (0.0, None)
+    desk_router._session_refreshing = False
+    desk_router._portfolio_cache = None
+    desk_router._open_orders_cache = None
+    desk_router._outcomes_live_cache = None
 
 
 @pytest.fixture()
@@ -13,12 +83,13 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path/'desk.db'}")
     monkeypatch.setenv("EDGEFINDER_SCHEDULER_ENABLED", "false")
 
+    # Importing the router first registers the era1_* archive table shapes in
+    # the shared metadata, so create_all builds them (empty = pre-cutover).
+    import dashboard.routers.desk as desk_router
     from edgefinder.db.engine import Base, get_engine
     import edgefinder.db.models  # noqa: F401
     import agent.models  # noqa: F401
-    from agent.models import (
-        ACCOUNT, DeskDecision, DeskEquity, DeskPosition, DeskThinking, DeskTrade,
-    )
+    from agent.models import ACCOUNT, DeskDecision, DeskThinking
     import agent.data as agent_data
     import dashboard.dependencies as deps
 
@@ -26,30 +97,37 @@ def client(tmp_path, monkeypatch):
     Base.metadata.create_all(engine)
     agent_data._session_factory = None
     deps._engine = deps._session_factory = None
+    _reset_desk_caches(desk_router)
 
-    # Reset the desk router's in-process caches (options allowlist, options
-    # rate-limit bucket, market-session cache + single-flight flag, portfolio
-    # TTL cache) — module state must not leak a previous test's DB view into
-    # this one.
-    import dashboard.routers.desk as desk_router
-    desk_router._options_allow = None
-    desk_router._options_bucket.reset()
-    desk_router._session_cache = (0.0, None)
-    desk_router._session_refreshing = False
-    desk_router._portfolio_cache = None
+    # The canned paper account: NVDA 100 @ 120, marked 130.
+    canned_trade(monkeypatch)
 
-    now = datetime.now(timezone.utc)
+    from agent.store import get_store
+    store = get_store()
+    # Era-2 fill in the desk_orders mirror (the source for /trades, missed
+    # dividends, and era-2 inception).
+    store.insert("desk_orders", {
+        "account": ACCOUNT, "run_id": "R1", "seq": 1,
+        "client_order_id": "R1:01", "alpaca_order_id": "ord-1",
+        "symbol": "NVDA", "asset_class": "us_equity", "side": "buy",
+        "kind": "entry", "order_type": "market", "tif": "day",
+        "order_class": "simple", "qty": 100.0, "status": "filled",
+        "filled_qty": 100.0, "filled_avg_price": 120.0,
+        "submitted_at": FILL_TS, "filled_at": FILL_TS}, returning=False)
+    # One nightly equity snapshot (era 2).
+    store.insert("desk_portfolio_history", {
+        "account": ACCOUNT,
+        "snap_date": (NOW - timedelta(days=1)).date().isoformat(),
+        "equity": 100500.0, "cash": 88000.0, "profit_loss": 500.0,
+        "base_value": 100000.0,
+        "positions": {"NVDA": {"qty": 100.0, "avg_entry_price": 120.0}}},
+        returning=False)
+
     sess = agent_data.session_factory()()
     try:
-        sess.add(DeskTrade(account=ACCOUNT, run_id="R1", symbol="NVDA", side="BUY",
-                           shares=100, price=120.0, dollars=12000.0, ts=now))
-        sess.add(DeskPosition(account=ACCOUNT, symbol="NVDA", shares=100,
-                              avg_price=120.0, last_price=130.0, opened_at=now, marked_at=now))
-        sess.add(DeskEquity(account=ACCOUNT, ts=now, cash=88000.0, positions_value=13000.0,
-                            equity=101000.0, return_pct=1.0))
         sess.add(DeskThinking(account=ACCOUNT, run_id="R1", phase="research",
-                              text="NVDA momentum strong", ts=now))
-        sess.add(DeskDecision(account=ACCOUNT, run_id="R1", ts=now, regime="risk_on",
+                              text="NVDA momentum strong", ts=NOW))
+        sess.add(DeskDecision(account=ACCOUNT, run_id="R1", ts=NOW, regime="risk_on",
                               summary="added NVDA", target_weights={"NVDA": 0.13},
                               picks=[{"symbol": "NVDA", "action": "buy", "why_now": "breakout"}],
                               watchlist=[{"symbol": "AAPL", "note": "near trigger"}],
@@ -71,10 +149,11 @@ def test_desk_page_renders(client):
 
 
 def test_desk_page_information_architecture(client):
-    """v9.5 IA: two zones only (reasoning, learning) — the Markets zone is
-    gone (live prices fold into the hero's index chips, movers/options/
-    dividends live on the chart page). Lab and Notebook carry view toggles
-    that absorbed the old backtests/journal cards."""
+    """v10 IA: two zones (reasoning, learning); the tripwire "watching" card
+    is gone (tripwires died with the streamer's dispatcher) and its slot now
+    holds the open-orders / resting-protection card; the hero zone carries
+    the V4 honesty strip (book of record, no market impact, missed
+    dividends)."""
     import re
 
     html = client.get("/desk").text
@@ -84,17 +163,22 @@ def test_desk_page_information_architecture(client):
     assert reasoning < learning
     assert 'id="zone-markets"' not in html
 
-    assert 'id="desk-watch"' in html            # the attention card
-    assert 'id="desk-lab"' in html              # the lab leaderboard
-    assert 'id="desk-hero-indices"' in html     # live SPY/QQQ/IWM chips
-    assert 'id="desk-lab-seg"' in html          # board / recent-tests views
-    assert 'id="desk-wiki-seg"' in html         # lessons / diary views
+    assert 'id="desk-watch"' not in html         # tripwire card retired
+    assert 'id="desk-orders"' in html            # open orders & protection
+    assert 'id="desk-honesty"' in html           # the V4 honesty strip
+    assert 'id="desk-honesty-missed"' in html    # missed-dividends counter
+    assert "Alpaca paper account" in html        # book-of-record disclosure
+    assert 'id="desk-lab"' in html               # the lab leaderboard
+    assert 'id="desk-hero-indices"' in html      # live SPY/QQQ/IWM chips
+    assert 'id="desk-lab-seg"' in html           # board / recent-tests views
+    assert 'id="desk-wiki-seg"' in html          # lessons / diary views
     assert 'data-zone="desk-hero">Overview' in html
     assert 'data-zone="zone-markets"' not in html
+    assert 'id="topnav-indices"' not in html     # dead slot removed
 
     # Retired standalone cards must be fully gone, not just hidden.
     for key in ("tape", "movers", "options", "dividends", "backtests",
-                "journal"):
+                "journal", "watch"):
         assert f'data-collapse-key="{key}"' not in html, f"{key} card lingers"
 
     def card_tag(key):
@@ -105,18 +189,163 @@ def test_desk_page_information_architecture(client):
 
     # Receipts ship collapsed; the reasoning/learning core is open.
     assert 'data-collapsed="1"' in card_tag("fills")
-    for key in ("watch", "decision", "thinking", "lab", "wiki"):
+    for key in ("orders", "decision", "thinking", "lab", "wiki"):
         assert 'data-collapsed="1"' not in card_tag(key), f"{key} should be open"
+
+
+# ── /portfolio: the Alpaca paper account, canned + degraded ──
 
 
 def test_portfolio_endpoint(client):
     r = client.get("/api/desk/portfolio")
     assert r.status_code == 200
     body = r.json()
+    assert body["available"] is True
     assert body["positions"][0]["symbol"] == "NVDA"
-    # cash = 100k start - 12k buy; equity = cash + marked positions value
-    assert abs(body["cash"] - 88000.0) < 0.01
-    assert body["equity"] == pytest.approx(88000.0 + 100 * 130.0, abs=0.01)
+    assert body["positions"][0]["qty"] == 100.0
+    assert body["positions"][0]["avg_entry_price"] == 120.0
+    assert body["positions"][0]["current_price"] == 130.0
+    assert body["positions"][0]["unrealized_pl"] == 1000.0
+    assert body["cash"] == 88000.0
+    assert body["equity"] == 101000.0
+    assert body["buying_power"] == 88000.0
+    assert body["total_pnl"] == 1000.0
+    assert body["total_return_pct"] == 1.0
+    assert body["vs_spy"] is None  # no SPY bars seeded → too young to benchmark
+
+
+def test_portfolio_degraded_without_creds(client, monkeypatch):
+    """No trade creds (or a dead broker) → available:false + empty positions,
+    never a 500 and never a fake book."""
+    import dashboard.routers.desk as desk_router
+
+    canned_trade(monkeypatch, fail=True)
+    desk_router._portfolio_cache = None
+    body = client.get("/api/desk/portfolio").json()
+    assert body["available"] is False
+    assert body["positions"] == []
+    assert body["equity"] is None and body["cash"] is None
+    assert "unreachable" in body["note"]
+
+
+def test_portfolio_vs_spy_price_return(client, monkeypatch):
+    """vs_spy is SYMMETRIC PRICE RETURN from the all-time inception (charter
+    V4): dividends must NOT back-adjust the benchmark — the paper book never
+    receives them."""
+    from datetime import date
+
+    import agent.data as agent_data
+    import dashboard.routers.desk as desk_router
+    from edgefinder.db.models import DailyBar, DividendRecord
+
+    incep = date.fromisoformat(FILL_TS[:10])
+    sess = agent_data.session_factory()()
+    try:
+        for d, px in ((incep - timedelta(days=2), 600.0),
+                      (incep + timedelta(days=5), 606.0),
+                      (date.today(), 612.0)):
+            sess.add(DailyBar(symbol="SPY", date=d, open=px, high=px, low=px,
+                              close=px, volume=1e6, source="test",
+                              created_at=NOW))
+        # A SPY dividend inside the window: a TOTAL-return series would
+        # back-adjust the 600 baseline and report > 2% — price return must not.
+        sess.add(DividendRecord(symbol="SPY", ex_date=incep + timedelta(days=1),
+                                cash_amount=6.0))
+        sess.commit()
+    finally:
+        sess.close()
+
+    desk_router._portfolio_cache = None
+    body = client.get("/api/desk/portfolio").json()
+    vs = body["vs_spy"]
+    assert vs is not None
+    assert vs["basis"] == "price_return"
+    assert vs["spy_return_pct"] == 2.0          # 600 → 612, dividend ignored
+    assert vs["alpha_pct"] == pytest.approx(body["total_return_pct"] - 2.0)
+
+
+def test_portfolio_response_is_ttl_cached(client, monkeypatch):
+    import dashboard.routers.desk as desk_router
+
+    st = canned_trade(monkeypatch)
+    desk_router._portfolio_cache = None
+    first = client.get("/api/desk/portfolio").json()
+
+    # the broker book moves...
+    st["cash"] = 50000.0
+    st["equity"] = 99000.0
+
+    # ...but inside the TTL the cached body still serves (bounded staleness)
+    assert client.get("/api/desk/portfolio").json() == first
+    # cache expiry (simulated) → the fresh broker read shows through
+    desk_router._portfolio_cache = None
+    fresh = client.get("/api/desk/portfolio").json()
+    assert fresh["cash"] == 50000.0 and fresh["equity"] == 99000.0
+
+
+# ── /equity: the stitched era curve ──
+
+
+def test_equity_basic_shape_and_live_tip(client):
+    body = client.get("/api/desk/equity").json()
+    pts = body["points"]
+    assert pts, "expected snapshot + live tip points"
+    # era-2 nightly snapshot then the live tip off the cached account read
+    assert pts[0]["era"] == 2 and pts[0]["equity"] == 100500.0
+    assert pts[-1]["equity"] == 101000.0 and pts[-1].get("live") is True
+    # era-2 inception is computed from the first mirrored fill
+    assert body["era2_inception"] == FILL_TS[:10] or body["era2_inception"] \
+        == (datetime.fromisoformat(FILL_TS) - timedelta(days=1)).date().isoformat()
+
+
+def test_equity_era_stitch_and_spy_overlay(client):
+    """Era-1 archive points come first (when the frozen tables exist), each
+    point is era-tagged, and the SPY overlay is PRICE return rebased at the
+    ALL-TIME inception (the era-1 book's first fill)."""
+    from datetime import date
+
+    import agent.data as agent_data
+    from agent.models import ACCOUNT
+    from agent.store import get_store
+    from edgefinder.db.models import DailyBar
+
+    store = get_store()
+    d1 = NOW - timedelta(days=30)
+    store.insert("era1_trades", {
+        "account": ACCOUNT, "ts": d1.replace(tzinfo=None), "run_id": "E1",
+        "symbol": "XYZ", "side": "BUY", "shares": 10.0, "price": 100.0,
+        "dollars": 1000.0, "rationale": "era-1 entry",
+        "fill_quote": {"bid": 99.9, "ask": 100.1}}, returning=False)
+    for i, eq in ((30, 100000.0), (29, 100100.0)):
+        store.insert("era1_equity", {
+            "account": ACCOUNT, "ts": (NOW - timedelta(days=i)).replace(tzinfo=None),
+            "cash": 99000.0, "positions_value": eq - 99000.0, "equity": eq,
+            "return_pct": 0.0}, returning=False)
+
+    incep = (d1.date())
+    sess = agent_data.session_factory()()
+    try:
+        for d, px in ((incep - timedelta(days=1), 600.0),
+                      (date.today(), 612.0)):
+            sess.add(DailyBar(symbol="SPY", date=d, open=px, high=px, low=px,
+                              close=px, volume=1e6, source="test",
+                              created_at=NOW))
+        sess.commit()
+    finally:
+        sess.close()
+
+    body = client.get("/api/desk/equity?with_spy=1").json()
+    pts = body["points"]
+    eras = [p["era"] for p in pts]
+    assert eras == sorted(eras), "era-1 points must precede era-2"
+    assert eras[0] == 1 and eras[-1] == 2
+    assert pts[0]["equity"] == 100000.0
+    assert body["era2_inception"] is not None
+    assert body["spy_basis"] == "price_return"
+    # rebased at the ALL-TIME (era-1) inception: 600 → 612 = +2%
+    assert body["spy_inception"] in (str(incep), str(incep - timedelta(days=1)),
+                                     str(incep + timedelta(days=1)))
+    assert body["spy"][-1]["pct"] == 2.0
 
 
 def test_decision_and_thinking(client):
@@ -124,8 +353,6 @@ def test_decision_and_thinking(client):
     assert d["exists"] and d["picks"][0]["symbol"] == "NVDA"
     t = client.get("/api/desk/thinking").json()
     assert t["run_id"] == "R1" and t["lines"]
-    e = client.get("/api/desk/equity").json()
-    assert e and e[-1]["equity"] == 101000.0
 
 
 def test_whatsnew_empty_then_announced(client):
@@ -157,14 +384,83 @@ def test_announce_validates_kind(client):
         announce("   ")  # blank title rejected
 
 
-def test_broker_health_no_keys(client, monkeypatch):
+# ── /broker-health: paper account + clock + last reconcile ──
+
+
+def test_broker_health_canned_account(client, monkeypatch):
     for v in ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "ALPACA_API_KEY", "ALPACA_API_SECRET"):
         monkeypatch.delenv(v, raising=False)
     from agent import broker as _b
     monkeypatch.setattr(_b.settings, "alpaca_api_key", "", raising=False)
     monkeypatch.setattr(_b.settings, "alpaca_api_secret", "", raising=False)
     body = client.get("/api/desk/broker-health").json()
-    assert body["keys_present"] is False and "keys" in body["error"]
+    assert body["paper_account"]["available"] is True
+    assert body["paper_account"]["status"] == "ACTIVE"
+    assert body["paper_account"]["equity"] == 101000.0
+    assert body["clock"] is None                 # no data keys → no clock read
+    assert body["last_reconcile"] is not None    # desk_orders mirror row exists
+
+
+def test_broker_health_degraded(client, monkeypatch):
+    import dashboard.routers.desk as desk_router  # noqa: F401
+
+    canned_trade(monkeypatch, fail=True)
+    from agent import broker as _b
+    monkeypatch.setattr(_b.settings, "alpaca_api_key", "", raising=False)
+    monkeypatch.setattr(_b.settings, "alpaca_api_secret", "", raising=False)
+    body = client.get("/api/desk/broker-health").json()
+    assert body["paper_account"]["available"] is False
+    assert "RuntimeError" in body["paper_account"]["error"]
+
+
+# ── /open-orders: resting protection ──
+
+
+def test_open_orders_rows(client, monkeypatch):
+    import dashboard.routers.desk as desk_router
+
+    canned_trade(monkeypatch, open_orders=[
+        {"alpaca_order_id": "o-stop", "symbol": "NVDA", "side": "sell",
+         "order_type": "stop", "tif": "gtc", "stop_price": 100.0,
+         "limit_price": None, "qty": 100.0, "filled_qty": 0.0,
+         "status": "new",
+         "submitted_at": (NOW - timedelta(days=85)).isoformat()},
+        {"alpaca_order_id": "o-lim", "symbol": "AAPL", "side": "buy",
+         "order_type": "limit", "tif": "day", "stop_price": None,
+         "limit_price": 180.0, "qty": 10.0, "filled_qty": 0.0,
+         "status": "new",
+         "submitted_at": (NOW - timedelta(days=1)).isoformat()},
+    ])
+    desk_router._open_orders_cache = None
+    body = client.get("/api/desk/open-orders").json()
+    assert body["available"] is True
+    rows = body["orders"]
+    assert len(rows) == 2
+    # stops sort first (the protection is the headline)
+    stop = rows[0]
+    assert stop["kind"] == "stop" and stop["symbol"] == "NVDA"
+    assert stop["stop_price"] == 100.0 and stop["tif"] == "gtc"
+    assert stop["age_days"] == 85                # ≥80 → the UI badges 90d expiry
+    assert stop["alpaca_order_id"] == "o-stop"
+    lim = rows[1]
+    assert lim["kind"] == "limit" and lim["limit_price"] == 180.0
+    assert lim["age_days"] in (0, 1)
+
+
+def test_open_orders_degraded(client, monkeypatch):
+    import dashboard.routers.desk as desk_router
+
+    canned_trade(monkeypatch, fail=True)
+    desk_router._open_orders_cache = None
+    body = client.get("/api/desk/open-orders").json()
+    assert body["available"] is False and body["orders"] == []
+
+
+# ── the watch endpoint is gone (tripwires died with the dispatcher) ──
+
+
+def test_watch_endpoint_removed(client):
+    assert client.get("/api/desk/watch").status_code == 404
 
 
 def test_desk_movers(client, monkeypatch):
@@ -206,7 +502,9 @@ def test_desk_movers(client, monkeypatch):
 
 
 def test_desk_holding_stats(client):
-    """Holding-stats returns day change, 52-week range, and a spark series."""
+    """Holding-stats sources held names from the cached Alpaca positions
+    (NVDA in the canned account) and returns day change, 52-week range, and
+    a spark series."""
     from datetime import date, datetime, timedelta, timezone
 
     import agent.data as agent_data
@@ -215,7 +513,7 @@ def test_desk_holding_stats(client):
     now = datetime.now(timezone.utc)
     sess = agent_data.session_factory()()
     try:
-        # NVDA is the seeded holding; give it 10 rising sessions
+        # NVDA is the canned holding; give it 10 rising sessions
         base = date(2026, 6, 24)
         for i in range(10):
             px = 100.0 + i  # 100 → 109, last-session change 108→109
@@ -234,15 +532,27 @@ def test_desk_holding_stats(client):
     assert s["spark"][0] == 100.0 and s["spark"][-1] == 109.0
 
 
+def test_desk_holding_stats_degraded_account(client, monkeypatch):
+    """Holdings unknown (no broker) must mean an EMPTY panel, not a 500."""
+    import dashboard.routers.desk as desk_router
+
+    canned_trade(monkeypatch, fail=True)
+    desk_router._portfolio_cache = None
+    d = client.get("/api/desk/holding-stats").json()
+    assert d == {"as_of": None, "symbols": {}}
+
+
 def test_desk_dividends(client):
-    """Dividend calendar returns last/next ex-dates for dividend-paying holdings."""
+    """Dividend calendar returns last/next ex-dates for dividend-paying
+    holdings (held = the canned Alpaca positions), plus the V4
+    missed-dividends counter."""
     from datetime import date
 
     import agent.data as agent_data
     from edgefinder.db.models import DividendRecord
 
     sess = agent_data.session_factory()()
-    try:  # NVDA is the seeded holding; 2099 is unambiguously "upcoming"
+    try:  # NVDA is the canned holding; 2099 is unambiguously "upcoming"
         for ex, amt in [(date(2026, 3, 5), 0.10), (date(2026, 6, 5), 0.10),
                         (date(2099, 9, 5), 0.12)]:
             sess.add(DividendRecord(symbol="NVDA", ex_date=ex, cash_amount=amt))
@@ -258,28 +568,73 @@ def test_desk_dividends(client):
     # trailing = PAST ex-dates only — the future declared 0.12 must not
     # inflate a figure labelled "trailing" (v9.13.0 fix)
     assert nvda["ttm_amount"] == round(0.10 + 0.10, 4)
+    # both seeded ex-dates precede the first era-2 fill → nothing missed yet
+    md = d["missed_dividends"]
+    assert md["total"] == 0.0 and md["by_symbol"] == {}
+    assert "no dividends" in md["note"]
 
 
-def test_desk_trades_include_fill_quote(client):
-    """The trades endpoint surfaces the stamped live bid/ask receipt."""
-    from datetime import datetime, timezone
+def test_missed_dividends_counter(client):
+    """Shares held STRICTLY BEFORE an ex-date inside era 2 earn the missed
+    estimate: the fixture's 100 NVDA shares filled 10 days ago × a $0.25
+    dividend that went ex 5 days ago = $25.00 foregone."""
+    from datetime import date, timedelta as td
 
     import agent.data as agent_data
-    from agent.models import ACCOUNT, DeskTrade
+    from edgefinder.db.models import DividendRecord
 
     sess = agent_data.session_factory()()
     try:
-        sess.add(DeskTrade(account=ACCOUNT, run_id="R2", symbol="LLY", side="BUY",
-                           shares=2.0, price=1226.46, dollars=2452.92,
-                           ts=datetime.now(timezone.utc),
-                           fill_quote={"bid": 1224.96, "ask": 1226.34, "mid": 1225.65}))
+        sess.add(DividendRecord(symbol="NVDA",
+                                ex_date=date.today() - td(days=5),
+                                cash_amount=0.25))
         sess.commit()
     finally:
         sess.close()
 
+    d = client.get("/api/desk/dividends").json()
+    md = d["missed_dividends"]
+    assert md["total"] == pytest.approx(25.0)
+    assert md["by_symbol"] == {"NVDA": 25.0}
+
+
+# ── /trades: era-tagged fills ──
+
+
+def test_desk_trades_era2_from_mirror(client):
+    rows = client.get("/api/desk/trades?limit=20").json()
+    assert isinstance(rows, list)
+    nvda = next(r for r in rows if r["symbol"] == "NVDA")
+    assert nvda["era"] == 2
+    assert nvda["side"] == "BUY" and nvda["shares"] == 100.0
+    assert nvda["price"] == 120.0 and nvda["dollars"] == 12000.0
+    assert nvda["run_id"] == "R1" and nvda["kind"] == "entry"
+    assert nvda["rationale"] is None            # era-2 reasoning lives on the run
+    assert nvda["fill_quote"] is None
+
+
+def test_desk_trades_include_era1_receipts(client):
+    """Era-1 rows (frozen archive) keep their original rationale + stamped
+    live bid/ask receipt, era-tagged next to the era-2 broker fills."""
+    from agent.models import ACCOUNT
+    from agent.store import get_store
+
+    get_store().insert("era1_trades", {
+        "account": ACCOUNT, "run_id": "R0", "symbol": "LLY", "side": "BUY",
+        "shares": 2.0, "price": 1226.46, "dollars": 2452.92,
+        "rationale": "era-1 conviction add",
+        "ts": (NOW - timedelta(days=40)).replace(tzinfo=None),
+        "fill_quote": {"bid": 1224.96, "ask": 1226.34, "mid": 1225.65}},
+        returning=False)
+
     rows = client.get("/api/desk/trades?limit=20").json()
     lly = next(r for r in rows if r["symbol"] == "LLY")
+    assert lly["era"] == 1
     assert lly["fill_quote"]["bid"] == 1224.96 and lly["fill_quote"]["ask"] == 1226.34
+    assert lly["rationale"] == "era-1 conviction add"
+    # newest first: the era-2 NVDA fill (10d ago) precedes the 40d-old era-1 row
+    syms = [r["symbol"] for r in rows]
+    assert syms.index("NVDA") < syms.index("LLY")
 
 
 def test_wiki_endpoint_empty_and_seeded(client):
@@ -308,79 +663,7 @@ def test_wiki_order_covers_all_six_slugs(client):
     assert [p["slug"] for p in body["pages"]] == list(WIKI_SLUGS)
 
 
-# ── Phase E: one book — /portfolio is ledger.state(), not a re-derivation ──
-
-
-def test_portfolio_matches_ledger_state(client):
-    from agent import ledger
-    from agent.store import get_store
-
-    st = ledger.state(get_store())
-    pf = client.get("/api/desk/portfolio").json()
-    assert pf["cash"] == st["cash"]
-    assert pf["equity"] == st["equity"]
-    assert pf["positions_value"] == st["positions_value"]
-    assert pf["total_pnl"] == st["total_pnl"]
-    assert pf["total_return_pct"] == round(st["total_return_pct"], 2)
-    by_sym = {p["symbol"]: p for p in pf["positions"]}
-    for row in st["positions"]:
-        got = by_sym[row["symbol"]]
-        for k in ("shares", "avg_price", "last_price", "market_value",
-                  "cost_basis", "unrealized_pnl", "weight"):
-            assert got[k] == row[k], (row["symbol"], k)
-    # page-only fields still ride along; mark_meta is additive
-    assert "opened_at" in pf["positions"][0] and "marked_at" in pf["positions"][0]
-    assert "mark_meta" in pf
-    assert pf["vs_spy"] is None  # no SPY bars seeded → too young to benchmark
-
-
-# ── Phase E: /equity mark provenance + SPY overlay ──
-
-
-def test_equity_degraded_points_and_spy_overlay(client):
-    from datetime import date, datetime, timedelta, timezone
-
-    import agent.data as agent_data
-    from agent.ledger import _et_date
-    from agent.models import ACCOUNT, DeskEquity
-    from edgefinder.db.models import DailyBar
-
-    now = datetime.now(timezone.utc)
-    sess = agent_data.session_factory()()
-    try:
-        sess.add(DeskEquity(
-            account=ACCOUNT, ts=now + timedelta(minutes=5), cash=88000.0,
-            positions_value=12000.0, equity=100000.0, return_pct=0.0,
-            mark_meta={"sources": {"live": 0, "close": 0, "cost": 1},
-                       "cost_marked": ["NVDA"], "cost_marked_value_pct": 100.0,
-                       "degraded": True}))
-        # SPY closes: baseline strictly before inception, endpoint on it
-        incep = date.fromisoformat(_et_date(now.replace(tzinfo=None)))
-        for d, px in ((incep - timedelta(days=5), 600.0), (incep, 612.0)):
-            sess.add(DailyBar(symbol="SPY", date=d, open=px, high=px, low=px,
-                              close=px, volume=1e6, source="test",
-                              created_at=now))
-        sess.commit()
-    finally:
-        sess.close()
-
-    # bare shape stays a list; the degraded point carries the flags additively
-    series = client.get("/api/desk/equity").json()
-    assert isinstance(series, list)
-    assert "degraded" not in series[0]           # the clean fixture point
-    last = series[-1]
-    assert last["degraded"] is True
-    assert last["cost_marked_value_pct"] == 100.0
-    assert last["cost_marked"] == ["NVDA"]
-
-    # with_spy=1: dict shape, TR SPY rebased to inception = 0
-    body = client.get("/api/desk/equity?with_spy=1").json()
-    assert [p["equity"] for p in body["points"]] == [p["equity"] for p in series]
-    assert body["spy"] == [{"date": str(incep), "pct": 2.0}]
-    assert body["spy_basis"] == "total_return"
-
-
-# ── Phase E: /outcomes — the predictions scoreboard ──
+# ── /outcomes — the predictions scoreboard ──
 
 
 def _seed_outcomes(client):
@@ -433,13 +716,16 @@ def test_outcomes_scoreboard(client):
     assert xyz["kill"] == "closes below 90"
     assert xyz["action"] == "buy" and xyz["decision_ts"]
     assert xyz["kill_level"] == 90.0 and xyz["kill_breached"] is False
-    assert xyz["sessions_elapsed"] is None  # no SPY bars seeded
+    # XYZ has no mirror fills/positions → the stored grade facts serve as-is
+    assert xyz["since_pct"] == 4.0 and xyz["alpha_pct"] == 3.0
     nvda = rows[1]
     assert nvda["exit_kind"] == "hardstop" and nvda["verdict"] == "TRUE"
     assert nvda["verdict_note"] == "called it"
     assert nvda["realized_pnl"] == 600.0
     # R1's fixture pick carries no prediction — surfaced as null, not invented
     assert nvda["prediction"] is None
+    # grade's own degraded bool passes through
+    assert nvda["degraded"] is False
 
     only_open = client.get("/api/desk/outcomes?status=open").json()["rows"]
     assert [r["symbol"] for r in only_open] == ["XYZ"]
@@ -448,7 +734,44 @@ def test_outcomes_scoreboard(client):
     assert client.get("/api/desk/outcomes?limit=999").status_code == 422
 
 
-# ── Phase E: /decisions — the archive with paging ──
+def test_outcomes_open_rows_overlay_live_marks(client, monkeypatch):
+    """An OPEN row whose pick has mirror fills + a live Alpaca position gets
+    fresh since/mark facts from agent.grade.outcomes (the stored row's stale
+    numbers move between grade runs); verdict-side columns never change."""
+    import dashboard.routers.desk as desk_router
+
+    _seed_outcomes(client)
+    from agent.models import ACCOUNT
+
+    # Point the R9/XYZ open row at the mirror: give XYZ a fill + position.
+    from agent.store import get_store
+    get_store().insert("desk_orders", {
+        "account": ACCOUNT, "run_id": "R9", "seq": 1,
+        "client_order_id": "R9:01", "alpaca_order_id": "ord-xyz",
+        "symbol": "XYZ", "asset_class": "us_equity", "side": "buy",
+        "kind": "entry", "order_type": "market", "tif": "day",
+        "order_class": "simple", "qty": 10.0, "status": "filled",
+        "filled_qty": 10.0, "filled_avg_price": 100.0,
+        "submitted_at": FILL_TS, "filled_at": FILL_TS}, returning=False)
+    st = _canned_state()
+    st["positions"].append({
+        "symbol": "XYZ", "asset_class": "us_equity", "qty": 10.0,
+        "qty_available": 10.0, "avg_entry_price": 100.0,
+        "current_price": 110.0, "market_value": 1100.0, "cost_basis": 1000.0,
+        "unrealized_pl": 100.0, "unrealized_plpc": 0.1, "change_today": None,
+        "side": "long", "weight": 0.01})
+    canned_trade(monkeypatch, state=st)
+    desk_router._portfolio_cache = None
+    desk_router._outcomes_live_cache = None
+
+    rows = client.get("/api/desk/outcomes?status=open").json()["rows"]
+    xyz = next(r for r in rows if r["symbol"] == "XYZ")
+    assert xyz["since_pct"] == 10.0          # live 110 vs 100 entry, not the stale 4.0
+    assert xyz["mark_px"] == 110.0
+    assert xyz["kill_level"] == 90.0         # stored machine facts untouched
+
+
+# ── /decisions — the archive with paging ──
 
 
 def test_decisions_archive_paging(client):
@@ -487,38 +810,16 @@ def test_decisions_archive_paging(client):
     assert client.get("/api/desk/decisions?before=not-a-ts").status_code == 422
 
 
-# ── Phase E: /data-health carries the latest mark provenance ──
+# ── /data-health: the marks block is dead (mark_meta died with the ledger) ──
 
 
-def test_data_health_marks_section(client):
-    from datetime import datetime, timedelta, timezone
-
-    import agent.data as agent_data
-    from agent.models import ACCOUNT, DeskEquity
-
+def test_data_health_has_no_marks_block(client):
     body = client.get("/api/desk/data-health").json()
-    assert body["marks"] is None            # fixture snapshot has no mark_meta
-
-    sess = agent_data.session_factory()()
-    try:
-        sess.add(DeskEquity(
-            account=ACCOUNT, ts=datetime.now(timezone.utc) + timedelta(minutes=5),
-            cash=88000.0, positions_value=12000.0, equity=100000.0,
-            return_pct=0.0,
-            mark_meta={"sources": {"live": 0, "close": 0, "cost": 1},
-                       "cost_marked": ["NVDA"], "cost_marked_value_pct": 100.0,
-                       "degraded": True}))
-        sess.commit()
-    finally:
-        sess.close()
-
-    body = client.get("/api/desk/data-health").json()
-    assert body["marks"]["degraded"] is True
-    assert body["marks"]["cost_marked"] == ["NVDA"]
-    assert body["marks"]["cost_marked_value_pct"] == 100.0
+    assert "status" in body
+    assert "marks" not in body
 
 
-# ── Phase E: options endpoints are allowlisted + rate-limited ──
+# ── options endpoints are allowlisted + rate-limited ──
 
 
 def test_options_allowlist_and_rate_limit(client, monkeypatch):
@@ -536,7 +837,8 @@ def test_options_allowlist_and_rate_limit(client, monkeypatch):
     desk_router._options_allow = None
     desk_router._options_bucket.reset()
 
-    # held position (NVDA) and the latest decision's watchlist (AAPL) → allowed
+    # held position (NVDA, canned Alpaca account) and the latest decision's
+    # watchlist (AAPL) → allowed
     r = client.get("/api/desk/options/NVDA")
     assert r.status_code == 200 and r.json()["available"] is False
     assert client.get("/api/desk/options/AAPL").status_code == 200
@@ -600,7 +902,7 @@ def test_options_rate_limit_key_ignores_spoofed_xff_head(client, monkeypatch):
         desk_router._options_bucket = old_bucket
 
 
-# ── E4 follow-up: the SSE session cache is single-flight + time-bounded ──
+# ── the SSE session cache is single-flight + time-bounded ──
 
 
 def test_market_session_single_flight(monkeypatch):
@@ -664,43 +966,12 @@ def test_market_session_timeout_backs_off(monkeypatch):
     assert time.time() - ts < desk_router._SESSION_TTL
 
 
-# ── /portfolio response cache: bounded full-ledger-scan frequency ──
-
-
-def test_portfolio_response_is_ttl_cached(client):
-    import dashboard.routers.desk as desk_router
-
-    first = client.get("/api/desk/portfolio").json()
-
-    # a new fill lands...
-    import agent.data as agent_data
-    from agent.models import ACCOUNT, DeskTrade
-    sess = agent_data.session_factory()()
-    try:
-        sess.add(DeskTrade(account=ACCOUNT, run_id="R9", symbol="AMD",
-                           side="BUY", shares=10, price=100.0, dollars=1000.0,
-                           ts=datetime.now(timezone.utc)))
-        sess.commit()
-    finally:
-        sess.close()
-
-    # ...but inside the TTL the cached body still serves (bounded staleness)
-    assert client.get("/api/desk/portfolio").json() == first
-    # cache expiry (simulated) → the fresh ledger scan sees the fill
-    desk_router._portfolio_cache = None
-    fresh = client.get("/api/desk/portfolio").json()
-    assert fresh["cash"] == pytest.approx(first["cash"] - 1000.0)
-
-
 def test_claims_and_proposals_endpoints(client):
     """The knowledge-layer projections: claims with tier authority visible,
     proposals with pending-first ordering. Read-only; no confidence floats."""
     from agent.knowledge import claim_add, proposal_add
-    import agent.data as agent_data
     from agent.store import get_store
-    import agent.store as store_mod
 
-    store_mod._store = None
     store = get_store()
     est = claim_add(store, kclass="risk_rule", tier="established",
                     statement="honor fired kills same-cycle",

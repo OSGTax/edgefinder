@@ -13,10 +13,10 @@ import { onThemeChange } from '../core/theme.js';
 
 let equityChart = null;
 let equitySeries = null;   // the recorded marks — history, never fabricated
-let spySeries = null;      // faint benchmark overlay: $100k in SPY (total return)
+let spySeries = null;      // faint benchmark overlay: SPY price return, rebased
 let liveTipSeries = null;  // ONE dashed connector: last real mark → live estimate
 let lastEquityData = [];
-let lastDegradedTimes = [];  // epoch secs of cost-marked points (warn markers)
+let cutoverTime = null;    // epoch sec of the first era-2 point (cutover marker)
 
 /* Live-marked book state — the source-of-truth "reference" portfolio (cash +
    position shares/avg + starting) and the running dict of live mids from the
@@ -112,7 +112,7 @@ function todayChange(series) {
   if (!series || series.length < 2) return null;
   const byDay = new Map();
   for (const p of series) {
-    if (p.t && p.equity != null) byDay.set(p.t.slice(0, 10), p.equity);
+    if (p.ts && p.equity != null) byDay.set(p.ts.slice(0, 10), p.equity);
   }
   const days = [...byDay.keys()].sort();
   if (days.length < 2) return null;
@@ -136,7 +136,7 @@ async function loadHeader() {
     }
   };
   try {
-    const [pf, strat, regime, eq, dataHealth] = await Promise.all([
+    const [pf, strat, regime, eqBody, dataHealth] = await Promise.all([
       apiGet('/api/desk/portfolio'),
       apiGet('/api/desk/strategy'),
       apiGet('/api/desk/regime').catch(() => null),
@@ -145,30 +145,43 @@ async function loadHeader() {
       // the pill exists to surface exactly the states where fetches fail.
       apiGet('/api/desk/data-health').catch(() => ({ status: 'unknown' })),
     ]);
+    const eq = (eqBody && eqBody.points) || [];
 
-    setText('desk-hero-account', fmtDollar(pf.equity));
-
-    const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
-    setText('desk-hero-pnl', fmtPnl(pf.total_pnl), pnlCls);
-    // *_pct fields are already percent numbers — fmtPct renders as given
-    // (the old /100 under-displayed every figure a hundredfold).
-    setText('desk-hero-return', fmtPct(pf.total_return_pct, { signed: true }), pnlCls);
-    if (pf.vs_spy && pf.vs_spy.alpha_pct != null) {
-      const a = pf.vs_spy.alpha_pct;
-      setText('desk-hero-alpha', fmtPct(a, { signed: true }),
-        a >= 0 ? 't-up' : 't-down');
-    } else {
+    // The paper account can be unreachable (no trade keys on this host,
+    // broker outage). Render the gap honestly — dashes, never fake numbers.
+    const degraded = pf && pf.available === false;
+    if (degraded) {
+      setText('desk-hero-account', '—');
+      setText('desk-hero-pnl', '—', '');
+      setText('desk-hero-return', '—', '');
       setText('desk-hero-alpha', '—', '');
-    }
-    setText('desk-hero-cash', fmtDollar(pf.cash));
-    setText('desk-hero-count', String((pf.positions || []).length));
+      setText('desk-hero-cash', '—');
+      setText('desk-hero-count', '—');
+    } else {
+      setText('desk-hero-account', fmtDollar(pf.equity));
 
-    // Cache the reference book so live tape ticks can fold in and refresh
-    // the hero + positions rows between routine runs. Seed lastEquity so the
-    // FIRST live tick (frozen → live) also flashes green/red — otherwise the
-    // biggest visible jump on load would happen silently.
-    deskLive.book = pf;
-    if (deskLive.lastEquity == null) deskLive.lastEquity = pf.equity;
+      const pnlCls = pf.total_pnl >= 0 ? 't-up' : 't-down';
+      setText('desk-hero-pnl', fmtPnl(pf.total_pnl), pnlCls);
+      // *_pct fields are already percent numbers — fmtPct renders as given
+      // (the old /100 under-displayed every figure a hundredfold).
+      setText('desk-hero-return', fmtPct(pf.total_return_pct, { signed: true }), pnlCls);
+      if (pf.vs_spy && pf.vs_spy.alpha_pct != null) {
+        const a = pf.vs_spy.alpha_pct;
+        setText('desk-hero-alpha', fmtPct(a, { signed: true }),
+          a >= 0 ? 't-up' : 't-down');
+      } else {
+        setText('desk-hero-alpha', '—', '');
+      }
+      setText('desk-hero-cash', fmtDollar(pf.cash));
+      setText('desk-hero-count', String((pf.positions || []).length));
+
+      // Cache the reference book so live tape ticks can fold in and refresh
+      // the hero + positions rows between routine runs. Seed lastEquity so the
+      // FIRST live tick (frozen → live) also flashes green/red — otherwise the
+      // biggest visible jump on load would happen silently.
+      deskLive.book = pf;
+      if (deskLive.lastEquity == null) deskLive.lastEquity = pf.equity;
+    }
 
     // Today's move — the change since the last completed session
     const todayEl = $('desk-hero-today');
@@ -196,6 +209,14 @@ async function loadHeader() {
     const chipsEl = $('desk-hero-chips');
     if (chipsEl) {
       clear(chipsEl);
+      if (degraded) {
+        chipsEl.append(h('span', {
+          class: 'c-pill warn',
+          title: 'The Alpaca paper account could not be reached from this '
+            + 'host — account figures are unavailable until it recovers.',
+          text: 'Account: unreachable',
+        }));
+      }
       if (strat && strat.current) {
         chipsEl.append(h('span', {
           class: 'c-pill info',
@@ -230,24 +251,6 @@ async function loadHeader() {
         const full = dataHealth.last_full_date
           ? ' (last full refresh: ' + dataHealth.last_full_date + ')' : '';
         chipsEl.append(h('span', { class: 'c-pill ' + cls, title: tip + full, text: label }));
-      }
-      // Degraded marks: the latest account valuation priced part of the book
-      // at COST (no live quote, no stored close) — fake-flat P&L must be
-      // visible, not buried in a JSON column.
-      if (dataHealth && dataHealth.marks && dataHealth.marks.degraded) {
-        const m = dataHealth.marks;
-        const who = (m.cost_marked && m.cost_marked.length)
-          ? ' Affected: ' + m.cost_marked.join(', ') + '.' : '';
-        const pct = m.cost_marked_value_pct != null
-          ? m.cost_marked_value_pct + '% of position value' : 'part of the book';
-        chipsEl.append(h('span', {
-          class: 'c-pill warn',
-          title: 'The latest account valuation priced ' + pct + ' at what it '
-            + 'PAID — no live quote or stored close was available, so profit/'
-            + 'loss on those names reads as flat until the data feed recovers.'
-            + who,
-          text: 'Marks: partly at cost',
-        }));
       }
     }
   } catch (err) {
@@ -291,21 +294,21 @@ function ensureEquityChart() {
     spySeries.applyOptions({ color: cc.benchmark });
     liveTipSeries.applyOptions({ color: cc.accent });
     // markers capture their color at set time (applyOptions can't restyle
-    // them) — re-set the degraded markers in the new palette
-    applyDegradedMarkers();
+    // them) — re-set the cutover marker in the new palette
+    applyCutoverMarker();
   });
 }
 
-/* Degraded marks (part of the book priced at cost basis) get a visible warn
-   marker on the exact affected points. A helper so the theme-change handler
-   can re-apply them in the new palette. */
-function applyDegradedMarkers() {
+/* The era cutover (hand-rolled ledger → Alpaca paper account) gets one
+   labeled marker on the first era-2 point. A helper so the theme-change
+   handler can re-apply it in the new palette. */
+function applyCutoverMarker() {
   if (!equitySeries) return;
   const c = colors();
-  equitySeries.setMarkers(lastDegradedTimes.map(time => ({
-    time, position: 'aboveBar', shape: 'circle', color: c.warn,
-    id: 'degraded:' + time, text: '',
-  })));
+  equitySeries.setMarkers(cutoverTime == null ? [] : [{
+    time: cutoverTime, position: 'aboveBar', shape: 'arrowDown',
+    color: c.warn, id: 'cutover', text: 'cutover',
+  }]);
 }
 
 async function loadEquity() {
@@ -318,30 +321,29 @@ async function loadEquity() {
       return;
     }
     ensureEquityChart();
-    // de-dup identical timestamps (chart requires strictly increasing time)
+    // ONE continuous series across both eras; de-dup identical timestamps
+    // (the chart requires strictly increasing time).
     const seen = new Set();
     const data = [];
-    const degraded = new Set();
+    let firstEra2 = null;
+    const hasEra1 = series.some(p => p.era === 1);
     for (const p of series) {
-      const time = toEpochSec(p.t);
-      if (!time) continue;
-      if (seen.has(time)) {
-        // same-second collision: the dropped point must not swallow a
-        // degraded flag — the kept point inherits it
-        if (p.degraded) degraded.add(time);
-        continue;
-      }
+      const time = toEpochSec(p.ts);
+      if (!time || seen.has(time)) continue;
       seen.add(time);
       data.push({ time, value: p.equity });
-      if (p.degraded) degraded.add(time);
+      if (firstEra2 == null && p.era === 2) firstEra2 = time;
     }
     lastEquityData = data;
-    lastDegradedTimes = [...degraded].sort((a, b) => a - b);
+    // The cutover marker only means something once BOTH eras are on the
+    // chart — a pure era-2 curve starts at the cutover by definition.
+    cutoverTime = (hasEra1 && body.era2_inception != null) ? firstEra2 : null;
     equitySeries.setData(data);
-    applyDegradedMarkers();
-    // SPY overlay: what $100k in SPY (dividends reinvested) since the
-    // account's first trade would be worth — same dollar axis, honest beta.
-    const start = (deskLive.book && deskLive.book.starting_capital) || 100000;
+    applyCutoverMarker();
+    // SPY overlay (price return — the paper book collects no dividends, so
+    // the benchmark drops its dividends too): the account's starting value
+    // ridden on SPY from the close before the first trade.
+    const start = data.length ? data[0].value : 100000;
     const spyData = (body.spy || [])
       .map(x => ({ time: toEpochSec(x.date),
                    value: Math.round(start * (1 + x.pct / 100) * 100) / 100 }))
@@ -353,12 +355,8 @@ async function loadEquity() {
     liveTipSeries.setData([]);
     equityChart.timeScale().fitContent();
     const last = series[series.length - 1];
-    metaEl.textContent = `${fmtDollar(last.equity)} · ${series.length} marks`
-      + (degraded.size ? ` · ${degraded.size} degraded` : '');
-    metaEl.title = degraded.size
-      ? 'Some snapshots priced part of the book at cost basis during a '
-        + 'quote/close outage — those points are flagged on the curve.'
-      : '';
+    metaEl.textContent = `${fmtDollar(last.equity)} · ${series.length} marks`;
+    metaEl.title = '';
   } catch (err) {
     metaEl.textContent = 'error loading curve';
   }
@@ -483,16 +481,16 @@ function equitiesTable(rows, stats) {
     h('tbody', {}, ...rows.map(p => h('tr', {},
       h('td', {}, h('a', { href: '/symbol/' + p.symbol, class: 'c-link', text: p.symbol }),
         divNote(p.symbol)),
-      h('td', { class: 'num', text: fmtNum(p.shares, 2) }),
-      h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
-      h('td', { class: 'num', text: fmtPrice(p.last_price) }),
+      h('td', { class: 'num', text: fmtNum(p.qty, 2) }),
+      h('td', { class: 'num', text: fmtPrice(p.avg_entry_price) }),
+      h('td', { class: 'num', text: fmtPrice(p.current_price) }),
       dayChangeCell(stats[p.symbol]),
       trendCell(stats[p.symbol]),
       h('td', { class: 'num', text: fmtDollar(p.market_value) }),
       // weight is a 0-1 fraction — scale to percent for display
       h('td', { class: 'num', text: fmtPct(p.weight * 100, { signed: false }) }),
-      h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
-        text: fmtPnl(p.unrealized_pnl) })))));
+      h('td', { class: 'num ' + (p.unrealized_pl >= 0 ? 't-up' : 't-down'),
+        text: fmtPnl(p.unrealized_pl) })))));
 }
 
 function optionsTable(rows) {
@@ -507,17 +505,17 @@ function optionsTable(rows) {
       h('th', { class: 'num', text: 'Gain / loss' }))),
     h('tbody', {}, ...rows.map(p => {
       const o = occParse(p.symbol);
-      const short = p.shares < 0;
+      const short = p.qty < 0;
       return h('tr', {},
         h('td', {}, h('a', { href: '/symbol/' + o.underlying, class: 'c-link', text: o.label })),
         h('td', {}, pill(short ? 'SHORT' : 'LONG', short ? 'warn' : 'info')),
-        h('td', { class: 'num', text: fmtNum(Math.abs(p.shares), 0) }),
+        h('td', { class: 'num', text: fmtNum(Math.abs(p.qty), 0) }),
         h('td', { class: 'num ' + (o.dte <= 5 ? 't-down' : ''), text: String(o.dte) }),
-        h('td', { class: 'num', text: fmtPrice(p.avg_price) }),
-        h('td', { class: 'num', text: fmtPrice(p.last_price) }),
+        h('td', { class: 'num', text: fmtPrice(p.avg_entry_price) }),
+        h('td', { class: 'num', text: fmtPrice(p.current_price) }),
         h('td', { class: 'num', text: fmtDollar(p.market_value) }),
-        h('td', { class: 'num ' + (p.unrealized_pnl >= 0 ? 't-up' : 't-down'),
-          text: fmtPnl(p.unrealized_pnl) }));
+        h('td', { class: 'num ' + (p.unrealized_pl >= 0 ? 't-up' : 't-down'),
+          text: fmtPnl(p.unrealized_pl) }));
     })));
 }
 
@@ -548,15 +546,15 @@ function applyLiveMarks(pillState) {
   for (const p of ref.positions) {
     const isOpt = !!occParse(p.symbol);
     const live = !isOpt ? marks[p.symbol] : null;
-    const price = (live != null && Number.isFinite(live)) ? live : p.last_price;
+    const price = (live != null && Number.isFinite(live)) ? live : p.current_price;
     const mult = isOpt ? 100 : 1;
-    const mv = Math.round(p.shares * price * mult * 100) / 100;
+    const mv = Math.round(p.qty * price * mult * 100) / 100;
     posValue += mv;
     positions.push({
       ...p,
-      last_price: Math.round(price * 10000) / 10000,
+      current_price: Math.round(price * 10000) / 10000,
       market_value: mv,
-      unrealized_pnl: Math.round(p.shares * (price - p.avg_price) * mult * 100) / 100,
+      unrealized_pl: Math.round(p.qty * (price - p.avg_entry_price) * mult * 100) / 100,
     });
   }
   const equity = Math.round((ref.cash + posValue) * 100) / 100;
@@ -635,6 +633,18 @@ async function loadPositions() {
       apiGet('/api/desk/holding-stats').catch(() => null),
       apiGet('/api/desk/dividends').catch(() => null),
     ]);
+    // Honesty strip: the running estimate of dividends the paper broker
+    // never paid (rendered even at $0 — the disclosure is the point).
+    const missedEl = document.getElementById('desk-honesty-missed');
+    if (missedEl) {
+      const total = dv && dv.missed_dividends ? dv.missed_dividends.total : null;
+      missedEl.textContent = fmtDollar(total || 0);
+    }
+    if (pf.available === false) {
+      renderEmpty(el, 'The paper account is unreachable right now — holdings '
+        + 'will reappear when the broker connection recovers.');
+      return;
+    }
     if (!pf.positions.length) { renderEmpty(el, 'All cash — no open positions.'); return; }
     // Cache stats + book so tape ticks can repaint with the same holding-stats
     // shape (day-change chip, 30-day trend) without another network round trip.
@@ -695,49 +705,67 @@ async function loadThinking() {
   } catch (err) { renderError(el, err, loadThinking); }
 }
 
-/* ── what the AI is watching: tripwires + planned check-ins ── */
-async function loadWatch() {
-  const el = document.getElementById('desk-watch');
-  const metaEl = document.getElementById('desk-watch-meta');
+/* ── open orders & resting protection: real orders on the broker's book ── */
+function openOrderRow(o) {
+  const stop = o.kind === 'stop';
+  const label = occParse(o.symbol) ? occParse(o.symbol).label : o.symbol;
+  let text;
+  if (stop) {
+    text = label + ' — protective stop at ' + fmtPrice(o.stop_price)
+      + (o.qty != null ? ' on ' + fmtNum(o.qty, 2) + ' shares' : '')
+      + (o.limit_price != null ? ' (limit ' + fmtPrice(o.limit_price) + ')' : '');
+  } else if (o.kind === 'limit') {
+    text = label + ' — ' + (o.side || '').toUpperCase() + ' limit at '
+      + fmtPrice(o.limit_price)
+      + (o.qty != null ? ' for ' + fmtNum(o.qty, 2) : '');
+  } else {
+    text = label + ' — ' + (o.side || '').toUpperCase() + ' '
+      + (o.order_type || 'order');
+  }
+  const row = h('div', { class: 'desk-orders-row' },
+    pill(stop ? 'STOP' : (o.kind === 'limit' ? 'LIMIT' : (o.order_type || 'ORDER').toUpperCase()),
+      stop ? 'warn' : 'info',
+      stop ? 'A resting stop-loss order on the broker’s own book — it fires even while the AI is offline.'
+           : 'A working order resting at the broker.'),
+    h('span', { class: 'desk-orders-text', text }),
+    h('span', { class: 'desk-feed-time t-dim',
+      text: o.age_days != null ? 'resting ' + o.age_days + 'd' : '' }));
+  if (o.tif === 'gtc' && o.age_days != null && o.age_days >= 80) {
+    row.append(pill('GTC expires at 90d', 'down',
+      'Alpaca silently cancels GTC orders after 90 days — this one is '
+      + o.age_days + ' days old and needs re-arming soon.'));
+  }
+  return row;
+}
+
+async function loadOpenOrders() {
+  const el = document.getElementById('desk-orders');
+  const metaEl = document.getElementById('desk-orders-meta');
   if (!el) return;
   skeleton(el);
   try {
-    const d = await apiGet('/api/desk/watch');
-    const wires = (d.watches || []).filter(w => w.status === 'armed' || w.status === 'tripped');
-    const now = Date.now();
-    const wakes = (d.wakes || []).filter(k => !k.honored_run_id
-      && k.at && (new Date(k.at).getTime() > now - 6 * 3600e3));
+    const d = await apiGet('/api/desk/open-orders');
     clear(el);
-    if (metaEl) {
-      metaEl.textContent = wires.length
-        ? wires.length + ' alarm' + (wires.length === 1 ? '' : 's') + ' set' : '';
-    }
-    if (!wires.length && !wakes.length) {
-      renderEmpty(el, 'No price alarms set right now — the AI arms them on positions it needs to react to.');
+    if (d.available === false) {
+      if (metaEl) metaEl.textContent = '';
+      renderEmpty(el, 'The broker connection is unavailable on this host — resting orders cannot be shown.');
       return;
     }
-    const list = h('div', { class: 'desk-watch-list' });
-    for (const w of wires) {
-      const dir = w.kind === 'below' ? 'falls under' : 'climbs past';
-      const tripped = w.status === 'tripped';
-      list.append(h('div', { class: 'desk-watch-row' },
-        pill(tripped ? 'TRIPPED' : 'watching', tripped ? 'down' : 'info'),
-        h('span', { class: 'desk-watch-text', text:
-          w.symbol + ' — alert if the price ' + dir + ' $' + fmtNum(w.level, 2)
-          + (w.reason ? ' · ' + w.reason : '') }),
-        h('span', { class: 'desk-feed-time t-dim',
-          text: tripped && w.tripped_at ? 'tripped ' + timeAgo(w.tripped_at)
-            : 'set ' + timeAgo(w.armed_at) })));
+    const rows = d.orders || [];
+    const stops = rows.filter(o => o.kind === 'stop').length;
+    if (metaEl) {
+      metaEl.textContent = rows.length
+        ? rows.length + ' resting' + (stops ? ' · ' + stops + ' stop' + (stops === 1 ? '' : 's') : '')
+        : '';
     }
-    for (const k of wakes) {
-      list.append(h('div', { class: 'desk-watch-row' },
-        pill('next check', 'neutral'),
-        h('span', { class: 'desk-watch-text', text:
-          'Wants to look again ' + fmtDateTimeET(k.at)
-          + (k.reason ? ' — ' + k.reason : '') })));
+    if (!rows.length) {
+      renderEmpty(el, 'Nothing resting at the broker right now — the AI arms protective stops on positions that need them.');
+      return;
     }
+    const list = h('div', { class: 'desk-orders-list' });
+    for (const o of rows) list.append(openOrderRow(o));
     el.append(list);
-  } catch (err) { renderError(el, err, loadWatch); }
+  } catch (err) { renderError(el, err, loadOpenOrders); }
 }
 
 /* ── decisions: the latest dossier + the browsable archive ──
@@ -960,7 +988,7 @@ function outcomeRow(r) {
   if (r.alpha_pct != null) {
     chips.push(h('span', {
       class: 'c-chip',
-      title: 'The move minus SPY’s move over the same window (dividends included) — skill, not market tide.',
+      title: 'The move minus SPY’s price move over the same window (price return on both sides — the paper book collects no dividends) — skill, not market tide.',
     }, 'vs S&P 500: ', num(r.alpha_pct)));
   }
   if (r.realized_pnl != null && !open) {
@@ -1487,9 +1515,9 @@ async function loadFills() {
         h('th', { text: 'When' }), h('th', { text: 'Stock' }),
         h('th', { text: 'Side' }), h('th', { class: 'num', text: 'Shares' }),
         h('th', { class: 'num', text: 'Fill price' }),
-        h('th', { class: 'num', text: 'Live bid / ask', title: 'The real-time bid and ask the fill priced against at that moment, plus any fee, session, or override receipts stamped on the fill' }),
+        h('th', { class: 'num', text: 'Receipt', title: 'Era-2 fills are executed by the broker against the live market — the decision run is the receipt. Era-1 fills carry the old ledger\'s stamped bid/ask, session, and fee receipts.' }),
         h('th', { class: 'num', text: 'Value' }),
-        h('th', { text: 'Why', title: 'The AI\'s stated reason for this trade at the time' }))),
+        h('th', { text: 'Why', title: 'The AI\'s stated reason for this trade at the time (era-1 fills; era-2 reasoning lives on the linked decision)' }))),
       h('tbody', {}, ...rows.map(r => {
         const q = r.fill_quote || {};
         const isOpt = OCC_RE_F.test(r.symbol);
@@ -1497,10 +1525,18 @@ async function loadFills() {
         const quoteCell = h('td', { class: 'num' },
           (q.bid != null && q.ask != null)
             ? h('span', { class: 't-dim', text: fmtPrice(q.bid) + ' / ' + fmtPrice(q.ask) })
-            : h('span', { class: 't-dim', text: '—' }));
-        // Receipt extras stamped on the fill: option fee, session tag,
-        // override/degraded-gate warnings — the honesty trail, visible.
+            : h('span', { class: 't-dim', text: r.era === 2 ? 'broker fill' : '—' }));
+        // Receipt extras: era-1 fills keep the old ledger's stamped session/
+        // fee receipts; era-2 fills tag stops and the frozen era.
         const extras = [];
+        if (r.era === 1) {
+          extras.push(pill('ERA 1', 'neutral',
+            'A fill from the pre-migration book (the hand-rolled ledger, frozen at cutover).'));
+        }
+        if (r.era === 2 && r.kind === 'stop') {
+          extras.push(pill('STOP', 'warn',
+            'This fill came from a resting protective stop on the broker’s book.'));
+        }
         if (q.session && q.session !== 'regular') {
           extras.push(pill(String(q.session).toUpperCase(), 'neutral',
             'This fill booked outside regular trading hours.'));
@@ -1510,10 +1546,15 @@ async function loadFills() {
             title: q.fee.contracts + ' contract(s) × ' + fmtPrice(q.fee.per_contract) + ' per-contract fee, included in the value',
             text: 'fee ' + fmtPrice(q.fee.total) }));
         }
-        if (q.warnings && q.warnings.length) {
-          extras.push(pill('override', 'warn', q.warnings.join('\n')));
-        }
         if (extras.length) quoteCell.append(h('div', { class: 'desk-fill-extra' }, ...extras));
+        const why = (r.rationale || '').trim();
+        const whyCell = why
+          ? fillWhyCell(why)
+          : (r.era === 2 && r.run_id
+              ? h('td', { class: 'desk-fills-why t-dim',
+                  title: 'The reasoning lives on the decision this fill belongs to — see “The latest decision” card’s History view.',
+                  text: 'run ' + r.run_id })
+              : h('td', { class: 't-dim', text: '—' }));
         return h('tr', {},
           h('td', { class: 't-dim', title: fmtDateTimeET(r.t), text: timeAgo(r.t) }),
           h('td', {}, h('a', { href: '/symbol/' + (isOpt ? r.symbol.match(/^[A-Z]+/)[0] : r.symbol), class: 'c-link', text: r.symbol })),
@@ -1522,7 +1563,7 @@ async function loadFills() {
           h('td', { class: 'num', text: fmtPrice(r.price) }),
           quoteCell,
           h('td', { class: 'num', text: fmtDollar(Math.abs(r.dollars)) }),
-          fillWhyCell((r.rationale || '').trim()));
+          whyCell);
       })));
     el.append(table);
   } catch (err) { renderError(el, err, loadFills); }
@@ -1614,7 +1655,7 @@ async function loadAll() {
   await Promise.all([
     loadHeader(), loadEquity(), loadPositions(), loadThinking(),
     loadDecision(), loadWhatsNew(), loadFills(), loadWiki(),
-    loadLab(), loadWatch(), loadPredictions(), loadClaims(),
+    loadLab(), loadOpenOrders(), loadPredictions(), loadClaims(),
   ]);
   refreshPeeks();
 }
@@ -1688,10 +1729,10 @@ function saveCollapseSet(set) {
    Left OPEN on purpose: equity (the curve), positions (the book), decision
    (what it just did) — what a phone glance is actually for.
 
-   `watch` is collapsed despite being live state: 21 armed wires rendered
-   3,257px, nearly four phone screens, and its peek ("21 wires") already
-   answers the only question a glance asks — are the tripwires armed. */
-const MOBILE_COLLAPSED = ['watch', 'thinking', 'predictions', 'lab', 'wiki',
+   `orders` is collapsed despite being live state: its header meta ("3
+   resting · 2 stops") already answers the only question a glance asks —
+   is the protection armed. */
+const MOBILE_COLLAPSED = ['orders', 'thinking', 'predictions', 'lab', 'wiki',
   'claims'];
 const MOBILE_Q = '(max-width: 768px)';
 
@@ -1841,7 +1882,7 @@ startTape();
 // refresh the live panels periodically (the agent updates several times/day)
 setInterval(() => {
   loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki();
-  loadLab(); loadWatch(); loadPredictions(); loadClaims();
+  loadLab(); loadOpenOrders(); loadPredictions(); loadClaims();
   // counts move as the agent works — a stale peek on a collapsed card is a
   // quietly wrong number, which is worse than no number
   setTimeout(refreshPeeks, 1500);

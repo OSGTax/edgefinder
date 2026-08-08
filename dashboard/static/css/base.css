@@ -93,10 +93,6 @@ a:hover { text-decoration: underline; }
   gap: 14px;
 }
 
-.topnav-indices { display: flex; gap: 16px; }
-.topnav-index { display: flex; gap: 5px; font-size: var(--t-fs-sm); }
-.topnav-index .sym { color: var(--t-text-3); }
-
 .theme-toggle {
   background: none;
   border: 1px solid var(--t-border);
@@ -261,7 +257,6 @@ a:hover { text-decoration: underline; }
 @media (max-width: 768px) {
   /* nav collapses; bottom bar takes over */
   .topnav-tabs { display: none; }
-  .topnav-indices { display: none; }
   .tabbar { display: flex; }
   .page {
     padding: 10px;

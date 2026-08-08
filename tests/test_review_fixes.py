@@ -380,6 +380,8 @@ def client(tmp_path, monkeypatch):
     desk_router._session_cache = (0.0, None)
     desk_router._session_refreshing = False
     desk_router._portfolio_cache = None
+    desk_router._open_orders_cache = None
+    desk_router._outcomes_live_cache = None
     from fastapi.testclient import TestClient
     from dashboard.app import app
     with TestClient(app) as c:
@@ -418,13 +420,30 @@ def test_movers_split_guard_and_coverage_floor(client, monkeypatch):
     assert out.get("splits_excluded") == ["SPL"]
 
 
-def test_holding_stats_rebases_split(client):
+def test_holding_stats_rebases_split(client, monkeypatch):
     import agent.data as agent_data
-    from agent.models import ACCOUNT, DeskPosition
+    import dashboard.routers.desk as desk_router
+
+    # held names now come from the cached Alpaca positions read
+    class _FakeTrade:
+        def __init__(self, *a, **k):
+            pass
+
+        def state(self):
+            return {"account": "agent", "paper": True, "cash": 88000.0,
+                    "equity": 100000.0, "buying_power": 88000.0,
+                    "starting_capital": 100000.0, "total_pnl": 0.0,
+                    "total_return_pct": 0.0, "positions_value": 12000.0,
+                    "positions": [{"symbol": "SPL", "asset_class": "us_equity",
+                                   "qty": 100.0, "avg_entry_price": 120.0,
+                                   "current_price": 122.0,
+                                   "market_value": 12200.0,
+                                   "unrealized_pl": 200.0, "weight": 0.12}]}
+
+    monkeypatch.setattr("agent.trade.Trade", _FakeTrade)
+    desk_router._portfolio_cache = None
     sess = agent_data.session_factory()()
     try:
-        sess.add(DeskPosition(account=ACCOUNT, symbol="SPL", shares=100,
-                              avg_price=120.0))
         for i, px in ((4, 1180.0), (3, 1200.0)):      # pre-split closes
             _bar(sess, "SPL", TODAY - timedelta(days=i), px)
         for i, px in ((2, 121.0), (1, 122.0)):        # post-split closes

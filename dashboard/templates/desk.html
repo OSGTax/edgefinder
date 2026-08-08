@@ -31,7 +31,7 @@
       <dd id="desk-hero-return">—</dd>
     </div>
     <div>
-      <dt title="The book's return minus what simply buying the S&amp;P 500 (SPY) would have returned over the same period. Positive means the AI is beating the market, not just riding it.">vs S&amp;P 500</dt>
+      <dt title="The book's price return minus the S&amp;P 500's (SPY) price return over the same period. Price return on both sides: the paper broker pays no dividends into the book, so the benchmark drops its dividends too — like for like. Positive means the AI is beating the market, not just riding it.">vs S&amp;P 500 (price return)</dt>
       <dd id="desk-hero-alpha">—</dd>
     </div>
     <div>
@@ -54,6 +54,16 @@
   </div>
 </section>
 
+<!-- HONESTY STRIP: the standing disclosures the paper-broker book requires
+     (charter V4). Static text; only the missed-dividends estimate is live. -->
+<div id="desk-honesty" class="desk-honesty">
+  <span class="desk-honesty-item">Book of record: <strong>Alpaca paper account</strong></span>
+  <span class="desk-honesty-sep" aria-hidden="true">·</span>
+  <span class="desk-honesty-item">Fills execute against the live market with no simulated market impact</span>
+  <span class="desk-honesty-sep" aria-hidden="true">·</span>
+  <span class="desk-honesty-item" title="The paper broker never credits dividend cash into the account. This is the running estimate of what the held shares would have collected — disclosed here instead of silently flattering the S&amp;P comparison.">Dividends are not simulated — est. missed: <span id="desk-honesty-missed">$0.00</span></span>
+</div>
+
 <!-- Chart + holdings at the TOP, right under the hero — the two most-wanted
      surfaces when the page loads. Presented as standalone cards (no zone
      wrapper) so they read as the anchor content, not a section deep in a
@@ -65,11 +75,11 @@
     <span class="spacer"></span>
     <span id="desk-equity-meta" class="t-dim"></span>
   </div>
-  <div class="c-card-sub">The whole account (cash + investments), recorded every trading cycle. Started at $100,000.</div>
+  <div class="c-card-sub">The whole account (cash + investments), one point per trading day. The vertical "cutover" marker is where the book moved to a real broker's paper account (Alpaca) — one continuous record across both eras.</div>
   <div class="c-card-body tight">
     <div class="desk-equity-legend t-dim" id="desk-equity-legend" hidden>
       <span class="desk-legend-item"><span class="desk-legend-swatch acct"></span>Account</span>
-      <span class="desk-legend-item" title="SPY (total return) from the close before inception: what $100,000 put into the S&amp;P 500 (SPY, dividends reinvested) at the last market close before the account's first trade would be worth."><span class="desk-legend-swatch spy"></span>$100k in the S&amp;P 500</span>
+      <span class="desk-legend-item" title="The S&amp;P 500 (SPY, price return — no dividends, matching the paper book) rebased to the account's starting value at the last market close before its first trade."><span class="desk-legend-swatch spy"></span>S&amp;P 500 (price return)</span>
       <span class="desk-legend-item" title="The dashed tip is a live estimate from real-time quotes — not yet a recorded mark."><span class="desk-legend-swatch live"></span>live estimate</span>
     </div>
     <div class="ch-shell">
@@ -109,15 +119,15 @@
   </header>
   <div class="desk-zone-grid">
 
-    <div class="c-card desk-card desk-span-2" data-collapse-key="watch">
+    <div class="c-card desk-card desk-span-2" data-collapse-key="orders">
       <div class="c-card-header">
         <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>What the AI is watching</span>
+        <span>Open orders &amp; resting protection</span>
         <span class="spacer"></span>
-        <span id="desk-watch-meta" class="t-dim"></span>
+        <span id="desk-orders-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">Price alarms the AI has set on its own positions (checked against live prices every few seconds, around the clock) and when it plans to look at the market next.</div>
-      <div class="c-card-body" id="desk-watch"></div>
+      <div class="c-card-sub">Real orders resting at the broker — protective stops fire even while the AI is between check-ins.</div>
+      <div class="c-card-body" id="desk-orders"></div>
     </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="decision">
@@ -220,7 +230,7 @@
         <span class="spacer"></span>
         <span id="desk-fills-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">Every trade the AI made, with the exact live prices it traded against at that moment — the receipt proving each trade hit the real market.</div>
+      <div class="c-card-sub">Every fill on the book — current-era trades executed by the broker against the live market (each linked to the decision cycle that placed it), and the frozen pre-migration receipts with their original bid/ask stamps.</div>
       <div class="c-card-body" id="desk-fills"></div>
     </div>
 
@@ -235,9 +245,10 @@
      not investment advice — the one fact a first-time visitor could easily
      misread from the dollar figures above. -->
 <p class="desk-footnote">
-  Everything on this page is a <strong>simulated $100,000 paper account</strong> —
-  no real money is bought or sold. The AI's picks, reasoning, and past results
-  are shown for transparency only and are not investment advice.
+  Everything on this page is <strong>a paper brokerage account at Alpaca —
+  real market, simulated money</strong>; no real money is bought or sold. The
+  AI's picks, reasoning, and past results are shown for transparency only and
+  are not investment advice.
 </p>
 {% endblock %}
 

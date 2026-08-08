@@ -59,15 +59,10 @@ function initThemeButtons() {
   }
 }
 
-/* The index strip that used to live here fetched /api/benchmarks/comparison,
-   a workbench-era route that no longer exists — it 404s in production, and
-   the failure was swallowed by a bare `catch { /* decorative */ }`, so
-   #topnav-indices has been permanently empty on every viewport while still
-   costing a doomed request on every page load. Removed rather than
-   re-pointed: the desk already publishes the same read as /api/desk/regime,
-   surfaced in the hero's market-mood pill, and the strip is display:none
-   below 768px anyway. #topnav-indices stays in base.html as an empty slot —
-   deleting the markup is a separate cleanup. */
+/* The index strip that used to live here (#topnav-indices) fetched a
+   workbench-era route that no longer exists; the dead slot was removed from
+   base.html in the V4 dashboard redesign. The desk hero's live index chips
+   (SSE tape) are the replacement. */
 
 async function loadHealthDot() {
   try {

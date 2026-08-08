@@ -471,3 +471,17 @@
 /* ── sparkline (display size; bitmap is dpr-scaled in JS) ── */
 .c-sparkline { width: 90px; height: 24px; display: block; }
 .c-sparkline.lg { width: 140px; height: 36px; }
+
+/* ── /trades: the frozen Era-1 section (collapsed by default) ── */
+.trades-era1 { margin-top: var(--t-space-3); }
+.trades-era1 > summary {
+  cursor: pointer;
+  color: var(--t-text-2);
+  font-size: var(--t-fs-sm);
+  padding: 6px 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--t-space-2);
+}
+.trades-era1 > summary:hover { color: var(--t-text); }
+.trades-era1[open] > summary { margin-bottom: var(--t-space-2); }

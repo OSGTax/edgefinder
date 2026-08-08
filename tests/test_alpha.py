@@ -30,10 +30,13 @@ def store(tmp_path, monkeypatch):
 
     Base.metadata.create_all(get_engine())
 
-    # The desk router caches the /portfolio body ~10s; a stale entry from a
-    # sibling test's DB must never serve here.
+    # The desk router caches the /portfolio body ~10s (plus the open-orders
+    # and live-outcomes overlays); a stale entry from a sibling test's DB
+    # must never serve here.
     import dashboard.routers.desk as desk_router
     desk_router._portfolio_cache = None
+    desk_router._open_orders_cache = None
+    desk_router._outcomes_live_cache = None
 
     from agent.store import get_store
 
@@ -361,6 +364,45 @@ def test_outcomes_skips_book_picks(store):
     assert [p["symbol"] for p in run["picks"]] == ["XYZ"]  # BOOK never graded
 
 
+def _seed_era2_fill(store, run_id: str, symbol: str, qty: float, price: float,
+                    ts: datetime) -> None:
+    """One era-2 entry fill in the desk_orders mirror (the V4 fills source —
+    also what /portfolio derives its all-time inception from pre-era-1)."""
+    store.insert("desk_orders", {
+        "account": "agent", "run_id": run_id, "seq": 1,
+        "client_order_id": f"{run_id}:01", "alpaca_order_id": f"{run_id}-1",
+        "symbol": symbol, "asset_class": "us_equity", "side": "buy",
+        "kind": "entry", "order_type": "market", "tif": "day",
+        "order_class": "simple", "qty": qty, "status": "filled",
+        "filled_qty": qty, "filled_avg_price": price,
+        "submitted_at": ts.isoformat() + "+00:00",
+        "filled_at": ts.isoformat() + "+00:00"}, returning=False)
+
+
+def _canned_desk_trade(monkeypatch, *, equity=100100.0, cash=99100.0,
+                       positions=None):
+    class _FakeTrade:
+        def __init__(self, *a, **k):
+            pass
+
+        def state(self):
+            return {"account": "agent", "paper": True, "cash": cash,
+                    "equity": equity, "buying_power": cash,
+                    "starting_capital": 100000.0,
+                    "total_pnl": round(equity - 100000.0, 2),
+                    "total_return_pct": round(
+                        (equity - 100000.0) / 100000.0 * 100, 4),
+                    "positions": list(positions or []),
+                    "positions_value": round(sum(
+                        p.get("market_value") or 0.0
+                        for p in (positions or [])), 2)}
+
+        def orders(self, **k):
+            return []
+
+    monkeypatch.setattr("agent.trade.Trade", _FakeTrade)
+
+
 def test_portfolio_and_decision_endpoints(store, monkeypatch):
     from fastapi.testclient import TestClient
 
@@ -371,13 +413,24 @@ def test_portfolio_and_decision_endpoints(store, monkeypatch):
     agent_data._session_factory = None
 
     seed_spy(store, {D_BASE: 600.0, TODAY: 612.0})
-    seed_backdated_book(store)
+    from agent.brain import save_decision
+
+    save_decision(store, run_id="A", summary="entry",
+                  picks=[{"symbol": "XYZ", "action": "buy", "why_now": "test",
+                          "rationale": "trend",
+                          "prediction": "XYZ +5% within 10 sessions",
+                          "horizon_days": 10, "kill": "closes below 90"}],
+                  rejected=[{"symbol": "ABC", "why_not": "falling knife"}])
+    _seed_era2_fill(store, "A", "XYZ", 10.0, 100.0, ts_of(D_ENTRY))
+    _canned_desk_trade(monkeypatch, equity=100100.0)
 
     from dashboard.app import app
 
     with TestClient(app) as c:
         pf = c.get("/api/desk/portfolio").json()
+        # PRICE return (charter V4): 600 baseline → 612 endpoint = +2.00%
         assert pf["vs_spy"]["spy_return_pct"] == 2.0
+        assert pf["vs_spy"]["basis"] == "price_return"
         assert pf["vs_spy"]["inception"] == str(D_ENTRY)
         assert pf["vs_spy"]["alpha_pct"] == pytest.approx(
             pf["total_return_pct"] - 2.0)
@@ -386,9 +439,11 @@ def test_portfolio_and_decision_endpoints(store, monkeypatch):
         assert d["rejected"] == [{"symbol": "ABC", "why_not": "falling knife"}]
 
 
-def test_portfolio_vs_spy_is_total_return(store, monkeypatch):
-    """M2: the desk hero's vs_spy applies the SAME dividend back-adjustment
-    as the ledger — 600 baseline × (1 − 6/600) = 594 → +3.03%, not +2.00%."""
+def test_portfolio_vs_spy_is_price_return(store, monkeypatch):
+    """Charter V4 flips M2: the paper broker credits no dividends into the
+    book, so the benchmark must NOT be dividend back-adjusted either — a SPY
+    dividend inside the window leaves spy_return_pct at the raw price move
+    (+2.00%), never the total-return +3.03%."""
     from fastapi.testclient import TestClient
 
     import agent.data as agent_data
@@ -401,30 +456,38 @@ def test_portfolio_vs_spy_is_total_return(store, monkeypatch):
     seed_spy(store, {D_BASE: 600.0, ex: 600.0, TODAY: 612.0})
     store.insert("dividends", {"symbol": "SPY", "ex_date": ex,
                                "cash_amount": 6.0}, returning=False)
-    seed_backdated_book(store)
+    _seed_era2_fill(store, "A", "XYZ", 10.0, 100.0, ts_of(D_ENTRY))
+    _canned_desk_trade(monkeypatch, equity=100100.0)
 
     from dashboard.app import app
 
     with TestClient(app) as c:
         pf = c.get("/api/desk/portfolio").json()
-        assert pf["vs_spy"]["spy_return_pct"] == pytest.approx(3.03)
+        assert pf["vs_spy"]["spy_return_pct"] == pytest.approx(2.0)
+        assert pf["vs_spy"]["basis"] == "price_return"
         assert pf["vs_spy"]["alpha_pct"] == pytest.approx(
-            pf["total_return_pct"] - 3.03)
+            pf["total_return_pct"] - 2.0)
 
 
-def test_portfolio_applies_option_multiplier(store, monkeypatch):
+def test_portfolio_passes_alpaca_position_marks_through(store, monkeypatch):
+    """/portfolio serves the broker's own position economics unmodified —
+    an option position's market_value/unrealized_pl are Alpaca's numbers
+    (multiplier already inside), never re-derived locally."""
     from fastapi.testclient import TestClient
 
     import agent.data as agent_data
     import dashboard.dependencies as deps
-    from agent import ledger
 
     deps._engine = deps._session_factory = None
     agent_data._session_factory = None
 
     occ_sym = "NVDA270116C00200000"
-    seed_trade(store, "O", occ_sym, "BUY", 2.0, 5.0, ts_of(D_ENTRY))
-    ledger.mark(store, prices={occ_sym: 7.5})
+    _canned_desk_trade(monkeypatch, equity=100500.0, cash=99000.0, positions=[{
+        "symbol": occ_sym, "asset_class": "us_option", "qty": 2.0,
+        "qty_available": 2.0, "avg_entry_price": 5.0, "current_price": 7.5,
+        "market_value": 1500.0, "cost_basis": 1000.0, "unrealized_pl": 500.0,
+        "unrealized_plpc": 0.5, "change_today": None, "side": "long",
+        "weight": 0.0149}])
 
     from dashboard.app import app
 
@@ -432,6 +495,5 @@ def test_portfolio_applies_option_multiplier(store, monkeypatch):
         pf = c.get("/api/desk/portfolio").json()
         row = next(p for p in pf["positions"] if p["symbol"] == occ_sym)
         assert row["market_value"] == 1500.0     # 2 contracts × 7.5 × 100
-        assert row["unrealized_pnl"] == 500.0    # 2 × (7.5-5.0) × 100
-        # equity = 100k - 1000 premium + 1500 mark
+        assert row["unrealized_pl"] == 500.0     # 2 × (7.5-5.0) × 100
         assert pf["equity"] == pytest.approx(100500.0)

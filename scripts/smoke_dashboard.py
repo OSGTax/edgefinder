@@ -27,9 +27,9 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/desk", [], {200}),
     ("/trades", [], {200}),
     # /api/desk/* — the read-only projections of the desk_* tables
-    ("/api/desk/portfolio", ["cash", "equity", "positions"], {200}),
-    ("/api/desk/equity", [], {200}),                       # bare list shape
-    ("/api/desk/equity?with_spy=1", ["points", "spy"], {200}),
+    ("/api/desk/portfolio", ["cash", "equity", "positions", "available"], {200}),
+    ("/api/desk/equity", ["points", "era2_inception"], {200}),
+    ("/api/desk/equity?with_spy=1", ["points", "spy", "spy_basis"], {200}),
     ("/api/desk/decision/latest", ["exists"], {200}),
     ("/api/desk/decisions", ["decisions"], {200}),
     ("/api/desk/outcomes", ["summary", "rows"], {200}),
@@ -40,19 +40,20 @@ CHECKS: list[tuple[str, list[str], set[int]]] = [
     ("/api/desk/regime", ["tag"], {200}),
     ("/api/desk/movers", ["gainers", "losers", "most_active"], {200}),
     ("/api/desk/holding-stats", ["symbols"], {200}),
-    ("/api/desk/dividends", ["holdings"], {200}),
+    ("/api/desk/dividends", ["holdings", "missed_dividends"], {200}),
+    ("/api/desk/open-orders", ["available", "orders"], {200}),
     ("/api/desk/quotes", ["quotes", "connected"], {200}),
     # allowlist guard: a name the desk neither holds nor watches must 404
     # (the endpoint fans out to metered live options calls when allowed)
     ("/api/desk/options/ZZZQ", [], {404}),
-    ("/api/desk/broker-health", ["keys_present"], {200}),
-    ("/api/desk/data-health", ["status", "marks"], {200}),
+    ("/api/desk/broker-health", ["paper_account", "clock"], {200}),
+    ("/api/desk/data-health", ["status"], {200}),
     ("/api/desk/lab", ["top", "combos_tested"], {200}),
     ("/api/desk/brief", ["exists"], {200}),
-    ("/api/desk/watch", ["watches", "wakes"], {200}),
     ("/api/desk/whatsnew", ["entries", "new_count"], {200}),
     ("/api/desk/trades?limit=5", [], {200}),               # bare list shape
-    ("/api/desk/trade-history?limit=5", ["rows", "realized_pnl"], {200}),
+    ("/api/desk/trade-history?limit=5",
+     ["rows", "realized_pnl", "era1_realized", "era2_realized"], {200}),
     # symbol workstation API (404 acceptable when the symbol has no bars
     # in the target environment)
     ("/api/symbols/SPY/bars?range=3m", ["bars", "source"], {200, 404}),

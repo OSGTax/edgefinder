@@ -316,8 +316,13 @@ function openTradeDrawer(t) {
     [t.symbol && t.symbol.length > 6 ? 'Contracts' : 'Shares', t.shares],
     ['Fill price', fmtPrice(t.price)],
     ['Dollars', t.dollars != null ? fmtPnl(Math.abs(t.dollars)) : '—'],
+    // Era 2 fills execute at the broker (no locally-stamped quote); era-1
+    // rows keep the old ledger's bid/ask receipt.
     ['Quote at fill', q && q.bid != null && q.ask != null
-      ? `${fmtPrice(q.bid)} / ${fmtPrice(q.ask)} (bid/ask)` : '—'],
+      ? `${fmtPrice(q.bid)} / ${fmtPrice(q.ask)} (bid/ask)`
+      : (t.era === 2 ? 'broker fill (live market)' : '—')],
+    ['Book', t.era === 1 ? 'Era 1 — pre-migration ledger (frozen)'
+      : 'Alpaca paper account'],
     ['Run', t.run_id || '—'],
   ];
   const kv = h('dl', { class: 'c-kv' });

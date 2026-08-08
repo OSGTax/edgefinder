@@ -519,13 +519,27 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
   line-height: 1.5;
 }
 
-/* ── what the AI is watching ── */
-.desk-watch-list { display: flex; flex-direction: column; gap: var(--t-space-2); }
-.desk-watch-row {
+/* ── open orders & resting protection ── */
+.desk-orders-list { display: flex; flex-direction: column; gap: var(--t-space-2); }
+.desk-orders-row {
   display: flex; align-items: baseline; gap: var(--t-space-2);
   font-size: var(--t-fs-sm); line-height: 1.5;
 }
-.desk-watch-text { flex: 1; min-width: 0; }
+.desk-orders-text { flex: 1; min-width: 0; }
+
+/* ── the honesty strip (charter V4 disclosures) ── */
+.desk-honesty {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 6px var(--t-space-2);
+  margin: 0 0 var(--t-space-3);
+  padding: 8px 14px;
+  border: 1px solid var(--t-border);
+  border-radius: var(--t-radius-sm);
+  color: var(--t-text-3);
+  font-size: var(--t-fs-xs); line-height: 1.5;
+}
+.desk-honesty strong { color: var(--t-text-2); font-weight: 600; }
+.desk-honesty-sep { color: var(--t-border-strong); }
 
 /* pro-view toggles (option chain, full thinking feed) */
 .desk-morebtn {

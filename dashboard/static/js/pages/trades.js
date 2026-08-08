@@ -2,7 +2,12 @@
    Deliberately simple: no filters, no sorting, no polling. Load once, render
    a table, stop. The server does all the math (see /api/desk/trade-history);
    this file must never re-derive P&L — in particular the option x100
-   multiplier is ALREADY inside `realized`. */
+   multiplier is ALREADY inside `realized`.
+
+   Era model (REBUILD-V4): era-2 rows are fills executed by the Alpaca paper
+   broker (the current book of record); era-1 rows are the frozen
+   pre-migration ledger, rendered in their own collapsible section with the
+   old corp-action conventions intact. */
 
 import { apiGet } from '../core/net.js';
 import { h, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
@@ -10,11 +15,12 @@ import { fmtDollar, fmtPnl, upDownClass } from '../core/fmt.js';
 
 const DASH = '—';
 
-/* Buy/Sell for real fills; the corp-action kinds name themselves. */
+/* Buy/Sell for real fills; stops and the corp-action kinds name themselves. */
 function actionCell(r) {
-  if (r.kind === 'trade' || r.kind === 'expiry') {
+  if (r.kind === 'trade' || r.kind === 'expiry' || r.kind === 'stop') {
     const cls = r.side === 'BUY' ? 'up' : 'down';
-    const label = r.kind === 'expiry' ? `${r.side} (expiry)` : r.side;
+    const label = r.kind === 'expiry' ? `${r.side} (expiry)`
+      : r.kind === 'stop' ? `${r.side} (stop)` : r.side;
     return h('span', { class: 'c-pill ' + cls, text: label });
   }
   return h('span', { class: 'c-pill neutral', text: r.kind });
@@ -67,17 +73,40 @@ async function load() {
     const rows = data.rows || [];
     if (!rows.length) { renderEmpty(el, 'No trades yet.'); return; }
     clear(el);
-    el.append(table(rows));
+
+    const era2 = rows.filter(r => r.era !== 1);
+    const era1 = rows.filter(r => r.era === 1);
+
+    if (era2.length) {
+      el.append(table(era2));
+    } else {
+      renderEmpty(el, 'No trades on the current book yet.');
+    }
+
+    if (era1.length) {
+      // The frozen pre-migration ledger, collapsed by default — history,
+      // not the working book.
+      const details = h('details', { class: 'trades-era1' },
+        h('summary', {},
+          h('span', { class: 'c-pill neutral', text: 'ERA 1' }),
+          ' The pre-migration book (frozen at cutover) — ' + era1.length
+            + ' rows, realized ' + fmtPnl(data.era1_realized || 0)),
+        table(era1));
+      el.append(details);
+    }
 
     const total = document.getElementById('trades-total');
     if (total) {
-      // The total covers the WHOLE ledger, so say so when the table does not.
+      // The totals cover the WHOLE ledger, so say so when the table does not.
       const shown = data.total > rows.length
         ? ` — showing the newest ${rows.length} of ${data.total} fills`
         : '';
+      const eras = era1.length
+        ? ` (era 2 ${fmtPnl(data.era2_realized || 0)} · era 1 ${fmtPnl(data.era1_realized || 0)})`
+        : '';
       total.textContent =
         `Realized profit ${fmtPnl(data.realized_pnl)} across `
-        + `${data.closing_fills} closing fills${shown}`;
+        + `${data.closing_fills} closing fills${eras}${shown}`;
     }
   } catch (err) {
     renderError(el, err, load);
