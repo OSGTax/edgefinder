@@ -101,7 +101,30 @@ print(f"R2: {n} objects, {tot/1e9:.2f} GB / 10 GB")
 PY
 ```
 
-### 5. Knowledge-registry lint (report-only)
+### 5. The V4 nightly duties — read the `v4_nightly` block and REPORT it
+
+The market ingest (`--source alpaca-market`) now runs the REBUILD-V4
+duties automatically and reports them under `v4_nightly` in its JSON.
+Your job is to READ that block and surface anything loud:
+- **`mirror_sync`** — orders + activities pulled from the Alpaca paper
+  account into the local mirror. Relay any `gtc_stop_warnings` (a
+  protective stop within 10 days of Alpaca's 90-day GTC auto-cancel) in
+  your summary — the next trading cycle must re-arm it.
+- **`split_guard`** — any `divergences` entry means a stock split may NOT
+  have been applied to the paper position (an undocumented paper-engine
+  behavior). It already journaled a SPLIT DIVERGENCE note; make it the
+  HEADLINE of your run report so the owner sees it tonight.
+- **`snapshot`** — today's desk_portfolio_history row (equity + positions
+  map). Its absence on a trading day is worth flagging.
+- **`backup`** — the R2 export of the knowledge layer + irreplaceable
+  market tables. `status: partial` names failed tables; repeat failures
+  are an incident, not a footnote.
+- **`db_size`** — warn ≥400MB / alert ≥450MB of the Supabase free 500MB
+  cap. On `warn` or worse, name it in the summary with the suggested
+  relief valve (prune desk_thinking history / trim the daily_bars hot
+  set) — never let the database die of silence.
+
+### 6. Knowledge-registry lint (report-only)
 `python -m agent.knowledge lint` — the nightly integrity read of the claims
 registry (broken citations, orphaned evidence, expired regime claims, unjudged
 closed picks, unhonored commitments). **Report-only from this routine**: you

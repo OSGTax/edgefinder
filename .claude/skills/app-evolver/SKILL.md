@@ -47,7 +47,8 @@ source, not a mandate; the one-small-improvement bar is unchanged.
   `dashboard/templates/desk.html`, `dashboard/static/js/pages/desk.js`,
   `dashboard/static/css/desk.css`, `dashboard/static/js/core/*` (carefully), and
   read-only additions to `dashboard/routers/desk.py`. Do **not** touch the
-  trading agent (`agent/ledger.py`, `agent/brain.py`, trade/ledger logic),
+  trading agent (`agent/trade.py`, `agent/grade.py`, `agent/brain.py`, the
+  desk_orders/desk_activities/desk_portfolio_history mirror tables, order logic),
   the market-data layer, the database schema of existing tables, auth, secrets,
   RLS, or CI. No new dependencies. No build step. No external network calls.
 - **No regressions to the book.** Never change how cash, positions, equity, or

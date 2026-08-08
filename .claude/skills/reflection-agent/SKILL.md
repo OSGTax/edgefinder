@@ -15,9 +15,9 @@ the whole job — a short notebook of proven lessons beats a long one of
 impressions. **It is fine, and often correct, to make the wiki SHORTER.**
 
 ## Hard guardrails (non-negotiable)
-- **Read-only on the book.** Never call `ledger fill`, `record`, `mark`, or
-  `settle`. You grade; you do not trade. Your only writes are the grading
-  surfaces: `ledger grade` (machine facts → `desk_outcomes`), `brain
+- **Read-only on the book.** Never call `trade submit`, `cancel`, or
+  `arm-stop`. You grade; you do not trade. Your only writes are the grading
+  surfaces: `grade run` (machine facts → `desk_outcomes`), `brain
   verdict` (your judgment on those rows), wiki edits, journal notes, and
   the claims registry (`agent.knowledge claim-*` — the structured layer
   behind the wiki).
@@ -38,19 +38,19 @@ over vibes (the same style rules as the trading charter).
 
 ### 1. Gather the evidence
 - `python -m agent.preflight` — stop and report if the environment is broken.
-- `python -m agent.ledger state` — the book as it stands.
-- `python -m agent.ledger grade --days 30` — refresh `desk_outcomes` with
+- `python -m agent.trade state` — the book as it stands (LIVE from the Alpaca paper account).
+- `python -m agent.grade run --days 30` — refresh `desk_outcomes` with
   each pick's MACHINE facts: entry price, since/alpha vs SPY,
   `horizon_elapsed` (in sessions), the kill parsed to a level and
   breach-checked against stored daily closes. Closed rows carry
-  `exit_kind` (same_run | cross_run | hardstop | settlement) with a real
+  `exit_kind` (same_run | cross_run | hardstop | settlement | cutover) with a real
   exit price and realized P&L — stop-outs and cross-run exits are graded,
-  not null; a row with `degraded` true had its mark priced at cost basis,
+  not null; a row with `degraded` true had no broker mark available,
   so its since/alpha are honestly null this pass. **These rows are what
   you grade from** — numbers first, judgment second. (`--days` bounds
   closed-row re-grades only; every still-open pick refreshes regardless.)
-- `python -m agent.ledger outcomes --days 7` — this week, pick by pick.
-- `python -m agent.ledger outcomes --days 30` — the longer arc for context.
+- `python -m agent.grade outcomes --days 7` — this week, pick by pick.
+- `python -m agent.grade outcomes --days 30` — the longer arc for context.
 - `python -m agent.brain state-get` and `python -m agent.brain wiki-get` —
   the strategy you were running and the notebook as it stands.
 - `python -m agent.knowledge lint` — run it FIRST and clear what it finds:
@@ -64,7 +64,7 @@ over vibes (the same style rules as the trading charter).
 Grading is MECHANICAL now, not retrospective storytelling. Each pick in
 `outcomes` carries its own registry: `prediction` (the falsifiable claim),
 `horizon_days` (when it comes due), and `kill` (what proves it wrong) —
-and its `desk_outcomes` row (from `ledger grade` in step 1) already holds
+and its `desk_outcomes` row (from `grade run` in step 1) already holds
 the machine verdict inputs: `horizon_elapsed` says whether the prediction
 is due, `kill_breached` says whether a stored close touched the kill
 (null means the kill didn't parse to a single PLAUSIBLE level —
@@ -191,7 +191,7 @@ With the grades in hand, rewrite pages via
 - **Generalize** a one-off into a rule only once it has REPEATED.
 - **Write the postmortems.** The `postmortems` page gets ONE dated entry per
   round trip that CLOSED since the last reflection — source them from the
-  `desk_outcomes` rows `ledger grade` marked closed in step 1, never from
+  `desk_outcomes` rows `grade run` marked closed in step 1, never from
   memory. Each entry: date, symbol, entry → exit (`entry_avg_px` →
   `exit_avg_px`, with `exit_kind`), realized P&L, alpha, the prediction's
   verdict, and the one-line cause. Newest first; when the page nears its
