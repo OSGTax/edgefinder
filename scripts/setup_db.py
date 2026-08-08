@@ -8,6 +8,7 @@ sys.path.insert(0, ".")
 
 from edgefinder.db.engine import Base, get_engine
 from edgefinder.db import models  # noqa: F401 — registers all models
+from agent import models as agent_models  # noqa: F401 — registers desk_* tables
 
 from rich.console import Console
 
@@ -21,6 +22,18 @@ def main():
     console.print(f"Database: {engine.url}")
 
     Base.metadata.create_all(engine)
+
+    # Postgres extras create_all can't express (idempotent): the RLS toggles
+    # and the edgefinder_db_size() RPC that agent.backup's size check calls
+    # on the rest lane. Statement-by-statement, same as render_start.py.
+    if engine.dialect.name == "postgresql":
+        from sqlalchemy import text
+        for ddl in agent_models.DESK_TABLE_DDL:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(ddl))
+            except Exception as exc:  # noqa: BLE001 — idempotent best-effort
+                console.print(f"[yellow]DDL skipped:[/yellow] {exc}")
 
     from sqlalchemy import inspect
     inspector = inspect(engine)

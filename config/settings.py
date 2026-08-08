@@ -52,15 +52,25 @@ class Settings(BaseSettings):
     github_owner_login: str = "OSGTax"
     github_read_token: str = ""
 
-    # ── LIVE BROKER (Alpaca paper + real-time data) ──
-    # The account of record for live paper trading and the real-time quote
-    # source. Keys are paper keys; data feed "sip" = full consolidated tape
-    # (paid), "iex" = free single-exchange. broker.py also accepts the SDK's
-    # native APCA_API_KEY_ID / APCA_API_SECRET_KEY env vars as a fallback.
+    # ── LIVE BROKER (Alpaca) ─────────────────────────
+    # TWO credential sets, deliberately separate (REBUILD-V4):
+    #
+    # DATA keys — the Algo Trader Plus subscription's keys. Quotes, bars,
+    # news, option chains, the market clock. Read-only by construction
+    # (agent/broker.py has no write methods). Feed "sip" = full consolidated
+    # tape (paid), "iex" = free single-exchange. broker.py also accepts the
+    # SDK's native APCA_API_KEY_ID / APCA_API_SECRET_KEY as a fallback.
     alpaca_api_key: str = ""
     alpaca_api_secret: str = ""
     alpaca_paper: bool = True
     alpaca_data_feed: str = "sip"
+    # TRADE keys — the PAPER account's own key pair (agent/trade.py). Paper
+    # keys cannot authenticate against the live API, so provisioning the
+    # runtime with ONLY these makes live trading unreachable by construction
+    # — a stronger guarantee than any paper=True flag. No env-var fallback:
+    # trade credentials are never inferred from the data keys.
+    alpaca_trade_key: str = ""
+    alpaca_trade_secret: str = ""
 
     # ── LIVE QUOTE STREAM (Render → /desk SSE) ───────
     # Held names are added to this seed universe automatically at stream start.

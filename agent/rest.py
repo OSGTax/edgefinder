@@ -128,6 +128,13 @@ class Rest:
                 time.sleep(1.5 * (attempt + 1))
         raise RuntimeError("unreachable")  # pragma: no cover
 
+    def rpc(self, name: str, args: dict | None = None):
+        """Call a Postgres function through PostgREST (``/rpc/<name>``).
+        Returns the decoded JSON result (scalar functions come back as a
+        bare value). Used by agent.backup's size check on the rest lane."""
+        status, body = self._do("POST", f"rpc/{name}", body=args or {})
+        return json.loads(body) if body else None
+
     # PostgREST caps a single response (Supabase default: 1000 rows). Reads
     # page through with offset so a big select can never silently truncate —
     # the pre-fix behavior returned the FIRST 1000 by sort order, which for

@@ -665,6 +665,112 @@ class DeskProposal(Base):
     expires_at: Mapped[date | None] = mapped_column(Date)
 
 
+# ── V4 mirror tables — Alpaca is the book of record; these are OUR copy ──
+#
+# REBUILD-V4: orders execute on Alpaca's paper account. Alpaca's retention of
+# closed orders/activities is undocumented, so every order, fill activity, and
+# daily portfolio snapshot is mirrored locally the moment we see it and
+# archived to R2 nightly. The mirror is a cache/archive, never the arbiter —
+# on any conflict, Alpaca wins and the mirror is re-synced.
+
+
+class DeskOrder(Base):
+    """One row per Alpaca order — and one per mleg LEG (legs carry
+    ``parent_order_id`` and inherit the parent's run_id/seq).
+
+    ``client_order_id`` is the attribution carrier: ``<run_id>:<seq>``.
+    The knowledge loop's ``(run_id, symbol)`` joins recover the symbol from
+    this row, never from the id string (OCC and BTC/USD need no escaping).
+    Alpaca timestamps are stored as ISO-8601 text — lexicographic order IS
+    chronological order, and both transports pass them through untouched.
+    """
+
+    __tablename__ = "desk_orders"
+    __table_args__ = (
+        UniqueConstraint("alpaca_order_id", name="uq_desk_orders_alpaca_id"),
+        Index("idx_desk_orders_run", "account", "run_id"),
+        Index("idx_desk_orders_symbol", "account", "symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    run_id: Mapped[str | None] = mapped_column(String(48), index=True)
+    seq: Mapped[int | None] = mapped_column(Integer)
+    client_order_id: Mapped[str | None] = mapped_column(String(128))  # null on legs
+    alpaca_order_id: Mapped[str] = mapped_column(String(64))
+    parent_order_id: Mapped[str | None] = mapped_column(String(64))  # set on legs
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    asset_class: Mapped[str | None] = mapped_column(String(12))  # us_equity | us_option | crypto
+    side: Mapped[str | None] = mapped_column(String(4))  # buy | sell
+    kind: Mapped[str | None] = mapped_column(String(8))  # entry | exit | stop
+    order_type: Mapped[str | None] = mapped_column(String(14))
+    tif: Mapped[str | None] = mapped_column(String(6))
+    order_class: Mapped[str | None] = mapped_column(String(10))
+    limit_price: Mapped[float | None] = mapped_column(Float)
+    stop_price: Mapped[float | None] = mapped_column(Float)
+    qty: Mapped[float | None] = mapped_column(Float)
+    notional: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str | None] = mapped_column(String(24))
+    filled_qty: Mapped[float | None] = mapped_column(Float)
+    filled_avg_price: Mapped[float | None] = mapped_column(Float)
+    submitted_at: Mapped[str | None] = mapped_column(String(40))  # ISO text
+    filled_at: Mapped[str | None] = mapped_column(String(40))
+    canceled_at: Mapped[str | None] = mapped_column(String(40))
+    raw: Mapped[dict | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now())
+
+
+class DeskActivity(Base):
+    """Append-only mirror of Alpaca account activities (FILL, SSP splits,
+    OPASN/OPEXP option events — both OPEXC and OPXRC exercise codes — CFEE,
+    …), cursor-synced by unique ``alpaca_activity_id``. On paper, option
+    non-trade activities land T+1 — grading never waits on same-day rows."""
+
+    __tablename__ = "desk_activities"
+    __table_args__ = (
+        UniqueConstraint("alpaca_activity_id", name="uq_desk_activities_alpaca_id"),
+        Index("idx_desk_activities_date", "account", "date"),
+        Index("idx_desk_activities_symbol", "account", "symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    alpaca_activity_id: Mapped[str] = mapped_column(String(64))
+    activity_type: Mapped[str] = mapped_column(String(12), index=True)
+    date: Mapped[str | None] = mapped_column(String(10))  # YYYY-MM-DD
+    symbol: Mapped[str | None] = mapped_column(String(24))
+    side: Mapped[str | None] = mapped_column(String(10))
+    qty: Mapped[float | None] = mapped_column(Float)
+    price: Mapped[float | None] = mapped_column(Float)
+    net_amount: Mapped[float | None] = mapped_column(Float)
+    alpaca_order_id: Mapped[str | None] = mapped_column(String(64))
+    raw: Mapped[dict | None] = mapped_column(JSON)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class DeskPortfolioSnapshot(Base):
+    """One nightly snapshot per trading day: account equity + the positions
+    map. Durability (portfolio-history survives nothing we don't copy) plus
+    the split-reconciliation guard's baseline — yesterday's qty × split ratio
+    must equal today's Alpaca qty, or the divergence is journaled loudly."""
+
+    __tablename__ = "desk_portfolio_history"
+    __table_args__ = (
+        UniqueConstraint("account", "snap_date", name="uq_desk_pf_hist_date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    snap_date: Mapped[str] = mapped_column(String(10))  # ET trading date
+    equity: Mapped[float | None] = mapped_column(Float)
+    cash: Mapped[float | None] = mapped_column(Float)
+    profit_loss: Mapped[float | None] = mapped_column(Float)
+    base_value: Mapped[float | None] = mapped_column(Float)
+    positions: Mapped[dict | None] = mapped_column(JSON)  # symbol → {qty, avg_entry_price}
+    captured_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
@@ -1008,4 +1114,76 @@ DESK_TABLE_DDL: list[str] = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_desk_proposals_status ON desk_proposals (account, status)",
     "ALTER TABLE desk_proposals ENABLE ROW LEVEL SECURITY",
+    # v10.0.0 (REBUILD-V4): Alpaca-paper mirror — orders, activities, and the
+    # nightly portfolio snapshot. Cache/archive of the broker's book of
+    # record; Alpaca wins every conflict.
+    """CREATE TABLE IF NOT EXISTS desk_orders (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        run_id VARCHAR(48),
+        seq INTEGER,
+        client_order_id VARCHAR(128),
+        alpaca_order_id VARCHAR(64) NOT NULL,
+        parent_order_id VARCHAR(64),
+        symbol VARCHAR(24) NOT NULL,
+        asset_class VARCHAR(12),
+        side VARCHAR(4),
+        kind VARCHAR(8),
+        order_type VARCHAR(14),
+        tif VARCHAR(6),
+        order_class VARCHAR(10),
+        limit_price FLOAT,
+        stop_price FLOAT,
+        qty FLOAT,
+        notional FLOAT,
+        status VARCHAR(24),
+        filled_qty FLOAT,
+        filled_avg_price FLOAT,
+        submitted_at VARCHAR(40),
+        filled_at VARCHAR(40),
+        canceled_at VARCHAR(40),
+        raw JSON,
+        updated_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_desk_orders_alpaca_id UNIQUE (alpaca_order_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_orders_run ON desk_orders (account, run_id)",
+    "CREATE INDEX IF NOT EXISTS idx_desk_orders_symbol ON desk_orders (account, symbol)",
+    "ALTER TABLE desk_orders ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_activities (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        alpaca_activity_id VARCHAR(64) NOT NULL,
+        activity_type VARCHAR(12) NOT NULL,
+        date VARCHAR(10),
+        symbol VARCHAR(24),
+        side VARCHAR(10),
+        qty FLOAT,
+        price FLOAT,
+        net_amount FLOAT,
+        alpaca_order_id VARCHAR(64),
+        raw JSON,
+        ingested_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_desk_activities_alpaca_id UNIQUE (alpaca_activity_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_desk_activities_date ON desk_activities (account, date)",
+    "CREATE INDEX IF NOT EXISTS idx_desk_activities_symbol ON desk_activities (account, symbol)",
+    "ALTER TABLE desk_activities ENABLE ROW LEVEL SECURITY",
+    """CREATE TABLE IF NOT EXISTS desk_portfolio_history (
+        id SERIAL PRIMARY KEY,
+        account VARCHAR(30) DEFAULT 'agent',
+        snap_date VARCHAR(10) NOT NULL,
+        equity FLOAT,
+        cash FLOAT,
+        profit_loss FLOAT,
+        base_value FLOAT,
+        positions JSON,
+        captured_at TIMESTAMP DEFAULT NOW(),
+        CONSTRAINT uq_desk_pf_hist_date UNIQUE (account, snap_date)
+    )""",
+    "ALTER TABLE desk_portfolio_history ENABLE ROW LEVEL SECURITY",
+    # agent.backup's size check on the REST lane — PostgREST cannot run
+    # pg_database_size directly, so it calls this function via /rpc.
+    """CREATE OR REPLACE FUNCTION edgefinder_db_size() RETURNS bigint
+       LANGUAGE sql SECURITY DEFINER
+       AS 'SELECT pg_database_size(current_database())'""",
 ]

@@ -153,13 +153,18 @@ def test_alpaca_bars_to_rows():
     assert r["transactions"] == 5000 and isinstance(r["transactions"], int)
 
 
-def test_no_alpaca_order_writes_anywhere():
-    """Contract (P0 verifier caveat): no repo code reaches Alpaca order writes,
-    even via the raw .trading client."""
+def test_no_alpaca_order_writes_outside_trade_module():
+    """Contract (REBUILD-V4): agent/trade.py is the ONLY module that reaches
+    Alpaca order writes — it is paper-only by construction (distinct paper
+    keys, hard-coded paper=True). Everything else, including the data-reader
+    broker.py, stays write-free exactly as the V3 charter demanded."""
     import pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
+    allowed = {root / "agent" / "trade.py"}
     for d in ("agent", "dashboard", "edgefinder", "scripts", "config"):
         for f in (root / d).rglob("*.py"):
+            if f in allowed:
+                continue
             src = f.read_text()
             for bad in ("submit_order", "cancel_order", "replace_order",
                         "close_position", "close_all_positions"):
