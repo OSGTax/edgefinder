@@ -32,14 +32,10 @@ class Settings(BaseSettings):
     # (SEC fair-access policy). Owner-approved contact, 2026-07-14.
     edgar_user_agent: str = "EdgeFinder mike@oshorelinegroup.com"
 
-    # ── AUTONOMY LOOP (v9.11.0) ──────────────────────
-    # The always-on streamer fires the repo's trading-agent workflow when a
-    # planned wake comes due or a tripwire trips. Token is a fine-grained
-    # PAT with Actions:write ONLY on this repo (it cannot push code or read
-    # secrets — least privilege by construction). Empty = dispatch off.
-    github_dispatch_token: str = ""
-    github_dispatch_repo: str = "OSGTax/edgefinder"
-    github_dispatch_workflow: str = "trading-agent.yml"
+    # ── GITHUB (owner-approval channel) ──────────────
+    # The repo where PROPOSAL-<id> issues live (agent.knowledge
+    # proposal-publish / proposal-sync).
+    github_repo: str = "OSGTax/edgefinder"
 
     # ── OWNER APPROVAL (v9.17.0) ─────────────────────
     # Learned-behavior changes (strategy pivots, cap raises) need the owner's

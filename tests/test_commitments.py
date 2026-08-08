@@ -59,11 +59,9 @@ def test_trim_with_structured_commitment_accepted_and_materialized(store):
     c = rows[0]
     assert c["kind"] == "reentry" and c["direction"] == "above"
     assert c["level"] == 325.0 and c["status"] == "open"
-    # a linked advisory tripwire was armed
-    assert c["watch_id"] is not None
-    w = store.select("desk_watch", filters={"id": c["watch_id"]})[0]
-    assert w["kind"] == "above" and w["level"] == 325.0
-    assert "commitment" in w["reason"]
+    # V4: no linked tripwire — the machine check is grade's sweep over
+    # stored daily closes; a fired clause surfaces in context next cycle.
+    assert c["watch_id"] is None
 
 
 def test_clause_reworded_without_promise_passes(store):

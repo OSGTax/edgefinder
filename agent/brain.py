@@ -429,10 +429,11 @@ def _validate_claim_citations(store, *, picks: list | None,
 def _materialize_commitments(store, *, run_id: str, picks: list | None,
                              account: str) -> list[dict]:
     """Turn each pick's structured ``commitment`` into a ``desk_commitments``
-    row and arm a linked ADVISORY tripwire, so a fired clause wakes the agent
-    through the always-on sweep. Idempotent by (run_id, symbol): a re-save
-    never duplicates or clobbers a commitment that already fired. A missing
-    table (pre-deploy) degrades to a no-op — the decision itself still saved."""
+    row. The machine check is grade's sweep over stored daily closes
+    (REBUILD-V4 — the always-on tripwire sweep is gone; a fired clause
+    surfaces in context as an obligation at the next cycle). Idempotent by
+    (run_id, symbol): a re-save never duplicates or clobbers a commitment
+    that already fired. A missing table (pre-deploy) degrades to a no-op."""
     from datetime import timedelta as _timedelta
 
     made: list[dict] = []
@@ -467,20 +468,7 @@ def _materialize_commitments(store, *, run_id: str, picks: list | None,
             "until": until, "text": str(c.get("text") or "").strip(),
             "status": "open", "created_at": _utcnow()})
         cid = rows[0]["id"] if rows else None
-        watch_id = None
-        if level is not None and direction in ("above", "below"):
-            w = watch_set(
-                store, symbol=sym,
-                above=(level if direction == "above" else None),
-                below=(level if direction == "below" else None),
-                reason=f"commitment {cid} ({kind}): {str(c.get('text') or '')[:160]}",
-                until=until.isoformat(), run_id=run_id, account=account)
-            watch_id = w.get("id") if w.get("ok") else None
-            if watch_id and cid is not None:
-                store.update("desk_commitments", {"id": cid},
-                             {"watch_id": watch_id}, returning=False)
-        made.append({"id": cid, "symbol": sym, "kind": kind,
-                     "watch_id": watch_id})
+        made.append({"id": cid, "symbol": sym, "kind": kind})
     return made
 
 
@@ -539,171 +527,63 @@ def save_decision(store=None, *, run_id: str, regime: str | None = None,
 # after wake-plan says ok, so the cap and minimum gap are enforced and every
 # planned check-in is on the record for the desk.
 
-WAKE_MAX_PER_DAY = 40     # self-scheduled wakes per ET day. Sized for the rolling
-                          # chain (v9.12.0): prep + a 15-60-min chain across the
-                          # session + wrap needs up to ~28. Raised from 30
-                          # (2026-07-23, owner-directed) for headroom when the
-                          # chain leans toward the tight end of its range more
-                          # often — comfortably under the 60-row wake reads in
-                          # this module and wake_due(). The dispatcher honors
-                          # every plan, so the cap IS the cadence ceiling.
-WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes — kept as the FLOOR:
-                          # a cycle itself can run close to 10 minutes end to
-                          # end, and GH Actions serializes cycles (no two run
-                          # concurrently), so a shorter gap risks a wake coming
-                          # due while the prior cycle is still running.
+WAKE_MAX_PER_DAY = 40     # self-scheduled wakes per ET day. Sized for the
+                          # rolling chain: prep + a 15-60-min chain across the
+                          # session + wrap needs up to ~28. The cap is the
+                          # SUBSCRIPTION-USAGE ceiling now (REBUILD-V4): each
+                          # honored plan becomes a one-shot Routine trigger the
+                          # cycle arms itself, so every extra run is counted
+                          # here before it can exist.
+WAKE_MIN_GAP_MIN = 15     # minutes between planned wakes — the FLOOR: a cycle
+                          # can run close to 10 minutes end to end, so a
+                          # shorter gap risks a wake coming due while the
+                          # prior cycle is still running.
 
 
-def watch_set(store=None, *, symbol: str, above: float | None = None,
-              below: float | None = None, reason: str,
-              until: str | None = None, hours: float = 24.0,
-              run_id: str | None = None, hard: bool = False,
-              account: str = "agent") -> dict:
-    """Arm one tripwire. Exactly one of above/below; reason is mandatory —
-    an unexplained tripwire is noise waiting to happen.
+def chain_health(store=None, *, account: str = "agent",
+                 now: datetime | None = None) -> dict:
+    """Is the wake chain alive? The hourly floor Routine's first read
+    (REBUILD-V4 — the in-process successor of scripts/wake_gate.py).
 
-    ``hard`` arms a HARD STOP instead of an advisory wire: when the live mid
-    touches the level, the streamer itself SELLS THE WHOLE POSITION through
-    the ledger's normal fill gates (see agent.streamer.execute_hard_stop).
-    Opt-in per position — plain above/below wires never trade. A hard stop
-    must be a --below level on a currently-held long EQUITY position, below
-    the market so it can't fire the moment it's armed. Arm-time rules —
-    protection that cannot fire must not arm:
-    - equities only: the sweep watches the equity SIP websocket cache, and
-      crypto quotes never enter it, so a crypto hard stop could never trip;
-    - the shares must not be backing short calls (a covered-call exit would
-      trip and then fail the ledger's coverage gate — leg out first);
-    - a live/last reference price must exist to prove the level sits below
-      the market (retry once a quote is up)."""
+    ``should_run`` is True when a wake-plan is DUE, or it is desk hours
+    (9:00–16:30 ET, weekday) with no cycle in the last 25 minutes — the
+    chain went quiet and the floor session should run a full cycle to
+    restart it. A healthy chain makes floor firings a cheap early exit.
+    Market holidays read as weekdays here (accepted cost: a handful of
+    short no-op cycles a year)."""
     from datetime import timedelta
+    from zoneinfo import ZoneInfo
 
     store = store or _store()
-    symbol = symbol.upper()
-    if (above is None) == (below is None):
-        return {"ok": False, "error": "pass exactly one of --above / --below"}
-    if not (reason or "").strip():
-        return {"ok": False, "error": "--reason is required"}
-    level = above if above is not None else below
-    if level is None or level <= 0:
-        return {"ok": False, "error": "level must be positive"}
-    kind = "above" if above is not None else "below"
-    if hard:
-        from agent import broker, occ
-
-        if below is None:
-            return {"ok": False, "error": "a hard stop is a --below level on "
-                                          "a long position — pass --below"}
-        if occ.is_option(symbol):
-            return {"ok": False, "error": "hard stops protect long equity "
-                                          "share positions, not option contracts"}
-        if broker.is_crypto(symbol):
-            # protection that cannot trip must not arm: the sweep only sees
-            # the equity SIP websocket cache — crypto quotes never enter it
-            return {"ok": False, "error":
-                    f"hard stops are equity-only: the streamer's sweep "
-                    f"watches the equity SIP tape and {symbol} quotes never "
-                    "enter it, so this stop could never trip — manage crypto "
-                    "exits in-cycle (or arm an advisory wire and act on the "
-                    "trip yourself)"}
-        pos = store.select("desk_positions",
-                           filters={"account": account, "symbol": symbol}, limit=1)
-        held = float(pos[0]["shares"]) if pos else 0.0
-        if held <= 0:
-            return {"ok": False, "error": f"no long {symbol} position to "
-                                          "protect — hard stops arm on names you hold"}
-        # Shares that back short calls cannot sell: the stop would trip and
-        # then fail the ledger's coverage gate — dead protection. Same math
-        # record_trade runs at fill time, applied at arm time instead.
-        from agent.ledger import (_check_equity_sell_keeps_calls_covered,
-                                  _positions_map)
-
-        err = _check_equity_sell_keeps_calls_covered(
-            _positions_map(store, account), symbol, held)
-        if err:
-            return {"ok": False, "error":
-                    f"cannot arm a hard stop on {symbol}: {err}. A stop on "
-                    "covered-call shares would trip and then fail the same "
-                    "coverage gate — leg out of the short calls before arming"}
-        px = None
-        try:
-            if broker.enabled():
-                q = broker.Broker().quotes([symbol]).get(symbol) or {}
-                px = q.get("mid") or q.get("bid") or q.get("ask")
-        except Exception:  # noqa: BLE001 — fall back to the last mark
-            px = None
-        if px is None and pos:
-            px = pos[0].get("last_price")
-        if px is None:
-            # Strict: without a reference price we cannot prove the level
-            # sits below the market — an at/above-market stop would fire
-            # the moment the tape wakes up.
-            return {"ok": False, "error":
-                    f"no live or last reference price for {symbol} — cannot "
-                    "verify the stop sits below the market; retry once a "
-                    "quote is up (after the streamer warms or a mark runs)"}
-        if float(level) >= float(px):
-            return {"ok": False, "error":
-                    f"hard stop at {float(level):g} would fire instantly — "
-                    f"{symbol} trades at {float(px):g}; pick a level below "
-                    "the market"}
-        kind = "hard_stop"
-    expiry = (datetime.fromisoformat(until) if until
-              else _utcnow() + timedelta(hours=hours))
-    rows = store.insert("desk_watch", {
-        "account": account, "run_id": run_id, "symbol": symbol,
-        "kind": kind, "level": float(level), "reason": reason.strip(),
-        "armed_at": _utcnow(), "until": expiry, "status": "armed"})
-    return {"ok": True, "id": rows[0]["id"] if rows else None,
-            "symbol": symbol, "kind": kind,
-            "level": float(level), "until": str(expiry)}
-
-
-def watch_list(store=None, *, include_done: bool = False,
-               account: str = "agent") -> dict:
-    """Armed + tripped wires (the brain reads TRIPPED first at every wake)."""
-    store = store or _store()
-    rows = store.select("desk_watch", filters={"account": account},
-                        order=[("id", "desc")], limit=100)
-    out = {"tripped": [], "armed": [], "done": []}
-    now = _utcnow()
-    for r in rows:
-        until = r.get("until")
-        if isinstance(until, str):
-            try:
-                until = datetime.fromisoformat(until.replace("Z", "+00:00"))
-                until = until.replace(tzinfo=None)
-            except ValueError:
-                until = None
-        status = r.get("status")
-        if status == "armed" and until is not None and until < now:
-            status = "expired"  # lazily reported; the sweep also writes it
-        entry = {k: (str(v) if isinstance(v, datetime) else v)
-                 for k, v in r.items()}
-        entry["status"] = status
-        # exec_failed (a hard stop that tripped but was gated, e.g. market
-        # closed) surfaces WITH the tripped wires — it is an unhandled trip
-        # the next cycle must address first.
-        if status in ("tripped", "exec_failed"):
-            out["tripped"].append(entry)
-        elif status == "armed":
-            out["armed"].append(entry)
-        elif include_done:
-            out["done"].append(entry)
-    if not include_done:
-        out.pop("done")
-    return out
-
-
-def watch_clear(store=None, *, watch_id: int, account: str = "agent") -> dict:
-    """Disarm one wire (position exited, level no longer relevant)."""
-    store = store or _store()
-    rows = store.select("desk_watch",
-                        filters={"account": account, "id": watch_id}, limit=1)
-    if not rows:
-        return {"ok": False, "error": f"no watch id {watch_id}"}
-    store.update("desk_watch", {"id": watch_id}, {"status": "disarmed"},
-                 returning=False)
-    return {"ok": True, "id": watch_id, "status": "disarmed"}
+    now = now or _utcnow()
+    now_et = (now.replace(tzinfo=timezone.utc)
+              .astimezone(ZoneInfo("America/New_York")))
+    desk_hours = (now_et.weekday() < 5
+                  and (9, 0) <= (now_et.hour, now_et.minute) < (16, 30))
+    due = wake_due(store, account=account)
+    wakes_due = bool(due.get("due"))
+    recent_min = None
+    try:
+        rows = store.select("desk_decisions", columns="ts",
+                            filters={"account": account},
+                            order=[("ts", "desc")], limit=1)
+        if rows:
+            ts = rows[0]["ts"]
+            if isinstance(ts, str):
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                ts = (ts.astimezone(timezone.utc).replace(tzinfo=None)
+                      if ts.tzinfo else ts)
+            recent_min = round((now - ts) / timedelta(minutes=1), 1)
+    except Exception:  # noqa: BLE001 — no decisions yet → chain never started
+        recent_min = None
+    chain_quiet = recent_min is None or recent_min > 25
+    should_run = wakes_due or (desk_hours and chain_quiet)
+    return {"should_run": should_run, "desk_hours": desk_hours,
+            "wakes_due": wakes_due,
+            "last_cycle_minutes_ago": recent_min,
+            "note": ("wake due — run it" if wakes_due else
+                     "chain quiet during desk hours — restart it" if should_run
+                     else "chain healthy — exit without a cycle")}
 
 
 def wake_plan(store=None, *, at: str, reason: str,
@@ -1118,7 +998,7 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
     ``agent.market brief`` does), the whole lessons wiki (already size-
     capped), the living strategy, every open prediction joined to its latest
     machine-graded desk_outcomes facts, a condensed outcomes summary over
-    ``days``, tripped/exec_failed tripwires, and due/missed wake-plans.
+    ``days``, fired-unhonored commitments, and due/missed wake-plans.
     Bounded on purpose — free text is clipped and lists capped, so this
     stays a working set, not a dump; drill into any section with the
     individual tools. A dead section lands in ``errors`` instead of killing
@@ -1237,15 +1117,6 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
 
     outcomes_out = _safe("outcomes", _outcomes, {})
 
-    def _watches():
-        wl = watch_list(store, account=account)
-        return {"tripped": wl.get("tripped") or [],
-                "armed": [{k: w.get(k) for k in
-                           ("id", "symbol", "kind", "level", "reason", "until")}
-                          for w in wl.get("armed") or []]}
-
-    watches = _safe("watches", _watches, {})
-
     def _commitments():
         # Fired-and-unhonored FIRST — these are obligations the cycle must
         # face (act, or record standing down). Open ones are still watching.
@@ -1294,13 +1165,13 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
             "note": "the cycle's working memory in one read — account header,"
                     " brief, wiki, tier-gated claims, strategy, open"
                     " predictions with their machine-graded facts, recent"
-                    " outcomes, tripped wires, fired-unhonored commitments,"
-                    " due wakes. Free text is clipped; drill in with the"
-                    " individual tools.",
+                    " outcomes, fired-unhonored commitments, due wakes."
+                    " Free text is clipped; drill in with the individual"
+                    " tools.",
             "account": account_out, "brief": brief, "wiki": wiki,
             "claims": claims, "strategy": strategy,
             "open_predictions": open_predictions,
-            "outcomes": outcomes_out, "watches": watches,
+            "outcomes": outcomes_out,
             "commitments": commitments, "wakes": wakes,
             "errors": errors}
 
@@ -1357,27 +1228,6 @@ def main(argv: list[str] | None = None) -> None:
                          help="one revision's full body (omit to list)")
     wh_hist.add_argument("--limit", type=int, default=20)
 
-    wset = sub.add_parser("watch-set", help="arm a tripwire on the live tape")
-    wset.add_argument("--symbol", required=True)
-    wset.add_argument("--above", type=float, default=None)
-    wset.add_argument("--below", type=float, default=None)
-    wset.add_argument("--reason", required=True)
-    wset.add_argument("--until", default=None, help="ISO UTC expiry")
-    wset.add_argument("--hours", type=float, default=24.0,
-                      help="expiry horizon when --until not given")
-    wset.add_argument("--run-id", default=None)
-    wset.add_argument("--hard", action="store_true",
-                      help="arm a HARD STOP: the streamer sells the WHOLE "
-                           "position through the normal fill gates when the "
-                           "level trips (long EQUITY positions only — crypto "
-                           "never reaches the sweep's tape; --below required)")
-
-    wl = sub.add_parser("watch-list")
-    wl.add_argument("--all", action="store_true", dest="include_done")
-
-    wc = sub.add_parser("watch-clear")
-    wc.add_argument("--id", type=int, required=True, dest="watch_id")
-
     wp = sub.add_parser("wake-plan",
                         help="budget-gate + record a self-scheduled check-in")
     wp.add_argument("--at", required=True, help="ISO UTC fire time")
@@ -1386,6 +1236,10 @@ def main(argv: list[str] | None = None) -> None:
 
     wd = sub.add_parser("wake-due",
                         help="unhonored due wake-plans (check at cycle start)")
+
+    sub.add_parser("chain-health",
+                   help="is the wake chain alive? (floor-fired sessions exit "
+                        "early when healthy)")
 
     wh = sub.add_parser("wake-honor")
     wh.add_argument("--id", type=int, required=True, dest="wake_id")
@@ -1466,21 +1320,13 @@ def main(argv: list[str] | None = None) -> None:
             watchlist=_load_json(args.watchlist_file),
             rejected=_load_json(args.rejected_file),
             strategy_version=args.strategy_version), indent=2))
-    elif args.cmd == "watch-set":
-        print(json.dumps(watch_set(
-            store, symbol=args.symbol, above=args.above, below=args.below,
-            reason=args.reason, until=args.until, hours=args.hours,
-            run_id=args.run_id, hard=args.hard), indent=2))
-    elif args.cmd == "watch-list":
-        print(json.dumps(watch_list(store, include_done=args.include_done),
-                         indent=2))
-    elif args.cmd == "watch-clear":
-        print(json.dumps(watch_clear(store, watch_id=args.watch_id), indent=2))
     elif args.cmd == "wake-plan":
         print(json.dumps(wake_plan(store, at=args.at, reason=args.reason,
                                    run_id=args.run_id), indent=2))
     elif args.cmd == "wake-due":
         print(json.dumps(wake_due(store), indent=2, default=str))
+    elif args.cmd == "chain-health":
+        print(json.dumps(chain_health(store), indent=2, default=str))
     elif args.cmd == "wake-honor":
         print(json.dumps(wake_honor(store, wake_id=args.wake_id,
                                     run_id=args.run_id), indent=2))

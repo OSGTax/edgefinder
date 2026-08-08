@@ -351,33 +351,6 @@ def test_close_band_rebases_reference_across_split(store, monkeypatch):
     assert any("rebased" in w for w in r.get("warnings", []))
 
 
-# ── dispatcher: edge-trigger vs FAILED dispatches; day cap countable ──
-
-
-def test_failed_dispatch_does_not_silence_a_trip():
-    from agent.streamer import dispatch_reason
-    now = datetime(2026, 7, 15, 15, 0)
-    watches = [{"id": 5, "status": "tripped", "symbol": "AMD",
-                "kind": "below", "level": 100.0,
-                "tripped_at": now - timedelta(minutes=30)}]
-    failed = [{"ts": now - timedelta(minutes=20), "status": "failed"}]
-    d = dispatch_reason([], watches, failed, now=now)
-    assert d is not None and d["watch_ids"] == [5]
-    sent = [{"ts": now - timedelta(minutes=20), "status": "sent"}]
-    assert dispatch_reason([], watches, sent, now=now) is None  # edge held
-
-
-def test_dispatch_day_cap_binds():
-    from agent.streamer import DISPATCH_MAX_PER_DAY, dispatch_reason
-    now = datetime(2026, 7, 15, 20, 0)   # 15:00-16:00 ET, same ET day
-    wakes = [{"id": 1, "at": now - timedelta(hours=1),
-              "honored_run_id": None, "dispatch_count": 0}]
-    mk = lambda n: [{"ts": now - timedelta(minutes=6 * (i + 1)),
-                     "status": "sent"} for i in range(n)]
-    assert dispatch_reason(wakes, [], mk(DISPATCH_MAX_PER_DAY - 1), now=now)
-    assert dispatch_reason(wakes, [], mk(DISPATCH_MAX_PER_DAY), now=now) is None
-
-
 def test_token_bucket_prune_actually_prunes():
     from dashboard.routers.desk import _TokenBucket
     b = _TokenBucket(capacity=2.0, refill_per_sec=1000.0)

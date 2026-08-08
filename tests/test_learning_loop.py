@@ -499,8 +499,7 @@ def test_verdict_requires_a_graded_row_and_a_known_verdict(store):
 
 def test_context_aggregates_and_stays_bounded(store, monkeypatch):
     from agent import trade as trade_mod
-    from agent.brain import (CONTEXT_CLIP, context, set_wiki, set_state,
-                             watch_set)
+    from agent.brain import CONTEXT_CLIP, context, set_wiki, set_state
     from agent.grade import grade as grade_run
 
     t0 = datetime.utcnow() - timedelta(days=3)
@@ -534,17 +533,15 @@ def test_context_aggregates_and_stays_bounded(store, monkeypatch):
         "cash": 99_000.0, "equity": 100_040.0, "buying_power": 99_000.0,
         "total_pnl": 40.0, "total_return_pct": 0.04,
         "positions": [dict(xyz_pos, weight=0.0104)]})
-    watch_set(store, symbol="XYZ", below=95.0, reason="kill level")
-    store.update("desk_watch", {"symbol": "XYZ"},
-                 {"status": "tripped", "tripped_price": 94.5}, returning=False)
     from agent.brain import wake_plan
     at = (datetime.utcnow() + timedelta(hours=2)).isoformat() + "Z"
     assert wake_plan(store, at=at, reason="pre-close check")["ok"]
 
     ctx = context(store, days=14)
-    # every section present
+    # every section present (V4: no watches — tripwires are gone; stops
+    # rest on Alpaca's book and appear in the open-orders read)
     for key in ("account", "brief", "wiki", "strategy", "open_predictions",
-                "outcomes", "watches", "wakes", "errors"):
+                "outcomes", "commitments", "wakes", "errors"):
         assert key in ctx, key
     assert ctx["errors"] == {}
     # account header off the paper account
@@ -565,8 +562,7 @@ def test_context_aggregates_and_stays_bounded(store, monkeypatch):
     assert len(run["summary"]) <= CONTEXT_CLIP
     assert run["summary"].endswith("…")
     assert len(ctx["strategy"]["thesis"]) <= 2000
-    # tripped wires and the planned next look surface
-    assert ctx["watches"]["tripped"][0]["symbol"] == "XYZ"
+    # the planned next look surfaces
     assert ctx["wakes"]["upcoming"][0]["reason"] == "pre-close check"
     # the whole payload stays a working set, not a dump
     assert len(json.dumps(ctx, default=str)) < 20_000

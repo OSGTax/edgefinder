@@ -793,7 +793,7 @@ def proposal_sync(store=None, *, proposal_id: int, fetch=None,
             return {"ok": False, "error":
                     "no issues:read token (github_read_token / GITHUB_TOKEN) — "
                     "use the CLI fallback: knowledge proposal-approve"}
-        repo = settings.github_dispatch_repo
+        repo = settings.github_repo
         data = _fetch_github_issue(repo, f"PROPOSAL-{proposal_id}", token)
     else:
         data = fetcher(f"PROPOSAL-{proposal_id}")
@@ -865,7 +865,7 @@ def proposal_publish(store=None, *, proposal_id: int, post=None,
                     "no GitHub token with issues:write — the owner can still "
                     "approve via: knowledge proposal-approve --id "
                     f"{proposal_id}"}
-        repo = settings.github_dispatch_repo
+        repo = settings.github_repo
 
         def post(t, b):  # noqa: ANN001 — matches the injectable signature
             existing = _fetch_github_issue(repo, t, token)
