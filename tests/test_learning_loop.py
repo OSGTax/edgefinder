@@ -1,7 +1,10 @@
-"""C3: the learning loop in code — `agent.ledger grade` materializes
-machine facts into desk_outcomes, `agent.brain verdict` stores the weekly
-reflection's judgment durably next to those facts, and `agent.brain context`
-puts the cycle's whole working memory in one bounded read.
+"""C3: the learning loop in code — `agent.grade run` materializes machine
+facts into desk_outcomes from the Alpaca mirror, `agent.brain verdict`
+stores the weekly reflection's judgment durably next to those facts, and
+`agent.brain context` puts the cycle's whole working memory in one
+bounded read. Deep grade mechanics live in test_grade_alpaca.py; this
+file keeps the loop-level contracts: windows, races, pre-deploy grace,
+the verdict write path, and context.
 """
 
 from __future__ import annotations
@@ -31,11 +34,29 @@ def q(px):
     return {"bid": px, "ask": px, "mid": px, "t": "x", "src": "test"}
 
 
+_OID = iter(range(1, 10_000))
+
+
 def _seed_trade(store, run_id, symbol, side, shares, price, ts):
-    store.insert("desk_trades", {
-        "account": "agent", "run_id": run_id, "symbol": symbol, "side": side,
-        "shares": shares, "price": price, "dollars": round(shares * price, 2),
-        "ts": ts}, returning=False)
+    """A filled order in the Alpaca mirror — the V4 shape of 'a fill'."""
+    n = next(_OID)
+    store.insert("desk_orders", {
+        "account": "agent", "run_id": run_id, "seq": n,
+        "client_order_id": f"{run_id}:{n:02d}", "alpaca_order_id": f"lo-{n}",
+        "symbol": symbol, "asset_class": "us_equity",
+        "side": side.lower(), "kind": "entry" if side == "BUY" else "exit",
+        "order_type": "market", "tif": "day", "qty": shares,
+        "status": "filled", "filled_qty": shares, "filled_avg_price": price,
+        "filled_at": ts.isoformat() + "+00:00"}, returning=False)
+
+
+def _pos(symbol, qty, avg, cur):
+    return {"symbol": symbol, "asset_class": "us_equity", "qty": qty,
+            "qty_available": qty, "avg_entry_price": avg,
+            "current_price": cur, "market_value": (cur or avg) * qty,
+            "cost_basis": avg * qty,
+            "unrealized_pl": round(((cur or avg) - avg) * qty, 2),
+            "unrealized_plpc": None, "change_today": None, "side": "long"}
 
 
 def _seed_close(store, symbol, day, close):
@@ -69,7 +90,7 @@ def _buy_pick(symbol, kill="closes below $90", horizon=2):
 
 
 def test_parse_kill():
-    from agent.ledger import _parse_kill
+    from agent.grade import _parse_kill
     assert _parse_kill("closes below 90") == 90.0
     assert _parse_kill("closes below $385") == 385.0
     # a $-prefixed level wins over other numbers in the sentence
@@ -102,229 +123,13 @@ def test_parse_kill():
     assert _parse_kill(87.5, entry_px=100.0) == 87.5
 
 
-# ── grade: machine facts ──
-
-
-def test_grade_materializes_open_pick_facts(store):
-    """Entry facts, horizon-in-sessions math, kill parse + breach against
-    stored daily closes — all machine, no LLM."""
-    from agent import ledger
-
-    t0 = datetime.utcnow() - timedelta(days=6)
-    entry_day = ledger._et_date(t0)
-    _seed_spy(store, days=10)
-    _decision(store, "G", [_buy_pick("XYZ", kill="closes below $90",
-                                     horizon=2)], t0)
-    _seed_trade(store, "G", "XYZ", "BUY", 10, 100.0, t0)
-    # closes between entry and today: one dipped through the kill
-    _seed_close(store, "XYZ",
-                date.fromisoformat(entry_day) + timedelta(days=1), 85.0)
-    _seed_close(store, "XYZ",
-                date.fromisoformat(entry_day) + timedelta(days=2), 95.0)
-    ledger.mark(store, prices={"XYZ": 95.0})
-
-    out = ledger.grade(store, days=30)
-    assert out["graded"] == 1
-    row = store.select("desk_outcomes",
-                       filters={"run_id": "G", "symbol": "XYZ"})[0]
-    assert row["entry_avg_px"] == 100.0
-    assert row["status"] == "open" and row["mark_basis"] == "mark"
-    assert row["since_pct"] == pytest.approx(-5.0)
-    assert row["mark_px"] == pytest.approx(95.0)
-    assert row["spy_pct"] == pytest.approx(0.0)     # SPY flat over the window
-    assert row["alpha_pct"] == pytest.approx(-5.0)
-    assert row["horizon_days"] == 2
-    assert bool(row["horizon_elapsed"]) is True     # ≥ 2 SPY sessions elapsed
-    assert row["kill_level"] == 90.0
-    assert bool(row["kill_breached"]) is True       # the 85 close touched it
-    assert row["verdict"] is None                   # machine facts only
-
-
-def test_grade_horizon_not_elapsed_and_kill_not_breached(store):
-    from agent import ledger
-
-    t0 = datetime.utcnow() - timedelta(days=6)
-    entry_day = ledger._et_date(t0)
-    _seed_spy(store, days=10)
-    _decision(store, "H", [_buy_pick("ABC", kill="closes below $50",
-                                     horizon=100)], t0)
-    _seed_trade(store, "H", "ABC", "BUY", 10, 100.0, t0)
-    _seed_close(store, "ABC",
-                date.fromisoformat(entry_day) + timedelta(days=1), 98.0)
-    ledger.mark(store, prices={"ABC": 98.0})
-
-    ledger.grade(store, days=30)
-    row = store.select("desk_outcomes",
-                       filters={"run_id": "H", "symbol": "ABC"})[0]
-    assert bool(row["horizon_elapsed"]) is False    # 100 sessions not elapsed
-    assert bool(row["kill_breached"]) is False      # no close touched 50
-    # free-text kill that doesn't parse → both fields honestly null
-    _decision(store, "H2", [_buy_pick("DEF",
-                                      kill="thesis breaks on a guidance cut")],
-              t0)
-    _seed_trade(store, "H2", "DEF", "BUY", 10, 100.0, t0)
-    ledger.grade(store, days=30)
-    row2 = store.select("desk_outcomes",
-                        filters={"run_id": "H2", "symbol": "DEF"})[0]
-    assert row2["kill_level"] is None and row2["kill_breached"] is None
-
-
-def test_grade_closed_round_trip_uses_exit_basis(store):
-    from agent import ledger
-
-    t0 = datetime.utcnow() - timedelta(days=6)
-    _seed_spy(store, days=10)
-    _decision(store, "C", [_buy_pick("XYZ")], t0)
-    _seed_trade(store, "C", "XYZ", "BUY", 10, 100.0, t0)
-    _seed_trade(store, "C", "XYZ", "SELL", 10, 110.0,
-                datetime.utcnow() - timedelta(days=1))
-    ledger.grade(store, days=30)
-    row = store.select("desk_outcomes",
-                       filters={"run_id": "C", "symbol": "XYZ"})[0]
-    assert row["status"] == "closed" and row["mark_basis"] == "exit"
-    assert row["since_pct"] == pytest.approx(10.0)
-    assert row["mark_px"] == pytest.approx(110.0)
-    # H3: same-run round trips carry the exit facts too
-    assert row["exit_kind"] == "same_run"
-    assert row["exit_avg_px"] == pytest.approx(110.0)
-    assert row["realized_pnl"] == pytest.approx(100.0)
-
-
-# ── H3: stop-outs and cross-run exits grade with numbers, not nulls ──
-
-
-def test_grade_hardstop_exit_grades_with_real_numbers(store):
-    """H3 repro: bought in run G, sold by the streamer under run_id
-    'hardstop:5' — previously graded closed with null since/mark/alpha,
-    so the learning ledger had numbers for open winners and nulls for
-    stopped-out losers. The exit must be reconstructed."""
-    from agent import ledger
-
-    t0 = datetime.utcnow() - timedelta(days=6)
-    _seed_spy(store, days=10)
-    _decision(store, "G", [_buy_pick("XYZ")], t0)
-    _seed_trade(store, "G", "XYZ", "BUY", 10, 100.0, t0)
-    _seed_trade(store, "hardstop:5", "XYZ", "SELL", 10, 74.0,
-                datetime.utcnow() - timedelta(days=1))
-    out = ledger.grade(store, days=30)
-    assert out["ok"] and out["graded"] == 1
-    row = store.select("desk_outcomes",
-                       filters={"run_id": "G", "symbol": "XYZ"})[0]
-    assert row["status"] == "closed"
-    assert row["exit_kind"] == "hardstop"
-    assert row["exit_avg_px"] == pytest.approx(74.0)
-    assert row["mark_basis"] == "exit"
-    assert row["mark_px"] == pytest.approx(74.0)
-    assert row["since_pct"] == pytest.approx(-26.0)   # the real stop-out loss
-    assert row["spy_pct"] == pytest.approx(0.0)       # SPY flat entry→flat
-    assert row["alpha_pct"] == pytest.approx(-26.0)
-    assert row["realized_pnl"] == pytest.approx(-260.0)
-
-
-def test_grade_cross_run_exit_grades_with_exit_kind(store):
-    """H3: bought in run A, exited by a LATER run's sell — graded off the
-    actual closing fills, tagged cross_run."""
-    from agent import ledger
-
-    t0 = datetime.utcnow() - timedelta(days=6)
-    _seed_spy(store, days=10)
-    _decision(store, "A", [_buy_pick("XYZ")], t0)
-    _seed_trade(store, "A", "XYZ", "BUY", 10, 100.0, t0)
-    _seed_trade(store, "B", "XYZ", "SELL", 10, 110.0,
-                datetime.utcnow() - timedelta(days=1))
-    ledger.grade(store, days=30)
-    row = store.select("desk_outcomes",
-                       filters={"run_id": "A", "symbol": "XYZ"})[0]
-    assert row["status"] == "closed"
-    assert row["exit_kind"] == "cross_run"
-    assert row["exit_avg_px"] == pytest.approx(110.0)
-    assert row["since_pct"] == pytest.approx(10.0)
-    assert row["realized_pnl"] == pytest.approx(100.0)
-
-
-# ── M2: degraded marks must not feed grade unflagged ──
-
-
-def test_grade_degraded_mark_nulls_facts_and_flags(store, monkeypatch):
-    """M2: when the latest snapshot marked the pick's symbol at COST BASIS
-    (mark_meta.cost_marked), the fake-flat mark must not grade the pick —
-    mark-derived facts write as null with degraded=true; a later clean
-    re-grade overwrites both."""
-    from agent import ledger
-
-    t0 = datetime.utcnow() - timedelta(days=6)
-    _seed_spy(store, days=10)
-    _decision(store, "DM", [_buy_pick("XYZ")], t0)
-    _seed_trade(store, "DM", "XYZ", "BUY", 10, 100.0, t0)
-    monkeypatch.setattr(ledger, "_live_mids", lambda syms: {})
-    monkeypatch.setattr(ledger, "_latest_closes", lambda syms: {})
-    ledger.mark(store)                      # XYZ marked at cost → degraded
-    ledger.grade(store, days=30)
-    row = store.select("desk_outcomes",
-                       filters={"run_id": "DM", "symbol": "XYZ"})[0]
-    assert row["status"] == "open"
-    assert row["since_pct"] is None and row["alpha_pct"] is None
-    assert row["mark_px"] is None
-    assert bool(row["degraded"]) is True
-    assert row["entry_avg_px"] == 100.0     # entry facts are not mark-derived
-    # a clean mark re-grades with real facts and clears the flag
-    ledger.mark(store, prices={"XYZ": 95.0})
-    ledger.grade(store, days=30)
-    row = store.select("desk_outcomes",
-                       filters={"run_id": "DM", "symbol": "XYZ"})[0]
-    assert row["since_pct"] == pytest.approx(-5.0)
-    assert row["mark_px"] == pytest.approx(95.0)
-    assert bool(row["degraded"]) is False
-
-
-# ── M3: option picks grade net of fees ──
-
-
-def test_option_pick_grades_net_of_fees(store):
-    """M3 (reviewer example): 10 contracts $0.40 → $0.45 is +12.5% gross,
-    but $6.50 of fees each way nets +9.1% — option picks grade off the
-    fee-inclusive dollars, not price×shares."""
-    from agent import ledger, occ
-
-    FEE = ledger.OPTION_FEE_PER_CONTRACT
-    sym = occ.build("NVDA", TODAY + timedelta(days=45), "C", 200)
-    t0 = datetime.utcnow() - timedelta(days=6)
-    _seed_spy(store, days=10)
-    _decision(store, "O", [{"symbol": sym, "action": "buy",
-                            "prediction": "premium re-rates on the catalyst",
-                            "horizon_days": 5, "kill": 0.2}], t0)
-    fq_b = {"bid": 0.40, "ask": 0.40, "mid": 0.40, "t": "x", "src": "test"}
-    buy = ledger.record_trade(store, run_id="O", symbol=sym, side="BUY",
-                              shares=10, price=0.40, fill_quote=fq_b)
-    assert buy["ok"] and buy["dollars"] == pytest.approx(400.0 + 10 * FEE)
-    fq_s = {"bid": 0.45, "ask": 0.45, "mid": 0.45, "t": "x", "src": "test"}
-    sell = ledger.record_trade(store, run_id="O", symbol=sym, side="SELL",
-                               shares=10, price=0.45, fill_quote=fq_s)
-    assert sell["ok"] and sell["dollars"] == pytest.approx(450.0 - 10 * FEE)
-
-    out = ledger.outcomes(store, days=30)
-    pick = out["runs"][0]["picks"][0]
-    # (443.5 − 406.5) / 406.5 = +9.1%, NOT (0.45−0.40)/0.40 = +12.5%
-    assert pick["closed_return_pct"] == pytest.approx(9.1, abs=0.01)
-    assert pick["entry_avg_px"] == pytest.approx(0.4065)  # fee-incl. cost
-    assert pick["realized_pnl"] == pytest.approx(37.0)    # 443.5 − 406.5
-    assert pick["alpha_pct"] is None                      # options: by design
-
-    ledger.grade(store, days=30)
-    row = store.select("desk_outcomes", filters={"run_id": "O"})[0]
-    assert row["since_pct"] == pytest.approx(9.1, abs=0.01)
-    assert row["exit_kind"] == "same_run"
-    assert row["realized_pnl"] == pytest.approx(37.0)
-    assert row["alpha_pct"] is None
-
-
-# ── L4: --days bounds closed-row re-grades only ──
+# ── grade: loop-level contracts (mechanics live in test_grade_alpaca) ──
 
 
 def test_grade_days_bounds_closed_regrades_only(store):
     """An open pick older than the window still refreshes on every pass;
     a closed row outside the window with facts already stored is final."""
-    from agent import ledger
+    from agent.grade import grade
 
     t_old = datetime.utcnow() - timedelta(days=40)
     _seed_spy(store, days=10)
@@ -333,15 +138,13 @@ def test_grade_days_bounds_closed_regrades_only(store):
     _seed_trade(store, "OLD", "CLS", "BUY", 10, 100.0, t_old)
     _seed_trade(store, "OLD", "CLS", "SELL", 10, 110.0,
                 t_old + timedelta(days=1))
-    ledger.mark(store, prices={"OPN": 105.0})
     # first pass: both graded (a never-graded closed pick writes its row
     # even outside the window — first facts are not a "re-grade")
-    out = ledger.grade(store, days=30)
+    out = grade(store, days=30, positions=[_pos("OPN", 10, 100.0, 105.0)])
     assert {r["symbol"] for r in out["rows"]} == {"OPN", "CLS"}
     # second pass: the old closed row is final and skipped; the open pick
     # refreshes regardless of --days
-    ledger.mark(store, prices={"OPN": 120.0})
-    out2 = ledger.grade(store, days=30)
+    out2 = grade(store, days=30, positions=[_pos("OPN", 10, 100.0, 120.0)])
     assert {r["symbol"] for r in out2["rows"]} == {"OPN"}
     assert out2["closed_rows_outside_window"] == 1
     row = store.select("desk_outcomes", filters={"symbol": "OPN"})[0]
@@ -355,14 +158,14 @@ def test_grade_survives_concurrent_insert_race(store):
     """Two graders racing on the same new pick: the loser's insert hits the
     (account, run_id, symbol) unique key and falls back to an update
     instead of crashing the pass."""
-    from agent import ledger
+    from agent.grade import grade
 
     t0 = datetime.utcnow() - timedelta(days=3)
     _seed_spy(store, days=10)
     _decision(store, "RC", [_buy_pick("XYZ")], t0)
     _seed_trade(store, "RC", "XYZ", "BUY", 10, 100.0, t0)
-    ledger.mark(store, prices={"XYZ": 105.0})
-    assert ledger.grade(store, days=30)["ok"]  # the row now exists
+    assert grade(store, days=30,
+                 positions=[_pos("XYZ", 10, 100.0, 105.0)])["ok"]
 
     class RaceStore:
         """Delegates everything, but the pick's existence check misses once
@@ -388,8 +191,8 @@ def test_grade_survives_concurrent_insert_race(store):
         def delete(self, *a, **kw):
             return self._inner.delete(*a, **kw)
 
-    ledger.mark(store, prices={"XYZ": 110.0})
-    out = ledger.grade(RaceStore(store), days=30)
+    out = grade(RaceStore(store), days=30,
+                positions=[_pos("XYZ", 10, 100.0, 110.0)])
     assert out["ok"] and out["graded"] == 1
     rows = store.select("desk_outcomes", filters={"run_id": "RC"})
     assert len(rows) == 1
@@ -402,12 +205,12 @@ def test_grade_survives_concurrent_insert_race(store):
 def test_grade_and_verdict_missing_table_exit_actionably(store):
     """A DB that predates desk_outcomes gets an actionable message, not a
     stack trace mid-reflection."""
-    from agent import ledger
     from agent.brain import set_verdict
+    from agent.grade import grade
     from edgefinder.db.engine import Base, get_engine
 
     Base.metadata.tables["desk_outcomes"].drop(get_engine())
-    out = ledger.grade(store, days=30)
+    out = grade(store, days=30)
     assert not out["ok"] and "not migrated" in out["error"]
     v = set_verdict(store, run_id="X", symbol="XYZ", verdict="TRUE")
     assert not v["ok"] and "not migrated" in v["error"]
@@ -417,8 +220,8 @@ def test_grade_and_verdict_transient_error_reraises(store):
     """M3: a transient connection error whose message merely MENTIONS
     desk_outcomes (SQLAlchemy embeds the SQL in str(exc)) must re-raise —
     the old string-match misdiagnosed every blip as 'schema not migrated'."""
-    from agent import ledger
     from agent.brain import set_verdict
+    from agent.grade import grade
 
     class _Blip:
         def select(self, *a, **kw):
@@ -426,21 +229,22 @@ def test_grade_and_verdict_transient_error_reraises(store):
                 'connection reset during "SELECT * FROM desk_outcomes"')
 
     with pytest.raises(RuntimeError, match="connection reset"):
-        ledger.grade(_Blip(), days=30)
+        grade(_Blip(), days=30)
     with pytest.raises(RuntimeError, match="connection reset"):
         set_verdict(_Blip(), run_id="X", symbol="XYZ", verdict="TRUE")
 
 
-def test_grade_excludes_book_settlement_hardstop_and_no_fill_picks(store):
-    from agent import ledger
+def test_grade_excludes_book_and_no_fill_picks(store):
+    """BOOK stances and picks with no entry fills of their own never grade —
+    and fills with a run_id that has no decision row grade nothing either."""
+    from agent.grade import grade
 
     t0 = datetime.utcnow() - timedelta(days=2)
     _seed_spy(store, days=10)
     _decision(store, "B", [{"symbol": "BOOK", "action": "hold"},
                            {"symbol": "AAPL", "action": "hold"}], t0)
-    _seed_trade(store, "settlement", "XYZ", "BUY", 10, 100.0, t0)
-    _seed_trade(store, "hardstop:7", "XYZ", "SELL", 10, 90.0, t0)
-    out = ledger.grade(store, days=30)
+    _seed_trade(store, "ORPHAN", "XYZ", "BUY", 10, 100.0, t0)
+    out = grade(store, days=30, positions=[])
     assert out["graded"] == 0
     assert store.select("desk_outcomes") == []
 
@@ -448,21 +252,19 @@ def test_grade_excludes_book_settlement_hardstop_and_no_fill_picks(store):
 def test_grade_upserts_and_verdict_survives_regrade(store):
     """One row per (run_id, symbol); a re-run refreshes machine facts in
     place and NEVER touches the reflection agent's verdict columns."""
-    from agent import ledger
     from agent.brain import set_verdict
+    from agent.grade import grade
 
     t0 = datetime.utcnow() - timedelta(days=6)
     _seed_spy(store, days=10)
     _decision(store, "U", [_buy_pick("XYZ")], t0)
     _seed_trade(store, "U", "XYZ", "BUY", 10, 100.0, t0)
-    ledger.mark(store, prices={"XYZ": 105.0})
-    ledger.grade(store, days=30)
+    grade(store, days=30, positions=[_pos("XYZ", 10, 100.0, 105.0)])
     v = set_verdict(store, run_id="U", symbol="XYZ", verdict="TRUE",
                     note="+5% inside the horizon")
     assert v["ok"], v
     # the mark moved; re-grade refreshes the facts, keeps the judgment
-    ledger.mark(store, prices={"XYZ": 120.0})
-    ledger.grade(store, days=30)
+    grade(store, days=30, positions=[_pos("XYZ", 10, 100.0, 120.0)])
     rows = store.select("desk_outcomes",
                         filters={"run_id": "U", "symbol": "XYZ"})
     assert len(rows) == 1
@@ -479,12 +281,12 @@ def test_verdict_requires_a_graded_row_and_a_known_verdict(store):
 
     r = set_verdict(store, run_id="X", symbol="XYZ", verdict="TRUE")
     assert not r["ok"] and "grade" in r["error"]
-    from agent import ledger
+    from agent.grade import grade
 
     t0 = datetime.utcnow() - timedelta(days=2)
     _decision(store, "X", [_buy_pick("XYZ")], t0)
     _seed_trade(store, "X", "XYZ", "BUY", 10, 100.0, t0)
-    ledger.grade(store, days=30)
+    grade(store, days=30, positions=[_pos("XYZ", 10, 100.0, 101.0)])
     bad = set_verdict(store, run_id="X", symbol="XYZ", verdict="MAYBE")
     assert not bad["ok"] and "TRUE/FALSE/NOT_YET" in bad["error"]
     ok = set_verdict(store, run_id="X", symbol="xyz", verdict="not yet")
@@ -619,8 +421,8 @@ def test_context_clips_a_fat_brief(store):
 
 def test_context_drops_judged_closed_predictions(store):
     """A closed AND verdicted pick is history, not working memory."""
-    from agent import ledger
     from agent.brain import context, set_verdict
+    from agent.grade import grade
 
     t0 = datetime.utcnow() - timedelta(days=3)
     _seed_spy(store, days=10)
@@ -628,7 +430,7 @@ def test_context_drops_judged_closed_predictions(store):
     _seed_trade(store, "D", "XYZ", "BUY", 10, 100.0, t0)
     _seed_trade(store, "D", "XYZ", "SELL", 10, 110.0,
                 datetime.utcnow() - timedelta(days=1))
-    ledger.grade(store, days=30)
+    grade(store, days=30, positions=[])
     assert len(context(store)["open_predictions"]) == 1  # closed, unjudged
     set_verdict(store, run_id="D", symbol="XYZ", verdict="TRUE", note="+10%")
     assert context(store)["open_predictions"] == []

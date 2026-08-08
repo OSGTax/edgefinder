@@ -66,57 +66,6 @@ class FakeStore:
             if not all(r.get(k) == v for k, v in filters.items())]
 
 
-def test_ledger_integrity_on_fake_store():
-    from agent import ledger
-    from agent.models import STARTING_CAPITAL
-
-    store = FakeStore()
-    # buy 100 @ 120 (pass latest_close so no data lookup is needed)
-    r = ledger.record_trade(store, symbol="NVDA", side="BUY", shares=100,
-                            price=120.0, latest_close=120.0, run_id="R1")
-    assert r["ok"]
-    assert ledger.cash(store) == round(STARTING_CAPITAL - 12000.0, 2)
-    st = ledger.state(store)
-    assert st["positions"][0]["symbol"] == "NVDA" and st["positions"][0]["shares"] == 100
-    assert abs(st["cash"] + st["positions_value"] - st["equity"]) < 0.01
-
-    # partial sell caps at held; cash returns
-    r2 = ledger.record_trade(store, symbol="NVDA", side="SELL", shares=40,
-                             price=130.0, latest_close=130.0, run_id="R1")
-    assert r2["ok"]
-    assert ledger.state(store)["positions"][0]["shares"] == 60
-
-    # mark writes exactly one equity snapshot and values the book at the mark
-    marked = ledger.mark(store, prices={"NVDA": 130.0})
-    assert marked["equity"] == round(ledger.cash(store) + 60 * 130.0, 2)
-    assert len(store.tables["desk_equity"]) == 1
-
-
-def test_ledger_guards_on_fake_store():
-    from agent import ledger
-
-    store = FakeStore()
-    # fill-sanity: a price wildly off the latest close is rejected
-    bad = ledger.record_trade(store, symbol="AAPL", side="BUY", shares=10,
-                              price=500.0, latest_close=100.0)
-    assert not bad["ok"] and "sanity" in bad["error"]
-    # cannot sell what isn't held
-    nosell = ledger.record_trade(store, symbol="AAPL", side="SELL", shares=10,
-                                 price=100.0, latest_close=100.0)
-    assert not nosell["ok"]
-    # cannot overdraw cash
-    over = ledger.record_trade(store, symbol="AAPL", side="BUY", shares=10_000_000,
-                               price=100.0, latest_close=100.0)
-    assert not over["ok"]
-    # long-only: a SELL is capped at the held quantity, never goes short
-    ledger.record_trade(store, symbol="AAPL", side="BUY", shares=10,
-                        price=100.0, latest_close=100.0)
-    capped = ledger.record_trade(store, symbol="AAPL", side="SELL", shares=999,
-                                 price=100.0, latest_close=100.0)
-    assert capped["ok"] and capped["shares"] == 10
-    assert ledger.state(store)["positions"] == []
-
-
 def test_brain_state_and_decision_upsert_on_fake_store():
     from agent import brain
 

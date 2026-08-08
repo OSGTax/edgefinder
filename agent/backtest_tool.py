@@ -379,7 +379,7 @@ def main(argv: list[str] | None = None) -> None:
               costed=not args.no_costs, div_adjust=not args.no_div,
               source=args.source)
     if args.save and "error" not in out:
-        from agent.ledger import save_backtest
+        from agent.grade import save_backtest
         save_backtest(args.label or f"{args.rule} [{args.symbols}]", out,
                       run_id=args.run_id)
     print(json.dumps(out, indent=2))

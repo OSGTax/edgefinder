@@ -1021,6 +1021,21 @@ def grade(store=None, *, days: int = 30, run_id: str | None = None,
             "commitments": commitments}
 
 
+def save_backtest(label: str, result: dict, *, run_id: str | None = None,
+                  account: str = ACCOUNT) -> int:
+    """Persist a backtest the agent ran (evidence panel reads desk_backtests).
+    Lived in the V3 ledger; homed here with the rest of the evidence layer."""
+    rows = _store().insert("desk_backtests", {
+        "account": account, "run_id": run_id, "label": label,
+        "spec": {k: result.get(k) for k in ("rule", "symbols", "schedule",
+                                            "start", "end")},
+        "result": {k: result.get(k) for k in (
+            "return_pct", "sharpe", "max_drawdown_pct", "benchmark_return_pct",
+            "excess_return_pct", "num_trades", "days", "final_equity")},
+        "ts": _utcnow()})
+    return int(rows[0]["id"]) if rows else 0
+
+
 # ── CLI ──────────────────────────────────────────────────────
 
 

@@ -6,10 +6,13 @@ agent reads and writes only these; the market-data tables (daily_bars,
 dividends, ticker_splits, fundamentals_snapshots, ticker_news, index_daily)
 are read-only inputs reached through the kept data-access layer.
 
-Source-of-truth rule (mirrors the old engine's discipline): ``desk_trades``
-is append-only and authoritative for cash. The portfolio/positions/equity
-rows are recomputable projections — ``agent.ledger`` rebuilds them from the
-trade ledger on every mark, so a corrupted projection can always be healed.
+Source-of-truth rule (REBUILD-V4): the Alpaca PAPER account is the book of
+record. ``desk_orders`` / ``desk_activities`` / ``desk_portfolio_history``
+mirror it locally (Alpaca's retention of closed history is undocumented);
+the mirror is a cache re-synced every cycle, never the arbiter. The frozen
+V3 book lives on as ``era1_trades``/``era1_positions``/``era1_equity``
+(renamed at cutover — deliberately absent from this module so nothing can
+write them).
 """
 
 from __future__ import annotations
@@ -36,85 +39,6 @@ from edgefinder.db.engine import Base
 # The single paper book the agent runs. One account, full discretion.
 ACCOUNT = "agent"
 STARTING_CAPITAL = 100_000.0
-
-
-# ── desk_trades — append-only fill ledger (source of truth for cash) ──
-
-
-class DeskTrade(Base):
-    """One executed paper fill. Append-only; never updated or deleted.
-
-    Cash is always ``STARTING_CAPITAL + Σ(SELL dollars) - Σ(BUY dollars)``
-    over this table, so the ledger is auditable and self-correcting.
-    """
-
-    __tablename__ = "desk_trades"
-    __table_args__ = (Index("idx_desk_trades_account_ts", "account", "ts"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
-    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
-    run_id: Mapped[str | None] = mapped_column(String(40), index=True)
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
-    side: Mapped[str] = mapped_column(String(4))  # BUY | SELL
-    shares: Mapped[float] = mapped_column(Float)  # fractional shares (v7)
-    price: Mapped[float] = mapped_column(Float)  # fill price after costs
-    # signed-agnostic cash moved = shares*price*mult ± option fees (option
-    # fills carry a flat per-contract fee inside dollars; fill_quote.fee is
-    # the receipt — see agent.ledger.record_trade)
-    dollars: Mapped[float] = mapped_column(Float)
-    rationale: Mapped[str | None] = mapped_column(Text)
-    # The live-quote snapshot the fill priced off: {bid, ask, mid, t, src}.
-    # The honesty contract's receipt — every live fill carries one.
-    fill_quote: Mapped[dict | None] = mapped_column(JSON)
-
-
-# ── desk_positions — open lots (projection, rebuilt from the ledger) ──
-
-
-class DeskPosition(Base):
-    """Current open lot per symbol. Rebuilt from desk_trades on every mark."""
-
-    __tablename__ = "desk_positions"
-    __table_args__ = (
-        UniqueConstraint("account", "symbol", name="uq_desk_pos_account_symbol"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
-    shares: Mapped[float] = mapped_column(Float)  # fractional shares (v7)
-    avg_price: Mapped[float] = mapped_column(Float)  # cost basis per share
-    last_price: Mapped[float | None] = mapped_column(Float)  # latest mark
-    opened_at: Mapped[datetime | None] = mapped_column(DateTime)
-    marked_at: Mapped[datetime | None] = mapped_column(DateTime)
-
-
-# ── desk_equity — equity-curve time series (one row per mark) ──
-
-
-class DeskEquity(Base):
-    """Account equity snapshot for the curve. Append-only series."""
-
-    __tablename__ = "desk_equity"
-    __table_args__ = (Index("idx_desk_equity_account_ts", "account", "ts"),)
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
-    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
-    cash: Mapped[float] = mapped_column(Float)
-    positions_value: Mapped[float] = mapped_column(Float)
-    equity: Mapped[float] = mapped_column(Float)
-    return_pct: Mapped[float] = mapped_column(Float)
-    # Mark provenance: {"sources": {live, close, cost}, "cost_marked": [...],
-    # "cost_marked_value_pct": x, "degraded": true?} — which pricing tier
-    # marked each position, so a snapshot written during a quote/data outage
-    # (cost-basis marks = fake-flat P&L) is visibly flagged, never silently
-    # embedded in the curve forever. NOTE: a dev database created before this
-    # column will error reading desk_equity via the ORM — rerun
-    # scripts/setup_db.py (prod self-heals via the idempotent ALTER in
-    # DESK_TABLE_DDL on deploy).
-    mark_meta: Mapped[dict | None] = mapped_column(JSON)
 
 
 # ── desk_strategy_state — the agent's current, evolving strategy ──
@@ -378,43 +302,6 @@ class DeskBrief(Base):
 # ── the attention system: tripwires + planned wakes ──
 
 
-class DeskWatch(Base):
-    """One standing tripwire the brain armed on its way out.
-
-    The always-on streamer sweeps armed wires against the live tape every few
-    seconds and marks trips; the brain reads them FIRST at its next wake.
-    Cheap code watches continuously so expensive judgment only shows up when
-    something it named actually happened. Written only by ``agent.brain
-    watch-set`` / ``watch-clear``; the streamer writes the trip — and, for
-    the opt-in ``hard_stop`` kind ONLY, executes a full-position sell through
-    the ledger's normal live-fill gates (plain above/below wires stay
-    advisory, always).
-    """
-
-    __tablename__ = "desk_watch"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
-    run_id: Mapped[str | None] = mapped_column(String(40))
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
-    kind: Mapped[str] = mapped_column(String(10))  # above | below | hard_stop
-    level: Mapped[float] = mapped_column(Float)
-    reason: Mapped[str] = mapped_column(Text)
-    armed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    until: Mapped[datetime | None] = mapped_column(DateTime)  # expiry (UTC)
-    # armed | tripped | expired | disarmed
-    #   | executing | executed | exec_failed | stale   (hard_stop lifecycle:
-    # 'executing' is the atomic claim — exactly one writer wins it; a claim
-    # orphaned by a crash is flagged exec_failed, never auto-retried)
-    status: Mapped[str] = mapped_column(String(12), default="armed", index=True)
-    tripped_at: Mapped[datetime | None] = mapped_column(DateTime)
-    tripped_price: Mapped[float | None] = mapped_column(Float)
-    # hard_stop execution receipt: the fill's run_id ("hardstop:{id}") on
-    # success, and a human-readable outcome (fill summary / gate rejection).
-    honored_run_id: Mapped[str | None] = mapped_column(String(40))
-    result: Mapped[str | None] = mapped_column(Text)
-
-
 class DeskWake(Base):
     """One self-scheduled check-in the brain planned (and why).
 
@@ -439,34 +326,6 @@ class DeskWake(Base):
     # wake has triggered; at DISPATCH_MAX_PER_WAKE the dispatcher stamps it
     # honored_run_id='missed:auto' so no wake can loop forever
     dispatch_count: Mapped[int] = mapped_column(Integer, default=0)
-
-
-class DeskDispatch(Base):
-    """One GitHub workflow_dispatch fired (or attempted) by the streamer.
-
-    The autonomy loop's at-most-once ledger: ``bucket`` (epoch // gap) is
-    UNIQUE per account, so sibling streamer instances during a Render
-    deploy overlap CAS-race on the insert and exactly one wins the window
-    (the ``claim_watch`` idiom). Also the debounce clock and the per-ET-day
-    dispatch cap — DB state, never process memory."""
-
-    __tablename__ = "desk_dispatches"
-    __table_args__ = (
-        UniqueConstraint("account", "bucket", name="uq_desk_dispatch_bucket"),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
-    bucket: Mapped[int] = mapped_column(Integer)   # epoch // (min-gap secs)
-    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    reason: Mapped[str] = mapped_column(Text)
-    wake_ids: Mapped[list | None] = mapped_column(JSON)
-    watch_ids: Mapped[list | None] = mapped_column(JSON)
-    status: Mapped[str] = mapped_column(String(12), default="claimed")
-    http_status: Mapped[int | None] = mapped_column(Integer)
-
-
-# ── desk_outcomes — machine-graded pick facts (the learning loop's ledger) ──
 
 
 class DeskOutcome(Base):
@@ -774,45 +633,6 @@ class DeskPortfolioSnapshot(Base):
 # Idempotent CREATE TABLE IF NOT EXISTS DDL for render_start.py (Render skips
 # create_all). Postgres-flavored; SQLite ignores the JSON type harmlessly.
 DESK_TABLE_DDL: list[str] = [
-    """CREATE TABLE IF NOT EXISTS desk_trades (
-        id SERIAL PRIMARY KEY,
-        account VARCHAR(30) DEFAULT 'agent',
-        ts TIMESTAMP DEFAULT NOW(),
-        run_id VARCHAR(40),
-        symbol VARCHAR(24) NOT NULL,
-        side VARCHAR(4) NOT NULL,
-        shares FLOAT NOT NULL,
-        price FLOAT NOT NULL,
-        dollars FLOAT NOT NULL,
-        rationale TEXT,
-        fill_quote JSON
-    )""",
-    "CREATE INDEX IF NOT EXISTS idx_desk_trades_account_ts ON desk_trades (account, ts)",
-    "CREATE INDEX IF NOT EXISTS idx_desk_trades_run ON desk_trades (run_id)",
-    """CREATE TABLE IF NOT EXISTS desk_positions (
-        id SERIAL PRIMARY KEY,
-        account VARCHAR(30) DEFAULT 'agent',
-        symbol VARCHAR(24) NOT NULL,
-        shares FLOAT NOT NULL,
-        avg_price FLOAT NOT NULL,
-        last_price FLOAT,
-        opened_at TIMESTAMP,
-        marked_at TIMESTAMP,
-        CONSTRAINT uq_desk_pos_account_symbol UNIQUE (account, symbol)
-    )""",
-    """CREATE TABLE IF NOT EXISTS desk_equity (
-        id SERIAL PRIMARY KEY,
-        account VARCHAR(30) DEFAULT 'agent',
-        ts TIMESTAMP DEFAULT NOW(),
-        cash FLOAT NOT NULL,
-        positions_value FLOAT NOT NULL,
-        equity FLOAT NOT NULL,
-        return_pct FLOAT NOT NULL,
-        mark_meta JSON
-    )""",
-    # Additive upgrade for desk_equity tables created before mark provenance.
-    "ALTER TABLE desk_equity ADD COLUMN IF NOT EXISTS mark_meta JSON",
-    "CREATE INDEX IF NOT EXISTS idx_desk_equity_account_ts ON desk_equity (account, ts)",
     """CREATE TABLE IF NOT EXISTS desk_strategy_state (
         id SERIAL PRIMARY KEY,
         account VARCHAR(30) DEFAULT 'agent',
@@ -937,29 +757,6 @@ DESK_TABLE_DDL: list[str] = [
     # role (Render/agent) bypasses. Without this a new public-schema table is
     # world-writable through the Supabase Data API. Idempotent.
     "ALTER TABLE desk_briefs ENABLE ROW LEVEL SECURITY",
-    """CREATE TABLE IF NOT EXISTS desk_watch (
-        id SERIAL PRIMARY KEY,
-        account VARCHAR(30) DEFAULT 'agent',
-        run_id VARCHAR(40),
-        symbol VARCHAR(24) NOT NULL,
-        kind VARCHAR(10) NOT NULL,
-        level FLOAT NOT NULL,
-        reason TEXT NOT NULL,
-        armed_at TIMESTAMP DEFAULT NOW(),
-        until TIMESTAMP,
-        status VARCHAR(12) DEFAULT 'armed',
-        tripped_at TIMESTAMP,
-        tripped_price FLOAT,
-        honored_run_id VARCHAR(40),
-        result TEXT
-    )""",
-    # Additive upgrades for desk_watch tables created before hard stops:
-    # 'exec_failed' is 11 chars, and the execution receipt needs two columns.
-    "ALTER TABLE desk_watch ALTER COLUMN status TYPE VARCHAR(12)",
-    "ALTER TABLE desk_watch ADD COLUMN IF NOT EXISTS honored_run_id VARCHAR(40)",
-    "ALTER TABLE desk_watch ADD COLUMN IF NOT EXISTS result TEXT",
-    "CREATE INDEX IF NOT EXISTS idx_desk_watch_status ON desk_watch (account, status)",
-    "ALTER TABLE desk_watch ENABLE ROW LEVEL SECURITY",
     """CREATE TABLE IF NOT EXISTS desk_wakes (
         id SERIAL PRIMARY KEY,
         account VARCHAR(30) DEFAULT 'agent',
@@ -1023,20 +820,6 @@ DESK_TABLE_DDL: list[str] = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_fund_pit_symbol_filed ON fundamentals_pit (symbol, filed)",
     "ALTER TABLE fundamentals_pit ENABLE ROW LEVEL SECURITY",
-    # v9.11.0 autonomy loop: the dispatch ledger + per-wake attempt counter
-    """CREATE TABLE IF NOT EXISTS desk_dispatches (
-        id SERIAL PRIMARY KEY,
-        account VARCHAR(30) DEFAULT 'agent',
-        bucket INTEGER NOT NULL,
-        ts TIMESTAMP DEFAULT NOW(),
-        reason TEXT NOT NULL,
-        wake_ids JSON,
-        watch_ids JSON,
-        status VARCHAR(12) DEFAULT 'claimed',
-        http_status INTEGER,
-        CONSTRAINT uq_desk_dispatch_bucket UNIQUE (account, bucket)
-    )""",
-    "ALTER TABLE desk_dispatches ENABLE ROW LEVEL SECURITY",
     "ALTER TABLE desk_wakes ADD COLUMN IF NOT EXISTS dispatch_count INTEGER DEFAULT 0",
     # v9.13.0 knowledge layer (SCHEMA.md): claims registry + lifecycle events +
     # commitments + owner-approval proposals. Same lockdown as every desk_*

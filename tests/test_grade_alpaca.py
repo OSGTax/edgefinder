@@ -363,3 +363,28 @@ def test_sweep_fires_commitment_from_closes(store):
     assert r["fired"] == 1
     row = store.select("desk_commitments")[0]
     assert row["status"] == "fired" and row["fired_close"] == 330.0
+
+
+# ── the SPY window conventions (pure — ported from the V3 alpha suite) ───
+
+
+def test_spy_window_baseline_is_strictly_before_start():
+    from agent.grade import _spy_window_pct
+
+    spy = [("2026-08-01", 600.0), ("2026-08-04", 606.0), ("2026-08-05", 612.0)]
+    # entry on the 4th: baseline is the 1st's close (the last print BEFORE
+    # the window opened), never the entry day's own 16:00 close
+    assert _spy_window_pct(spy, "2026-08-04") == 2.0
+    assert _spy_window_pct(spy, "2026-08-04", "2026-08-04") == 1.0
+
+
+def test_spy_window_degenerate_is_none_not_zero():
+    from agent.grade import _spy_window_pct
+
+    spy = [("2026-08-01", 600.0), ("2026-08-04", 606.0)]
+    # same-day window: baseline row == endpoint row → too young, never 0.00
+    assert _spy_window_pct(spy, "2026-08-04", "2026-08-01") is None
+    # no baseline exists before the window start
+    assert _spy_window_pct(spy, "2026-08-01") is None
+    # no data at all
+    assert _spy_window_pct([], "2026-08-04") is None

@@ -118,7 +118,7 @@ def _bars(store, symbol, rows):
 
 
 def test_sweep_fires_when_a_close_touches_the_level(store):
-    from agent.ledger import sweep_commitments
+    from agent.grade import sweep_commitments
 
     store.insert("desk_decisions", {
         "account": "agent", "run_id": "R1", "symbol": "AAPL",
@@ -141,7 +141,7 @@ def test_sweep_fires_when_a_close_touches_the_level(store):
 
 
 def test_sweep_expires_a_deadline_that_passed_without_a_breach(store):
-    from agent.ledger import sweep_commitments
+    from agent.grade import sweep_commitments
 
     store.insert("desk_decisions", {
         "account": "agent", "run_id": "R1", "symbol": "AAPL",
@@ -162,7 +162,7 @@ def test_sweep_expires_a_deadline_that_passed_without_a_breach(store):
 
 
 def test_grade_runs_the_sweep(store):
-    from agent.ledger import grade
+    from agent.grade import grade
 
     store.insert("desk_decisions", {
         "account": "agent", "run_id": "R1", "symbol": "AAPL",
