@@ -57,8 +57,12 @@ FULL_EXTRA_TABLES = [
 ]
 
 PAGE_SIZE = 1000  # PostgREST's hard page cap — the pg lane matches it
-SIZE_WARN_BYTES = 400 * 1024 * 1024   # 400MB of the 500MB free-tier cap
-SIZE_ALERT_BYTES = 450 * 1024 * 1024
+# Supabase PRO plan since the 2026-08-08 cutover: 8GB database included.
+# (Was 400/450MB against the free tier's 500MB — the restore that unblocked
+# the cutover came with the upgrade.) Warn with real headroom left.
+DB_CAP_MB = 8192
+SIZE_WARN_BYTES = 6 * 1024 * 1024 * 1024   # 6GB of the 8GB Pro quota
+SIZE_ALERT_BYTES = 7 * 1024 * 1024 * 1024
 
 __all__ = ["run", "size_check", "KNOWLEDGE_TABLES", "MARKET_TABLES"]
 
@@ -210,9 +214,9 @@ def size_check(*, store=None) -> dict:
               else "warn" if size >= SIZE_WARN_BYTES else "ok")
     return {"status": status, "bytes": size,
             "mb": round(size / 1024 / 1024, 1),
-            "cap_mb": 500, "how": how,
+            "cap_mb": DB_CAP_MB, "how": how,
             "note": (None if status == "ok" else
-                     "approaching the Supabase free-tier cap — prune "
+                     "approaching the Supabase Pro quota — prune "
                      "desk_thinking history or trim the daily_bars hot set")}
 
 
