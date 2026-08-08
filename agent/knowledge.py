@@ -304,7 +304,21 @@ def _resolve_evidence(store, refs: list, account: str) -> dict:
                 else:
                     orphans.append(ref)
             elif kind == "trade":
-                if not store.select("desk_trades", filters={"id": ref.get("id")}):
+                # V4: fills live in the desk_orders mirror; legacy refs
+                # written by the V3 ledger resolve against the frozen Era-1
+                # archive (and desk_trades itself pre-cutover). An id found
+                # in ANY of the three is evidence; missing tables are just
+                # the eras this database doesn't have.
+                found = False
+                for table in ("desk_orders", "desk_trades", "era1_trades"):
+                    try:
+                        if store.select(table, filters={"id": ref.get("id")},
+                                        limit=1):
+                            found = True
+                            break
+                    except Exception:  # noqa: BLE001 — era table absent here
+                        continue
+                if not found:
                     orphans.append(ref)
             elif kind == "backtest":
                 if not store.select("desk_backtests",

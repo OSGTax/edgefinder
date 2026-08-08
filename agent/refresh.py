@@ -53,6 +53,35 @@ def _bound_network(timeout: float = NET_TIMEOUT_S) -> None:
     socket.setdefaulttimeout(timeout)
 
 
+def _held_equity_symbols(store) -> list[str]:
+    """Equity symbols the book currently holds, from the Alpaca paper account
+    when trade creds exist (REBUILD-V4 — Alpaca is the book of record), else
+    from the legacy ``desk_positions`` projection (pre-cutover, and every
+    offline test). Options are excluded either way — this feeds the equity
+    bar/streaming universe."""
+    from agent import occ
+
+    try:
+        from agent.trade import Trade, trade_enabled
+
+        if trade_enabled():
+            return [p["symbol"] for p in Trade().positions()
+                    if p.get("symbol") and not occ.is_option(p["symbol"])
+                    and (p.get("qty") or 0) != 0]
+    except Exception:  # noqa: BLE001 — a dead broker falls back to the mirror
+        logger.warning("held-symbols: Alpaca positions read failed",
+                       exc_info=True)
+    try:
+        from agent.models import ACCOUNT
+
+        return [str(r["symbol"]).upper()
+                for r in store.select("desk_positions",
+                                      filters={"account": ACCOUNT})
+                if not occ.is_option(str(r["symbol"]))]
+    except Exception:  # noqa: BLE001 — table renamed at cutover → nothing held
+        return []
+
+
 def alpaca_bars_to_rows(bars, symbol: str) -> list[dict]:
     """Alpaca daily-bar objects → daily_bars rows (pure; unit-tested)."""
     rows = []
@@ -101,9 +130,8 @@ def refresh_alpaca(max_days: int = 30, symbols: list[str] | None = None) -> dict
         from agent import occ
 
         symbols = stream_symbols()
-        for r in store.select("desk_positions", filters={"account": ACCOUNT}):
-            s = str(r["symbol"]).upper()
-            if not occ.is_option(s) and s not in symbols:
+        for s in _held_equity_symbols(store):
+            if s not in symbols:
                 symbols.append(s)
         # watchlist candidates need fresh bars too — the agent researches them
         # before they're held/streamed
@@ -454,10 +482,7 @@ def _keep_symbols_rest() -> set[str]:
     keep |= {s.strip().upper() for s in settings.index_symbols if s.strip()}
     keep |= {s.upper() for s in stream_symbols()}
     store = get_store()
-    for r in store.select("desk_positions", filters={"account": ACCOUNT}):
-        s = str(r["symbol"]).upper()
-        if not occ.is_option(s):
-            keep.add(s)
+    keep |= set(_held_equity_symbols(store))
     try:
         dec = store.select("desk_decisions", filters={"account": ACCOUNT},
                            order=[("ts", "desc")], limit=1)
@@ -748,7 +773,139 @@ def refresh_alpaca_market(*, top_n: int = 1000, max_days: int = 400,
     except Exception as exc:  # noqa: BLE001
         logger.warning("edgar fundamentals pass failed: %s", exc)
         summary["edgar"] = f"error: {exc}"
+    summary["v4_nightly"] = _v4_nightly_duties(get_store())
     return summary
+
+
+def _v4_nightly_duties(store) -> dict:
+    """The REBUILD-V4 additions to the nightly pass, each isolated so one
+    failure never aborts the ingest: (1) mirror sync — orders + activities
+    pulled from the Alpaca paper account (its retention is undocumented; the
+    mirror is our durable copy); (2) the portfolio snapshot
+    (desk_portfolio_history — also the split guard's baseline);
+    (3) the SPLIT GUARD — paper accounts' split handling is undocumented and
+    community reports say positions can silently NOT adjust, so any
+    ticker_splits event on a held name is checked qty-vs-expected and a
+    divergence is journaled LOUDLY (the Routine notification carries it);
+    (4) the R2 backup of the knowledge layer + irreplaceable market tables;
+    (5) the database size check against the Supabase free-tier cap."""
+    out: dict = {}
+
+    trade = None
+    try:
+        from agent.trade import Trade, trade_enabled
+
+        if trade_enabled():
+            trade = Trade(store=store)
+    except Exception as exc:  # noqa: BLE001
+        out["trade"] = f"unavailable: {exc}"
+
+    if trade is not None:
+        try:
+            rec = trade.reconcile()
+            out["mirror_sync"] = {"orders": rec["orders_synced"],
+                                  "activities": rec["activities_added"],
+                                  "gtc_stop_warnings": rec["gtc_stop_warnings"]}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("v4 mirror sync failed", exc_info=True)
+            out["mirror_sync"] = f"error: {exc}"
+        try:
+            out["split_guard"] = _split_guard(store, trade)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("v4 split guard failed", exc_info=True)
+            out["split_guard"] = f"error: {exc}"
+        try:
+            snap = trade.snapshot_portfolio()
+            out["snapshot"] = {"date": snap["snap_date"],
+                               "equity": snap["equity"]}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("v4 snapshot failed", exc_info=True)
+            out["snapshot"] = f"error: {exc}"
+    else:
+        out.setdefault("trade", "no trade creds — mirror/snapshot/guard skipped")
+
+    try:
+        from agent import backup
+
+        out["backup"] = backup.run(store=store)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("v4 backup failed", exc_info=True)
+        out["backup"] = f"error: {exc}"
+    try:
+        from agent import backup as _b
+
+        out["db_size"] = _b.size_check(store=store)
+        if out["db_size"].get("status") in ("warn", "alert"):
+            logger.warning("DB SIZE %s: %s MB of 500 MB cap",
+                           out["db_size"]["status"], out["db_size"].get("mb"))
+    except Exception as exc:  # noqa: BLE001
+        out["db_size"] = f"error: {exc}"
+    return out
+
+
+def _split_guard(store, trade) -> dict:
+    """Compare today's Alpaca position quantities against the last snapshot's
+    quantities × any ticker_splits ratio executing since — the check that
+    catches a paper account silently NOT applying a split (an undocumented
+    behavior with credible failure reports). A divergence writes a
+    desk_journal note titled 'SPLIT DIVERGENCE <sym>' so the next cycle's
+    context and the Routine notification both carry it."""
+    from agent.models import ACCOUNT
+
+    snaps = store.select("desk_portfolio_history",
+                         filters={"account": ACCOUNT},
+                         order=[("snap_date", "desc")], limit=1)
+    if not snaps:
+        return {"checked": 0, "note": "no baseline snapshot yet"}
+    base = snaps[0]
+    base_date = str(base["snap_date"])[:10]
+    base_pos = base.get("positions") or {}
+    if isinstance(base_pos, str):
+        import json as _json
+
+        base_pos = _json.loads(base_pos)
+    splits = store.select("ticker_splits",
+                          columns="symbol,execution_date,split_from,split_to",
+                          filters={"execution_date": ("gt", base_date)})
+    if not splits:
+        return {"checked": 0, "since": base_date}
+    live = {p["symbol"]: float(p.get("qty") or 0.0)
+            for p in trade.positions()}
+    checked = 0
+    divergences = []
+    for s in splits:
+        sym = str(s["symbol"]).upper()
+        if sym not in base_pos:
+            continue
+        try:
+            ratio = float(s["split_to"]) / float(s["split_from"])
+        except (TypeError, ValueError, ZeroDivisionError):
+            continue
+        old_qty = float(base_pos[sym].get("qty") or 0.0)
+        expected = old_qty * ratio
+        actual = live.get(sym, 0.0)
+        checked += 1
+        # Tolerance: the book may legitimately have traded the name since
+        # the snapshot; only the UN-adjusted quantity is the smoking gun.
+        if abs(actual - old_qty) < 1e-6 and abs(expected - old_qty) > 1e-6:
+            divergences.append({"symbol": sym, "ratio": ratio,
+                                "held": actual, "expected": expected})
+            try:
+                store.insert("desk_journal", {
+                    "account": ACCOUNT, "kind": "note",
+                    "title": f"SPLIT DIVERGENCE {sym}",
+                    "body": (f"ticker_splits says {sym} split "
+                             f"{s['split_from']}:{s['split_to']} on "
+                             f"{s['execution_date']}, but the Alpaca paper "
+                             f"position still shows {actual:g} shares "
+                             f"(expected ~{expected:g}). Paper split handling "
+                             "is undocumented — verify the position on the "
+                             "Alpaca dashboard before trading this name."),
+                }, returning=False)
+            except Exception:  # noqa: BLE001 — the summary still carries it
+                logger.warning("split-guard journal write failed", exc_info=True)
+    return {"checked": checked, "since": base_date,
+            "divergences": divergences}
 
 
 def merge_bar_frames(r2_rows, db_rows):

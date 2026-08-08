@@ -497,10 +497,11 @@ def test_verdict_requires_a_graded_row_and_a_known_verdict(store):
 # ── context: the working memory in one read ──
 
 
-def test_context_aggregates_and_stays_bounded(store):
-    from agent import ledger
+def test_context_aggregates_and_stays_bounded(store, monkeypatch):
+    from agent import trade as trade_mod
     from agent.brain import (CONTEXT_CLIP, context, set_wiki, set_state,
                              watch_set)
+    from agent.grade import grade as grade_run
 
     t0 = datetime.utcnow() - timedelta(days=3)
     _seed_spy(store, days=10)
@@ -512,9 +513,27 @@ def test_context_aggregates_and_stays_bounded(store):
                   picks=[_buy_pick("XYZ")])
     store.update("desk_decisions", {"run_id": "R1"}, {"ts": t0},
                  returning=False)
-    _seed_trade(store, "R1", "XYZ", "BUY", 10, 100.0, t0)
-    ledger.mark(store, prices={"XYZ": 104.0})
-    ledger.grade(store, days=30)
+    # V4: the fill lives in the Alpaca mirror; the mark is the Alpaca
+    # position's current_price.
+    store.insert("desk_orders", {
+        "account": "agent", "run_id": "R1", "seq": 1,
+        "client_order_id": "R1:01", "alpaca_order_id": "ctx-o1",
+        "symbol": "XYZ", "asset_class": "us_equity", "side": "buy",
+        "kind": "entry", "order_type": "market", "tif": "day",
+        "qty": 10.0, "status": "filled", "filled_qty": 10.0,
+        "filled_avg_price": 100.0, "filled_at": t0.isoformat() + "+00:00"},
+        returning=False)
+    xyz_pos = {"symbol": "XYZ", "asset_class": "us_equity", "qty": 10.0,
+               "qty_available": 10.0, "avg_entry_price": 100.0,
+               "current_price": 104.0, "market_value": 1040.0,
+               "cost_basis": 1000.0, "unrealized_pl": 40.0,
+               "unrealized_plpc": 0.04, "change_today": None, "side": "long"}
+    grade_run(store, days=30, positions=[xyz_pos])
+    # The account header is a live Alpaca read — canned here.
+    monkeypatch.setattr(trade_mod, "state", lambda: {
+        "cash": 99_000.0, "equity": 100_040.0, "buying_power": 99_000.0,
+        "total_pnl": 40.0, "total_return_pct": 0.04,
+        "positions": [dict(xyz_pos, weight=0.0104)]})
     watch_set(store, symbol="XYZ", below=95.0, reason="kill level")
     store.update("desk_watch", {"symbol": "XYZ"},
                  {"status": "tripped", "tripped_price": 94.5}, returning=False)
@@ -528,10 +547,10 @@ def test_context_aggregates_and_stays_bounded(store):
                 "outcomes", "watches", "wakes", "errors"):
         assert key in ctx, key
     assert ctx["errors"] == {}
-    # account header with provenance
+    # account header off the paper account
     assert ctx["account"]["equity"] > 0
     assert ctx["account"]["positions"][0]["symbol"] == "XYZ"
-    assert ctx["account"]["mark_meta"]["sources"]["live"] == 1
+    assert ctx["account"]["positions"][0]["current_price"] == 104.0
     # no brief built → honest exists=False (same read as `agent.market brief`)
     assert ctx["brief"]["exists"] is False
     # the wiki rides whole (it is size-capped at the source)
@@ -556,10 +575,10 @@ def test_context_aggregates_and_stays_bounded(store):
 def test_context_survives_a_dead_section(store, monkeypatch):
     """One broken read lands in errors; the rest of the memory still loads
     (same convention as the brief builder)."""
-    from agent import ledger
+    from agent import grade as grade_mod
     from agent.brain import context
 
-    monkeypatch.setattr(ledger, "outcomes",
+    monkeypatch.setattr(grade_mod, "outcomes",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     ctx = context(store)
     assert "outcomes" in ctx["errors"]

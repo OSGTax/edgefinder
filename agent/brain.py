@@ -715,7 +715,7 @@ def wake_plan(store=None, *, at: str, reason: str,
     run the trader grants itself is counted, reasoned, and visible."""
     from datetime import timedelta
 
-    from agent.ledger import _et_date
+    from agent.grade import _et_date
 
     store = store or _store()
     if not (reason or "").strip():
@@ -848,7 +848,7 @@ def wake_honor(store=None, *, wake_id: int, run_id: str,
 # ── lessons wiki (Karpathy-style system-prompt learning) ────
 #
 # A small, size-capped set of curated pages the agent reads at the start of
-# every cycle and revises from MEASURED outcomes (see `agent.ledger outcomes`).
+# every cycle and revises from MEASURED outcomes (see `agent.grade outcomes`).
 # Fixed slugs are the curation constraint; pages are edited in place; every
 # edit writes a journal note (kind="wiki") so the audit trail can't be skipped,
 # AND banks the outgoing body as a desk_wiki_history revision (read back with
@@ -1015,7 +1015,7 @@ def get_wiki_history(store=None, *, slug: str, revision: int | None = None,
 
 # ── the learning loop: verdicts + the cycle's working memory ────
 #
-# `agent.ledger grade` writes MACHINE FACTS into desk_outcomes; the weekly
+# `agent.grade run` writes MACHINE FACTS into desk_outcomes; the weekly
 # reflection judges them and records its verdict here — LLM judgment stored
 # durably next to the numbers it judged, instead of evaporating into prose.
 # `context` is the other half of the loop: ONE read that puts the wiki,
@@ -1031,7 +1031,7 @@ def set_verdict(store=None, *, run_id: str, symbol: str, verdict: str,
     """Record the reflection agent's judgment on one graded pick.
 
     The ONLY writer of ``desk_outcomes.verdict`` / ``verdict_note`` —
-    ``agent.ledger grade`` writes the machine facts and never touches these
+    ``agent.grade run`` writes the machine facts and never touches these
     two columns, so a verdict survives re-grading. The row must exist:
     grade first, judge second."""
     store = store or _store()
@@ -1060,7 +1060,7 @@ def set_verdict(store=None, *, run_id: str, symbol: str, verdict: str,
     if not rows:
         return {"ok": False, "error":
                 f"no graded outcome row for run {run_id!r} / {symbol} — run "
-                "`python -m agent.ledger grade` first (machine facts before "
+                "`python -m agent.grade run` first (machine facts before "
                 "judgment)"}
     store.update("desk_outcomes", {"id": rows[0]["id"]},
                  {"verdict": v, "verdict_note": note}, returning=False)
@@ -1123,8 +1123,6 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
     stays a working set, not a dump; drill into any section with the
     individual tools. A dead section lands in ``errors`` instead of killing
     the read (same convention as the brief builder)."""
-    from agent import ledger
-
     store = store or _store()
     errors: dict[str, str] = {}
 
@@ -1135,15 +1133,23 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
             errors[name] = f"{type(exc).__name__}: {exc}"
             return default
 
-    st = _safe("account", lambda: ledger.state(store, account), {})
+    # The account header is a LIVE Alpaca read (REBUILD-V4: the paper account
+    # is the book of record). A dead broker degrades into errors["account"]
+    # like any other section — the cycle still gets its memory.
+    def _account():
+        from agent import trade
+
+        return trade.state()
+
+    st = _safe("account", _account, {})
     account_out = {
         "cash": st.get("cash"), "equity": st.get("equity"),
+        "buying_power": st.get("buying_power"),
         "total_pnl": st.get("total_pnl"),
         "total_return_pct": st.get("total_return_pct"),
-        "mark_meta": st.get("mark_meta"),
         "positions": [{k: p.get(k) for k in
-                       ("symbol", "shares", "avg_price", "last_price",
-                        "unrealized_pnl", "weight")}
+                       ("symbol", "qty", "avg_entry_price", "current_price",
+                        "unrealized_pl", "weight")}
                       for p in st.get("positions") or []]}
 
     def _brief():
@@ -1211,7 +1217,9 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
     open_predictions = _safe("open_predictions", _open_predictions, [])
 
     def _outcomes():
-        oc = ledger.outcomes(store, days=days, account=account)
+        from agent import grade
+
+        oc = grade.outcomes(store, days=days, account=account)
         runs = [{"run_id": r["run_id"], "ts": r["ts"],
                  "summary": _clip(r.get("summary")),
                  "spy_same_window_pct": r.get("spy_same_window_pct"),
@@ -1223,9 +1231,8 @@ def context(store=None, *, days: int = 14, account: str = "agent") -> dict:
                            for p in r.get("picks") or []]}
                 for r in (oc.get("runs") or [])[:CONTEXT_MAX_RUNS]]
         return {"days": days, "book": oc.get("book"),
-                "settlement": oc.get("settlement"),
-                "hardstop": oc.get("hardstop"),
-                "unattributed_trades": oc.get("unattributed_trades"),
+                "marks_available": oc.get("marks_available"),
+                "unattributed_fills": oc.get("unattributed_fills"),
                 "runs": runs}
 
     outcomes_out = _safe("outcomes", _outcomes, {})

@@ -40,14 +40,30 @@ def run(*, strict: bool = False) -> dict:
             if critical:
                 out["ok"] = False
 
-    # DB reachability via the active transport (a cheap desk_* read)
+    # DB reachability via the active transport (a cheap desk_* read).
+    # REBUILD-V4: account state lives at Alpaca, so the DB probe reads the
+    # knowledge layer instead of a ledger that no longer exists.
     def _db():
-        from agent.ledger import state
+        from agent.store import get_store
 
-        st = state()
-        return {"equity": st["equity"], "positions": len(st["positions"]), "cash": st["cash"]}
+        rows = get_store().select("desk_decisions", columns="run_id,ts",
+                                  order=[("ts", "desc")], limit=1)
+        return {"latest_decision": (rows[0]["run_id"] if rows else None)}
 
     check("db", _db)
+
+    # The paper account (the book of record) — non-critical: a broker blip
+    # degrades the cycle to research-only, it does not bench the whole desk.
+    def _paper_account():
+        from agent.trade import Trade, trade_enabled
+
+        if not trade_enabled():
+            return {"note": "trade creds not set"}
+        acct = Trade().account()
+        return {"equity": acct.get("equity"), "cash": acct.get("cash"),
+                "status": acct.get("status")}
+
+    check("paper_account", _paper_account, critical=False)
 
     # Market-data freshness (latest stored daily bar)
     def _bars():
