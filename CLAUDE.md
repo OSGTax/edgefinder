@@ -55,7 +55,7 @@ runtime layout, credentials model). The agent's operating manual is
 | Nightly data | Claude Code Routine | `data-refresh` skill — whole-market ingest + EDGAR + brief + mirror sync, portfolio snapshot, split guard, R2 backup, DB size check |
 | Strategy Lab | Claude Code Routine, nightly | `strategy-lab` skill — 21y split-sample sweep → leaderboard → brief |
 | Reflection | Claude Code Routine, Friday | `reflection-agent` skill — grade the week, curate the wiki, lint the registry |
-| App evolver | Claude Code Routine, Saturday | `app-evolver` skill — one small announced `/desk` improvement |
+| App evolver | on-demand (no Routine) | `app-evolver` skill — one small announced `/desk` improvement when the owner asks |
 | Mirror + knowledge | Supabase Postgres (free tier) | `desk_*` tables; nightly R2 backup; size check vs the 500MB cap |
 | Deep history | Cloudflare R2 | 21y parquet + `backups/` |
 

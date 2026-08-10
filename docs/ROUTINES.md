@@ -12,8 +12,12 @@ in parens); all fire fresh sessions with completion notifications
 | Chain wakes | "Run the trading-agent skill." (+ dispatcher note) | **API trigger, fired by the Render dispatcher** — every market-hours cycle plans its next wake 15–60 min out (`brain wake-plan`, the `desk_wakes` budget: 40/ET-day, 15-min floor); `agent/streamer.py` polls for due plans every 60s and POSTs this routine's `/fire` endpoint (≤3 attempts per wake, then `missed:auto`) | The rolling chain: prep ~9:00 ET → session → wrap post-close |
 | Nightly data | `data-refresh` | `45 0 * * 2-6` (8:45 PM ET Mon–Fri) | Full-market ingest + EDGAR + brief **+ V4 duties: Alpaca mirror sync, portfolio snapshot, split guard, R2 knowledge backup, DB size check** |
 | Strategy Lab | `strategy-lab` | `0 2 * * 2-6` (10 PM ET) | 21y split-sample sweep → leaderboard → brief |
-| Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week (via `agent.grade`), curate the wiki, lint the claims registry |
-| Desk evolution | `app-evolver` | `0 15 * * 6` (11 AM ET Sat) | One small, tested, announced `/desk` improvement |
+| Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week (via `agent.grade`), verdicts incl. did named news catalysts play out, curate the wiki, lint the claims registry |
+
+The `app-evolver` skill has NO scheduled routine (retired 2026-08-10 in
+the roster pruning): desk improvements run on demand — ask any session
+to "improve the dashboard" and the same skill, boundaries, and test
+gate apply.
 
 Retired with V4: the GitHub Actions `trading-agent.yml` workflow +
 `wake_gate.py` gate, the Render wake-dispatcher + tripwire sweep +
