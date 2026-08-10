@@ -43,30 +43,44 @@
   transient: the corp-actions pass hit an SSL handshake timeout —
   idempotent, re-covered by the next nightly.
 
-**Pending (owner, as of Sun 2026-08-09 22:00 UTC — verified NOT yet in):**
-1. Alpaca paper account created with starting cash **$94,877.79** + its
-   API keys generated (steps 7–8).
-2. `EDGEFINDER_ALPACA_TRADE_KEY` / `EDGEFINDER_ALPACA_TRADE_SECRET` /
-   `EDGEFINDER_STARTING_CAPITAL=94877.79` set in BOTH the EdgeFinder
-   Claude environment (`env_01Fs6E1TzLuQ1bkdjjzrVcaY`) and the Render
-   service env.
-3. The weekly-reflection Routine's prompt swapped (it was created via
-   the web UI, so agents cannot edit it; replacement text:
-   "Run the reflection-agent skill exactly
-   (.claude/skills/reflection-agent/SKILL.md). You are read-only on the
-   book — never trade submit/cancel/arm-stop. Run id
-   reflect-YYYY-MM-DD. Grade with agent.grade run / agent.grade
-   outcomes, alpha not dollars, then curate the wiki.").
-4. Cosmetic, anytime: delete the GitHub dispatch PAT + `SMTP_*` +
-   `CLAUDE_CODE_OAUTH_TOKEN` repo secrets.
+**Steps 7–8 DONE (owner, Mon 2026-08-10 ~9:00 ET):** the paper account
+was created fresh (new account + new keys — an Alpaca reset always mints
+both) and funded at **exactly $94,877.79** — verified live via
+`/api/desk/broker-health`: status ACTIVE, equity 94877.79. The env vars
+were initially saved under wrong names in BOTH environments (missing the
+`EDGEFINDER_` prefix — the settings loader requires it); fixed ~8:55 ET.
+A first-light one-shot trigger fired 12:32 UTC while the names were
+still wrong and stopped at the creds check, as designed — superseded by
+the fix; its trigger (`trig_01NAFSLgRVLDouViosj31rQK`) is spent.
 
-**First light (steps 10–13):** a one-shot check fires Mon 2026-08-10
-12:30 UTC (8:30 ET) — if keys are in, it triggers `agent.trade config` +
-`probe --suite cutover` + `snapshot` in a fresh session before the floor
-Routine's first firing at 13:00 UTC. Until the keys land, cycles run
-research-only (account section degrades; no orders possible). The first
-armed cycle re-enters only what the agent still believes from the
-57-position Era-1 book, as fresh picks with prediction/horizon/kill.
+**Remaining (the first armed session runs these — ~3 minutes):**
+1. `python -m agent.trade config` — apply `no_shorting=true` +
+   `max_margin_multiplier="1"`, verify options Level 3. THE ACCOUNT IS
+   UNCONFIGURED UNTIL THIS RUNS (a fresh paper account defaults to
+   margin + shorting enabled; the charter's server-side enforcement
+   starts here).
+2. `python -m agent.trade probe --suite cutover` — journaled
+   automatically as "V4 cutover probe results".
+3. `python -m agent.trade snapshot` — Era 2's first
+   desk_portfolio_history row.
+4. Confirm `EDGEFINDER_STARTING_CAPITAL` (94877.79) matches the
+   account's actual equity — it does, per the broker-health read above.
+
+**Still owner, non-blocking:** the weekly-reflection Routine's prompt
+swap (web-UI-created, agents cannot edit it; replacement text: "Run the
+reflection-agent skill exactly
+(.claude/skills/reflection-agent/SKILL.md). You are read-only on the
+book — never trade submit/cancel/arm-stop. Run id reflect-YYYY-MM-DD.
+Grade with agent.grade run / agent.grade outcomes, alpha not dollars,
+then curate the wiki."), and deleting the dead GitHub repo secrets
+(dispatch PAT, `SMTP_*`, `CLAUDE_CODE_OAUTH_TOKEN`).
+
+**First light:** the floor Routine (hourly, `0 13-20 * * 1-5` UTC) runs
+cycles from Mon 2026-08-10; any cycle before the config/probes ran is
+research-only-by-circumstance and says so. The first ARMED cycle
+re-enters only what the agent still believes from the 57-position Era-1
+book, as fresh picks with prediction/horizon/kill, and arms protective
+stops.
 
 ---
 
