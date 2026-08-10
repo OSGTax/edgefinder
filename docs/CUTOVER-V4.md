@@ -66,14 +66,11 @@ the fix; its trigger (`trig_01NAFSLgRVLDouViosj31rQK`) is spent.
 4. Confirm `EDGEFINDER_STARTING_CAPITAL` (94877.79) matches the
    account's actual equity — it does, per the broker-health read above.
 
-**Still owner, non-blocking:** the weekly-reflection Routine's prompt
-swap (web-UI-created, agents cannot edit it; replacement text: "Run the
-reflection-agent skill exactly
-(.claude/skills/reflection-agent/SKILL.md). You are read-only on the
-book — never trade submit/cancel/arm-stop. Run id reflect-YYYY-MM-DD.
-Grade with agent.grade run / agent.grade outcomes, alpha not dollars,
-then curate the wiki."), and deleting the dead GitHub repo secrets
-(dispatch PAT, `SMTP_*`, `CLAUDE_CODE_OAUTH_TOKEN`).
+**Still owner, non-blocking:** ~~the weekly-reflection Routine's prompt
+swap~~ (DONE 2026-08-10 — deleted in the UI and recreated agent-managed
+with the V4 prompt), and deleting the dead GitHub repo secrets
+(dispatch PAT, `SMTP_*`, `CLAUDE_CODE_OAUTH_TOKEN`) plus the four dead
+`EDGEFINDER_POLYGON_S3_*` rows in the Claude environment.
 
 **First light:** the floor Routine (hourly, `0 13-20 * * 1-5` UTC) runs
 cycles from Mon 2026-08-10; any cycle before the config/probes ran is
