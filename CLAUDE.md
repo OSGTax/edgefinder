@@ -48,7 +48,8 @@ runtime layout, credentials model). The agent's operating manual is
 | Piece | Where | Job |
 |---|---|---|
 | Paper account | Alpaca | THE BOOK: fills, positions, cash, equity, resting GTC stops, expiry |
-| Trading brain | Claude Code Routines, self-chaining | Each market-hours cycle plans the next 15–60 min out (`brain wake-plan` budget gate → one-shot `create_trigger`); an hourly floor Routine restarts a dropped chain (`brain chain-health` = cheap early exit) |
+| Trading brain | Claude Code Routines | Each market-hours cycle plans the next 15–60 min out (`brain wake-plan` budget gate — the row is the whole job; fired sessions have NO scheduler tools); an hourly floor Routine restarts a dropped chain (`brain chain-health` = cheap early exit) |
+| Chain dispatcher | Render (always-on, in `agent/streamer.py`) | Polls `desk_wakes` every 60s, fires the "EdgeFinder chain wakes" Routine's API `/fire` trigger when a plan is due; `desk_dispatches` CAS ledger = at-most-once, ≤60/day, ≤3 tries/wake then `missed:auto` |
 | Quote streamer | Render (always-on) | SIP WebSocket → in-memory `QuoteCache` → SSE live tape (`/api/desk/stream`) — display + research; fills don't depend on it |
 | Desk page | Render | Live ticks, the book (from Alpaca), thinking feed, decisions, journal, claims, What's New |
 | Nightly data | Claude Code Routine | `data-refresh` skill — whole-market ingest + EDGAR + brief + mirror sync, portfolio snapshot, split guard, R2 backup, DB size check |
@@ -58,8 +59,11 @@ runtime layout, credentials model). The agent's operating manual is
 | Mirror + knowledge | Supabase Postgres (free tier) | `desk_*` tables; nightly R2 backup; size check vs the 500MB cap |
 | Deep history | Cloudflare R2 | 21y parquet + `backups/` |
 
-There is **no in-process scheduler**, no GitHub Actions execution arm, and
-no in-house stop watcher — protection rests on Alpaca's own book.
+There is no GitHub Actions execution arm and no in-house stop watcher —
+protection rests on Alpaca's own book. The one in-process clock is the
+Render dispatcher above (V4.1): it fires trading *sessions*, never
+orders, because fired Routine sessions cannot create their own triggers
+(probed 2026-07-13, re-proven 2026-08-10).
 
 ## Tech stack
 
@@ -244,7 +248,11 @@ greenfield cutover, 2026-06-22). REBUILD-V3 (v8–v9.28) was the live desk
 with a hand-rolled ledger: fills priced off self-captured SIP quotes, a
 GitHub-Actions execution arm, a Render wake-dispatcher, tripwires and an
 in-house hard-stop sweep. V4 (v10.0.0) replaced the ledger with Alpaca's
-paper brokerage, the dispatcher with self-scheduling Routines, and froze
-the V3 book as Era 1. The record lives in git history,
+paper brokerage and froze the V3 book as Era 1; its self-scheduling
+design (each cycle `create_trigger`s its successor) assumed a tool fired
+sessions never have and died on first contact (2026-08-10) — V4.1
+(v10.1.0) brought back the V3 dispatcher pattern on Render, firing the
+chain-wakes Routine's API trigger instead of GitHub Actions. The record
+lives in git history,
 `docs/history/REBUILD-V3.md`, `HANDOFF.md`, and `reviews/` — none of it
 is current guidance.

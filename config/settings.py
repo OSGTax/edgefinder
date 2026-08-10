@@ -68,6 +68,17 @@ class Settings(BaseSettings):
     alpaca_trade_key: str = ""
     alpaca_trade_secret: str = ""
 
+    # ── CHAIN-WAKE DISPATCHER (Render → Routines API trigger) ───────
+    # The "EdgeFinder chain wakes" Routine's /fire endpoint + bearer token
+    # (owner-generated once at claude.ai/code/routines — API triggers are
+    # web-UI-only, and the token is shown a single time). Fired sessions
+    # have no scheduler MCP, so the always-on streamer process fires the
+    # chain: agent/streamer.py polls desk_wakes and POSTs here when a
+    # planned wake comes due. Both empty → the dispatcher stays off and
+    # the hourly floor Routine is the only chain restarter.
+    routine_fire_url: str = ""
+    routine_fire_token: str = ""
+
     # ── LIVE QUOTE STREAM (Render → /desk SSE) ───────
     # Held names are added to this seed universe automatically at stream start.
     stream_symbols: str = "SPY,QQQ,IWM,NVDA,AAPL,MSFT,AMZN,GOOGL,META,TSLA"

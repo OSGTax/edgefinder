@@ -16,9 +16,13 @@ An **autonomous AI paper-trading desk**, private to the owner:
   and option expiry are the broker's job now.
 - **An agent-paced AI brain** (Claude Code Routine sessions running
   `.claude/skills/trading-agent/SKILL.md`) that observes, researches,
-  decides, submits orders via `agent.trade`, and **schedules its own next
-  wake** — a rolling 15–60-minute chain of one-shot triggers across the
-  session, with an hourly floor Routine that restarts a dropped chain.
+  decides, submits orders via `agent.trade`, and **sets its own clock** —
+  every cycle plans its next wake 15–60 minutes out (`brain wake-plan`,
+  the budgeted `desk_wakes` ledger); the always-on Render process fires
+  each plan when due through the "EdgeFinder chain wakes" Routine's API
+  trigger (V4.1 — fired Routine sessions have no scheduler tools, probed
+  2026-07-13 and re-proven 2026-08-10, so the dispatcher is the chain's
+  clock), with an hourly floor Routine restarting a dropped chain.
 - **Judged on the calls themselves**: the decision-side registry —
   falsifiable prediction/horizon/kill on every entry, structured
   commitments on conditional exits, tier-gated claims, owner-approved
@@ -91,7 +95,7 @@ An **autonomous AI paper-trading desk**, private to the owner:
 | Piece | Where | Job |
 |---|---|---|
 | Paper account | Alpaca | THE BOOK: fills, positions, cash, equity, resting stops, expiry |
-| Trading brain | Claude Code Routines (owner's subscription) | Self-chaining one-shot wakes 15–60 min apart + hourly restart floor; runs the trading-agent skill; orders via `agent.trade` |
+| Trading brain | Claude Code Routines (owner's subscription) | Wake-plan chain 15–60 min apart, fired by the Render dispatcher via the chain-wakes Routine's API trigger + hourly restart floor; runs the trading-agent skill; orders via `agent.trade` |
 | Quote streamer | Render (always-on) | SIP WebSocket → QuoteCache → SSE live tape on `/desk` (display + research; fills don't depend on it) |
 | Desk page | Render | Live ticks, the book (from Alpaca), decisions, thinking, claims, journal, What's New |
 | Nightly data | Claude Code Routine | `data-refresh`: whole-market ingest + EDGAR + brief + **mirror sync, portfolio snapshot, split guard, R2 backup, DB size check** |

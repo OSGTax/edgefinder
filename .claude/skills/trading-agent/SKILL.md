@@ -23,11 +23,12 @@ enforce in code, the BROKER now enforces at the account level: the account
 is configured long-only (`no_shorting`), unleveraged (margin multiplier 1),
 and options Level 3 max — the platform itself has no naked-call tier.
 
-**You are at the desk all day, and you schedule yourself.** While the
+**You are at the desk all day, and you set your own clock.** While the
 market is open you run a **rolling chain**: every cycle ends by planning
-the next one 15–60 minutes out and ARMING IT YOURSELF as a one-shot
-Routine trigger (step 8) — the way a trader glances at the clock and
-decides when to look up again. The day has a shape: a **prep cycle**
+the next one 15–60 minutes out with `brain wake-plan` (step 8) — the way
+a trader glances at the clock and decides when to look up again. The
+always-on Render dispatcher fires each plan when it comes due; you never
+create triggers yourself (fired sessions have no scheduler tools). The day has a shape: a **prep cycle**
 around 9:00 AM ET, the chain through the session, and a **wrap cycle**
 just after the close. An hourly cron Routine is only the FLOOR — it
 restarts a dropped chain and exits cheaply otherwise (step 0).
@@ -357,30 +358,29 @@ python -m agent.brain decision --run-id <RID> --regime risk_on \
   ONE** wiki page (`agent.brain wiki-set`), citing the numbers. Deep
   curation is Friday's job. An hourly wobble is not a lesson.
 
-### 8. The chain (phase: decide) — arm your own next wake
+### 8. The chain (phase: decide) — plan the next wake
 
 While the market is open, **every cycle ENDS by planning the next one,
-15–60 minutes out — and ARMING it yourself.** Two steps, in order:
-
-1. **The budget gate** (never skip it — this is how every extra run the
-   trader grants itself stays counted and visible):
+15–60 minutes out.** One step — the budget gate (never skip it; this is
+how every extra run the trader grants itself stays counted and visible):
 ```
 python -m agent.brain wake-plan --at 2026-08-17T19:45:00Z \
     --reason "chain: semis fading into lunch, next look 45m" --run-id <RID>
 ```
-   Max 40/ET-day, ≥15 min apart. If it refuses, you are out of budget —
-   the hourly floor becomes your cadence; say so.
-2. **Arm the trigger** — ONLY after wake-plan says ok, create the
-   one-shot Routine trigger with the claude-code-remote MCP tool
-   `create_trigger`:
-   - `name`: `chain wake <ET time>`
-   - `run_once_at`: the SAME time you just planned (RFC3339 UTC)
-   - `create_new_session_on_fire`: true
-   - `prompt`: `Run the trading-agent skill.`
-   - `notifications`: `{"push": true, "email": true}`
-   If the tool is unavailable or errors, journal it loudly — the hourly
-   floor will restart the chain within the hour; the wake-plan row is the
-   record that you tried.
+Max 40/ET-day, ≥15 min apart. If it refuses, you are out of budget —
+the hourly floor becomes your cadence; say so.
+
+**That row is the whole job — you do NOT create any trigger.** Sessions
+fired by Routines have no scheduler tools (probed 2026-07-13, re-proven
+2026-08-10; do not waste turns looking). The always-on Render process
+runs the chain's clock: its dispatcher (`agent/streamer.py`) polls
+`desk_wakes` every minute and fires the "EdgeFinder chain wakes"
+Routine's API trigger when your plan comes due (~1–2 min latency, ≤3
+fire attempts per wake, then `missed:auto`). If a cycle starts and
+`wake-due` shows nothing, you were floor-fired — run chain-health and
+follow it. If the desk journal carries a "Chain-wake fire token
+rejected" note, the dispatcher is dead until the owner rotates the
+token — the hourly floor is the cadence; say so in your summary.
 
 **Cadence:** 15–20 min is the default whenever there's an open position,
 a live thesis, or anything on the shortlist; 30–45 for a quiet stretch;

@@ -328,6 +328,35 @@ class DeskWake(Base):
     dispatch_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class DeskDispatch(Base):
+    """One chain-wake fire (or attempt) by the streamer's dispatcher.
+
+    The autonomy loop's at-most-once ledger, back in service for V4.1: the
+    always-on Render process polls ``desk_wakes`` and fires the
+    "EdgeFinder chain wakes" Routine's API trigger when a plan comes due
+    (fired sessions have no scheduler MCP — probed 2026-07-13, re-proven
+    2026-08-10 — so the dispatcher IS the chain's clock). ``bucket``
+    (epoch // gap) is UNIQUE per account: sibling instances during a
+    Render deploy overlap CAS-race the insert and exactly one wins the
+    window. Also the debounce clock and the per-ET-day dispatch cap — DB
+    state, never process memory."""
+
+    __tablename__ = "desk_dispatches"
+    __table_args__ = (
+        UniqueConstraint("account", "bucket", name="uq_desk_dispatch_bucket"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(30), default=ACCOUNT, index=True)
+    bucket: Mapped[int] = mapped_column(Integer)   # epoch // (min-gap secs)
+    ts: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    reason: Mapped[str] = mapped_column(Text)
+    wake_ids: Mapped[list | None] = mapped_column(JSON)
+    watch_ids: Mapped[list | None] = mapped_column(JSON)  # legacy shape (V3 rows)
+    status: Mapped[str] = mapped_column(String(12), default="claimed")
+    http_status: Mapped[int | None] = mapped_column(Integer)
+
+
 class DeskOutcome(Base):
     """One pick's machine-graded outcome facts — the durable scoreboard the
     reflection agent grades FROM instead of re-deriving (or vibing) each week.

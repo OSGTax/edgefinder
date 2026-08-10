@@ -4,10 +4,15 @@ The always-on Render process owns this: a single connection to Alpaca's SIP
 stream (quotes + trades for the configured universe) writes into a process-
 local ``QuoteCache``; the desk page reads it over SSE (``/api/desk/stream``)
 and the tools read it over ``/api/desk/quotes``. REBUILD-V4: this is the
-desk page's LIVE TAPE only — fills execute on Alpaca's paper engine
-against its own NBBO view, protective stops rest on Alpaca's book, and
-cycles self-schedule via Routine triggers, so the old tripwire sweep,
-hard-stop executor, and GitHub wake-dispatcher no longer exist here.
+desk page's LIVE TAPE — fills execute on Alpaca's paper engine against
+its own NBBO view and protective stops rest on Alpaca's book, so the old
+tripwire sweep and hard-stop executor no longer exist here — PLUS the
+chain-wake dispatcher (V4.1): fired Routine sessions have no scheduler
+MCP (probed 2026-07-13, re-proven 2026-08-10), so this always-on process
+is the chain's clock — it polls ``desk_wakes`` and POSTs the
+"EdgeFinder chain wakes" Routine's API /fire endpoint when a planned
+wake comes due, with the ``desk_dispatches`` CAS ledger making every
+window at-most-once.
 
 Resilience (all mandatory — Render deploys/replacements kill the socket):
 - reconnect with exponential backoff (1s → 60s cap, reset after a healthy run)
@@ -264,19 +269,223 @@ async def run_stream() -> None:
 
 
 
-_stream_task: asyncio.Task | None = None  # keep a ref so GC can't collect it
+# ── the chain-wake dispatcher (V4.1) ─────────────────────────────────────
+#
+# Fired Routine sessions cannot create triggers (no scheduler MCP — probed
+# 2026-07-13, re-proven live 2026-08-10), so a cycle's wake-plan row is a
+# PROMISE something external must fire. This is that something: the same
+# battle-tested V3 dispatcher loop, with the GitHub workflow_dispatch POST
+# replaced by the "EdgeFinder chain wakes" Routine's API /fire endpoint
+# (owner-created web-UI trigger; research-preview beta header per
+# https://code.claude.com/docs/en/routines).
+
+DISPATCH_PERIOD_SECS = 60          # how often the dispatcher looks
+DISPATCH_MIN_GAP_SECS = 300        # >=5 min between fires (the CAS bucket)
+DISPATCH_MAX_PER_DAY = 60          # per ET day — chain + retry headroom,
+                                   # 1.5x brain.WAKE_MAX_PER_DAY (40)
+DISPATCH_MAX_PER_WAKE = 3          # then the wake is stamped missed:auto
+DISPATCH_WAKE_LOOKBACK_HOURS = 8   # same "due" definition as brain.wake_due
+ROUTINE_FIRE_BETA = "experimental-cc-routine-2026-04-01"
+
+
+def dispatch_reason(wakes: list[dict], dispatches: list[dict],
+                    now: datetime | None = None) -> dict | None:
+    """Pure decision: should the dispatcher fire a trading cycle right now?
+
+    ``wakes``/``dispatches`` are plain row dicts (naive-UTC timestamps,
+    both transports). Returns {"reason", "wake_ids"} or None. Enforces the
+    min-gap debounce and the per-ET-day cap (from the dispatch ledger),
+    the 8h due-window, and the per-wake attempt cap (immortal wakes are
+    the classic infinite-loop cost trap). V4 has no tripwires — due
+    wake-plans are the only fire cause."""
+    now = now or datetime.utcnow()
+
+    def _dt(v):
+        if isinstance(v, datetime):
+            return v.replace(tzinfo=None) if v.tzinfo else v
+        try:
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return d.astimezone(timezone.utc).replace(tzinfo=None) if d.tzinfo else d
+        except (TypeError, ValueError):
+            return None
+
+    disp_times = sorted(t for t in (_dt(d.get("ts")) for d in dispatches) if t)
+    if disp_times and (now - disp_times[-1]).total_seconds() < DISPATCH_MIN_GAP_SECS:
+        return None
+    # ET-day cap: naive-UTC minus a fixed 5h (EST) — never looser than intended.
+    et_day = (now - timedelta(hours=5)).date()
+    today = [t for t in disp_times if (t - timedelta(hours=5)).date() == et_day]
+    if len(today) >= DISPATCH_MAX_PER_DAY:
+        return None
+
+    lookback = now - timedelta(hours=DISPATCH_WAKE_LOOKBACK_HOURS)
+    due = [w for w in wakes
+           if not w.get("honored_run_id")
+           and int(w.get("dispatch_count") or 0) < DISPATCH_MAX_PER_WAKE
+           and (t := _dt(w.get("at"))) is not None and lookback <= t <= now]
+    if not due:
+        return None
+    return {"reason": f"{len(due)} wake-plan(s) due",
+            "wake_ids": [w["id"] for w in due]}
+
+
+def claim_dispatch_slot(store, decision: dict,
+                        now: datetime | None = None) -> int | None:
+    """CAS-claim this debounce window: insert the UNIQUE (account, bucket)
+    row BEFORE posting. A duplicate-key loss means a sibling instance owns
+    the window — stand down. Returns the row id or None."""
+    from agent.store import is_duplicate_key_error
+
+    now = now or datetime.utcnow()
+    bucket = int(now.timestamp()) // DISPATCH_MIN_GAP_SECS
+    try:
+        rows = store.insert("desk_dispatches", {
+            "account": "agent", "bucket": bucket, "ts": now,
+            "reason": decision["reason"], "wake_ids": decision["wake_ids"],
+            "status": "claimed",
+        }, returning=True)
+        return rows[0]["id"] if rows else None
+    except Exception as exc:  # noqa: BLE001
+        if is_duplicate_key_error(exc):
+            return None
+        raise
+
+
+def fire_routine(reason: str) -> int:
+    """POST the chain-wakes Routine's /fire endpoint (stdlib urllib).
+
+    200 = a session was created. The bearer token can ONLY fire this one
+    routine (per-routine scope); the reason text rides the ``text`` field,
+    which the platform wraps as untrusted payload — the routine's saved
+    prompt is what the session acts on, so ids/labels here are display
+    only and the prompt-injection surface stays closed."""
+    import urllib.request
+
+    req = urllib.request.Request(
+        settings.routine_fire_url,
+        data=json.dumps({"text": reason[:200]}).encode(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {settings.routine_fire_token}",
+            "anthropic-beta": ROUTINE_FIRE_BETA,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return resp.status
+
+
+def _run_dispatch_once(store, now: datetime | None = None,
+                       fire=fire_routine) -> dict | None:
+    """One dispatcher pass (sync; called via to_thread). Returns the
+    decision it acted on, or None."""
+    now = now or datetime.utcnow()
+    wakes = store.select("desk_wakes", filters={"account": "agent"},
+                         order=[("at", "desc")], limit=60)
+    # The read must cover a full ET day of rows or the daily cap can never
+    # bind. 300 > the bucket-math ceiling of 86400/DISPATCH_MIN_GAP_SECS.
+    dispatches = store.select("desk_dispatches", order=[("ts", "desc")], limit=300)
+    decision = dispatch_reason(wakes, dispatches, now=now)
+
+    # Terminal-resolve exhausted wakes so they can never loop the dispatcher:
+    # an unhonored wake at the attempt cap is stamped missed:auto (honest —
+    # it fired cycles that chose not to honor it, or the market was closed).
+    for w in wakes:
+        if (not w.get("honored_run_id")
+                and int(w.get("dispatch_count") or 0) >= DISPATCH_MAX_PER_WAKE):
+            store.update("desk_wakes",
+                         {"id": w["id"], "honored_run_id": None},
+                         {"honored_run_id": "missed:auto"}, returning=False)
+
+    if not decision:
+        return None
+    slot = claim_dispatch_slot(store, decision, now=now)
+    if slot is None:
+        return None
+    try:
+        status = fire(decision["reason"])
+        store.update("desk_dispatches", {"id": slot},
+                     {"status": "sent", "http_status": status}, returning=False)
+        for wid in decision["wake_ids"]:
+            row = store.select("desk_wakes", filters={"id": wid}, limit=1)
+            if row:
+                store.update("desk_wakes", {"id": wid},
+                             {"dispatch_count": int(row[0].get("dispatch_count") or 0) + 1},
+                             returning=False)
+        logger.info("CHAIN dispatch fired (%s): %s", status, decision["reason"])
+        return decision
+    except Exception as exc:  # noqa: BLE001 — mark failed; next bucket retries
+        code = getattr(exc, "code", None)
+        store.update("desk_dispatches", {"id": slot},
+                     {"status": "failed", "http_status": code}, returning=False)
+        if code in (401, 403):
+            logger.error("CHAIN dispatch token rejected (%s) — regenerate the "
+                         "routine's API token and update Render; the chain "
+                         "rides the hourly floor until then", code)
+            try:
+                from agent.brain import add_journal
+
+                add_journal(store, kind="note",
+                            title="Chain-wake fire token rejected",
+                            body=f"The Routines API returned {code} for the "
+                                 "chain-wakes /fire call — the bearer token "
+                                 "on Render is expired, revoked, or wrong. "
+                                 "Sub-hourly chain wakes are OFF until the "
+                                 "owner regenerates the token "
+                                 "(claude.ai/code/routines → EdgeFinder chain "
+                                 "wakes → API trigger → Regenerate) and "
+                                 "updates EDGEFINDER_ROUTINE_FIRE_TOKEN on "
+                                 "Render. The hourly floor Routine still "
+                                 "restarts the chain each hour.")
+            except Exception:  # noqa: BLE001
+                logger.exception("could not journal the token rejection")
+        else:
+            logger.exception("chain dispatch POST failed (will retry)")
+        return None
+
+
+async def run_wake_dispatch() -> None:
+    """Forever task: the chain's clock. Separate from the tape task on
+    purpose — a hung POST must never stall the stream — and started even
+    without Alpaca keys (it needs only DB + the fire credentials)."""
+    if not (settings.routine_fire_url.strip()
+            and settings.routine_fire_token.strip()):
+        logger.info("Chain dispatcher disabled (no EDGEFINDER_ROUTINE_FIRE_URL"
+                    "/_TOKEN) — the hourly floor is the only restarter")
+        return
+    logger.info("Chain dispatcher up: firing %s every %ss when wakes come due",
+                settings.routine_fire_url.split("/routines/")[-1],
+                DISPATCH_PERIOD_SECS)
+    while True:
+        try:
+            def _pass():
+                from agent.store import get_store
+
+                return _run_dispatch_once(get_store())
+            await asyncio.to_thread(_pass)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — the dispatcher must never die loudly
+            logger.exception("chain dispatcher pass failed (retrying)")
+        await asyncio.sleep(DISPATCH_PERIOD_SECS)
+
+
+_stream_task: asyncio.Task | None = None  # keep refs so GC can't collect them
+_dispatch_task: asyncio.Task | None = None
 
 
 def start_in(_app=None) -> asyncio.Task | None:
-    """Start the streamer as an asyncio task (called from the FastAPI
-    lifespan). Returns the task, or None when keys are absent (dev/CI/
-    tests). REBUILD-V4: this is the ONLY background job — the tripwire
-    sweep, the hard-stop executor, and the GitHub wake-dispatcher are gone
-    (protective stops rest on Alpaca's own book; cycles schedule
-    themselves via one-shot Routine triggers)."""
-    global _stream_task
+    """Start the background jobs from the FastAPI lifespan: the chain-wake
+    dispatcher (UNCONDITIONALLY — it needs only DB + fire credentials, so
+    revoked Alpaca keys can never silently kill machine-fired cycles) and
+    the SIP tape task (None when Alpaca keys are absent — dev/CI/tests).
+    Protective stops still rest on Alpaca's own book; the dispatcher fires
+    cycles, never orders."""
+    global _stream_task, _dispatch_task
     from agent import broker
 
+    _dispatch_task = asyncio.get_running_loop().create_task(
+        run_wake_dispatch(), name="chain-dispatch")
     if not broker.enabled():
         logger.info("Live streamer disabled (no Alpaca keys)")
         return None

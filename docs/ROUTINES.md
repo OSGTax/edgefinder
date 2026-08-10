@@ -9,7 +9,7 @@ in parens); all fire fresh sessions with completion notifications
 
 | Routine | Skill / prompt | Cron (UTC) | What it does |
 |---|---|---|---|
-| Chain wakes | "Run the trading-agent skill." | **one-shot triggers, self-created** — every market-hours cycle arms its own next wake 15–60 min out (`create_trigger`, `run_once_at`, fresh session), gated by the `desk_wakes` budget (40/ET-day, 15-min floor) | The rolling chain: prep ~9:00 ET → session → wrap post-close |
+| Chain wakes | "Run the trading-agent skill." (+ dispatcher note) | **API trigger, fired by the Render dispatcher** — every market-hours cycle plans its next wake 15–60 min out (`brain wake-plan`, the `desk_wakes` budget: 40/ET-day, 15-min floor); `agent/streamer.py` polls for due plans every 60s and POSTs this routine's `/fire` endpoint (≤3 attempts per wake, then `missed:auto`) | The rolling chain: prep ~9:00 ET → session → wrap post-close |
 | Chain restarter (floor) | "Run the trading-agent skill." | `0 13-20 * * 1-5` (hourly, 9a–4p EDT) | The FLOOR: `agent.brain chain-health` makes it a cheap early exit while the chain is healthy; it runs a full cycle only when a wake is due or the chain went quiet (no cycle in 25 min during desk hours) |
 | Nightly data | `data-refresh` | `45 0 * * 2-6` (8:45 PM ET Mon–Fri) | Full-market ingest + EDGAR + brief **+ V4 duties: Alpaca mirror sync, portfolio snapshot, split guard, R2 knowledge backup, DB size check** |
 | Strategy Lab | `strategy-lab` | `0 2 * * 2-6` (10 PM ET) | 21y split-sample sweep → leaderboard → brief |
@@ -23,15 +23,28 @@ GTC orders — they fire with nothing of ours running), the SMTP
 `cycle_report.py` email (Routine completion notifications replace it),
 and the hourly loop-monitor Routine (same reason).
 
-**The autonomy loop (V4):** every market-hours trading cycle ends with
+**The autonomy loop (V4.1):** every market-hours trading cycle ends with
 `agent.brain wake-plan` (the budget gate — 40/ET-day, ≥15-min gap,
-DB-enforced in `desk_wakes`) and then arms the one-shot trigger itself
-via the claude-code-remote MCP (`create_trigger` with `run_once_at`,
-`create_new_session_on_fire=true`, prompt "Run the trading-agent
-skill."). The hourly floor Routine restarts a dropped chain; its
-`chain-health` early exit makes healthy-hour firings nearly free.
+DB-enforced in `desk_wakes`) — and that row is the cycle's whole job.
+Sessions fired by Routines have **no scheduler tools** (probed
+2026-07-13, re-proven live 2026-08-10 — V4.0's assumption that a cycle
+could `create_trigger` its own successor was wrong and never fired
+once), so the always-on Render process is the chain's clock:
+`agent/streamer.py`'s dispatcher polls `desk_wakes` every 60s and POSTs
+the "EdgeFinder chain wakes" Routine's API `/fire` endpoint when a plan
+comes due, with the `desk_dispatches` CAS ledger enforcing at-most-once
+per 5-min window, ≤60 fires/ET-day, and ≤3 attempts per wake
+(`missed:auto` after). Setup (owner, once): the routine is created in
+the web UI with an API trigger; its URL + bearer token live on Render as
+`EDGEFINDER_ROUTINE_FIRE_URL` / `EDGEFINDER_ROUTINE_FIRE_TOKEN` (the
+token fires this one routine only; on 401/403 the dispatcher journals
+"Chain-wake fire token rejected" and the hourly floor carries the chain
+until the owner regenerates it). The `/fire` endpoint is research-
+preview (`anthropic-beta: experimental-cc-routine-2026-04-01`).
 Expected volume: ~15–25 cycles/trading day, all billed to the owner's
-Claude subscription — no runner minutes, no dispatcher PAT.
+Claude subscription — no runner minutes, no GitHub PAT. Note the
+account-level daily routine-run cap at claude.ai/code/routines — the
+dispatcher's 60/day ceiling must fit inside it.
 
 Routine prompts are thin pointers ("Run the X skill.") — behavior lives
 in `.claude/skills/*/SKILL.md`, which every firing loads fresh from
