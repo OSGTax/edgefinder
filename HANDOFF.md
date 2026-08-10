@@ -1,3 +1,11 @@
+> **HISTORICAL DOCUMENT — the v5-era strategy-hunt record. Nothing below
+> is current guidance.** The live system is REBUILD-V4 (v10.0.0, cut over
+> 2026-08-08): Alpaca's paper brokerage is the book of record, the brain
+> self-schedules via Claude Code Routines, and the V3 book is frozen as
+> the `era1_*` archive. Current state lives in `CLAUDE.md` (the map),
+> `REBUILD-V4.md` (the charter), and `docs/CUTOVER-V4.md` (the executed
+> cutover record + what remains). Start there, not here.
+
 **DAILY-DECISION ROUND 2 COMPLETE (2026-06-14) — 0 confirmed; stateful interface WORKS.** reviews/DAILY-ROUND-2.md. Hysteresis collapsed turnover 17-20x (sh_trend_hold 739 trades vs daily-r1's 12,687). sh_trend_hold was the FIRST fast/daily candidate to pass main criteria (+1.96pp, 4/6) BUT failed the all-three re-checks (shift- 3/6, shift+ +0.23pp/3-6, late 3/4 — only 1 of 3 keeps majority; the value_pe12 death pattern). It's also just the monthly fleet's trend/momentum edge at daily cadence, not a new edge. FOUR-ROUND SYNTHESIS (intraday r1/r2 + daily r1/r2): turnover tolls dominate faster cadences; the stateful hold/exit interface is the right fix (kept as permanent machinery, 12 finalists byte-identical) but NO fast/daily strategy confirms under the 12-finalist standard. The validated edge lives at MONTHLY cadence (the 12 live finalists) — the honest place to stand. Holdout 2026-04-01 sealed/unburned; queue idle. Open option: the blind LLM agent (v5.56) -> LIVE experimental (its real test; live it can simply HOLD), available on owner go.
 
 **STATEFUL HOLD/EXIT INTERFACE + DAILY-DECISION ROUND 2 (2026-06-14, v5.57.0) — built, PRE-REGISTERED, NOT YET RUN. queue IDLE.** Acts on the daily-r1 structural finding (stateless cross-sectional reselection rotates membership -> the band can't help -> toll death). FIX: give strategies STATE so turnover is signal-driven (enter on a signal, hold until an exit signal), not reselection-driven.

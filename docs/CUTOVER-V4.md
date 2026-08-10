@@ -1,5 +1,77 @@
 # CUTOVER-V4 — the ordered runbook (V3 ledger → Alpaca paper account)
 
+## EXECUTION RECORD — the cutover RAN on 2026-08-08 (UTC ~16:00–17:00)
+
+> This section is the durable record of what actually happened; the
+> numbered runbook below is kept as the reference it was executed from.
+
+**Done (verified):**
+- Step 1 — Supabase restored by the owner on a **Pro** account; same
+  project, all data intact. (Size check recalibrated to the 8GB Pro
+  quota in `agent/backup.py` — DB was 489MB.)
+- Step 2 — Full export to R2: **32 tables, 1,390,770 rows, 0 failures**
+  → `backups/2026-08-08/manifest-full.json`.
+- Steps 3–5 — Old loop retired (the GH workflow file left main with the
+  merge; the loop-monitor Routine disabled; the old daily trading
+  Routine CONVERTED in place to the V4 hourly floor). Final V3 pass ran
+  from an old-code worktree: bars topped up through Fri 2026-08-07,
+  `settle` (booked one CCK dividend), `mark` (all 57 positions, live
+  tier), `grade` (84 rows), then all **64 open outcome rows closed as
+  `exit_kind='cutover'`** and the **ERA 1 FREEZE** journal note written.
+- **E = final Era-1 equity = $94,877.79** (cash $9,113.85, positions
+  $85,763.94 at Friday marks).
+- Step 6 (rename) — executed via a Supabase migration
+  (`v4_cutover_freeze_era1`, guarded/idempotent DO block):
+  `desk_trades→era1_trades` (172 rows), `desk_positions→era1_positions`,
+  `desk_equity→era1_equity` (348 marks). `desk_trades` now errors
+  loudly, as designed. (The sandbox blocks port 6543, so the runbook's
+  "direct DATABASE_URL" path was replaced by the Supabase MCP migration
+  — same three ALTERs.)
+- Step 9 (deploy) — main fast-forwarded `b175aeb → d1814de` (+ the
+  `83a44e9` Pro-quota ops fix). Render serves **v10.0.0**; `/api/health`
+  verified; `/api/desk/equity` serves the Era-1 curve; account panels in
+  the honest degraded state pending trade keys.
+- Routine roster: floor = `trig_01XG54FqViuXuA2xryjQPmYk`
+  ("EdgeFinder trading floor (chain restarter)", `0 13-20 * * 1-5`,
+  prompt "Run the trading-agent skill."); loop monitor
+  `trig_01H4n1qmGrWxPp5KTc5BhYCn` disabled; data/lab/app-evolver
+  triggers unchanged.
+- Post-merge catch-up: full-market refresh on new main — 1,017-name
+  universe, **274,528 bars** backfilled (the pause's dark week), R2
+  synced (969), EDGAR +694 rows. The V4 nightly duties ran live for the
+  first time: knowledge backup ok (26 tables), size RPC ok. One
+  transient: the corp-actions pass hit an SSL handshake timeout —
+  idempotent, re-covered by the next nightly.
+
+**Pending (owner, as of Sun 2026-08-09 22:00 UTC — verified NOT yet in):**
+1. Alpaca paper account created with starting cash **$94,877.79** + its
+   API keys generated (steps 7–8).
+2. `EDGEFINDER_ALPACA_TRADE_KEY` / `EDGEFINDER_ALPACA_TRADE_SECRET` /
+   `EDGEFINDER_STARTING_CAPITAL=94877.79` set in BOTH the EdgeFinder
+   Claude environment (`env_01Fs6E1TzLuQ1bkdjjzrVcaY`) and the Render
+   service env.
+3. The weekly-reflection Routine's prompt swapped (it was created via
+   the web UI, so agents cannot edit it; replacement text:
+   "Run the reflection-agent skill exactly
+   (.claude/skills/reflection-agent/SKILL.md). You are read-only on the
+   book — never trade submit/cancel/arm-stop. Run id
+   reflect-YYYY-MM-DD. Grade with agent.grade run / agent.grade
+   outcomes, alpha not dollars, then curate the wiki.").
+4. Cosmetic, anytime: delete the GitHub dispatch PAT + `SMTP_*` +
+   `CLAUDE_CODE_OAUTH_TOKEN` repo secrets.
+
+**First light (steps 10–13):** a one-shot check fires Mon 2026-08-10
+12:30 UTC (8:30 ET) — if keys are in, it triggers `agent.trade config` +
+`probe --suite cutover` + `snapshot` in a fresh session before the floor
+Routine's first firing at 13:00 UTC. Until the keys land, cycles run
+research-only (account section degrades; no orders possible). The first
+armed cycle re-enters only what the agent still believes from the
+57-position Era-1 book, as fresh picks with prediction/horizon/kill.
+
+---
+
+
+
 > One pass, in order. **[OWNER]** steps are manual (dashboard/UI work an
 > agent cannot do). Everything else an agent session runs from this repo.
 > Main keeps trading on the V3 stack until step 9 — the branch merge IS
