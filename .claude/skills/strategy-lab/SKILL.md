@@ -46,6 +46,19 @@ Run id: `lab-YYYY-MM-DD`. Narrate with
    effective in-sample half is 2009-2017 — a thinner window than the price
    rules'. Say so when narrating their results; never compare their
    21-year figures to a price rule's as if the exposure were equal.
+3b. **The news study** (V4.2 — the second research product of the night):
+   `python -m agent.lab news-study --days 365 --run-id <RID>` — the
+   event-study of stored headlines: catalyst class (earnings, guidance,
+   upgrades/downgrades, M&A, FDA, dilution, legal…) × publication timing
+   (premarket/intraday/afterhours/overnight) → forward excess DRIFT vs
+   SPY at t+1/t+3/t+5 closes, entered at the first close AFTER the news
+   was tradable. Narrate 1-3 findings that matter: which catalyst classes
+   carry real drift (n ≥ 15 and consistent across halves), which are
+   noise, anything that reverses the trader's current intuition. The
+   initial reaction/gap is EXCLUDED by design — say "drift, not
+   reaction" whenever you quote a number. A finding worth trading on is
+   a CLAIM CANDIDATE: propose it through the registry exactly like a
+   sweep finding; the board alone never justifies size.
 4. `python -m agent.lab leaderboard --top 10` — sanity-check the standing
    board the brief will carry tomorrow (it reads the last 14 days of lab
    rows, deduped to the newest per combo). **Check its `flagged_for_claim`

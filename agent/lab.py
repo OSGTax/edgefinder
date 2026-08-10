@@ -33,8 +33,9 @@ CLI (JSON out, like every agent tool):
 from __future__ import annotations
 
 import json
+import re
 import time
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 # Where in-sample ends and out-of-sample begins. Chosen so both halves hold
 # multiple regimes (GFC + 2010s bull in-sample; covid, 2022 bear, the AI bull
@@ -391,6 +392,239 @@ def leaderboard(*, top: int = 10, days: int = 14) -> dict:
             "top": entries[:top]}
 
 
+# ── the news study (V4.2): headline timing vs subsequent moves ───────────
+#
+# Event-study over the stored ticker_news history: classify each headline
+# into a catalyst class by pattern, anchor it to the FIRST CLOSE at which
+# the news was tradable, and measure close-to-close forward EXCESS returns
+# vs SPY (price return both sides — house rules). Deliberately measures
+# DRIFT, not the initial reaction: the gap/pop before that first close is
+# excluded, because drift is what a next-cycle trader can still capture.
+# Findings persist as a desk_backtests "news-study" row; the brief carries
+# the board; anything that should change BEHAVIOR promotes through the
+# claims registry like every other piece of evidence.
+
+CATALYST_CLASSES: list[tuple[str, str]] = [
+    ("earnings", r"earnings|quarterly result|q[1-4] (result|revenue)|"
+                 r"beats|misses|tops estimate|(revenue|profit) (rise|jump|"
+                 r"fall|drop|surge)"),
+    ("guidance", r"guidance|outlook|forecast|(raises|cuts|lifts|lowers) "
+                 r"full.year"),
+    ("analyst_up", r"upgrade|price target (raised|boosted|hiked|increase)|"
+                   r"initiat\w+ .*(buy|overweight|outperform)"),
+    ("analyst_down", r"downgrade|price target (cut|lowered|slashed|reduc)|"
+                     r"initiat\w+ .*(sell|underweight|underperform)"),
+    ("mna", r"acqui(re|sition|ring)|merger|buyout|takeover|to buy |"
+            r"deal to |bid for "),
+    ("fda_clinical", r"\bfda\b|phase (1|2|3|i{1,3}\b)|clinical|"
+                     r"trial (data|result)|approval"),
+    ("contract_partner", r"contract|partnership|collaborat|"
+                         r"agreement with|awarded|selected by"),
+    ("capital_return", r"buyback|repurchase|dividend (increase|raise|"
+                       r"hike|declar|boost)"),
+    ("dilution_debt", r"offering|dilut|convertible|secondary|notes due|"
+                      r"pric\w+ .*share"),
+    ("legal_reg", r"lawsuit|probe|investigat|charges|settle|antitrust|"
+                  r"fine[sd]?\b|recall"),
+    ("insider_activist", r"insider|13[df]\b|stake|activist"),
+]
+_CATALYST_RE = [(name, re.compile(pat, re.IGNORECASE))
+                for name, pat in CATALYST_CLASSES]
+
+NEWS_MIN_BUCKET_N = 15       # a bucket below this many events is anecdote
+NEWS_MIN_HALF_N = 8          # per-half floor for the consistency flag
+
+
+def classify_headline(title: str | None) -> str:
+    """First matching catalyst class, else 'other'. Pattern-based on
+    purpose: deterministic, auditable, and identical across re-runs —
+    the narrating session adds judgment ON TOP of these numbers."""
+    if not title:
+        return "other"
+    for name, rx in _CATALYST_RE:
+        if rx.search(title):
+            return name
+    return "other"
+
+
+def _timing_bucket(pub_et) -> str:
+    hm = (pub_et.hour, pub_et.minute)
+    if (4, 0) <= hm < (9, 30):
+        return "premarket"
+    if (9, 30) <= hm < (16, 0):
+        return "intraday"
+    if (16, 0) <= hm <= (23, 59):
+        return "afterhours"
+    return "overnight"
+
+
+def _parse_pub(v: str | None):
+    """published_utc string → aware UTC datetime, or None."""
+    if not v:
+        return None
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_news_window(store, cutoff_iso: str, max_rows: int = 40000) -> list[dict]:
+    """All ticker_news rows published on/after the cutoff — keyset-paginated
+    by id (the REST lane serves 1000 rows/page)."""
+    out: list[dict] = []
+    last_id = None
+    while len(out) < max_rows:
+        filters: dict = {"published_utc": ("gte", cutoff_iso)}
+        if last_id is not None:
+            filters["id"] = ("gt", last_id)
+        page = store.select("ticker_news",
+                            columns="id,symbol,title,published_utc",
+                            filters=filters, order=[("id", "asc")], limit=1000)
+        out.extend(page)
+        if len(page) < 1000:
+            break
+        last_id = page[-1]["id"]
+    return out
+
+
+def news_study(*, days: int = 365, top_symbols: int = 400,
+               run_id: str | None = None, store=None) -> dict:
+    """Catalyst class × publication timing → forward excess drift vs SPY.
+
+    Every event enters at the first close AFTER the headline was tradable
+    (intraday/premarket → that day's close; after-hours/overnight/weekend →
+    the next session's close), measured at t+1/t+3/t+5 closes, excess vs
+    SPY over the same dates. One event per (symbol, class, entry date) —
+    an earnings morning produces one event, not eight rewrites. Split-half
+    consistency over the window is the honesty gate, same as the sweep."""
+    from zoneinfo import ZoneInfo
+
+    from agent import data
+    from agent.store import get_store
+
+    t0 = time.time()
+    store = store or get_store()
+    et = ZoneInfo("America/New_York")
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = _load_news_window(store, cutoff.isoformat())
+
+    # Cap the symbol set by news volume — joins stay bounded on big windows.
+    counts: dict[str, int] = {}
+    for r in rows:
+        s = (r.get("symbol") or "").upper()
+        if s:
+            counts[s] = counts.get(s, 0) + 1
+    keep = set(sorted(counts, key=lambda s: -counts[s])[:top_symbols])
+    keep.add("SPY")
+
+    bars = data.load_bars(sorted(keep), div_adjust=False,
+                          start=(cutoff.date() - timedelta(days=10)))
+    closes: dict[str, tuple[list, list]] = {}
+    for sym, df in bars.items():
+        if df is None or not len(df):
+            continue
+        dates = [d.date() if hasattr(d, "date") and not isinstance(d, date)
+                 else d for d in list(df["date"])]
+        closes[sym] = (dates, [float(c) for c in df["close"]])
+    spy = closes.get("SPY")
+    if not spy:
+        return {"error": "no SPY bars — cannot benchmark", "events": 0}
+    spy_idx = {d: i for i, d in enumerate(spy[0])}
+
+    def fwd_excess(sym: str, entry_date: date, k: int):
+        ser = closes.get(sym)
+        if not ser:
+            return None
+        dates, cs = ser
+        i0 = None
+        for i, d in enumerate(dates):        # first close at/after entry_date
+            if d >= entry_date:
+                i0 = i
+                break
+        if i0 is None or i0 + k >= len(dates):
+            return None
+        d0, dk = dates[i0], dates[i0 + k]
+        j0, jk = spy_idx.get(d0), spy_idx.get(dk)
+        if j0 is None or jk is None or not cs[i0] or not spy[1][j0]:
+            return None
+        sym_pct = (cs[i0 + k] / cs[i0] - 1) * 100
+        spy_pct = (spy[1][jk] / spy[1][j0] - 1) * 100
+        return sym_pct - spy_pct
+
+    seen: set[tuple] = set()
+    events: list[dict] = []
+    mid = datetime.now(timezone.utc) - timedelta(days=days / 2)
+    for r in rows:
+        sym = (r.get("symbol") or "").upper()
+        if sym not in keep or sym == "SPY" or sym not in closes:
+            continue
+        pub = _parse_pub(r.get("published_utc"))
+        if pub is None:
+            continue
+        pub_et = pub.astimezone(et)
+        cls = classify_headline(r.get("title"))
+        tradable = (pub_et.date() if _timing_bucket(pub_et)
+                    in ("premarket", "intraday") else
+                    pub_et.date() + timedelta(days=1))
+        key = (sym, cls, tradable)
+        if key in seen:
+            continue
+        seen.add(key)
+        x1 = fwd_excess(sym, tradable, 1)
+        if x1 is None:
+            continue
+        events.append({"cls": cls, "timing": _timing_bucket(pub_et),
+                       "recent": pub >= mid, "x1": x1,
+                       "x3": fwd_excess(sym, tradable, 3),
+                       "x5": fwd_excess(sym, tradable, 5)})
+
+    def agg(evs: list[dict]) -> dict:
+        xs1 = [e["x1"] for e in evs]
+        xs3 = [e["x3"] for e in evs if e["x3"] is not None]
+        xs5 = [e["x5"] for e in evs if e["x5"] is not None]
+        mean = lambda v: round(sum(v) / len(v), 3) if v else None  # noqa: E731
+        return {"n": len(evs), "x1": mean(xs1), "x3": mean(xs3),
+                "x5": mean(xs5),
+                "hit1": round(sum(1 for x in xs1 if x > 0) / len(xs1), 3)
+                if xs1 else None}
+
+    by_class: dict[str, dict] = {}
+    for cls in {e["cls"] for e in events}:
+        evs = [e for e in events if e["cls"] == cls]
+        early = [e for e in evs if not e["recent"]]
+        late = [e for e in evs if e["recent"]]
+        entry = agg(evs)
+        entry["consistent"] = (
+            None if min(len(early), len(late)) < NEWS_MIN_HALF_N
+            else (agg(early)["x1"] or 0) * (agg(late)["x1"] or 0) > 0)
+        entry["by_timing"] = {t: agg([e for e in evs if e["timing"] == t])
+                              for t in {e["timing"] for e in evs}}
+        by_class[cls] = entry
+
+    board = sorted(
+        ((cls, v) for cls, v in by_class.items()
+         if v["n"] >= NEWS_MIN_BUCKET_N and cls != "other"),
+        key=lambda kv: -abs(kv[1]["x1"] or 0))
+    out = {
+        "window_days": days, "news_rows": len(rows), "events": len(events),
+        "symbols": len(keep) - 1, "elapsed_secs": round(time.time() - t0, 1),
+        "by_class": by_class,
+        "top": [{"class": c, **v} for c, v in board[:8]],
+        "honesty": ("Excess drift AFTER the first tradable close — the "
+                    "initial gap/reaction is deliberately excluded. Buckets "
+                    f"under n={NEWS_MIN_BUCKET_N} are anecdote, not signal; "
+                    "'consistent' means the same sign in both window halves. "
+                    "Evidence here can justify behavior only after "
+                    "promotion through the claims registry."),
+    }
+    store.insert("desk_backtests", {
+        "account": "agent", "run_id": run_id, "label": "news-study",
+        "spec": {"days": days, "top_symbols": top_symbols},
+        "result": out}, returning=False)
+    return out
+
+
 def main(argv: list[str] | None = None) -> None:
     import argparse
 
@@ -404,11 +638,20 @@ def main(argv: list[str] | None = None) -> None:
     lb = sub.add_parser("leaderboard")
     lb.add_argument("--top", type=int, default=10)
     lb.add_argument("--days", type=int, default=14)
+    ns = sub.add_parser("news-study")
+    ns.add_argument("--days", type=int, default=365)
+    ns.add_argument("--top-symbols", type=int, default=400)
+    ns.add_argument("--run-id", default=None)
     args = p.parse_args(argv)
     if args.cmd == "sweep":
         print(json.dumps(sweep(max_combos=args.max_combos,
                                time_budget_secs=args.time_budget_secs,
                                offset=args.offset, run_id=args.run_id),
+                         indent=2, default=str))
+    elif args.cmd == "news-study":
+        print(json.dumps(news_study(days=args.days,
+                                    top_symbols=args.top_symbols,
+                                    run_id=args.run_id),
                          indent=2, default=str))
     else:
         print(json.dumps(leaderboard(top=args.top, days=args.days),

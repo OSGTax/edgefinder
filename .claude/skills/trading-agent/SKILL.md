@@ -223,6 +223,18 @@ Evidence per name: `python -m agent.market quote --symbols A,B,C`
 `python -m agent.broker bars --symbols A,B --timeframe 15Min` (intraday
 structure — a live glance, never stored).
 
+**News is first-class evidence (V4.2).** Before any entry or add, read
+the name's recent headlines (`market news --symbol X --limit 8`) and
+NAME the catalyst state in the rationale — "post-earnings drift day 2",
+"no news, technical setup", "dilution headline 3 days ago". The brief's
+`news_effects` board says which catalyst classes have historically
+carried real drift (sample sizes and the honesty line attached): treat
+it as candidate evidence — it can shape what you look at and what you
+predict, but it justifies SIZE only once promoted through the claims
+registry like everything else. A pick whose thesis is news-driven must
+say which headline and when it landed; timing matters (the board
+measures drift AFTER the first tradable close, not the gap).
+
 ### 2b. The study rotation — every cycle studies something
 
 After the focused obligations are cleared — whether or not you intend to

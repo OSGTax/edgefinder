@@ -274,6 +274,26 @@ def build_brief(*, top: int = 40) -> dict:
         return lab.leaderboard(top=8)
 
     lab_board = _safe("lab", _lab, {})
+
+    # News-effects board: the lab's event-study of catalyst classes vs
+    # forward excess drift (newest news-study row, ≤10 days old) — which
+    # kinds of headlines have actually moved names, with sample sizes and
+    # the honesty line attached. Candidate evidence for the trading cycle;
+    # behavior changes still promote through the claims registry.
+    def _news_effects():
+        rows = store.select("desk_backtests",
+                            filters={"account": ACCOUNT,
+                                     "label": "news-study"},
+                            order=[("id", "desc")], limit=1)
+        if not rows:
+            return {}
+        res = rows[0].get("result") or {}
+        ts = rows[0].get("ts")
+        return {"as_of": str(ts)[:16], "window_days": res.get("window_days"),
+                "events": res.get("events"), "top": res.get("top"),
+                "honesty": res.get("honesty")}
+
+    news_effects = _safe("news_effects", _news_effects, {})
     screens = _safe("screens", lambda: _screens(store), {})
 
     def _fundamentals():
@@ -286,8 +306,8 @@ def build_brief(*, top: int = 40) -> dict:
     payload = {"as_of": str(today), "regime": regime, "coverage": coverage,
                "universe_top": top_syms, "movers": movers,
                "trend_roster": trend, "headlines": headlines,
-               "lab_leaderboard": lab_board, "screens": screens,
-               "fundamentals": fundamentals,
+               "lab_leaderboard": lab_board, "news_effects": news_effects,
+               "screens": screens, "fundamentals": fundamentals,
                "errors": errors}
     built_at = datetime.now(timezone.utc).replace(tzinfo=None)
     values = {"payload": payload, "built_at": built_at}
