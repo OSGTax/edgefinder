@@ -176,12 +176,33 @@ def _build_portfolio() -> dict:
         store = get_store()
         inception = _alltime_inception(store)
         if inception and total_return_pct is not None:
+            # SYMMETRIC WINDOW (charter): the benchmark is measured from the
+            # all-time inception, so our side must cover the same span. With
+            # a frozen era-1 archive the era-2 total return covers a shorter
+            # window — re-anchor at the first era-1 equity mark (the same
+            # point the equity chart plots first). Without the archive the
+            # windows coincide and the era-2 return IS the all-time return.
+            port_pct = total_return_pct
+            base_equity = None
+            e1 = _era1_select(store, "era1_equity",
+                              filters={"account": ACCOUNT},
+                              order=[("ts", "asc")], limit=1)
+            try:
+                base_equity = float(e1[0]["equity"]) if e1 else None
+            except (TypeError, ValueError, KeyError):
+                base_equity = None
+            if base_equity and base_equity > 0 and st.get("equity") is not None:
+                port_pct = round((float(st["equity"]) / base_equity - 1) * 100, 2)
+            else:
+                base_equity = None
             spy = grade.spy_price_closes(store, since=inception)
             spy_pct = grade._spy_window_pct(spy, inception)
             if spy_pct is not None:
                 vs_spy = {"inception": inception, "spy_as_of": spy[-1][0],
                           "spy_return_pct": spy_pct,
-                          "alpha_pct": round(total_return_pct - spy_pct, 2),
+                          "portfolio_return_pct": port_pct,
+                          "alltime_base_equity": base_equity,
+                          "alpha_pct": round(port_pct - spy_pct, 2),
                           "basis": "price_return"}
     except Exception:  # noqa: BLE001 — the benchmark is additive, never a 500
         vs_spy = None
@@ -256,7 +277,11 @@ def portfolio():
     credits no dividends into the book, so the benchmark must not carry its
     dividends either — computed with ``agent.grade``'s SPY helpers from the
     ALL-TIME inception (era-1 first fill when the archive exists, else the
-    first mirrored era-2 fill). ``basis`` says so on the wire."""
+    first mirrored era-2 fill). Our side covers the SAME window: with a
+    frozen era-1 archive it re-anchors at the first era-1 equity mark
+    (``portfolio_return_pct``, with ``alltime_base_equity`` on the wire so
+    the live page can re-derive it from ticks); ``total_return_pct`` stays
+    the era-2-only number. ``basis`` says so on the wire."""
     return _cached_portfolio()
 
 

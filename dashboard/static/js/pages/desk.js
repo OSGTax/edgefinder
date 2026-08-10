@@ -591,12 +591,16 @@ function applyLiveMarks(pillState) {
   const pnlCls = totalPnl >= 0 ? 't-up' : 't-down';
   setText('desk-hero-pnl', fmtPnl(totalPnl), pnlCls);
   setText('desk-hero-return', fmtPct(returnPct, { signed: true }), pnlCls);
-  // Keep 'vs S&P 500' consistent with the live Return beside it — the SPY
-  // side is daily-close based and static between page loads, so live alpha
-  // is just live return minus the cached SPY return.
-  const spy = ref && ref.vs_spy ? ref.vs_spy.spy_return_pct : null;
+  // Keep 'vs S&P 500' consistent with the live ticks — the SPY side is
+  // daily-close based and static between page loads. Same window both
+  // sides: with an era-1 archive the benchmark window is all-time, so our
+  // side re-derives from the era-1 base equity, not the era-2 return.
+  const vs = ref ? ref.vs_spy : null;
+  const spy = vs ? vs.spy_return_pct : null;
   if (spy != null) {
-    const a = returnPct - spy;
+    const base = vs.alltime_base_equity;
+    const ours = base > 0 ? ((equity / base) - 1) * 100 : returnPct;
+    const a = ours - spy;
     setText('desk-hero-alpha', fmtPct(a, { signed: true }),
       a >= 0 ? 't-up' : 't-down');
   }

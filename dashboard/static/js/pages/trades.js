@@ -80,13 +80,19 @@ async function load() {
     if (era2.length) {
       el.append(table(era2));
     } else {
-      renderEmpty(el, 'No trades on the current book yet.');
+      renderEmpty(el, era1.length
+        ? 'No trades on the current book yet — the frozen Era-1 history is below.'
+        : 'No trades yet.');
     }
 
     if (era1.length) {
       // The frozen pre-migration ledger, collapsed by default — history,
-      // not the working book.
-      const details = h('details', { class: 'trades-era1' },
+      // not the working book. When it is the ONLY history (era 2 has no
+      // fills yet), open it: an empty page hiding 100+ real fills behind
+      // a closed disclosure reads as "history lost".
+      const era1Attrs = { class: 'trades-era1' };
+      if (!era2.length) era1Attrs.open = '';
+      const details = h('details', era1Attrs,
         h('summary', {},
           h('span', { class: 'c-pill neutral', text: 'ERA 1' }),
           ' The pre-migration book (frozen at cutover) — ' + era1.length

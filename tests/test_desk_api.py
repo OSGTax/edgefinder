@@ -264,6 +264,57 @@ def test_portfolio_vs_spy_price_return(client, monkeypatch):
     assert vs["alpha_pct"] == pytest.approx(body["total_return_pct"] - 2.0)
 
 
+def test_portfolio_alpha_alltime_window_with_era1(client, monkeypatch):
+    """With a frozen era-1 archive the vs-SPY comparison is ALL-TIME on BOTH
+    sides: our return re-anchors at the first era-1 equity mark instead of
+    the era-2 starting capital. Mixing the era-2-only return with an
+    all-time SPY window misstates alpha (the bug this test pins)."""
+    from datetime import date
+
+    import agent.data as agent_data
+    import dashboard.routers.desk as desk_router
+    from agent.models import ACCOUNT
+    from agent.store import get_store
+    from edgefinder.db.models import DailyBar
+
+    store = get_store()
+    d1 = NOW - timedelta(days=30)
+    store.insert("era1_trades", {
+        "account": ACCOUNT, "ts": d1.replace(tzinfo=None), "run_id": "E1",
+        "symbol": "XYZ", "side": "BUY", "shares": 10.0, "price": 100.0,
+        "dollars": 1000.0, "rationale": "era-1 entry",
+        "fill_quote": {}}, returning=False)
+    # Era 1 opened at $90k — the all-time anchor the card must use.
+    store.insert("era1_equity", {
+        "account": ACCOUNT, "ts": d1.replace(tzinfo=None), "cash": 90000.0,
+        "positions_value": 0.0, "equity": 90000.0, "return_pct": 0.0},
+        returning=False)
+
+    incep = d1.date()
+    sess = agent_data.session_factory()()
+    try:
+        for d, px in ((incep - timedelta(days=1), 600.0),
+                      (date.today(), 612.0)):
+            sess.add(DailyBar(symbol="SPY", date=d, open=px, high=px, low=px,
+                              close=px, volume=1e6, source="test",
+                              created_at=NOW))
+        sess.commit()
+    finally:
+        sess.close()
+
+    desk_router._portfolio_cache = None
+    body = client.get("/api/desk/portfolio").json()
+    vs = body["vs_spy"]
+    assert vs is not None
+    # canned account equity 101000 vs the 90000 era-1 open → all-time +12.22%
+    assert vs["alltime_base_equity"] == 90000.0
+    assert vs["portfolio_return_pct"] == pytest.approx(12.22, abs=0.01)
+    assert vs["spy_return_pct"] == 2.0
+    assert vs["alpha_pct"] == pytest.approx(10.22, abs=0.02)
+    # the era-2-only return is untouched — only the benchmark re-anchors
+    assert body["total_return_pct"] == 1.0
+
+
 def test_portfolio_response_is_ttl_cached(client, monkeypatch):
     import dashboard.routers.desk as desk_router
 
