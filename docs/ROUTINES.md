@@ -10,7 +10,6 @@ in parens); all fire fresh sessions with completion notifications
 | Routine | Skill / prompt | Cron (UTC) | What it does |
 |---|---|---|---|
 | Chain wakes | "Run the trading-agent skill." (+ dispatcher note) | **API trigger, fired by the Render dispatcher** — every market-hours cycle plans its next wake 15–60 min out (`brain wake-plan`, the `desk_wakes` budget: 40/ET-day, 15-min floor); `agent/streamer.py` polls for due plans every 60s and POSTs this routine's `/fire` endpoint (≤3 attempts per wake, then `missed:auto`) | The rolling chain: prep ~9:00 ET → session → wrap post-close |
-| Chain restarter (floor) | "Run the trading-agent skill." | `0 13-20 * * 1-5` (hourly, 9a–4p EDT) | The FLOOR: `agent.brain chain-health` makes it a cheap early exit while the chain is healthy; it runs a full cycle only when a wake is due or the chain went quiet (no cycle in 25 min during desk hours) |
 | Nightly data | `data-refresh` | `45 0 * * 2-6` (8:45 PM ET Mon–Fri) | Full-market ingest + EDGAR + brief **+ V4 duties: Alpaca mirror sync, portfolio snapshot, split guard, R2 knowledge backup, DB size check** |
 | Strategy Lab | `strategy-lab` | `0 2 * * 2-6` (10 PM ET) | 21y split-sample sweep → leaderboard → brief |
 | Weekly reflection | `reflection-agent` | `30 22 * * 5` (6:30 PM ET Fri) | Grade the week (via `agent.grade`), curate the wiki, lint the claims registry |
@@ -38,7 +37,8 @@ per 5-min window, ≤60 fires/ET-day, and ≤3 attempts per wake
 the web UI with an API trigger; its URL + bearer token live on Render as
 `EDGEFINDER_ROUTINE_FIRE_URL` / `EDGEFINDER_ROUTINE_FIRE_TOKEN` (the
 token fires this one routine only; on 401/403 the dispatcher journals
-"Chain-wake fire token rejected" and the hourly floor carries the chain
+"Chain-wake fire token rejected" (edge-triggered, no duplicates) and
+NOTHING fires cycles — resting Alpaca stops still protect the book —
 until the owner regenerates it). The `/fire` endpoint is research-
 preview (`anthropic-beta: experimental-cc-routine-2026-04-01`).
 Expected volume: ~15–25 cycles/trading day, all billed to the owner's

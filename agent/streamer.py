@@ -285,19 +285,27 @@ DISPATCH_MAX_PER_DAY = 60          # per ET day — chain + retry headroom,
                                    # 1.5x brain.WAKE_MAX_PER_DAY (40)
 DISPATCH_MAX_PER_WAKE = 3          # then the wake is stamped missed:auto
 DISPATCH_WAKE_LOOKBACK_HOURS = 8   # same "due" definition as brain.wake_due
+RESTART_MIN_GAP_SECS = 25 * 60     # chain-restart pacing: never stack a
+                                   # restart on a fire <25 min old (the
+                                   # session it spawned may still be booting)
 ROUTINE_FIRE_BETA = "experimental-cc-routine-2026-04-01"
 
 
 def dispatch_reason(wakes: list[dict], dispatches: list[dict],
-                    now: datetime | None = None) -> dict | None:
+                    now: datetime | None = None, *,
+                    chain_quiet: bool = False) -> dict | None:
     """Pure decision: should the dispatcher fire a trading cycle right now?
 
     ``wakes``/``dispatches`` are plain row dicts (naive-UTC timestamps,
     both transports). Returns {"reason", "wake_ids"} or None. Enforces the
     min-gap debounce and the per-ET-day cap (from the dispatch ledger),
     the 8h due-window, and the per-wake attempt cap (immortal wakes are
-    the classic infinite-loop cost trap). V4 has no tripwires — due
-    wake-plans are the only fire cause."""
+    the classic infinite-loop cost trap). Two fire causes (V4.1.1 — the
+    hourly floor Routine's job moved in here): a due wake-plan, or
+    ``chain_quiet`` (desk hours, no cycle in 25 min — computed by the
+    caller from ``brain.chain_health``), the latter paced by
+    RESTART_MIN_GAP_SECS against the newest SENT fire so a booting
+    session is never stacked on."""
     now = now or datetime.utcnow()
 
     def _dt(v):
@@ -323,10 +331,16 @@ def dispatch_reason(wakes: list[dict], dispatches: list[dict],
            if not w.get("honored_run_id")
            and int(w.get("dispatch_count") or 0) < DISPATCH_MAX_PER_WAKE
            and (t := _dt(w.get("at"))) is not None and lookback <= t <= now]
-    if not due:
-        return None
-    return {"reason": f"{len(due)} wake-plan(s) due",
-            "wake_ids": [w["id"] for w in due]}
+    if due:
+        return {"reason": f"{len(due)} wake-plan(s) due",
+                "wake_ids": [w["id"] for w in due]}
+    if chain_quiet:
+        sent = sorted(t for d in dispatches if d.get("status") == "sent"
+                      and (t := _dt(d.get("ts"))) is not None)
+        if not sent or (now - sent[-1]).total_seconds() >= RESTART_MIN_GAP_SECS:
+            return {"reason": "chain restart: desk hours, no cycle in 25+ min",
+                    "wake_ids": []}
+    return None
 
 
 def claim_dispatch_slot(store, decision: dict,
@@ -375,8 +389,22 @@ def fire_routine(reason: str) -> int:
         return resp.status
 
 
+def _chain_quiet(store, now: datetime) -> bool:
+    """Desk hours with no cycle in 25 min (brain.chain_health — the ONE
+    definition, shared with what the floor Routine used to read). False on
+    any error: a broken health read must never fire cycles."""
+    try:
+        from agent.brain import chain_health
+
+        ch = chain_health(store, now=now)
+        return bool(ch.get("should_run") and not ch.get("wakes_due"))
+    except Exception:  # noqa: BLE001
+        logger.exception("chain_health read failed — treating chain as active")
+        return False
+
+
 def _run_dispatch_once(store, now: datetime | None = None,
-                       fire=fire_routine) -> dict | None:
+                       fire=fire_routine, quiet_fn=_chain_quiet) -> dict | None:
     """One dispatcher pass (sync; called via to_thread). Returns the
     decision it acted on, or None."""
     now = now or datetime.utcnow()
@@ -385,7 +413,8 @@ def _run_dispatch_once(store, now: datetime | None = None,
     # The read must cover a full ET day of rows or the daily cap can never
     # bind. 300 > the bucket-math ceiling of 86400/DISPATCH_MIN_GAP_SECS.
     dispatches = store.select("desk_dispatches", order=[("ts", "desc")], limit=300)
-    decision = dispatch_reason(wakes, dispatches, now=now)
+    decision = dispatch_reason(wakes, dispatches, now=now,
+                               chain_quiet=quiet_fn(store, now))
 
     # Terminal-resolve exhausted wakes so they can never loop the dispatcher:
     # an unhonored wake at the attempt cap is stamped missed:auto (honest —
@@ -420,8 +449,17 @@ def _run_dispatch_once(store, now: datetime | None = None,
                      {"status": "failed", "http_status": code}, returning=False)
         if code in (401, 403):
             logger.error("CHAIN dispatch token rejected (%s) — regenerate the "
-                         "routine's API token and update Render; the chain "
-                         "rides the hourly floor until then", code)
+                         "routine's API token and update Render; NOTHING "
+                         "fires trading cycles until then", code)
+            # Edge-triggered journal: only when the PREVIOUS attempt wasn't
+            # already a 401/403 — a dead token retries every restart window
+            # and must not bury the desk journal in duplicates.
+            prior = dispatches[0] if dispatches else None
+            already_noted = (prior is not None
+                             and prior.get("status") == "failed"
+                             and prior.get("http_status") in (401, 403))
+            if already_noted:
+                return None
             try:
                 from agent.brain import add_journal
 
@@ -430,13 +468,13 @@ def _run_dispatch_once(store, now: datetime | None = None,
                             body=f"The Routines API returned {code} for the "
                                  "chain-wakes /fire call — the bearer token "
                                  "on Render is expired, revoked, or wrong. "
-                                 "Sub-hourly chain wakes are OFF until the "
-                                 "owner regenerates the token "
+                                 "NO trading cycles can fire until the owner "
+                                 "regenerates the token "
                                  "(claude.ai/code/routines → EdgeFinder chain "
                                  "wakes → API trigger → Regenerate) and "
                                  "updates EDGEFINDER_ROUTINE_FIRE_TOKEN on "
-                                 "Render. The hourly floor Routine still "
-                                 "restarts the chain each hour.")
+                                 "Render. Resting stops on Alpaca's book "
+                                 "still protect every position meanwhile.")
             except Exception:  # noqa: BLE001
                 logger.exception("could not journal the token rejection")
         else:
@@ -451,7 +489,7 @@ async def run_wake_dispatch() -> None:
     if not (settings.routine_fire_url.strip()
             and settings.routine_fire_token.strip()):
         logger.info("Chain dispatcher disabled (no EDGEFINDER_ROUTINE_FIRE_URL"
-                    "/_TOKEN) — the hourly floor is the only restarter")
+                    "/_TOKEN) — NOTHING fires trading cycles; set them")
         return
     logger.info("Chain dispatcher up: firing %s every %ss when wakes come due",
                 settings.routine_fire_url.split("/routines/")[-1],

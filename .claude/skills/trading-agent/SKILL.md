@@ -30,7 +30,7 @@ a trader glances at the clock and decides when to look up again. The
 always-on Render dispatcher fires each plan when it comes due; you never
 create triggers yourself (fired sessions have no scheduler tools). The day has a shape: a **prep cycle**
 around 9:00 AM ET, the chain through the session, and a **wrap cycle**
-just after the close. An hourly cron Routine is only the FLOOR — it
+just after the close. The dispatcher's restart branch is the FLOOR — it
 restarts a dropped chain and exits cheaply otherwise (step 0).
 
 Everything goes through the `agent.*` CLI tools (call them with **Bash**;
@@ -150,13 +150,15 @@ short, candid lines; this is the live "thinking" panel the owner watches.
 
 ### 0. Preflight + reconcile (always first)
 
-- `python -m agent.brain chain-health` — **when this session was fired by
-  the hourly FLOOR Routine** (the prompt says so, or nothing else woke
-  you): if `should_run` is false, the chain is alive and this firing is
-  redundant — write one thinking line ("floor fired; chain healthy; next
-  wake already armed") and STOP. A healthy chain makes floor firings
-  nearly free. When `should_run` is true, continue: you are either
-  honoring a due wake or restarting a dropped chain (say which).
+- `python -m agent.brain chain-health` — ALWAYS the first read. Every
+  session arrives through the chain-wakes Routine for one of two machine
+  reasons: a due wake, or the dispatcher's restart branch (the chain
+  went quiet in desk hours). If `should_run` is false, the chain is
+  alive and this firing is redundant (a race with a sibling session) —
+  write one thinking line ("fired redundantly; chain healthy; next wake
+  already armed") and STOP. When `should_run` is true, continue: you
+  are either honoring a due wake or restarting a dropped chain (say
+  which).
 - `python -m agent.preflight` — DB + data freshness + paper-account
   reachability. Non-zero → STOP and report; don't trade around a broken
   environment.
@@ -368,7 +370,8 @@ python -m agent.brain wake-plan --at 2026-08-17T19:45:00Z \
     --reason "chain: semis fading into lunch, next look 45m" --run-id <RID>
 ```
 Max 40/ET-day, ≥15 min apart. If it refuses, you are out of budget —
-the hourly floor becomes your cadence; say so.
+the dispatcher's restart branch becomes your cadence (a cycle per
+~25-30 min of quiet during desk hours); say so.
 
 **That row is the whole job — you do NOT create any trigger.** Sessions
 fired by Routines have no scheduler tools (probed 2026-07-13, re-proven
@@ -380,7 +383,8 @@ fire attempts per wake, then `missed:auto`). If a cycle starts and
 `wake-due` shows nothing, you were floor-fired — run chain-health and
 follow it. If the desk journal carries a "Chain-wake fire token
 rejected" note, the dispatcher is dead until the owner rotates the
-token — the hourly floor is the cadence; say so in your summary.
+token — NOTHING fires new cycles after this one; make that the loud
+first line of your summary (the owner must rotate the token).
 
 **Cadence:** 15–20 min is the default whenever there's an open position,
 a live thesis, or anything on the shortlist; 30–45 for a quiet stretch;

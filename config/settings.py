@@ -75,7 +75,8 @@ class Settings(BaseSettings):
     # have no scheduler MCP, so the always-on streamer process fires the
     # chain: agent/streamer.py polls desk_wakes and POSTs here when a
     # planned wake comes due. Both empty → the dispatcher stays off and
-    # the hourly floor Routine is the only chain restarter.
+    # NOTHING fires trading cycles (V4.1.1: the old hourly floor
+    # Routine is retired — the dispatcher's restart branch is the floor).
     routine_fire_url: str = ""
     routine_fire_token: str = ""
 

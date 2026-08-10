@@ -22,7 +22,8 @@ An **autonomous AI paper-trading desk**, private to the owner:
   each plan when due through the "EdgeFinder chain wakes" Routine's API
   trigger (V4.1 — fired Routine sessions have no scheduler tools, probed
   2026-07-13 and re-proven 2026-08-10, so the dispatcher is the chain's
-  clock), with an hourly floor Routine restarting a dropped chain.
+  clock, and its restart branch — desk hours, no cycle in 25 minutes —
+  revives a dropped chain; the V4.0 hourly floor Routine is retired).
 - **Judged on the calls themselves**: the decision-side registry —
   falsifiable prediction/horizon/kill on every entry, structured
   commitments on conditional exits, tier-gated claims, owner-approved

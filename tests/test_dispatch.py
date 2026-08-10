@@ -69,6 +69,33 @@ def test_iso_string_timestamps_accepted():
     assert d and d["wake_ids"] == [7]
 
 
+# ── the chain-restart branch (V4.1.1 — the floor Routine's job) ──────
+
+
+def test_quiet_chain_restarts_when_no_recent_fire():
+    d = dispatch_reason([], [], now=NOW, chain_quiet=True)
+    assert d and d["wake_ids"] == [] and "restart" in d["reason"]
+
+
+def test_restart_paced_by_recent_sent_fire():
+    from agent.streamer import RESTART_MIN_GAP_SECS
+    recent = [{"ts": NOW - timedelta(seconds=RESTART_MIN_GAP_SECS - 60),
+               "status": "sent"}]
+    assert dispatch_reason([], recent, now=NOW, chain_quiet=True) is None
+    aged = [{"ts": NOW - timedelta(seconds=RESTART_MIN_GAP_SECS + 60),
+             "status": "sent"}]
+    assert dispatch_reason([], aged, now=NOW, chain_quiet=True) is not None
+
+
+def test_active_chain_never_restart_fires():
+    assert dispatch_reason([], [], now=NOW, chain_quiet=False) is None
+
+
+def test_due_wake_takes_precedence_over_restart():
+    d = dispatch_reason([_wake(1, 5)], [], now=NOW, chain_quiet=True)
+    assert d and d["wake_ids"] == [1] and "due" in d["reason"]
+
+
 # ── store-backed pieces (SQLite) ─────────────────────────────────────
 
 
@@ -103,7 +130,8 @@ def test_run_dispatch_once_fires_and_stamps(store):
                                 "reason": "chain: test", "dispatch_count": 0},
                  returning=False)
     fired = []
-    out = _run_dispatch_once(store, now=NOW, fire=lambda r: fired.append(r) or 200)
+    out = _run_dispatch_once(store, now=NOW, fire=lambda r: fired.append(r) or 200,
+                             quiet_fn=lambda s, n: False)
     assert out is not None and fired == ["1 wake-plan(s) due"]
     d = store.select("desk_dispatches", limit=5)
     assert len(d) == 1 and d[0]["status"] == "sent" and d[0]["http_status"] == 200
@@ -117,7 +145,8 @@ def test_run_dispatch_once_terminal_resolves_spent_wakes(store):
                                 "reason": "chain: spent",
                                 "dispatch_count": DISPATCH_MAX_PER_WAKE},
                  returning=False)
-    out = _run_dispatch_once(store, now=NOW, fire=lambda r: 200)
+    out = _run_dispatch_once(store, now=NOW, fire=lambda r: 200,
+                             quiet_fn=lambda s, n: False)
     assert out is None  # nothing eligible to fire
     w = store.select("desk_wakes", limit=5)[0]
     assert w["honored_run_id"] == "missed:auto"
@@ -135,7 +164,8 @@ def test_run_dispatch_once_marks_failed_and_journals_on_401(store):
     def bad_fire(reason):
         raise Rejected("token rejected")
 
-    out = _run_dispatch_once(store, now=NOW, fire=bad_fire)
+    out = _run_dispatch_once(store, now=NOW, fire=bad_fire,
+                             quiet_fn=lambda s, n: False)
     assert out is None
     d = store.select("desk_dispatches", limit=5)
     assert d[0]["status"] == "failed" and d[0]["http_status"] == 401
@@ -182,3 +212,15 @@ def test_fire_routine_post_shape(monkeypatch):
     assert hdrs["authorization"] == "Bearer sk-ant-oat01-test"
     assert hdrs["anthropic-beta"] == ROUTINE_FIRE_BETA
     assert seen["body"] == {"text": "2 wake-plan(s) due"}
+
+
+def test_run_dispatch_once_restart_path(store):
+    """No wakes at all + a quiet chain -> the restart branch fires and the
+    ledger records it (the floor Routine's job, absorbed — V4.1.1)."""
+    fired = []
+    out = _run_dispatch_once(store, now=NOW, fire=lambda r: fired.append(r) or 200,
+                             quiet_fn=lambda s, n: True)
+    assert out is not None and "restart" in out["reason"]
+    assert fired and "restart" in fired[0]
+    d = store.select("desk_dispatches", limit=5)
+    assert d[0]["status"] == "sent" and d[0]["http_status"] == 200

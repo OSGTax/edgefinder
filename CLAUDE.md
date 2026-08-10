@@ -48,7 +48,7 @@ runtime layout, credentials model). The agent's operating manual is
 | Piece | Where | Job |
 |---|---|---|
 | Paper account | Alpaca | THE BOOK: fills, positions, cash, equity, resting GTC stops, expiry |
-| Trading brain | Claude Code Routines | Each market-hours cycle plans the next 15–60 min out (`brain wake-plan` budget gate — the row is the whole job; fired sessions have NO scheduler tools); an hourly floor Routine restarts a dropped chain (`brain chain-health` = cheap early exit) |
+| Trading brain | Claude Code Routines | Each market-hours cycle plans the next 15–60 min out (`brain wake-plan` budget gate — the row is the whole job; fired sessions have NO scheduler tools); the dispatcher's restart branch revives a dropped chain (desk hours + no cycle in 25 min, paced 25 min apart — the retired hourly floor Routine's job, absorbed in V4.1.1) |
 | Chain dispatcher | Render (always-on, in `agent/streamer.py`) | Polls `desk_wakes` every 60s, fires the "EdgeFinder chain wakes" Routine's API `/fire` trigger when a plan is due; `desk_dispatches` CAS ledger = at-most-once, ≤60/day, ≤3 tries/wake then `missed:auto` |
 | Quote streamer | Render (always-on) | SIP WebSocket → in-memory `QuoteCache` → SSE live tape (`/api/desk/stream`) — display + research; fills don't depend on it |
 | Desk page | Render | Live ticks, the book (from Alpaca), thinking feed, decisions, journal, claims, What's New |
