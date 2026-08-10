@@ -148,6 +148,7 @@ def symbol_bars(
         "range": rng,
         "source": meta["source"],
         "truncated": meta["truncated"],
+        "live_through": meta.get("live_through"),
         "basis": "split-adjusted",
         "bars": [],
     }
@@ -234,7 +235,59 @@ def symbol_events(
                          "publisher": r.publisher_name})
     news.reverse()
 
+    # Live headline top-up: stored news advances with the nightly for the
+    # maintained universe only — off-universe names read straight from
+    # Alpaca at view time (read-only, TTL-cached, dedup by URL).
+    live = _live_news(sym)
+    if live:
+        seen = {n["url"] for n in news if n.get("url")}
+        fresh = [n for n in live if n.get("url") not in seen]
+        if fresh:
+            news = sorted(news + fresh, key=lambda n: n["time"])
+
     return {"symbol": sym, "dividends": dividends, "splits": splits, "news": news}
+
+
+_news_cache = None
+
+
+def _live_news(symbol: str) -> list[dict] | None:
+    """Latest headlines for one symbol from Alpaca's news API (Benzinga).
+    None when data creds are absent or the call fails — stored news still
+    serves. Cached ~15 min per symbol; never written to ticker_news."""
+    global _news_cache
+    from config.settings import settings
+
+    if not (settings.alpaca_api_key and settings.alpaca_api_secret):
+        return None
+    if _news_cache is None:
+        from dashboard.ttl_cache import TTLCache
+
+        _news_cache = TTLCache(maxsize=256, ttl_seconds=900)
+    hit = _news_cache.get(symbol)
+    if hit is not None:
+        return hit
+    try:
+        from alpaca.data.historical.news import NewsClient
+        from alpaca.data.requests import NewsRequest
+
+        client = NewsClient(settings.alpaca_api_key,
+                            settings.alpaca_api_secret)
+        req = NewsRequest(symbols=symbol, limit=20)
+        items = (client.get_news(req).data or {}).get("news") or []
+        out = []
+        for n in items:
+            d = _parse_date(getattr(n, "created_at", None))
+            if d:
+                out.append({"time": _epoch(d),
+                            "title": getattr(n, "headline", None),
+                            "url": getattr(n, "url", None),
+                            "publisher": getattr(n, "source", None)
+                            or "Benzinga"})
+    except Exception:  # noqa: BLE001 — the top-up is additive, never a 500
+        return None
+    _news_cache.set(symbol, out)
+    return out
 
 
 def _parse_date(s) -> date | None:
