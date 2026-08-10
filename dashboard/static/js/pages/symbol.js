@@ -113,7 +113,73 @@ async function loadSymbol() {
   renderHeader();
   buildCharts();
   renderRail();
+  startQuotePolling();
 }
+
+/* ── live quote — the research page bridges Alpaca directly ──
+   Polls /quote every 12s while the tab is visible: live price + change in
+   the header, bid×ask pill, and today's developing bar folded into the
+   chart so the last candle ticks. Server-side TTL means any number of
+   viewers cost one upstream call. Degrades silently — stored closes and
+   the daily chart still serve without it. */
+let quoteTimer = null;
+
+async function pollQuote() {
+  if (document.hidden) return;
+  const sym = state.symbol;
+  let q;
+  try { q = await apiGet(`/api/symbols/${sym}/quote`); }
+  catch { return; }
+  if (sym !== state.symbol) return;  // user switched symbols mid-flight
+  const pill = document.getElementById('sym-live');
+  if (!q || !q.available || q.last == null) {
+    if (pill) pill.classList.add('hidden');
+    return;
+  }
+  document.getElementById('sym-price').textContent = fmtPrice(q.last);
+  const chgEl = document.getElementById('sym-change');
+  if (q.prev_close) {
+    const pct = q.day_change_pct != null
+      ? q.day_change_pct : (q.last / q.prev_close - 1) * 100;
+    chgEl.textContent = `${fmtPnl(q.last - q.prev_close).replace('$', '')} (${fmtPct(pct, { decimals: 2 })})`;
+    chgEl.className = 'num ' + upDownClass(pct);
+  }
+  if (pill) {
+    pill.classList.remove('hidden');
+    pill.className = 'c-pill up';
+    pill.textContent = (q.bid != null && q.ask != null)
+      ? `LIVE ${fmtPrice(q.bid)} × ${fmtPrice(q.ask)}` : 'LIVE';
+  }
+  // fold today's developing bar into the chart: update in place when the
+  // last loaded bar IS today, append when stored history ended earlier.
+  if (charts && charts.candle && q.day_bar
+      && state.bars && state.bars.bars.length) {
+    const bars = state.bars.bars;
+    const lastBar = bars[bars.length - 1];
+    if (q.day_bar.time >= lastBar.time) {
+      const b = { ...q.day_bar };
+      try {
+        charts.candle.update({ time: b.time, open: b.open, high: b.high,
+                               low: b.low, close: b.close });
+        const c = colors();
+        charts.volume.update({ time: b.time, value: b.volume || 0,
+          color: b.close >= b.open ? c.up + '55' : c.down + '55' });
+      } catch (e) { /* chart rebuilt mid-tick — the next poll repaints */ }
+      if (b.time === lastBar.time) bars[bars.length - 1] = b;
+      else bars.push(b);
+    }
+  }
+}
+
+function startQuotePolling() {
+  if (quoteTimer) clearInterval(quoteTimer);
+  pollQuote();
+  quoteTimer = setInterval(pollQuote, 12_000);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) pollQuote();
+});
 
 /* ── header ── */
 function renderHeader() {

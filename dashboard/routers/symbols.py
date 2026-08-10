@@ -290,6 +290,81 @@ def _live_news(symbol: str) -> list[dict] | None:
     return out
 
 
+_quote_cache = None
+
+
+def _fetch_snapshot(symbol: str) -> dict | None:
+    """One live Alpaca snapshot → the research header's payload: last trade,
+    bid/ask, today's developing daily bar, previous close. None without data
+    creds or on any API error — the page falls back to stored closes."""
+    from config.settings import settings
+
+    if not (settings.alpaca_api_key and settings.alpaca_api_secret):
+        return None
+    try:
+        from alpaca.data.enums import DataFeed
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockSnapshotRequest
+
+        try:
+            feed = DataFeed(settings.alpaca_data_feed or "sip")
+        except ValueError:
+            feed = DataFeed.SIP
+        client = StockHistoricalDataClient(settings.alpaca_api_key,
+                                           settings.alpaca_api_secret)
+        snap = client.get_stock_snapshot(
+            StockSnapshotRequest(symbol_or_symbols=symbol, feed=feed)
+        ).get(symbol)
+        if snap is None:
+            return None
+        lt, lq = snap.latest_trade, snap.latest_quote
+        day, prev = snap.daily_bar, snap.previous_daily_bar
+        last = (float(lt.price) if lt and lt.price
+                else float(day.close) if day else None)
+        prev_close = float(prev.close) if prev and prev.close else None
+        return {
+            "last": last,
+            "last_ts": str(lt.timestamp) if lt else None,
+            "bid": float(lq.bid_price) if lq and lq.bid_price else None,
+            "ask": float(lq.ask_price) if lq and lq.ask_price else None,
+            "prev_close": prev_close,
+            "day_change_pct": (round((last / prev_close - 1) * 100, 2)
+                               if last and prev_close else None),
+            "day_bar": ({"time": _epoch(day.timestamp.date()),
+                         "open": float(day.open), "high": float(day.high),
+                         "low": float(day.low), "close": float(day.close),
+                         "volume": float(day.volume)} if day else None),
+        }
+    except Exception:  # noqa: BLE001 — the live layer is additive, never a 500
+        return None
+
+
+@router.get("/{symbol}/quote")
+def symbol_quote(symbol: str):
+    """Live research quote: latest trade/quote + today's developing daily
+    bar straight from Alpaca (read-only, any symbol), ~8s TTL per symbol so
+    every open viewer shares one upstream call. ``available: false`` — never
+    a 500 — without creds or on errors; the page then shows stored closes."""
+    import re as _re
+
+    global _quote_cache
+    sym = _re.sub(r"[^A-Z0-9.\-]", "", symbol.upper())[:12]
+    if not sym:
+        raise HTTPException(404, "bad symbol")
+    if _quote_cache is None:
+        from dashboard.ttl_cache import TTLCache
+
+        _quote_cache = TTLCache(maxsize=512, ttl_seconds=8)
+    hit = _quote_cache.get(sym)
+    if hit is not None:
+        return hit
+    data = _fetch_snapshot(sym)
+    out = ({"symbol": sym, "available": True, **data} if data
+           else {"symbol": sym, "available": False})
+    _quote_cache.set(sym, out)
+    return out
+
+
 def _parse_date(s) -> date | None:
     if not s:
         return None

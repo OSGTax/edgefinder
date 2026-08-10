@@ -143,3 +143,33 @@ def test_events_degrade_without_live(client, monkeypatch):
     monkeypatch.setattr(sym_router, "_live_news", lambda s: None)
     out = client.get("/api/symbols/ZZZQ/events").json()
     assert out["news"] == [] and out["dividends"] == []
+
+
+def test_symbol_quote_live_and_ttl_cached(client, monkeypatch):
+    import dashboard.routers.symbols as sym_router
+    calls = {"n": 0}
+
+    def fake_snap(sym):
+        calls["n"] += 1
+        return {"last": 22.64, "last_ts": "t", "bid": 22.63, "ask": 22.65,
+                "prev_close": 22.0, "day_change_pct": 2.91,
+                "day_bar": {"time": 1754784000, "open": 22.1, "high": 22.7,
+                            "low": 22.0, "close": 22.64, "volume": 1e5}}
+
+    monkeypatch.setattr(sym_router, "_fetch_snapshot", fake_snap)
+    sym_router._quote_cache = None
+    out = client.get("/api/symbols/CPB/quote").json()
+    assert out["available"] is True
+    assert out["last"] == 22.64 and out["day_change_pct"] == 2.91
+    assert out["day_bar"]["close"] == 22.64
+    client.get("/api/symbols/CPB/quote")
+    assert calls["n"] == 1     # second read served from the TTL cache
+
+
+def test_symbol_quote_degrades_never_500s(client, monkeypatch):
+    import dashboard.routers.symbols as sym_router
+    monkeypatch.setattr(sym_router, "_fetch_snapshot", lambda s: None)
+    sym_router._quote_cache = None
+    r = client.get("/api/symbols/ZZZQ/quote")
+    assert r.status_code == 200
+    assert r.json() == {"symbol": "ZZZQ", "available": False}
