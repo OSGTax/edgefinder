@@ -1887,6 +1887,13 @@ startTape();
 setInterval(() => {
   loadHeader(); loadThinking(); loadDecision(); loadWhatsNew(); loadWiki();
   loadLab(); loadOpenOrders(); loadPredictions(); loadClaims();
+  // The BOOK moves intraday too — fills land, stops arm, the account read
+  // changes. A tab left open across a trading hour must not keep serving
+  // the load-time book: re-pull the positions reference (live ticks fold
+  // into whatever book this cached), the fills card, and the equity curve
+  // (the dashed live tip anchors to the curve's last real mark, so a stale
+  // curve pins the tip to stale history).
+  loadPositions(); loadFills(); loadEquity();
   // counts move as the agent works — a stale peek on a collapsed card is a
   // quietly wrong number, which is worse than no number
   setTimeout(refreshPeeks, 1500);
