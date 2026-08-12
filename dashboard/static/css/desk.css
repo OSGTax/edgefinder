@@ -319,7 +319,13 @@
   font-family: var(--t-font-mono);
 }
 .desk-feed-text { color: var(--t-text); line-height: 1.4; }
-.desk-feed-time { font-size: var(--t-fs-xs); white-space: nowrap; }
+.desk-feed-time {
+  font-size: var(--t-fs-xs);
+  white-space: nowrap;
+  font-family: var(--t-font-mono);
+  text-align: right;
+}
+.desk-feed-ago { color: var(--t-text-3); opacity: 0.8; }
 
 /* decision summary */
 .desk-summary { color: var(--t-text); line-height: 1.5; margin: 0; }
@@ -489,7 +495,9 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
     row-gap: 2px;
     padding: var(--t-space-2) 0;
   }
-  .desk-feed-time { justify-self: start; }
+  /* Stacked layout: the stamp sits under the text, so it reads left-aligned
+     with everything above it (the two lines collapse onto one row). */
+  .desk-feed-time { justify-self: start; text-align: left; display: flex; gap: var(--t-space-2); }
 
   /* Options radar — the 5 stat tiles that stack vertically on a Pixel
      collapse into a wrap-row of chips so the chain table is visible

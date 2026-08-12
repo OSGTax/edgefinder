@@ -119,13 +119,15 @@ export function fmtTimeET(iso) {
   }) + ' ET';
 }
 
-/* Full ET stamp — date and time to the second, for independent verification. */
+/* Full ET stamp — date and time to the second, for independent verification.
+   Named month rather than "8/11": these stamps head decisions and diary
+   entries a reader scans, and a slash date is one more thing to decode. */
 export function fmtDateTimeET(iso) {
   if (!iso) return DASH;
   const d = parse(iso);
   if (!d) return DASH;
   return d.toLocaleString('en-US', {
-    timeZone: ET, month: 'numeric', day: 'numeric',
+    timeZone: ET, month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
   }) + ' ET';
 }

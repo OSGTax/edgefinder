@@ -682,7 +682,13 @@ async function loadThinking() {
       const row = h('div', { class: 'desk-feed-line' },
         h('span', { class: 'desk-feed-phase', text: line.phase || '·' }),
         h('span', { class: 'desk-feed-text', text: line.text }),
-        h('span', { class: 'desk-feed-time t-dim', text: timeAgo(line.t) }));
+        // The exact ET stamp, with the relative age under it. A feed line is
+        // the agent narrating a moment — "4m ago" says it is fresh, but only
+        // the clock time lets a reader line the thought up against the tape
+        // and the fill it led to.
+        h('span', { class: 'desk-feed-time t-dim' },
+          h('div', { text: fmtTimeET(line.t) }),
+          h('div', { class: 'desk-feed-ago', text: timeAgo(line.t) })));
       if (i >= VISIBLE) row.hidden = true;
       feed.append(row);
     });
@@ -973,8 +979,10 @@ function outcomeRow(r) {
       'This pick’s symbol was priced at cost basis in the latest valuation — '
       + 'its performance numbers are withheld until real marks return.') : null,
     h('span', { class: 'spacer' }),
+    // When the desk committed to this prediction — the stamp is what makes
+    // the claim checkable against the price at that moment, not just "3d ago".
     h('span', { class: 't-dim', title: 'decision run ' + (r.run_id || ''),
-      text: r.decision_ts ? timeAgo(r.decision_ts) : '' }));
+      text: r.decision_ts ? fmtDateTimeET(r.decision_ts) : '' }));
 
   const pred = h('p', { class: 'desk-outcome-pred',
     text: r.prediction ? '“' + r.prediction + '”'
@@ -1279,7 +1287,7 @@ function renderNotebook() {
     for (const j of journal) {
       el.append(h('div', { class: 'desk-diary-entry' },
         h('div', { class: 'desk-diary-when t-dim' },
-          h('span', { text: timeAgo(j.t) + ' \u2014 the AI ' }),
+          h('span', { text: fmtDateTimeET(j.t) + ' \u2014 the AI ' }),
           h('span', { class: 'desk-diary-kind' + (j.kind === 'pivot' ? ' pivot' : ''),
             text: DIARY_KIND[j.kind] || DIARY_KIND.note })),
         h('div', { class: 'desk-diary-title', text: j.title }),
