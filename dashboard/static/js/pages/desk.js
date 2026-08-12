@@ -741,13 +741,31 @@ function applyLiveMarks(pillState) {
 
   // Positions tables: repaint only if the container already has content
   // (first load hasn't finished yet → skeleton lives; leave it).
-  const posEl = document.getElementById('desk-positions');
-  if (posEl && !posEl.querySelector('.c-skel') && !posEl.querySelector('.c-empty')) {
-    renderPositions(posEl, {
-      ...ref, positions, positions_value: posValue,
-      equity, total_pnl: totalPnl, total_return_pct: returnPct,
-    }, deskLive.stats);
-  }
+  livePositions = {
+    ...ref, positions, positions_value: posValue,
+    equity, total_pnl: totalPnl, total_return_pct: returnPct,
+  };
+  repaintPositions();
+}
+
+/* The last live-folded book, so a tab switch can repaint from it. */
+let livePositions = null;
+
+/* Repaint the holdings card from the live fold — but only when it is
+   actually on screen.
+
+   Two reasons this guard exists. The treemap lays out against
+   `clientWidth`, which is 0 inside a hidden panel, so it would silently fall
+   back to its 600px default and lay the tiles out for the wrong box. And the
+   rebuild runs once per tape frame: at market open that is a full table plus
+   a squarify pass, several times a second, for a panel nobody is looking at.
+   wireTabs calls this on activation, so switching back paints current marks
+   immediately. */
+function repaintPositions() {
+  const el = document.getElementById('desk-positions');
+  if (!livePositions || !el || el.offsetParent === null) return;
+  if (el.querySelector('.c-skel') || el.querySelector('.c-empty')) return;
+  renderPositions(el, livePositions, deskLive.stats);
 }
 
 async function loadPositions() {
@@ -2094,9 +2112,11 @@ function wireTabs() {
       history.replaceState(null, '', '#' + panelId);
     }
     // A chart or treemap built inside a hidden panel measured 0px wide.
-    // Charts re-measure through their own ResizeObserver; the holdings
-    // treemap is laid out imperatively, so it needs an explicit redraw.
+    // Charts re-measure through their own ResizeObserver; the holdings card
+    // is laid out imperatively and skips its repaint while hidden, so it
+    // needs one now — with whatever the tape has folded in since.
     window.dispatchEvent(new Event('resize'));
+    repaintPositions();
     redrawAllocation();
     return true;
   };
