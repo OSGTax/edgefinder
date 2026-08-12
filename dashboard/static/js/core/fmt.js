@@ -66,21 +66,66 @@ export function upDownClass(n) {
   return n >= 0 ? 't-up' : 't-down';
 }
 
-export function fmtDate(t) {
-  if (!t) return DASH;
-  const d = typeof t === 'number' ? new Date((t > 1e10 ? t : t * 1000)) : new Date(t);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+/* ── time: everything the desk shows is on the MARKET's clock ──
+   Fills, decisions and sessions are all stamped in US/Eastern, never in the
+   viewer's zone. A reader checking a fill against the tape should not have
+   to do zone math, and a laptop left on the wrong timezone should not be
+   able to make an accurate fill look late. The API serializes every
+   timestamp with an explicit offset, so these conversions are exact. */
+
+const ET = 'America/New_York';
+
+function parse(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/* Full trade timestamp in US/Eastern, for independent fill verification.
-   The trades API already serializes entry/exit times as ET ISO strings
-   (offset included), so rendering in that SAME zone — not the viewer's —
-   is what makes the displayed time match the broker clock. */
+/* A date-ONLY value's calendar day (ex-dates, split dates, bar dates).
+   Rendered in UTC because that is the zone toEpochSec() pins date-only
+   inputs to: reading a UTC-midnight epoch in the viewer's zone shows the
+   previous day for everyone west of UTC — in New York every dividend and
+   split would be dated a day early. Instants carrying a real time of day
+   belong in fmtDateET/fmtDateTimeET instead. */
+export function fmtDate(t) {
+  if (!t) return DASH;
+  const d = parse(typeof t === 'number' ? (t > 1e10 ? t : t * 1000) : t);
+  if (!d) return DASH;
+  return d.toLocaleDateString('en-US', {
+    timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/* The ET calendar date of an instant — the session a fill belongs to. A
+   19:25 UTC fill is 3:25 PM the same day in New York, but a 01:30 UTC fill
+   is the previous session's evening; only the ET date says which. */
+export function fmtDateET(iso) {
+  if (!iso) return DASH;
+  const d = parse(iso);
+  if (!d) return DASH;
+  return d.toLocaleDateString('en-US', {
+    timeZone: ET, month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/* ET clock time alone, for tables that already carry the date in their own
+   column. Seconds are deliberate: a basket submitted in one cycle fills
+   inside the same minute, and the second is what tells those fills apart
+   when checking them against the tape. */
+export function fmtTimeET(iso) {
+  if (!iso) return DASH;
+  const d = parse(iso);
+  if (!d) return DASH;
+  return d.toLocaleTimeString('en-US', {
+    timeZone: ET, hour: 'numeric', minute: '2-digit', second: '2-digit',
+    hour12: true,
+  }) + ' ET';
+}
+
+/* Full ET stamp — date and time to the second, for independent verification. */
 export function fmtDateTimeET(iso) {
   if (!iso) return DASH;
-  const d = new Date(iso);
+  const d = parse(iso);
+  if (!d) return DASH;
   return d.toLocaleString('en-US', {
-    timeZone: 'America/New_York', month: 'numeric', day: 'numeric',
+    timeZone: ET, month: 'numeric', day: 'numeric',
     hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
   }) + ' ET';
 }

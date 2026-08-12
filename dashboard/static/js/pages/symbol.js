@@ -4,7 +4,8 @@
    history via range=max, URL-shareable state, trade-detail drawer. */
 
 import { apiGet } from '../core/net.js';
-import { toEpochSec, fmtPrice, fmtPct, fmtPnl, fmtCompact, fmtDate, fmtNum, upDownClass } from '../core/fmt.js';
+import { toEpochSec, fmtPrice, fmtPct, fmtPnl, fmtCompact, fmtDate, fmtDateET,
+         fmtTimeET, fmtDateTimeET, fmtNum, upDownClass } from '../core/fmt.js';
 import { h, clear, skeleton, renderError, renderEmpty, debounce } from '../core/dom.js';
 import { createChart, colors, syncPanes, rangeSwitcher, fullscreenButton, eventMarkers, mergeMarkers } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
@@ -377,7 +378,7 @@ function openTradeDrawer(t) {
   const body = document.getElementById('trade-drawer-body');
   const q = t.fill_quote || null;
   const rows = [
-    ['When', fmtDate(t.t)],
+    ['When', fmtDateTimeET(t.t)],
     ['Side', (t.side || '').toUpperCase()],
     [t.symbol && t.symbol.length > 6 ? 'Contracts' : 'Shares', t.shares],
     ['Fill price', fmtPrice(t.price)],
@@ -580,7 +581,11 @@ function renderRailTrades(body) {
         }
       },
     },
-      h('div', { class: 'when', text: fmtDate(t.t) }),
+      // ET date over ET clock time: the rail is where a reader scans this
+      // symbol's own fills, so each one carries the stamp to check it by.
+      h('div', { class: 'when' },
+        h('div', { text: fmtDateET(t.t) }),
+        h('div', { class: 'when-sub', text: fmtTimeET(t.t) })),
       h('div', { class: 'what' },
         h('span', { class: 'num ' + (buy ? 't-up' : 't-down'), text: buy ? 'BUY ' : 'SELL ' }),
         h('span', { class: 'num', text: `${t.shares} ${unit} @ ${fmtPrice(t.price)}` }),

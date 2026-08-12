@@ -353,13 +353,17 @@
 /* ── timeline row (ops activity) ── */
 .c-tl { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--t-border); }
 .c-tl:last-child { border-bottom: none; }
+/* 100px fits the widest stamp the rail shows — "3:25:53 PM ET" — without
+   wrapping it onto a second line. */
 .c-tl .when {
   flex: 0 0 auto;
-  width: 86px;
+  width: 100px;
   font-size: var(--t-fs-xs);
   color: var(--t-text-3);
   font-family: var(--t-font-mono);
+  white-space: nowrap;
 }
+.c-tl .when-sub { color: var(--t-text-3); opacity: 0.8; margin-top: 1px; }
 .c-tl .what { flex: 1; min-width: 0; font-size: var(--t-fs-sm); color: var(--t-text); }
 .c-tl .what .sub { color: var(--t-text-3); font-size: var(--t-fs-xs); }
 
@@ -471,6 +475,16 @@
 /* ── sparkline (display size; bitmap is dpr-scaled in JS) ── */
 .c-sparkline { width: 90px; height: 24px; display: block; }
 .c-sparkline.lg { width: 140px; height: 36px; }
+
+/* ── /trades: the ET fill clock ──
+   Monospace so the seconds column stays aligned down the table — that is
+   what makes two fills a few seconds apart scannable against the tape. */
+.trades-time {
+  font-family: var(--t-font-mono);
+  font-size: var(--t-fs-xs);
+  color: var(--t-text-2);
+  white-space: nowrap;
+}
 
 /* ── /trades: the frozen Era-1 section (collapsed by default) ── */
 .trades-era1 { margin-top: var(--t-space-3); }

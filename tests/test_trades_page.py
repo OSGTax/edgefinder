@@ -284,6 +284,56 @@ def test_era1_replay_is_independent_of_era2(client, store):
     assert d["realized_pnl"] == 0.0
 
 
+# ── the clock: a fill's stamp has to survive the trip to the browser ──
+
+@pytest.mark.parametrize("raw,expected", [
+    # PostgREST hands a `timestamp without time zone` back as naked text
+    ("2026-07-06T01:30:00", "2026-07-06T01:30:00+00:00"),
+    ("2026-07-06T01:30:00.5", "2026-07-06T01:30:00.500000+00:00"),
+    # already unambiguous — leave the wire format alone
+    ("2026-07-06T01:30:00+00:00", "2026-07-06T01:30:00+00:00"),
+    ("2026-07-06T01:30:00Z", "2026-07-06T01:30:00Z"),
+    ("2026-07-05T21:30:00-04:00", "2026-07-05T21:30:00-04:00"),
+    # a calendar day is not an instant; unparseable text is not ours to guess
+    ("2026-07-06", "2026-07-06"),
+    ("not a timestamp", "not a timestamp"),
+])
+def test_naked_timestamps_are_stamped_utc(raw, expected):
+    """THE ZONE TRAP. A zone-less date-time is read as LOCAL time by the
+    browser (ES spec), so passing one through would render a 19:25 UTC fill
+    at 19:25 on the reader's own clock — hours off the broker stamp these
+    pages exist to let them check."""
+    import dashboard.routers.desk as desk_router
+
+    assert desk_router._stamp_utc(raw) == expected
+
+
+def test_every_fill_timestamp_carries_an_offset(client, store):
+    """Both eras, both endpoints. Era-1 rows come off a naive DateTime column
+    and era-2 rows off Alpaca's own ISO text — the API has to land them in
+    one unambiguous form, or the desk cannot honestly claim an ET time."""
+    _seed(store, "XYZ", "buy", 10, 100.0, _ts(6))
+    _seed_era1(store, "ABC", "BUY", 5, 50.0, _dt(6))
+
+    stamps = ([r["t"] for r in _hist(client)["rows"]]
+              + [r["t"] for r in client.get("/api/desk/trades").json()])
+    assert len(stamps) == 4
+    for t in stamps:
+        parsed = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+        assert parsed.tzinfo is not None, t
+
+
+def test_evening_fill_is_dated_by_its_ET_session(client, store):
+    """01:30 UTC is 9:30 PM the PREVIOUS evening in New York. The row dates
+    to the ET session it traded in while ``t`` keeps the true instant — a
+    UTC-dated row would send a reader to the wrong day's tape."""
+    _seed(store, "XYZ", "buy", 10, 100.0, "2026-07-06T01:30:00+00:00")
+
+    row = _hist(client)["rows"][0]
+    assert row["date"] == "2026-07-05"
+    assert row["t"] == "2026-07-06T01:30:00+00:00"
+
+
 # ── /api/desk/trades: the receipts list stays a BARE LIST ──
 
 def test_trades_endpoint_shape(client, store):

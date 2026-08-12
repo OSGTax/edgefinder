@@ -651,6 +651,10 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 }
 .desk-fills-more:hover { text-decoration: underline; }
 .desk-fill-extra { display: flex; gap: var(--t-space-2); justify-content: flex-end; margin-top: 2px; font-size: var(--t-fs-xs); }
+/* Fill time: the exact ET stamp leads, the session date + relative age sit
+   under it. Monospace keeps the seconds aligned down the column. */
+.desk-fill-when { font-family: var(--t-font-mono); font-size: var(--t-fs-xs); white-space: nowrap; }
+.desk-fill-when-sub { color: var(--t-text-3); margin-top: 1px; }
 
 @media (max-width: 640px) {
   .desk-hero-indices { width: 100%; }

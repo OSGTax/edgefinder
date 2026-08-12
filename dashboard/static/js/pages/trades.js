@@ -11,7 +11,7 @@
 
 import { apiGet } from '../core/net.js';
 import { h, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
-import { fmtDollar, fmtPnl, upDownClass } from '../core/fmt.js';
+import { fmtDollar, fmtPnl, fmtTimeET, upDownClass } from '../core/fmt.js';
 
 const DASH = '—';
 
@@ -33,6 +33,16 @@ function amountCell(r) {
   return fmtDollar(r.dollars);
 }
 
+/* The fill's ET clock time, so a row can be checked against the tape. The
+   corp-action kinds have none to show: a split or dividend row is dated by
+   its own effective date and the only instant it carries is when the old
+   ledger booked the adjustment — printing that would read as an execution
+   that never happened. */
+function timeCell(r) {
+  if (r.kind === 'split' || r.kind === 'dividend') return DASH;
+  return fmtTimeET(r.t);
+}
+
 /* null = closed nothing, so there is no profit to state. A literal 0.00 would
    render bright green via upDownClass(0) and claim a breakeven win. A genuine
    breakeven close is shown neutral for the same reason. */
@@ -45,6 +55,7 @@ function profitCell(r) {
 function row(r) {
   return h('tr', {},
     h('td', { text: r.date || DASH }),
+    h('td', { class: 'trades-time', text: timeCell(r) }),
     h('td', {}, h('a', { href: '/symbol/' + r.underlying, text: r.label })),
     h('td', {}, actionCell(r)),
     h('td', { class: 'num', text: amountCell(r) }),
@@ -54,6 +65,8 @@ function row(r) {
 function table(rows) {
   const head = h('thead', {}, h('tr', {},
     h('th', { text: 'Date' }),
+    h('th', { text: 'Time',
+      title: 'When the fill executed, on the New York market clock (US/Eastern), to the second.' }),
     h('th', { text: 'Symbol' }),
     h('th', { text: 'Action' }),
     h('th', { class: 'num', text: 'Amount' }),

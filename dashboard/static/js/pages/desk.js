@@ -5,8 +5,8 @@
    /api/desk/* endpoints; reuses the core charts/dom/fmt/net modules. */
 
 import { apiGet } from '../core/net.js';
-import { toEpochSec, fmtDollar, fmtPnl, fmtPct, fmtPrice, fmtNum, timeAgo, fmtDateTimeET }
-  from '../core/fmt.js';
+import { toEpochSec, fmtDollar, fmtPnl, fmtPct, fmtPrice, fmtNum, timeAgo,
+         fmtDateET, fmtTimeET, fmtDateTimeET } from '../core/fmt.js';
 import { h, svg, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
 import { createChart, colors } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
@@ -1480,6 +1480,10 @@ function startTape() {
 
 /* ── recent fills: each trade + the live bid/ask it priced off ── */
 const OCC_RE_F = /^[A-Z]{1,6}\d{6}[CP]\d{8}$/;
+/* Era-1 rows whose "fill" is a bookkeeping adjustment rather than an
+   execution. An expiry settlement is NOT one of these — it happens at a real
+   moment and keeps its stamp. */
+const CORP_ACTION_SRC = new Set(['dividend', 'split_adjustment']);
 
 /* Rationale cell: truncated with an inline more/less toggle — the full
    reasoning is readable in place, not trapped in a hover title. */
@@ -1516,7 +1520,9 @@ async function loadFills() {
     clear(el);
     const table = h('table', { class: 'c-table' },
       h('thead', {}, h('tr', {},
-        h('th', { text: 'When' }), h('th', { text: 'Stock' }),
+        h('th', { text: 'When',
+          title: 'When the fill executed, on the New York market clock (US/Eastern), to the second.' }),
+        h('th', { text: 'Stock' }),
         h('th', { text: 'Side' }), h('th', { class: 'num', text: 'Shares' }),
         h('th', { class: 'num', text: 'Fill price' }),
         h('th', { class: 'num', text: 'Receipt', title: 'Era-2 fills are executed by the broker against the live market — the decision run is the receipt. Era-1 fills carry the old ledger\'s stamped bid/ask, session, and fee receipts.' }),
@@ -1559,8 +1565,18 @@ async function loadFills() {
                   title: 'The reasoning lives on the decision this fill belongs to — see “The latest decision” card’s History view.',
                   text: 'run ' + r.run_id })
               : h('td', { class: 't-dim', text: '—' }));
+        // The ET clock time leads, with the session date and the relative
+        // age beneath it. "2h ago" alone cannot be checked against anything;
+        // the exact stamp is what lets a reader pull up the tape and confirm
+        // the fill happened when the desk says it did. The era-1 corp-action
+        // rows have no execution to stamp — their only instant is when the
+        // old ledger booked the adjustment (same rule as /trades).
+        const booked = CORP_ACTION_SRC.has(q.src);
         return h('tr', {},
-          h('td', { class: 't-dim', title: fmtDateTimeET(r.t), text: timeAgo(r.t) }),
+          h('td', { class: 'desk-fill-when' },
+            h('div', { text: booked ? '—' : fmtTimeET(r.t) }),
+            h('div', { class: 'desk-fill-when-sub',
+              text: fmtDateET(r.t) + ' · ' + timeAgo(r.t) })),
           h('td', {}, h('a', { href: '/symbol/' + (isOpt ? r.symbol.match(/^[A-Z]+/)[0] : r.symbol), class: 'c-link', text: r.symbol })),
           h('td', {}, pill((r.side || '').toUpperCase() || '—', buy ? 'up' : 'down')),
           h('td', { class: 'num', text: fmtNum(Math.abs(r.shares), isOpt ? 0 : 2) }),

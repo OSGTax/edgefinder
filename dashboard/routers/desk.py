@@ -56,11 +56,38 @@ def _iso(dt):
     return dt.isoformat()
 
 
+def _stamp_utc(s: str) -> str:
+    """A zone-less date-TIME string stamped UTC; anything else untouched.
+
+    Date-only text ("2026-05-09") names a calendar day, not an instant, and
+    malformed text is not ours to guess at — both pass through.
+    """
+    from datetime import datetime as _dt
+
+    if len(s) <= 10:
+        return s
+    try:
+        dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s
+    return s if dt.tzinfo else dt.replace(tzinfo=timezone.utc).isoformat()
+
+
 def _iso_any(v):
     """ISO string from a datetime OR an already-string timestamp (the two DB
-    transports disagree on what a TIMESTAMP round-trips as)."""
-    if v is None or isinstance(v, str):
+    transports disagree on what a TIMESTAMP round-trips as).
+
+    Every returned timestamp carries an explicit offset. The browser reads an
+    offset-less date-time as LOCAL time (ES spec), so a naked string would
+    render a 19:25 UTC fill as 19:25 on the viewer's clock — hours off the
+    broker's own stamp, on the very surfaces built to check it. The pg
+    transport hands back datetimes (``_iso`` stamps those); PostgREST hands
+    back text, which is where a naked one can come from.
+    """
+    if v is None:
         return v
+    if isinstance(v, str):
+        return _stamp_utc(v)
     return _iso(v)
 
 
