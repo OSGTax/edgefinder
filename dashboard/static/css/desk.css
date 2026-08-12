@@ -160,33 +160,43 @@
 /* ── TABS: sticky just below the topnav ──
    Real tabs since v10.3.0 — one panel renders at a time. The topnav consumes
    env(safe-area-inset-top) too, so the bar docks flush at nav-h + inset.
-   The active tab is marked by an underline rather than a filled chip: the
-   bar sits directly under the hero, and a filled pill there competed with
-   the account value for the eye. */
+
+   v10.4.0 restyle: a segmented pill group on a raised track, replacing the
+   flat underline tabs (which read as dated browser chrome). The active pill
+   gets the surface + a real border + the link colour, so the current section
+   is unmissable and the control visibly IS a control. */
 .desk-tabs {
   position: sticky;
   top: calc(var(--t-nav-h) + env(safe-area-inset-top, 0px));
   z-index: 30;
-  display: flex; gap: var(--t-space-1);
-  padding: 6px 0 0; margin-bottom: 18px;
+  display: flex; gap: var(--t-space-2);
+  padding: 10px 0; margin-bottom: 16px;
   background: var(--t-bg);
   border-bottom: 1px solid var(--t-border);
   overflow-x: auto; scrollbar-width: none;
 }
 .desk-tabs::-webkit-scrollbar { display: none; }
 .desk-tab {
-  appearance: none; background: none; border: 0;
-  border-bottom: 2px solid transparent;
-  padding: 8px 14px 9px; margin-bottom: -1px;
+  appearance: none;
+  border: 1px solid var(--t-border);
+  border-radius: 999px;
+  background: var(--t-surface);
+  padding: 7px 18px;
+  min-height: 34px;
   color: var(--t-text-2);
   font: inherit; font-size: var(--t-fs-base); font-weight: 600;
   white-space: nowrap; cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
-.desk-tab:hover { color: var(--t-text); }
-.desk-tab.active { color: var(--t-text); border-bottom-color: var(--t-link); }
-.desk-tab:focus-visible {
-  outline: 2px solid var(--t-link); outline-offset: -2px;
-  border-radius: var(--t-radius-sm);
+.desk-tab:hover { color: var(--t-text); border-color: var(--t-border-strong); background: var(--t-surface-2); }
+.desk-tab.active {
+  color: var(--t-link);
+  border-color: var(--t-link);
+  background: var(--t-info-dim);
+}
+.desk-tab:focus-visible { outline: 2px solid var(--t-link); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .desk-tab { transition: none; }
 }
 
 /* ── PANELS: named sections with head + 2-col card grid ── */
@@ -516,11 +526,6 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-spark { display: inline-block; vertical-align: middle; width: 68px; height: 20px; }
 
 /* ── allocation donut ── */
-/* Allocation treemap host. The donut it replaced was a 48-slice ring with a
-   single-column legend beside it — 1,023px of page for a chart in which a
-   0.4% arc was invisible. The treemap component owns the tile styling
-   (components.css .c-treemap); this only reserves the block. */
-.desk-alloc { margin-bottom: var(--t-space-4); }
 
 /* ── footnote: quiet paper-account / not-investment-advice reminder ── */
 .desk-footnote {
@@ -615,13 +620,26 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-honesty-sep { color: var(--t-border-strong); }
 
 /* pro-view toggles (option chain, full thinking feed) */
+/* "Show all N" expanders — pill-shaped like the tabs so every disclosure
+   control on the page reads as one family, with a chevron so it reads as
+   "more below" rather than a mystery button. */
 .desk-morebtn {
-  background: none; border: 1px solid var(--t-border);
-  border-radius: var(--t-radius-sm); color: var(--t-text-2);
-  font: inherit; font-size: var(--t-fs-xs); cursor: pointer;
-  padding: 4px 10px; margin-top: var(--t-space-2);
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--t-surface);
+  border: 1px solid var(--t-border);
+  border-radius: 999px;
+  color: var(--t-text-2);
+  font: inherit; font-size: var(--t-fs-sm); font-weight: 600;
+  cursor: pointer;
+  padding: 6px 14px; min-height: 30px; margin-top: var(--t-space-3);
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
-.desk-morebtn:hover { color: var(--t-text); border-color: var(--t-border-strong); }
+.desk-morebtn::after { content: "▾"; font-size: 10px; color: var(--t-text-3); }
+.desk-morebtn:hover { color: var(--t-link); border-color: var(--t-link); background: var(--t-info-dim); }
+.desk-morebtn:focus-visible { outline: 2px solid var(--t-link); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .desk-morebtn { transition: none; }
+}
 
 /* ── v9.5.0: calmer desk ── */
 
@@ -755,3 +773,8 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
   text-transform: uppercase; letter-spacing: 0.06em;
 }
 .desk-wiki-h:first-child { margin-top: 0; }
+.desk-morebtn.open::after { content: "▴"; }
+
+/* Notebook tables (the playbook's sleeve table): the shared c-table look at
+   the prose width, with a little air above and below. */
+.desk-wiki-table { margin: var(--t-space-2) 0; }

@@ -10,7 +10,6 @@ import { toEpochSec, fmtDollar, fmtPnl, fmtPct, fmtPrice, fmtNum, timeAgo,
 import { h, svg, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
 import { createChart, colors } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
-import { treemap } from '../components/treemap.js';
 
 let equityChart = null;
 let equitySeries = null;   // the recorded marks — history, never fabricated
@@ -44,6 +43,15 @@ setInterval(() => {
 
 const ACTION_CLASS = { buy: 'up', add: 'up', hold: 'neutral', trim: 'warn', exit: 'down', sell: 'down' };
 
+/* Per-surface caps. The cap is a landing-view size, not a limit — capList
+   always renders the rest, hidden behind a counted toggle. */
+const HOLDINGS_CAP = 10;
+const CLAIMS_CAP = 5;
+const OUTCOMES_CAP = 8;
+const LESSONS_CAP = 3;
+const ORDERS_CAP = 12;
+const FILLS_CAP = 15;
+
 /* ── capped lists ──
    Long corpora (179 claims, 50 holdings, every graded prediction) used to
    render in full and made the page 40,971px tall. Cap them, and put the real
@@ -63,6 +71,7 @@ function capList(rows, cap, noun, nouns) {
     const expanding = hidden[0].hidden;
     for (const r of hidden) r.hidden = !expanding;
     btn.textContent = expanding ? `Show fewer` : label();
+    btn.classList.toggle('open', expanding);
   });
   return btn;
 }
@@ -453,85 +462,6 @@ function occParse(sym) {
   };
 }
 
-/* Allocation treemap — how the account is split across holdings + cash.
-
-   Was a 48-slice donut with its legend in one tall column: unreadable by
-   construction (a 0.4% arc is invisible) and 1,023px of page, more than the
-   decision and thinking feed put together. A treemap sizes by area, so the
-   positions that actually matter are the ones you can read, and the long
-   tail pools into one honest tile instead of forty lines.
-
-   The tail is pooled, never dropped — the tile states its own count. */
-const ALLOC_TOP = 12;
-const ALLOC_HEIGHT = 260;
-const HOLDINGS_CAP = 10;
-const CLAIMS_CAP = 5;
-const OUTCOMES_CAP = 8;
-const LESSONS_CAP = 3;
-const ORDERS_CAP = 12;
-const FILLS_CAP = 15;
-
-function allocationNodes(pf) {
-  const held = (pf.positions || [])
-    .filter(p => p.weight > 0)
-    .map(p => ({ symbol: p.symbol, value: p.weight * 100 }))
-    .sort((a, b) => b.value - a.value);
-  const nodes = held.slice(0, ALLOC_TOP).map((p, i) => {
-    const occ = occParse(p.symbol);
-    return {
-      name: occ ? occ.label : p.symbol,
-      symbol: occ ? occ.underlying : p.symbol,
-      value: p.value,
-      count: fmtNum(p.value, 1) + '%',
-      quadrant: 's' + (i % 8),
-    };
-  });
-  const tail = held.slice(ALLOC_TOP);
-  if (tail.length) {
-    const tailPct = tail.reduce((s, p) => s + p.value, 0);
-    nodes.push({
-      name: `${tail.length} smaller position${tail.length === 1 ? '' : 's'}`,
-      value: tailPct,
-      count: fmtNum(tailPct, 1) + '%',
-      quadrant: 'tail',
-    });
-  }
-  const cashPct = pf.equity ? Math.max(0, pf.cash / pf.equity * 100) : 0;
-  if (cashPct > 0.05) {
-    nodes.push({ name: 'Cash', value: cashPct, count: fmtNum(cashPct, 1) + '%', quadrant: 'cash' });
-  }
-  return nodes;
-}
-
-/* Kept as module state so a tab switch can re-lay-out: treemap() reads
-   clientWidth, which is 0 inside a hidden panel. */
-let allocNodes = null;
-
-function renderAllocation(host) {
-  if (!allocNodes || !allocNodes.length) return;
-  treemap(host, allocNodes, {
-    height: ALLOC_HEIGHT,
-    onClick: name => {
-      const n = allocNodes.find(x => x.name === name);
-      if (n && n.symbol) location.href = '/symbol/' + n.symbol;
-    },
-  });
-}
-
-function redrawAllocation() {
-  const host = document.getElementById('desk-alloc');
-  if (host && host.offsetParent !== null) renderAllocation(host);
-}
-
-function allocation(pf) {
-  allocNodes = allocationNodes(pf);
-  if (!allocNodes.length) return null;
-  const host = h('div', { id: 'desk-alloc', class: 'desk-alloc' });
-  // treemap() measures clientWidth, so it can only run once the node is in
-  // the document — renderPositions calls back through renderAllocation.
-  return host;
-}
-
 function sparkline(series, up) {
   const W = 68, H = 20, n = series ? series.length : 0;
   if (n < 2) return h('span', { class: 't-dim', text: '—' });
@@ -630,8 +560,6 @@ function renderPositions(el, pf, stats) {
   const eqs = pf.positions.filter(p => !occParse(p.symbol));
   const opts = pf.positions.filter(p => occParse(p.symbol));
   clear(el);
-  const alloc = allocation(pf);
-  if (alloc) { el.append(alloc); renderAllocation(alloc); }
   if (eqs.length) {
     const table = equitiesTable(eqs, stats);
     el.append(table);
@@ -752,15 +680,10 @@ function applyLiveMarks(pillState) {
 let livePositions = null;
 
 /* Repaint the holdings card from the live fold — but only when it is
-   actually on screen.
-
-   Two reasons this guard exists. The treemap lays out against
-   `clientWidth`, which is 0 inside a hidden panel, so it would silently fall
-   back to its 600px default and lay the tiles out for the wrong box. And the
-   rebuild runs once per tape frame: at market open that is a full table plus
-   a squarify pass, several times a second, for a panel nobody is looking at.
-   wireTabs calls this on activation, so switching back paints current marks
-   immediately. */
+   actually on screen. The rebuild runs once per tape frame, which at market
+   open is a full table several times a second; there is no reason to pay
+   that for a panel nobody is looking at. wireTabs calls this on activation,
+   so switching back paints current marks immediately. */
 function repaintPositions() {
   const el = document.getElementById('desk-positions');
   if (!livePositions || !el || el.offsetParent === null) return;
@@ -789,7 +712,7 @@ async function loadPositions() {
         + 'will reappear when the broker connection recovers.');
       return;
     }
-    if (!pf.positions.length) { renderEmpty(el, 'All cash — no open positions.'); return; }
+    if (!pf.positions.length) { renderEmpty(el, 'All cash — nothing on the book right now. The AI is between ideas, not asleep.'); return; }
     // Cache stats + book so tape ticks can repaint with the same holding-stats
     // shape (day-change chip, 30-day trend) without another network round trip.
     deskLive.stats = (hs && hs.symbols) || {};
@@ -811,7 +734,7 @@ async function loadThinking() {
   skeleton(el);
   try {
     const data = await apiGet('/api/desk/thinking?limit=80');
-    if (!data.lines.length) { renderEmpty(el, 'No thinking recorded yet.'); runEl.textContent = ''; return; }
+    if (!data.lines.length) { renderEmpty(el, 'Nothing narrated yet — the next trading cycle will talk its way through here.'); runEl.textContent = ''; return; }
     runEl.textContent = data.run_id ? ('run ' + data.run_id) : '';
     clear(el);
     // Show the freshest handful; the full transcript is one click away —
@@ -939,7 +862,7 @@ async function loadOpenOrders() {
         : '';
     }
     if (!rows.length) {
-      renderEmpty(el, 'Nothing resting at the broker right now — the AI arms protective stops on positions that need them.');
+      renderEmpty(el, 'Nothing resting at the broker — stops get armed as positions need them.');
       return;
     }
     // One sentence of what the protection actually amounts to, then the
@@ -1256,7 +1179,7 @@ async function loadPredictions() {
     }
     clear(el);
     if (!rows.length) {
-      renderEmpty(el, 'No graded predictions yet — every buy records one, and the grader scores them from real prices.');
+      renderEmpty(el, 'No graded predictions yet. Every buy writes one, and the grader has a long memory.');
       return;
     }
     if (s.closed_graded) {
@@ -1428,35 +1351,76 @@ const REGIME_TAGS = {
   neutral: 'learned in a mixed market',
 };
 
+/* One <li>, with the [risk_on]-style tag rendered as a plain-English pill
+   instead of raw shorthand. */
+function wikiListItem(text) {
+  const item = h('li', {});
+  const m = text.match(/\s*\[(risk_on|risk_off|neutral)\]\s*/);
+  if (m) {
+    text = (text.slice(0, m.index) + ' ' + text.slice(m.index + m[0].length)).trim();
+    item.append(...inlineMd(text), ' ',
+      h('span', { class: 'c-pill neutral desk-wiki-tag', text: REGIME_TAGS[m[1]] }));
+  } else {
+    item.append(...inlineMd(text));
+  }
+  return item;
+}
+
+/* Group a block's lines into list items: a marker line starts an item,
+   anything else continues the one before it. The agent hard-wraps its
+   markdown at ~72 columns, so most real bullets span 2\u20133 physical lines \u2014
+   requiring every line to carry the marker (the pre-v10.4 rule) collapsed
+   whole doctrine lists into run-on paragraphs. */
+function wikiListItems(lines, markerRe) {
+  const items = [];
+  for (const l of lines) {
+    const m = l.match(markerRe);
+    if (m) items.push(l.slice(m[0].length));
+    else if (items.length) items[items.length - 1] += ' ' + l;
+  }
+  return items.map(t => wikiListItem(dashes(t)));
+}
+
+const WIKI_TABLE_SEP = /^[\s|:-]+$/;  // the |---|:--| divider row
+
+function wikiTable(lines) {
+  const cells = l => l.replace(/^\|/, '').replace(/\|$/, '')
+    .split('|').map(c => c.trim());
+  const rows = lines.filter(l => !WIKI_TABLE_SEP.test(l)).map(cells);
+  if (!rows.length) return null;
+  const head = h('tr', {}, ...rows[0].map(c => h('th', {}, ...inlineMd(dashes(c)))));
+  const body = rows.slice(1).map(r =>
+    h('tr', {}, ...r.map(c => h('td', {}, ...inlineMd(dashes(c))))));
+  // .c-table-wrap so a wide doctrine table scrolls inside the card instead
+  // of pushing the page sideways on a phone.
+  return h('div', { class: 'c-table-wrap' },
+    h('table', { class: 'c-table desk-wiki-table' },
+      h('thead', {}, head), h('tbody', {}, ...body)));
+}
+
 function wikiBlocks(body) {
-  // markdown-lite: blank-line-separated blocks. "- " blocks \u2192 bullet lists,
-  // "#"-prefixed lines \u2192 headings, everything else \u2192 paragraphs. All text
-  // nodes \u2014 zero innerHTML. A [risk_on]-style tag anywhere in a bullet
-  // becomes a small plain-English pill instead of raw shorthand.
-  //
-  // Headings and bold were added in v10.3.0: the agent writes markdown, and
-  // without a parser for it the notebook rendered literal "## Posture:" and
-  // "**never**" down the page \u2014 its own structure showing as punctuation.
+  // markdown-lite for the agent's own notebook: headings, **bold**, "- "
+  // bullets, "1." ordered lists, and | tables |. All text nodes \u2014 zero
+  // innerHTML. The agent WRITES real markdown; before v10.4.0 the renderer
+  // only understood single-line bullets, so its tables rendered as pipe
+  // soup and its numbered doctrine collapsed into run-on paragraphs \u2014 the
+  // worst-reading text on the desk was a rendering gap, not bad writing.
   const out = [];
   for (const block of String(body || '').split(/\n\s*\n/)) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
     if (!lines.length) continue;
-    if (lines.every(l => l.startsWith('- '))) {
+    if (lines.length > 1 && lines.every(l => l.startsWith('|'))) {
+      const table = wikiTable(lines);
+      if (table) { out.push(table); continue; }
+    }
+    if (lines[0].startsWith('- ')) {
       out.push(h('ul', { class: 'desk-wiki-list' },
-        ...lines.map(l => {
-          const item = h('li', {});
-          let text = dashes(l.slice(2));
-          const m = text.match(/\s*\[(risk_on|risk_off|neutral)\]\s*/);
-          if (m) {
-            text = (text.slice(0, m.index) + ' '
-              + text.slice(m.index + m[0].length)).trim();
-            item.append(...inlineMd(text), ' ',
-              h('span', { class: 'c-pill neutral desk-wiki-tag', text: REGIME_TAGS[m[1]] }));
-          } else {
-            item.append(...inlineMd(text));
-          }
-          return item;
-        })));
+        ...wikiListItems(lines, /^- /)));
+      continue;
+    }
+    if (/^\d+[.)] /.test(lines[0])) {
+      out.push(h('ol', { class: 'desk-wiki-list' },
+        ...wikiListItems(lines, /^\d+[.)] /)));
       continue;
     }
     // Headings can lead a block that also carries prose, so walk the lines
@@ -1517,7 +1481,7 @@ function renderNotebook() {
   const pages = wikiCache.pages || [];
   if (metaEl) metaEl.textContent = pages.length ? pages.length + ' page(s)' : '';
   if (!pages.length) {
-    renderEmpty(el, 'The notebook is empty \u2014 lessons appear once real results come in.');
+    renderEmpty(el, 'The notebook is empty — lessons only get written once real results come in. No hunches allowed.');
     return;
   }
   const built = pages.map(p => h('div', { class: 'desk-wiki-page' },
@@ -2111,13 +2075,12 @@ function wireTabs() {
       try { localStorage.setItem(TAB_KEY, panelId); } catch (e) { /* private mode */ }
       history.replaceState(null, '', '#' + panelId);
     }
-    // A chart or treemap built inside a hidden panel measured 0px wide.
-    // Charts re-measure through their own ResizeObserver; the holdings card
-    // is laid out imperatively and skips its repaint while hidden, so it
-    // needs one now — with whatever the tape has folded in since.
+    // A chart built inside a hidden panel measured 0px wide. Charts
+    // re-measure through their own ResizeObserver on the resize ping; the
+    // holdings card skips its repaint while hidden, so paint it now with
+    // whatever the tape has folded in since.
     window.dispatchEvent(new Event('resize'));
     repaintPositions();
-    redrawAllocation();
     return true;
   };
 

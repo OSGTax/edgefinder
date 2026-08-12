@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Trading Desk — EdgeFinder{% endblock %}
-{% block head %}<link rel="stylesheet" href="/static/css/desk.css">{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/css/desk.css?v={{ app_version | default('0') }}">{% endblock %}
 
 {% block content %}
 <h2 class="desk-page-title">Trading Desk</h2>
@@ -90,9 +90,38 @@
 <section id="panel-now" class="desk-panel" role="tabpanel" aria-labelledby="tab-now">
   <header class="desk-zone-head">
     <h3 class="desk-zone-title">What the AI is doing now</h3>
-    <p class="desk-zone-sub">Its most recent decision, its live reasoning, and the book that resulted.</p>
+    <p class="desk-zone-sub">The book as it stands, and the thinking that got it here.</p>
   </header>
   <div class="desk-zone-grid">
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="positions">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>What the AI owns right now</span>
+      </div>
+      <div class="c-card-sub">Everything it holds right now — what it paid, what it's worth, and how that's going.</div>
+      <div class="c-card-body" id="desk-positions"></div>
+    </div>
+
+    <div class="c-card desk-card desk-span-2" data-collapse-key="equity">
+      <div class="c-card-header">
+        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
+        <span>Account value over time</span>
+        <span class="spacer"></span>
+        <span id="desk-equity-meta" class="t-dim"></span>
+      </div>
+      <div class="c-card-sub">The whole account, one point per trading day, with the S&amp;P 500 along for comparison. The "cutover" flag is the day the book moved to Alpaca's paper brokerage — one unbroken record across both eras.</div>
+      <div class="c-card-body tight">
+        <div class="desk-equity-legend t-dim" id="desk-equity-legend" hidden>
+          <span class="desk-legend-item"><span class="desk-legend-swatch acct"></span>Account</span>
+          <span class="desk-legend-item" title="The S&amp;P 500 (SPY, price return — no dividends, matching the paper book) rebased to the account's starting value at the last market close before its first trade."><span class="desk-legend-swatch spy"></span>S&amp;P 500</span>
+          <span class="desk-legend-item" title="The dashed tip is a live estimate from real-time quotes — not yet a recorded mark."><span class="desk-legend-swatch live"></span>live estimate</span>
+        </div>
+        <div class="ch-shell">
+          <div class="ch-pane tall" id="desk-equity-chart"></div>
+        </div>
+      </div>
+    </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="decision">
       <div class="c-card-header">
@@ -105,7 +134,7 @@
         </div>
         <span id="desk-decision-when" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">What the AI decided on its most recent cycle — what it bought, held, or sold, and the reasoning behind each pick. "History" browses every past decision in full.</div>
+      <div class="c-card-sub">What it bought, held, or sold on the latest cycle — and the reasoning it now has to live with. "History" keeps every past decision, verbatim.</div>
       <div class="c-card-body">
         <div id="desk-summary" class="mb-16"></div>
         <div id="desk-picks"></div>
@@ -121,37 +150,8 @@
         <span class="spacer"></span>
         <span id="desk-thinking-run" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">Its live reasoning, in its own words, as each trading cycle runs.</div>
+      <div class="c-card-sub">The AI narrating its own trading day as it happens — unedited, including the parts it may later regret.</div>
       <div class="c-card-body" id="desk-thinking"></div>
-    </div>
-
-    <div class="c-card desk-card desk-span-2" data-collapse-key="equity">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>Account value over time</span>
-        <span class="spacer"></span>
-        <span id="desk-equity-meta" class="t-dim"></span>
-      </div>
-      <div class="c-card-sub">The whole account (cash + investments), one point per trading day. The vertical "cutover" marker is where the book moved to a real broker's paper account (Alpaca) — one continuous record across both eras.</div>
-      <div class="c-card-body tight">
-        <div class="desk-equity-legend t-dim" id="desk-equity-legend" hidden>
-          <span class="desk-legend-item"><span class="desk-legend-swatch acct"></span>Account</span>
-          <span class="desk-legend-item" title="The S&amp;P 500 (SPY, price return — no dividends, matching the paper book) rebased to the account's starting value at the last market close before its first trade."><span class="desk-legend-swatch spy"></span>S&amp;P 500</span>
-          <span class="desk-legend-item" title="The dashed tip is a live estimate from real-time quotes — not yet a recorded mark."><span class="desk-legend-swatch live"></span>live estimate</span>
-        </div>
-        <div class="ch-shell">
-          <div class="ch-pane tall" id="desk-equity-chart"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="c-card desk-card desk-span-2" data-collapse-key="positions">
-      <div class="c-card-header">
-        <button class="desk-collapse" type="button" aria-label="Toggle" data-collapse-btn>&#9662;</button>
-        <span>What the AI owns right now</span>
-      </div>
-      <div class="c-card-sub">Every investment currently held, what it cost, what it's worth now, and the gain or loss so far.</div>
-      <div class="c-card-body" id="desk-positions"></div>
     </div>
 
     <div class="c-card desk-card desk-span-2" data-collapse-key="orders">
@@ -161,7 +161,7 @@
         <span class="spacer"></span>
         <span id="desk-orders-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">Real orders resting at the broker — protective stops fire even while the AI is between check-ins.</div>
+      <div class="c-card-sub">Standing orders on the broker's own book. The stops fire on their own — the AI does not have to be awake for the exits to work.</div>
       <div class="c-card-body" id="desk-orders"></div>
     </div>
 
@@ -172,7 +172,7 @@
 <section id="panel-record" class="desk-panel" role="tabpanel" aria-labelledby="tab-record" hidden>
   <header class="desk-zone-head">
     <h3 class="desk-zone-title">Track record</h3>
-    <p class="desk-zone-sub">Every prediction it committed to before trading, graded against what actually happened.</p>
+    <p class="desk-zone-sub">Every call it put in writing before trading, graded against what actually happened. No grading on a curve.</p>
   </header>
   <div class="desk-zone-grid">
 
@@ -183,7 +183,7 @@
         <span class="spacer"></span>
         <span id="desk-predictions-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">Every prediction the AI wrote down when it bought — tracked, machine-graded against what actually happened, and judged TRUE or FALSE by the weekly review. The scoreboard it cannot argue with.</div>
+      <div class="c-card-sub">Before every buy, the AI writes down what should happen, by when, and what would prove it wrong. A grader then checks the tape — no partial credit, no quiet edits.</div>
       <div class="c-card-body" id="desk-predictions"></div>
     </div>
 
@@ -194,7 +194,7 @@
         <span class="spacer"></span>
         <span id="desk-fills-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">Every fill on the book — current-era trades executed by the broker against the live market (each linked to the decision cycle that placed it), and the frozen pre-migration receipts with their original bid/ask stamps.</div>
+      <div class="c-card-sub">The most recent fills, each executed by the broker against the live market and linked to the decision that placed it. Older receipts keep their original stamps; the full ledger lives on the Trades page.</div>
       <div class="c-card-body" id="desk-fills"></div>
     </div>
 
@@ -205,7 +205,7 @@
 <section id="panel-learned" class="desk-panel" role="tabpanel" aria-labelledby="tab-learned" hidden>
   <header class="desk-zone-head">
     <h3 class="desk-zone-title">What it's learned</h3>
-    <p class="desk-zone-sub">From 21 years of history every night, and from its own results every week.</p>
+    <p class="desk-zone-sub">What 21 years of market history — and its own results — keep teaching it.</p>
   </header>
   <div class="desk-zone-grid">
 
@@ -219,7 +219,7 @@
           <button data-view="tests" type="button">Recent tests</button>
         </div>
       </div>
-      <div class="c-card-sub">Every night the AI tests dozens of strategy variations against 21 years of market history — and before betting (paper) money on any single idea, it tests that idea the same way. "Tonight's board" is what survived; "Recent tests" is the homework, including the ideas that failed.</div>
+      <div class="c-card-sub">Every night it stress-tests strategy ideas against 21 years of market history, and no idea gets (paper) money without passing the same exam. "Tonight's board" is what survived. "Recent tests" is the full homework — including the ideas that did not make it, and there are always some.</div>
       <div class="c-card-body" id="desk-lab"></div>
     </div>
 
@@ -234,7 +234,7 @@
         </div>
         <span id="desk-wiki-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">Lessons distilled from the AI's own wins and losses (rewritten as real results come in, never from hunches), and a diary of every time it changed its approach and why.</div>
+      <div class="c-card-sub">Lessons it learned the expensive way — in pretend money — rewritten as real results come in, never from hunches. Plus a diary of every time it changed its mind, and why.</div>
       <div class="c-card-body" id="desk-wiki"></div>
     </div>
 
@@ -245,7 +245,7 @@
         <span class="spacer"></span>
         <span id="desk-claims-meta" class="t-dim"></span>
       </div>
-      <div class="c-card-sub">The structured facts behind the notebook. Only "in force" claims (proven across enough trades, or explicitly experimental under a tight size cap) may justify a trade — everything below that tier is watch-only until it earns promotion. Each claim carries its real sample size, never a self-assessed confidence score. Changes to the AI's own trading rules wait for the owner's approval, shown here when pending.</div>
+      <div class="c-card-sub">The structured facts behind the notebook. Only claims marked "in force" may justify a trade; everything else watches from the bench until it earns promotion with real results. Every claim carries its actual sample size — never a self-assessed confidence score — and changes to the AI's own trading rules wait for the owner's sign-off, shown here when pending.</div>
       <div class="c-card-body" id="desk-claims"></div>
     </div>
 
@@ -268,5 +268,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script type="module" src="/static/js/pages/desk.js"></script>
+<script type="module" src="/static/js/pages/desk.js?v={{ app_version | default('0') }}"></script>
 {% endblock %}

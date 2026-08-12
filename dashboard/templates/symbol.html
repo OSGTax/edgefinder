@@ -72,5 +72,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script type="module" src="/static/js/pages/symbol.js"></script>
+<script type="module" src="/static/js/pages/symbol.js?v={{ app_version | default('0') }}"></script>
 {% endblock %}

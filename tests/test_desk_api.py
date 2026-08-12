@@ -172,9 +172,15 @@ def test_desk_page_information_architecture(client):
         seg = html[html.index(f'id="{pid}"'):]
         assert seg[:seg.index(">")].endswith("hidden"), pid
 
-    # The decision leads the Now panel, ahead of the chart and the book.
-    assert now < html.index('id="desk-picks"') < html.index('id="desk-equity-chart"')
-    assert html.index('id="desk-equity-chart"') < html.index('id="desk-positions"')
+    # Owner-directed order (2026-08-12): the BOOK leads the Now panel —
+    # holdings, then the equity curve, then the decision/reasoning cards.
+    assert now < html.index('id="desk-positions"') < html.index('id="desk-equity-chart"')
+    assert html.index('id="desk-equity-chart"') < html.index('id="desk-picks"')
+
+    # Static entry points are version-stamped so a release can never run the
+    # previous release's cached JS (the v10.3.0 dead-tab-bar bug).
+    assert "/static/js/pages/desk.js?v=" in html
+    assert "/static/css/desk.css?v=" in html
 
     assert 'id="desk-watch"' not in html         # tripwire card retired
     assert 'id="desk-orders"' in html            # open orders & protection

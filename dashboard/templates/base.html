@@ -10,13 +10,13 @@
     document.documentElement.setAttribute('data-theme',
       localStorage.getItem('ef-theme') === 'light' ? 'light' : 'dark');
   </script>
-  <link rel="stylesheet" href="/static/css/tokens.css">
-  <link rel="stylesheet" href="/static/css/base.css">
-  <link rel="stylesheet" href="/static/css/components.css">
-  <link rel="stylesheet" href="/static/css/charts.css">
+  <link rel="stylesheet" href="/static/css/tokens.css?v={{ app_version | default('0') }}">
+  <link rel="stylesheet" href="/static/css/base.css?v={{ app_version | default('0') }}">
+  <link rel="stylesheet" href="/static/css/components.css?v={{ app_version | default('0') }}">
+  <link rel="stylesheet" href="/static/css/charts.css?v={{ app_version | default('0') }}">
   <!-- vendored (pinned, no CDN dependency) — TradingView Lightweight Charts v4.1.0, Apache-2.0 -->
-  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
-  <script type="module" src="/static/js/core/nav.js"></script>
+  <script src="/static/vendor/lightweight-charts.standalone.production.js?v={{ app_version | default('0') }}"></script>
+  <script type="module" src="/static/js/core/nav.js?v={{ app_version | default('0') }}"></script>
   {% block head %}{% endblock %}
 </head>
 <body>
