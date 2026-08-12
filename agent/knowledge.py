@@ -308,21 +308,37 @@ def _resolve_evidence(store, refs: list, account: str) -> dict:
                 # written by the V3 ledger resolve against the frozen Era-1
                 # archive (and desk_trades itself pre-cutover). An id found
                 # in ANY of the three is evidence; missing tables are just
-                # the eras this database doesn't have.
+                # the eras this database doesn't have. V4 refs carry no row
+                # id — they cite the (run_id, symbol) attribution pair the
+                # mirror is indexed for.
                 found = False
-                for table in ("desk_orders", "desk_trades", "era1_trades"):
-                    try:
-                        if store.select(table, filters={"id": ref.get("id")},
-                                        limit=1):
-                            found = True
-                            break
-                    except Exception:  # noqa: BLE001 — era table absent here
-                        continue
+                if ref.get("id") is not None:
+                    for table in ("desk_orders", "desk_trades", "era1_trades"):
+                        try:
+                            if store.select(table, filters={"id": ref["id"]},
+                                            limit=1):
+                                found = True
+                                break
+                        except Exception:  # noqa: BLE001 — era table absent
+                            continue
+                elif ref.get("run_id"):
+                    f = {"account": account, "run_id": ref["run_id"]}
+                    if ref.get("symbol"):
+                        f["symbol"] = ref["symbol"]
+                    found = bool(store.select("desk_orders", filters=f,
+                                              limit=1))
                 if not found:
                     orphans.append(ref)
             elif kind == "backtest":
-                if not store.select("desk_backtests",
-                                    filters={"id": ref.get("id")}):
+                if ref.get("id") is not None:
+                    f = {"id": ref["id"]}
+                elif ref.get("run_id"):
+                    # backtest_tool --save stamps the saving run's id
+                    f = {"account": account, "run_id": ref["run_id"]}
+                else:
+                    f = None  # nothing machine-resolvable on the ref
+                if not (f and store.select("desk_backtests", filters=f,
+                                           limit=1)):
                     orphans.append(ref)
             elif kind == "wiki_history":
                 if not store.select("desk_wiki_history",

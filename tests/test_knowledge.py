@@ -345,6 +345,68 @@ def test_lint_catches_the_step2_failure_modes(store):
     assert "unjudged" in text
 
 
+def test_run_attributed_trade_and_backtest_refs_resolve(store):
+    """V4 refs carry no mirror row id — they cite the (run_id, symbol) pair
+    desk_orders is indexed for, and the run_id backtest_tool --save stamps.
+    Lint must resolve those, and still resolve legacy id-shaped refs."""
+    from agent.knowledge import claim_add, lint
+
+    order = store.insert("desk_orders", {
+        "account": "agent", "run_id": "2026-08-12T14:13-8lcn",
+        "alpaca_order_id": "a1", "symbol": "TXG", "side": "buy",
+        "status": "filled",
+    })[0]
+    store.insert("desk_backtests", {
+        "account": "agent", "run_id": "2026-08-11T13:00-cv3h",
+        "label": "momo_trend:5 on core-add candidates",
+    }, returning=False)
+    claim_add(store, kclass="market_strategy", tier="candidate",
+              statement="s", scope=SCOPE,
+              evidence=[
+                  {"kind": "trade", "run_id": "2026-08-12T14:13-8lcn",
+                   "symbol": "TXG"},
+                  {"kind": "trade", "id": order["id"]},
+                  {"kind": "backtest", "run_id": "2026-08-11T13:00-cv3h",
+                   "label": "momo_trend:5 on core-add candidates"},
+              ],
+              promotion_criteria={"min_n": 5})
+    out = lint(store)
+    assert "unresolvable" not in "\n".join(out["errors"])
+
+
+def test_unattributable_evidence_still_orphans(store):
+    from agent.knowledge import claim_add, lint
+
+    claim_add(store, kclass="market_strategy", tier="candidate",
+              statement="s", scope=SCOPE,
+              evidence=[
+                  {"kind": "trade", "run_id": "NO-SUCH-RUN", "symbol": "TXG"},
+                  {"kind": "backtest", "date": "2026-08-03",
+                   "note": "free-form prose, nothing machine-resolvable"},
+              ],
+              promotion_criteria={"min_n": 5})
+    out = lint(store)
+    assert "\n".join(out["errors"]).count("unresolvable") == 2
+
+
+def test_promotion_not_blocked_by_run_attributed_trade_ref(store):
+    from agent.knowledge import claim_promote
+
+    refs = [_seed_graded_pick(
+        store, f"R{i}", s, alpha=2.0,
+        regime=("risk_on" if i % 2 else "neutral"),
+        ts=datetime(2026, 6, 1, 15, 0) + timedelta(days=i * 10))
+        for i, s in enumerate(["IWM", "LLY", "NVDA", "AVGO", "DDOG"])]
+    store.insert("desk_orders", {
+        "account": "agent", "run_id": "R0", "alpaca_order_id": "a2",
+        "symbol": "IWM", "side": "buy", "status": "filled",
+    }, returning=False)
+    refs.append({"kind": "trade", "run_id": "R0", "symbol": "IWM"})
+    cid = _candidate(store, refs)
+    out = claim_promote(store, claim_id=cid)
+    assert out["ok"], out
+
+
 def test_search_supports_false_absence_checks(store):
     from agent.knowledge import claim_add, search_claims
 
