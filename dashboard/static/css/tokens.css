@@ -29,6 +29,12 @@
   --t-warn: #f0b429;
   --t-info: #58a6ff;
   --t-accent: #26d49c;
+  /* Interactive chrome — links, active tabs, focus rings, the What's New
+     button. Split out from --t-accent in v10.3.0: accent was the SAME hex as
+     --t-up, so a link, an active tab and a winning position all rendered
+     identically and green stopped meaning "up". Green stays the brand and
+     the account equity curve; green-as-a-link is what went away. */
+  --t-link: #58a6ff;
   --t-up-dim: rgba(38, 212, 156, 0.12);
   --t-down-dim: rgba(240, 74, 74, 0.12);
   --t-warn-dim: rgba(240, 180, 41, 0.12);
@@ -52,12 +58,21 @@
                "Helvetica Neue", Arial, sans-serif;
   --t-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo,
                  Consolas, monospace;
+  /* Two ramps, on purpose. The DATA ramp (xs…xl) stays tight — dense tables
+     are the point of a terminal. The PROSE ramp was added in v10.3.0: with
+     nothing between 13px and 20px, hierarchy had to be carried by colour and
+     weight alone, which is why the page read as one continuous texture.
+     Prose sizes apply to card subs, rationales, claim statements and
+     summaries — never to a table cell. */
   --t-fs-xs: 11px;
   --t-fs-sm: 12px;
   --t-fs-base: 13px;
   --t-fs-lg: 15px;
   --t-fs-xl: 20px;
   --t-fs-hero: 28px;
+  --t-fs-body: 15px;
+  --t-fs-lede: 17px;
+  --t-fs-display: 30px;
 
   /* ── density & shape ── */
   --t-pad-card: 14px;
@@ -121,6 +136,7 @@ html[data-theme="light"] {
   --t-warn: #b97e0a;
   --t-info: #2f6fd0;
   --t-accent: #0a9e74;
+  --t-link: #2f6fd0;
   --t-up-dim: rgba(10, 158, 116, 0.10);
   --t-down-dim: rgba(211, 56, 47, 0.10);
   --t-warn-dim: rgba(185, 126, 10, 0.12);

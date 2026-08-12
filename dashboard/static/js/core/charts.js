@@ -34,11 +34,15 @@ onThemeChange(() => {
   for (const { chart } of registry) chart.applyOptions(baseOptions());
 });
 
-/* Phone price axis: "102000.00" is ~90px of a 390px-wide chart spent on two
-   decimals nobody reads on an equity curve. Compact to "102k" and reclaim the
-   width for the actual plot. Scoped to narrow viewports on purpose — desktop
-   has the room, and the crosshair label shares this formatter, so the precision
-   trade only makes sense where space is genuinely scarce. */
+/* Price axis: "102000.00" is two decimals nobody reads on a six-figure equity
+   curve, and ~90px of a 390px-wide chart. Compact to "102k".
+
+   Was scoped to narrow viewports until v10.3.0 on the reasoning that desktop
+   had the room. Room was never the argument that mattered: the decimals are
+   noise at any width, and the axis is there to be read at a glance. Below
+   $10k it keeps one decimal so a small move is still visible, and under $1
+   it keeps four — the crosshair label shares this formatter, so a cheap
+   option contract still prices honestly. */
 function compactPrice(v) {
   const n = Number(v);
   if (!isFinite(n)) return String(v);
@@ -51,15 +55,10 @@ function compactPrice(v) {
   return a >= 1 ? n.toFixed(2) : n.toFixed(4);
 }
 
-function isNarrow() {
-  return typeof window !== 'undefined'
-    && window.matchMedia('(max-width: 640px)').matches;
-}
-
 function baseOptions() {
   const c = chartColors();
   return {
-    ...(isNarrow() ? { localization: { priceFormatter: compactPrice } } : {}),
+    localization: { priceFormatter: compactPrice },
     layout: {
       background: { type: 'solid', color: 'transparent' },
       textColor: c.text,

@@ -168,9 +168,9 @@
 }
 .c-chip:hover { color: var(--t-text); border-color: var(--t-border-strong); }
 .c-chip.active {
-  color: var(--t-accent);
-  border-color: var(--t-accent);
-  background: var(--t-accent-dim);
+  color: var(--t-link);
+  border-color: var(--t-link);
+  background: var(--t-info-dim);
 }
 
 /* ── segmented control ── */
@@ -231,7 +231,7 @@
 }
 .c-input:focus, .c-select:focus {
   outline: none;
-  border-color: var(--t-accent);
+  border-color: var(--t-link);
 }
 
 /* ── drawer (desktop right panel) ── */
@@ -469,8 +469,33 @@
 .c-treemap .node.q-weakening { background: rgba(240, 180, 41, 0.3); }
 .c-treemap .node.q-lagging { background: rgba(240, 74, 74, 0.3); }
 .c-treemap .node.q-unknown { background: var(--t-surface-3); }
+/* Allocation treemap (desk holdings): tiles take the 8-slot series palette by
+   index, so the same holding keeps its colour between the map and any chart
+   that plots it. The pooled tail and cash are deliberately NOT series colours
+   — they are not holdings, and reading them as one would overstate how
+   concentrated the book is. */
+.c-treemap .node.q-s0 { background: color-mix(in srgb, var(--t-s0) 34%, transparent); }
+.c-treemap .node.q-s1 { background: color-mix(in srgb, var(--t-s1) 34%, transparent); }
+.c-treemap .node.q-s2 { background: color-mix(in srgb, var(--t-s2) 34%, transparent); }
+.c-treemap .node.q-s3 { background: color-mix(in srgb, var(--t-s3) 34%, transparent); }
+.c-treemap .node.q-s4 { background: color-mix(in srgb, var(--t-s4) 34%, transparent); }
+.c-treemap .node.q-s5 { background: color-mix(in srgb, var(--t-s5) 34%, transparent); }
+.c-treemap .node.q-s6 { background: color-mix(in srgb, var(--t-s6) 34%, transparent); }
+.c-treemap .node.q-s7 { background: color-mix(in srgb, var(--t-s7) 34%, transparent); }
+.c-treemap .node.q-tail { background: var(--t-surface-3); color: var(--t-text-2); }
+.c-treemap .node.q-cash {
+  background: var(--t-surface-2);
+  color: var(--t-text-2);
+  border-style: dashed;
+  border-color: var(--t-border-strong);
+}
 .c-treemap .node .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.c-treemap .node .ct { color: var(--t-text-2); }
+.c-treemap .node .ct { color: var(--t-text-2); font-variant-numeric: tabular-nums; }
+/* A 0.4% tile is a few pixels tall — its label would overflow into the tile
+   below. Hide text that cannot fit; the tooltip still carries the full name. */
+.c-treemap .node { container-type: size; }
+@container (max-height: 26px) { .c-treemap .node .ct { display: none; } }
+@container (max-height: 14px) { .c-treemap .node .nm { display: none; } }
 
 /* ── sparkline (display size; bitmap is dpr-scaled in JS) ── */
 .c-sparkline { width: 90px; height: 24px; display: block; }

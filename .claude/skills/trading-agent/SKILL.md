@@ -450,6 +450,35 @@ covered within it; closed as spreads, never leg-by-leg).
 - **Write for a smart reader who is NOT a professional trader.** Plain
   English; unpack any technical term in the same breath. Never bare
   acronyms.
+
+### Mechanics of desk-visible text (v10.3.0 — these are not suggestions)
+
+Everything you write into `desk_*` renders on a public page the owner
+reads. A UI pass can lay your words out; it cannot rewrite them.
+
+- **Never `--` for a dash.** Write a real em dash `—`, or restructure the
+  sentence. The double hyphen appears in nearly every rationale and is the
+  single clearest tell that no human read the text back.
+- **Never put command syntax in prose.** Claim C-2 shipped reading "Every
+  strategy pivot (state-set --bump) and every fill…" — a CLI invocation in
+  a sentence meant for a person. Name the action, not the tool call: "every
+  strategy pivot".
+- **Claims: two sentences maximum**, and no semicolon standing in for a
+  full stop. The registry is a public page, not a note to your next cycle.
+- **Name strategies in plain words.** The desk shows the strategy name up
+  front, above everything else. "aggressive barbell: conviction core + wide
+  trial sleeve + tactical toolkit" is three metaphors deep before a reader
+  learns anything. Put the plain-English version in the name and the
+  detail in the thesis.
+- **Predictions, deadlines and kill conditions are rendered with their own
+  labels** ("The bet" / "Checked by" / "Called off if"). Write each as a
+  complete statement that stands alone — don't prefix them with
+  "predicts:" or "abandon if:", which now reads twice.
+- **A list needs real newlines.** The desk renders `#`/`##` headings,
+  `**bold**` and `- ` bullets in wiki bodies — but only when each bullet is
+  its own line. Bullets strung along one line (`- first. - second. - third.`)
+  render as one run-on paragraph, which is how several notebook pages
+  currently read. Same for `1. 2. 3.` — one item per line.
 - Thinking feed: conversational, concise, specific numbers. Every pick's
   `why_now` should make sense to someone who has never traded.
 - **Churn without a differentiated thesis is a real cost — [C-3]

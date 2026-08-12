@@ -1,11 +1,18 @@
 /* Trading Desk — page-specific styles (tokens only, no hard-coded colors). */
 
 /* ═══════════════════════════════════════════════════════════════
-   Redesign v8.7: hero + zones + sticky anchor nav.
-   Structure: page title (small) → hero card → sticky anchor nav →
-   4 zones (Book / Markets / Reasoning / History) each with a
-   named header and a 2-col grid of cards (cards can .desk-span-2
-   to go full-width). Everything collapses to 1 col ≤900px.
+   Revamp v10.3.0: hero + sticky TABS + one panel at a time.
+
+   Structure: page title (small) → hero card → honesty strip →
+   sticky tab bar → exactly one visible .desk-panel, each with a
+   named header and a 2-col grid of cards (cards can .desk-span-2 to
+   go full-width). Everything collapses to 1 col ≤900px.
+
+   Cards come in three tiers — hero, primary (.desk-card) and
+   reference (.desk-card--ref) — so the archives stop competing with
+   live state for attention. See docs/DESK-REVAMP.md for the
+   measurements that drove this: the previous structure rendered the
+   whole page in one 40,971px scroll, 73% of it two archival tables.
    ═══════════════════════════════════════════════════════════════ */
 
 .desk-page-title {
@@ -69,11 +76,6 @@
 @keyframes desk-tick-down { 0% { color: var(--t-down); } 100% { color: inherit; } }
 .desk-hero-value.desk-tick-up   { animation: desk-tick-up   0.4s ease-out; }
 .desk-hero-value.desk-tick-down { animation: desk-tick-down 0.4s ease-out; }
-
-/* Top-of-page cards (chart + holdings) — sit under the hero at full width
-   with the same spacing the desk-zone-grid gives its .desk-span-2 children. */
-.desk-topcard { display: block; margin-bottom: 14px; min-width: 0; }
-@media (max-width: 900px) { .desk-topcard { margin-bottom: 12px; } }
 
 .desk-hero-stats {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
@@ -155,57 +157,139 @@
   }
 }
 
-/* ── ANCHOR NAV: sticky just below the topnav ──
-   The topnav consumes env(safe-area-inset-top) too, so the anchor nav
-   docks flush at that computed height (nav-h + inset). */
-.desk-anchornav {
+/* ── TABS: sticky just below the topnav ──
+   Real tabs since v10.3.0 — one panel renders at a time. The topnav consumes
+   env(safe-area-inset-top) too, so the bar docks flush at nav-h + inset.
+   The active tab is marked by an underline rather than a filled chip: the
+   bar sits directly under the hero, and a filled pill there competed with
+   the account value for the eye. */
+.desk-tabs {
   position: sticky;
   top: calc(var(--t-nav-h) + env(safe-area-inset-top, 0px));
   z-index: 30;
-  display: flex; gap: 4px;
-  padding: 8px 0; margin-bottom: 14px;
+  display: flex; gap: var(--t-space-1);
+  padding: 6px 0 0; margin-bottom: 18px;
   background: var(--t-bg);
   border-bottom: 1px solid var(--t-border);
   overflow-x: auto; scrollbar-width: none;
 }
-.desk-anchornav::-webkit-scrollbar { display: none; }
-.desk-anchor {
-  padding: 6px 12px; border-radius: var(--t-radius-sm);
-  color: var(--t-text-2); font-size: var(--t-fs-sm); font-weight: 600;
-  text-decoration: none; white-space: nowrap;
-  border: 1px solid transparent;
+.desk-tabs::-webkit-scrollbar { display: none; }
+.desk-tab {
+  appearance: none; background: none; border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px 9px; margin-bottom: -1px;
+  color: var(--t-text-2);
+  font: inherit; font-size: var(--t-fs-base); font-weight: 600;
+  white-space: nowrap; cursor: pointer;
 }
-.desk-anchor:hover {
-  color: var(--t-text); background: var(--t-surface-2); text-decoration: none;
-}
-.desk-anchor.active {
-  color: var(--t-text); background: var(--t-surface-2);
-  border-color: var(--t-border-strong);
+.desk-tab:hover { color: var(--t-text); }
+.desk-tab.active { color: var(--t-text); border-bottom-color: var(--t-link); }
+.desk-tab:focus-visible {
+  outline: 2px solid var(--t-link); outline-offset: -2px;
+  border-radius: var(--t-radius-sm);
 }
 
-/* ── ZONES: named sections with head + 2-col card grid ── */
-.desk-zone {
-  margin-bottom: 28px;
-  /* clear both the topnav (with inset) AND the anchor nav underneath it. */
-  scroll-margin-top: calc(var(--t-nav-h) + env(safe-area-inset-top, 0px) + 62px);
-}
+/* ── PANELS: named sections with head + 2-col card grid ── */
+.desk-panel { margin-bottom: 28px; }
 .desk-zone-head {
   display: flex; align-items: baseline; gap: 14px;
-  padding: 0 2px; margin-bottom: 12px; flex-wrap: wrap;
+  padding: 0 2px; margin-bottom: 14px; flex-wrap: wrap;
 }
 .desk-zone-title {
-  margin: 0; font-size: var(--t-fs-xl); font-weight: 700;
-  color: var(--t-text);
+  margin: 0; font-size: var(--t-fs-display); font-weight: 700;
+  letter-spacing: -0.02em; color: var(--t-text);
 }
 .desk-zone-sub {
   margin: 0; color: var(--t-text-3);
-  font-size: var(--t-fs-sm); line-height: 1.45;
+  font-size: var(--t-fs-body); line-height: 1.45;
 }
 
 .desk-zone-grid {
   display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px;
 }
 .desk-span-2 { grid-column: 1 / -1; }
+
+/* ── CARD TIERS (v10.3.0) ──
+   Fourteen cards with identical border, radius and padding meant nothing
+   looked more important than anything else. Three tiers now:
+
+     hero        — the account. Its own surface + padding (above).
+     primary     — .desk-card: decision, thinking, equity, holdings, orders.
+                   Surface + border, as before.
+     reference   — .desk-card--ref: claims, notebook, lab, receipts,
+                   predictions. Archives you consult, not state you watch.
+                   No surface, no border; a rule and space instead.
+
+   Reference cards keep the header rule so the chevron still reads as
+   attached to a heading rather than floating over the page. */
+.desk-card--ref {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--t-border-strong);
+  padding-top: var(--t-space-2);
+}
+.desk-card--ref > .c-card-header {
+  padding-left: 0; padding-right: 0;
+  border-bottom: 0;
+  /* A reference card has no border to carry its identity, so its title has to
+     do that work — and it must out-rank its own description, which sits
+     directly beneath it. */
+  font-size: var(--t-fs-lede);
+}
+.desk-card--ref > .c-card-sub { padding-left: 0; padding-right: 0; }
+.desk-card--ref > .c-card-body { padding-left: 0; padding-right: 0; }
+
+/* Prose sizes reach the reading surfaces only — never a table cell. */
+.c-card-sub { font-size: var(--t-fs-body); }
+.desk-summary,
+.desk-pick-rationale,
+.desk-claim-statement { font-size: var(--t-fs-body); }
+
+/* Open orders: the one-line summary above the table. The dollar figure is
+   what a stop is FOR — how much of the book has a floor under it. */
+.desk-orders-summary {
+  margin: 0 0 var(--t-space-3);
+  font-size: var(--t-fs-body);
+  color: var(--t-text-2);
+}
+
+/* The pre-registered prediction on a pick — a labelled block, not chips.
+   Labels are the narrow column so the commitments themselves line up and can
+   be read down the page. */
+.desk-pick-commit {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--t-space-1) var(--t-space-3);
+  margin: var(--t-space-3) 0 0;
+  padding-top: var(--t-space-3);
+  border-top: 1px solid var(--t-border);
+  font-size: var(--t-fs-sm);
+}
+.desk-pick-commit dt {
+  color: var(--t-text-3);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: var(--t-fs-xs);
+  letter-spacing: 0.06em;
+  padding-top: 2px;
+  white-space: nowrap;
+}
+.desk-pick-commit dd {
+  margin: 0;
+  color: var(--t-text);
+  line-height: 1.45;
+}
+@media (max-width: 640px) {
+  /* Two columns at 390px leaves ~200px for a full sentence. Stack instead. */
+  html .desk-pick-commit { grid-template-columns: 1fr; gap: 0; }
+  html .desk-pick-commit dt { padding-top: var(--t-space-2); }
+}
+.desk-orders-summary strong {
+  color: var(--t-text);
+  font-family: var(--t-font-mono);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Grid tracks are `1fr`, but grid items default to `min-width: min-content` —
    so a card containing a wide table (live tape, options chain, positions)
@@ -282,7 +366,7 @@
     cursor: pointer;
     line-height: 1;
   }
-  html .desk-info-btn[aria-expanded="true"] { color: var(--t-accent); }
+  html .desk-info-btn[aria-expanded="true"] { color: var(--t-link); }
   /* Big hit area, small visual. The 44px minimum drew a conspicuous empty
      box around an 11px chevron next to every card title; drop the border on
      phones and keep the target. */
@@ -291,8 +375,7 @@
     font-size: var(--t-fs-base);
   }
   /* hidden by default on mobile; the button reveals it */
-  html .desk-card .c-card-sub,
-  html .desk-topcard .c-card-sub { display: none; }
+  html .desk-card .c-card-sub { display: none; }
   html .desk-card.desk-info-open .c-card-sub { display: block; }
 }
 
@@ -315,7 +398,7 @@
   font-size: var(--t-fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--t-accent);
+  color: var(--t-link);
   font-family: var(--t-font-mono);
 }
 .desk-feed-text { color: var(--t-text); line-height: 1.4; }
@@ -334,7 +417,7 @@
 .desk-pick { padding: var(--t-space-3); margin-bottom: var(--t-space-3); }
 .desk-pick-head { display: flex; align-items: center; gap: var(--t-space-3); flex-wrap: wrap; }
 .desk-pick-sym { font-weight: 700; font-size: var(--t-fs-lg); color: var(--t-text); text-decoration: none; }
-.desk-pick-sym:hover { color: var(--t-accent); }
+.desk-pick-sym:hover { color: var(--t-link); }
 .desk-pick-why { font-size: var(--t-fs-sm); }
 .desk-pick-rationale { color: var(--t-text-2); line-height: 1.5; margin: var(--t-space-2) 0 0; }
 .desk-pick-evidence { margin-top: var(--t-space-2); }
@@ -352,7 +435,7 @@
 .desk-bt-when { font-size: var(--t-fs-xs); }
 
 /* links inside tables/cards */
-.c-link { color: var(--t-accent); text-decoration: none; }
+.c-link { color: var(--t-link); text-decoration: none; }
 .c-link:hover { text-decoration: underline; }
 
 /* what's new — header button, badge, attention banner, feed panel */
@@ -363,7 +446,7 @@
   border-radius: var(--t-radius-sm); padding: var(--t-space-1) var(--t-space-3); cursor: pointer;
 }
 .desk-wn-btn:hover { color: var(--t-text); border-color: var(--t-border-strong); }
-.desk-wn-btn.has-new { color: var(--t-text); border-color: var(--t-accent); }
+.desk-wn-btn.has-new { color: var(--t-text); border-color: var(--t-link); }
 .desk-wn-spark { color: var(--t-accent); }
 .desk-wn-badge {
   display: inline-flex; align-items: center; justify-content: center;
@@ -433,23 +516,11 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-spark { display: inline-block; vertical-align: middle; width: 68px; height: 20px; }
 
 /* ── allocation donut ── */
-.desk-alloc { display: flex; align-items: center; gap: var(--t-space-4); flex-wrap: wrap; margin-bottom: var(--t-space-4); }
-.desk-alloc-ring { flex: none; transform: rotate(0deg); }
-.desk-alloc-bg { stroke: var(--t-border); }
-.desk-alloc-legend { display: flex; flex-direction: column; gap: var(--t-space-1); min-width: 160px; }
-.desk-alloc-item { display: flex; align-items: center; gap: var(--t-space-2); font-size: var(--t-fs-sm); }
-.desk-alloc-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; display: inline-block; }
-.desk-alloc-label { color: var(--t-text); font-weight: 600; }
-.desk-alloc-pct { margin-left: auto; font-family: var(--t-font-mono); }
-.desk-alloc-seg.s0, .desk-alloc-swatch.s0 { stroke: var(--t-s0); background: var(--t-s0); }
-.desk-alloc-seg.s1, .desk-alloc-swatch.s1 { stroke: var(--t-s1); background: var(--t-s1); }
-.desk-alloc-seg.s2, .desk-alloc-swatch.s2 { stroke: var(--t-s2); background: var(--t-s2); }
-.desk-alloc-seg.s3, .desk-alloc-swatch.s3 { stroke: var(--t-s3); background: var(--t-s3); }
-.desk-alloc-seg.s4, .desk-alloc-swatch.s4 { stroke: var(--t-s4); background: var(--t-s4); }
-.desk-alloc-seg.s5, .desk-alloc-swatch.s5 { stroke: var(--t-s5); background: var(--t-s5); }
-.desk-alloc-seg.s6, .desk-alloc-swatch.s6 { stroke: var(--t-s6); background: var(--t-s6); }
-.desk-alloc-seg.s7, .desk-alloc-swatch.s7 { stroke: var(--t-s7); background: var(--t-s7); }
-.desk-alloc-seg.cash, .desk-alloc-swatch.cash { stroke: var(--t-benchmark); background: var(--t-benchmark); }
+/* Allocation treemap host. The donut it replaced was a 48-slice ring with a
+   single-column legend beside it — 1,023px of page for a chart in which a
+   0.4% arc was invisible. The treemap component owns the tile styling
+   (components.css .c-treemap); this only reserves the block. */
+.desk-alloc { margin-bottom: var(--t-space-4); }
 
 /* ── footnote: quiet paper-account / not-investment-advice reminder ── */
 .desk-footnote {
@@ -528,12 +599,6 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 }
 
 /* ── open orders & resting protection ── */
-.desk-orders-list { display: flex; flex-direction: column; gap: var(--t-space-2); }
-.desk-orders-row {
-  display: flex; align-items: baseline; gap: var(--t-space-2);
-  font-size: var(--t-fs-sm); line-height: 1.5;
-}
-.desk-orders-text { flex: 1; min-width: 0; }
 
 /* ── the honesty strip (charter V4 disclosures) ── */
 .desk-honesty {
@@ -631,7 +696,7 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 .desk-outcome:last-child { border-bottom: none; padding-bottom: 0; }
 .desk-outcome-head { display: flex; align-items: center; gap: var(--t-space-2); flex-wrap: wrap; }
 .desk-outcome-sym { font-weight: 700; color: var(--t-text); text-decoration: none; }
-.desk-outcome-sym:hover { color: var(--t-accent); }
+.desk-outcome-sym:hover { color: var(--t-link); }
 .desk-outcome-pred { margin: var(--t-space-1) 0 0; color: var(--t-text-2); line-height: 1.5; }
 .desk-outcome-facts { margin-top: var(--t-space-2); }
 .desk-outcome-subhead {
@@ -654,7 +719,7 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
 /* trade receipts: expandable rationale + receipt extras */
 .desk-fills-why.expanded { max-width: none; white-space: normal; }
 .desk-fills-more {
-  font: inherit; font-size: var(--t-fs-xs); color: var(--t-accent);
+  font: inherit; font-size: var(--t-fs-xs); color: var(--t-link);
   background: none; border: none; cursor: pointer; padding: 0 2px;
 }
 .desk-fills-more:hover { text-decoration: underline; }
@@ -668,3 +733,25 @@ th[title] { cursor: help; border-bottom: 1px dotted var(--t-text-3); }
   .desk-hero-indices { width: 100%; }
   .desk-card-seg button { padding: 3px 8px; }
 }
+
+/* Trade receipts: the pointer to the real archive. The card is a
+   recent-activity window; /trades is every fill with its realized P&L. */
+.desk-fills-allnote { margin: var(--t-space-3) 0 0; font-size: var(--t-fs-sm); }
+
+/* Notebook headings — the agent writes markdown, so "## Posture:" used to
+   render as literal punctuation down the page. Three levels, distinguished
+   by weight and colour rather than size: these sit inside a reference card
+   and should structure the text without competing with the card's own title. */
+.desk-wiki-h {
+  margin: var(--t-space-4) 0 var(--t-space-1);
+  font-weight: 700;
+  color: var(--t-text);
+  line-height: 1.3;
+}
+.desk-wiki-h.h1 { font-size: var(--t-fs-lede); }
+.desk-wiki-h.h2 { font-size: var(--t-fs-body); }
+.desk-wiki-h.h3 {
+  font-size: var(--t-fs-sm); color: var(--t-text-2);
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.desk-wiki-h:first-child { margin-top: 0; }

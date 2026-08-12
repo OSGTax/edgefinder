@@ -149,19 +149,32 @@ def test_desk_page_renders(client):
 
 
 def test_desk_page_information_architecture(client):
-    """v10 IA: two zones (reasoning, learning); the tripwire "watching" card
-    is gone (tripwires died with the streamer's dispatcher) and its slot now
-    holds the open-orders / resting-protection card; the hero zone carries
-    the V4 honesty strip (book of record, no market impact, missed
-    dividends)."""
-    import re
+    """v10.3 IA: three TAB PANELS, one rendered at a time.
 
+    The zones used to be anchor targets in a single 40,971px scroll, with the
+    nav itself 3.6 screens down. Now the tab bar sits under the hero and each
+    panel is a real tabpanel — so the assertions that matter are that the bar
+    precedes every panel, that only the first is visible on load, and that
+    the decision leads the landing panel (it used to begin 5.1 screens in).
+    """
     html = client.get("/desk").text
 
-    reasoning = html.index('id="zone-reasoning"')
-    learning = html.index('id="zone-history"')
-    assert reasoning < learning
+    tabs = html.index('id="desk-tabs"')
+    now = html.index('id="panel-now"')
+    record = html.index('id="panel-record"')
+    learned = html.index('id="panel-learned"')
+    assert tabs < now < record < learned
     assert 'id="zone-markets"' not in html
+
+    # Exactly the non-default panels ship hidden — the landing tab must not.
+    assert 'id="panel-now" class="desk-panel" role="tabpanel" aria-labelledby="tab-now">' in html
+    for pid in ("panel-record", "panel-learned"):
+        seg = html[html.index(f'id="{pid}"'):]
+        assert seg[:seg.index(">")].endswith("hidden"), pid
+
+    # The decision leads the Now panel, ahead of the chart and the book.
+    assert now < html.index('id="desk-picks"') < html.index('id="desk-equity-chart"')
+    assert html.index('id="desk-equity-chart"') < html.index('id="desk-positions"')
 
     assert 'id="desk-watch"' not in html         # tripwire card retired
     assert 'id="desk-orders"' in html            # open orders & protection
@@ -172,8 +185,7 @@ def test_desk_page_information_architecture(client):
     assert 'id="desk-hero-indices"' in html      # live SPY/QQQ/IWM chips
     assert 'id="desk-lab-seg"' in html           # board / recent-tests views
     assert 'id="desk-wiki-seg"' in html          # lessons / diary views
-    assert 'data-zone="desk-hero">Overview' in html
-    assert 'data-zone="zone-markets"' not in html
+    assert 'data-panel="panel-now"' in html      # the tab bar is wired
     assert 'id="topnav-indices"' not in html     # dead slot removed
 
     # Retired standalone cards must be fully gone, not just hidden.
@@ -181,16 +193,38 @@ def test_desk_page_information_architecture(client):
                 "journal", "watch"):
         assert f'data-collapse-key="{key}"' not in html, f"{key} card lingers"
 
-    def card_tag(key):
-        m = re.search(r'<div class="c-card desk-card[^"]*" '
-                      r'data-collapse-key="%s"[^>]*>' % key, html)
-        assert m, f"card {key} missing"
-        return m.group(0)
 
-    # Receipts ship collapsed; the reasoning/learning core is open.
-    assert 'data-collapsed="1"' in card_tag("fills")
-    for key in ("orders", "decision", "thinking", "lab", "wiki"):
-        assert 'data-collapsed="1"' not in card_tag(key), f"{key} should be open"
+def _card_tag(html, key):
+    import re
+
+    m = re.search(r'<div class="c-card desk-card[^"]*" '
+                  r'data-collapse-key="%s"[^>]*>' % key, html)
+    assert m, f"card {key} missing"
+    return m.group(0)
+
+
+def test_desk_archives_are_reference_tier(client):
+    """The archival cards carry .desk-card--ref — no surface, no border. That
+    tier is what stops fourteen identically-chromed cards from all reading as
+    equally important, so the live cards on the Now panel must NOT have it."""
+    html = client.get("/desk").text
+
+    for key in ("predictions", "fills", "lab", "wiki", "claims"):
+        assert "desk-card--ref" in _card_tag(html, key), f"{key} should be reference tier"
+    for key in ("decision", "thinking", "equity", "positions", "orders"):
+        assert "desk-card--ref" not in _card_tag(html, key), f"{key} is live state"
+
+
+def test_no_card_ships_collapsed_now_that_tabs_hide_the_archives(client):
+    """Receipts used to ship `data-collapsed="1"` because it sat at the bottom
+    of one very long page. Tabs keep it off the landing view already, and
+    collapsing a card the reader deliberately switched tabs to reach would
+    hide it twice."""
+    html = client.get("/desk").text
+
+    for key in ("fills", "orders", "decision", "thinking", "lab", "wiki",
+                "claims", "predictions", "equity", "positions"):
+        assert 'data-collapsed="1"' not in _card_tag(html, key), key
 
 
 # ── /portfolio: the Alpaca paper account, canned + degraded ──

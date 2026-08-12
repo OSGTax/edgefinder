@@ -10,6 +10,7 @@ import { toEpochSec, fmtDollar, fmtPnl, fmtPct, fmtPrice, fmtNum, timeAgo,
 import { h, svg, clear, skeleton, renderEmpty, renderError } from '../core/dom.js';
 import { createChart, colors } from '../core/charts.js';
 import { onThemeChange } from '../core/theme.js';
+import { treemap } from '../components/treemap.js';
 
 let equityChart = null;
 let equitySeries = null;   // the recorded marks — history, never fabricated
@@ -42,6 +43,56 @@ setInterval(() => {
 }, 1000);
 
 const ACTION_CLASS = { buy: 'up', add: 'up', hold: 'neutral', trim: 'warn', exit: 'down', sell: 'down' };
+
+/* ── capped lists ──
+   Long corpora (179 claims, 50 holdings, every graded prediction) used to
+   render in full and made the page 40,971px tall. Cap them, and put the real
+   total in the toggle: the count IS the disclosure, so nothing is ever
+   silently truncated. Rows past the cap are rendered but hidden, so expanding
+   is instant and costs no request.
+
+   `rows` are already-built elements; `noun`/`nouns` name what is being
+   counted. Returns the toggle button, or null when nothing was hidden. */
+function capList(rows, cap, noun, nouns) {
+  if (rows.length <= cap) return null;
+  const hidden = rows.slice(cap);
+  for (const r of hidden) r.hidden = true;
+  const label = n => `Show all ${rows.length} ${rows.length === 1 ? noun : (nouns || noun + 's')}`;
+  const btn = h('button', { class: 'desk-morebtn', type: 'button', text: label() });
+  btn.addEventListener('click', () => {
+    const expanding = hidden[0].hidden;
+    for (const r of hidden) r.hidden = !expanding;
+    btn.textContent = expanding ? `Show fewer` : label();
+  });
+  return btn;
+}
+
+/* ── display typography for agent-authored prose ──
+
+   " -- " is the agent's habit for an em dash and turns up in nearly every
+   rationale; it is the clearest "no human read this back" tell on the page.
+   The trading skill now forbids writing it, but the corpus already on the
+   book is full of it, so normalise at render too. Spaces are required on
+   BOTH sides, which is exactly what leaves a CLI flag like `--bump` alone. */
+function dashes(s) {
+  return String(s == null ? '' : s).replace(/ -- /g, ' — ');
+}
+
+/* `**bold**` → a real <strong>, built as nodes. Returns an array to spread
+   into h(); this codebase sets no innerHTML anywhere and this is not the
+   place to start. */
+function inlineMd(text) {
+  const out = [];
+  const re = /\*\*(.+?)\*\*/g;
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(h('strong', { text: m[1] }));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out.length ? out : [text];
+}
 
 function pill(text, cls, title) {
   return h('span', { class: 'c-pill ' + (cls || 'neutral'), title: title || null, text });
@@ -218,10 +269,20 @@ async function loadHeader() {
         }));
       }
       if (strat && strat.current) {
+        // The agent names its own strategies, and the names pile up clauses:
+        // "aggressive barbell: conviction core + wide trial sleeve + tactical
+        // toolkit" is the first thing a visitor reads, and it ran 160px past
+        // a phone viewport. Show the head of the name; the full name and the
+        // thesis behind it live in the tooltip.
+        const full = String(strat.current.name || '');
+        const head = full.split(':')[0].trim() || full;
+        const title = [full !== head ? full : null, strat.current.thesis]
+          .filter(Boolean).join(' — ')
+          || 'The strategy the AI is currently running.';
         chipsEl.append(h('span', {
           class: 'c-pill info',
-          title: strat.current.thesis || 'The strategy the AI is currently running.',
-          text: 'Strategy v' + strat.current.version + ' · ' + strat.current.name,
+          title,
+          text: 'Strategy v' + strat.current.version + (head ? ' · ' + head : ''),
         }));
       }
       if (regime && regime.tag) {
@@ -392,37 +453,83 @@ function occParse(sym) {
   };
 }
 
-/* allocation donut — how the account is split across holdings + cash.
-   SVG arcs (circumference normalized to 100), colored by the token series
-   palette via classes — theme-safe, zero inline styles. */
-function allocation(pf) {
-  const segs = [];
-  (pf.positions || []).forEach((p, i) => {
-    if (p.weight > 0) segs.push({ label: p.symbol, pct: p.weight * 100, cls: 's' + (i % 8) });
+/* Allocation treemap — how the account is split across holdings + cash.
+
+   Was a 48-slice donut with its legend in one tall column: unreadable by
+   construction (a 0.4% arc is invisible) and 1,023px of page, more than the
+   decision and thinking feed put together. A treemap sizes by area, so the
+   positions that actually matter are the ones you can read, and the long
+   tail pools into one honest tile instead of forty lines.
+
+   The tail is pooled, never dropped — the tile states its own count. */
+const ALLOC_TOP = 12;
+const ALLOC_HEIGHT = 260;
+const HOLDINGS_CAP = 10;
+const CLAIMS_CAP = 5;
+const OUTCOMES_CAP = 8;
+const LESSONS_CAP = 3;
+const ORDERS_CAP = 12;
+const FILLS_CAP = 15;
+
+function allocationNodes(pf) {
+  const held = (pf.positions || [])
+    .filter(p => p.weight > 0)
+    .map(p => ({ symbol: p.symbol, value: p.weight * 100 }))
+    .sort((a, b) => b.value - a.value);
+  const nodes = held.slice(0, ALLOC_TOP).map((p, i) => {
+    const occ = occParse(p.symbol);
+    return {
+      name: occ ? occ.label : p.symbol,
+      symbol: occ ? occ.underlying : p.symbol,
+      value: p.value,
+      count: fmtNum(p.value, 1) + '%',
+      quadrant: 's' + (i % 8),
+    };
   });
-  const cashPct = pf.equity ? Math.max(0, pf.cash / pf.equity * 100) : 0;
-  if (cashPct > 0.05) segs.push({ label: 'Cash', pct: cashPct, cls: 'cash' });
-  if (!segs.length) return null;
-  const R = 15.915494;  // circumference ≈ 100 → dasharray reads as percent
-  const ring = svg('svg', {
-    class: 'desk-alloc-ring', viewBox: '0 0 42 42', width: '132', height: '132',
-    role: 'img', 'aria-label': 'Allocation by holding',
-  }, svg('circle', { class: 'desk-alloc-bg', cx: '21', cy: '21', r: R, fill: 'none', 'stroke-width': '5' }));
-  let start = 0;
-  for (const s of segs) {
-    ring.append(svg('circle', {
-      class: 'desk-alloc-seg ' + s.cls, cx: '21', cy: '21', r: R, fill: 'none', 'stroke-width': '5',
-      'stroke-dasharray': `${s.pct.toFixed(2)} ${(100 - s.pct).toFixed(2)}`,
-      'stroke-dashoffset': ((25 - start % 100 + 100) % 100).toFixed(2),
-    }));
-    start += s.pct;
+  const tail = held.slice(ALLOC_TOP);
+  if (tail.length) {
+    const tailPct = tail.reduce((s, p) => s + p.value, 0);
+    nodes.push({
+      name: `${tail.length} smaller position${tail.length === 1 ? '' : 's'}`,
+      value: tailPct,
+      count: fmtNum(tailPct, 1) + '%',
+      quadrant: 'tail',
+    });
   }
-  const legend = h('div', { class: 'desk-alloc-legend' },
-    ...segs.map(s => h('div', { class: 'desk-alloc-item' },
-      h('span', { class: 'desk-alloc-swatch ' + s.cls }),
-      h('span', { class: 'desk-alloc-label', text: s.label }),
-      h('span', { class: 'desk-alloc-pct t-dim', text: fmtNum(s.pct, 1) + '%' }))));
-  return h('div', { class: 'desk-alloc' }, ring, legend);
+  const cashPct = pf.equity ? Math.max(0, pf.cash / pf.equity * 100) : 0;
+  if (cashPct > 0.05) {
+    nodes.push({ name: 'Cash', value: cashPct, count: fmtNum(cashPct, 1) + '%', quadrant: 'cash' });
+  }
+  return nodes;
+}
+
+/* Kept as module state so a tab switch can re-lay-out: treemap() reads
+   clientWidth, which is 0 inside a hidden panel. */
+let allocNodes = null;
+
+function renderAllocation(host) {
+  if (!allocNodes || !allocNodes.length) return;
+  treemap(host, allocNodes, {
+    height: ALLOC_HEIGHT,
+    onClick: name => {
+      const n = allocNodes.find(x => x.name === name);
+      if (n && n.symbol) location.href = '/symbol/' + n.symbol;
+    },
+  });
+}
+
+function redrawAllocation() {
+  const host = document.getElementById('desk-alloc');
+  if (host && host.offsetParent !== null) renderAllocation(host);
+}
+
+function allocation(pf) {
+  allocNodes = allocationNodes(pf);
+  if (!allocNodes.length) return null;
+  const host = h('div', { id: 'desk-alloc', class: 'desk-alloc' });
+  // treemap() measures clientWidth, so it can only run once the node is in
+  // the document — renderPositions calls back through renderAllocation.
+  return host;
 }
 
 function sparkline(series, up) {
@@ -523,9 +630,24 @@ function renderPositions(el, pf, stats) {
   const eqs = pf.positions.filter(p => !occParse(p.symbol));
   const opts = pf.positions.filter(p => occParse(p.symbol));
   clear(el);
-  const donut = allocation(pf);
-  if (donut) el.append(donut);
-  if (eqs.length) el.append(equitiesTable(eqs, stats));
+  const alloc = allocation(pf);
+  if (alloc) { el.append(alloc); renderAllocation(alloc); }
+  if (eqs.length) {
+    const table = equitiesTable(eqs, stats);
+    el.append(table);
+    // The book runs 40+ names; the top ten are 80%+ of it. The rest are one
+    // click away with their count on the button.
+    //
+    // "stocks", not "holdings": this caps the EQUITY table only, and the hero
+    // counts stocks + option contracts together. A button reading "show all 44
+    // holdings" under a hero reading "50 positions held" invites the reader to
+    // wonder which number is lying.
+    const more = capList([...table.querySelectorAll('tbody > tr')], HOLDINGS_CAP,
+      'stock', 'stocks');
+    if (more) el.append(more);
+  }
+  // The options book is NOT capped: it runs a handful of rows and is the part
+  // of the account least legible from anywhere else.
   if (opts.length) {
     el.append(h('div', { class: 'desk-subhead', text: 'Options' }), optionsTable(opts));
   }
@@ -681,7 +803,7 @@ async function loadThinking() {
     data.lines.forEach((line, i) => {
       const row = h('div', { class: 'desk-feed-line' },
         h('span', { class: 'desk-feed-phase', text: line.phase || '·' }),
-        h('span', { class: 'desk-feed-text', text: line.text }),
+        h('span', { class: 'desk-feed-text', text: dashes(line.text) }),
         // The exact ET stamp, with the relative age under it. A feed line is
         // the agent narrating a moment — "4m ago" says it is fresh, but only
         // the clock time lets a reader line the thought up against the tape
@@ -715,37 +837,67 @@ async function loadThinking() {
   } catch (err) { renderError(el, err, loadThinking); }
 }
 
-/* ── open orders & resting protection: real orders on the broker's book ── */
+/* ── open orders & resting protection: real orders on the broker's book ──
+
+   Rendered as 44 near-identical English sentences until v10.3.0 ("ABNB —
+   protective stop at $168.00 on 3.00 shares", forty-three more times). The
+   same facts in a table are scannable and a fifth of the height; the prose
+   only ever restated the column headers. ── */
+
+/* "placed today" reads; "resting 1d" needs decoding. */
+function orderAge(days) {
+  if (days == null) return '—';
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  return days + ' days ago';
+}
+
+function orderTriggerCell(o) {
+  if (o.kind === 'stop') {
+    return fmtPrice(o.stop_price)
+      + (o.limit_price != null ? ' limit ' + fmtPrice(o.limit_price) : '');
+  }
+  if (o.kind === 'limit') return fmtPrice(o.limit_price);
+  return '—';
+}
+
 function openOrderRow(o) {
   const stop = o.kind === 'stop';
-  const label = occParse(o.symbol) ? occParse(o.symbol).label : o.symbol;
-  let text;
-  if (stop) {
-    text = label + ' — protective stop at ' + fmtPrice(o.stop_price)
-      + (o.qty != null ? ' on ' + fmtNum(o.qty, 2) + ' shares' : '')
-      + (o.limit_price != null ? ' (limit ' + fmtPrice(o.limit_price) + ')' : '');
-  } else if (o.kind === 'limit') {
-    text = label + ' — ' + (o.side || '').toUpperCase() + ' limit at '
-      + fmtPrice(o.limit_price)
-      + (o.qty != null ? ' for ' + fmtNum(o.qty, 2) : '');
-  } else {
-    text = label + ' — ' + (o.side || '').toUpperCase() + ' '
-      + (o.order_type || 'order');
-  }
-  const row = h('div', { class: 'desk-orders-row' },
-    pill(stop ? 'STOP' : (o.kind === 'limit' ? 'LIMIT' : (o.order_type || 'ORDER').toUpperCase()),
-      stop ? 'warn' : 'info',
-      stop ? 'A resting stop-loss order on the broker’s own book — it fires even while the AI is offline.'
-           : 'A working order resting at the broker.'),
-    h('span', { class: 'desk-orders-text', text }),
-    h('span', { class: 'desk-feed-time t-dim',
-      text: o.age_days != null ? 'resting ' + o.age_days + 'd' : '' }));
+  const occ = occParse(o.symbol);
+  const kindPill = pill(
+    stop ? 'STOP' : (o.kind === 'limit' ? 'LIMIT' : (o.order_type || 'ORDER').toUpperCase()),
+    stop ? 'warn' : 'info',
+    stop ? 'A resting stop-loss order on the broker’s own book — it fires even while the AI is offline.'
+         : 'A working order resting at the broker.');
+  const symCell = h('td', {},
+    h('a', { href: '/symbol/' + (occ ? occ.underlying : o.symbol),
+      class: 'c-link', text: occ ? occ.label : o.symbol }));
+  // A GTC order Alpaca is about to cancel out from under us is real risk, so
+  // it keeps its loud pill rather than becoming another quiet cell.
   if (o.tif === 'gtc' && o.age_days != null && o.age_days >= 80) {
-    row.append(pill('GTC expires at 90d', 'down',
+    symCell.append(h('div', {}, pill('GTC expires at 90d', 'down',
       'Alpaca silently cancels GTC orders after 90 days — this one is '
-      + o.age_days + ' days old and needs re-arming soon.'));
+      + o.age_days + ' days old and needs re-arming soon.')));
   }
-  return row;
+  return h('tr', {},
+    symCell,
+    h('td', {}, kindPill),
+    h('td', { class: 'num', text: orderTriggerCell(o) }),
+    h('td', { class: 'num', text: o.qty != null ? fmtNum(o.qty, 2) : '—' }),
+    h('td', { class: 'num t-dim', text: orderAge(o.age_days) }));
+}
+
+function ordersTable(rows) {
+  const body = h('tbody', {}, ...rows.map(openOrderRow));
+  return h('div', { class: 'c-table-wrap' },
+    h('table', { class: 'c-table' },
+      h('thead', {}, h('tr', {},
+        h('th', { text: 'Stock' }),
+        h('th', { text: 'Type' }),
+        h('th', { class: 'num', text: 'Trigger', title: 'The price that fires this order' }),
+        h('th', { class: 'num', text: 'Quantity' }),
+        h('th', { class: 'num', text: 'Placed' }))),
+      body));
 }
 
 async function loadOpenOrders() {
@@ -772,9 +924,24 @@ async function loadOpenOrders() {
       renderEmpty(el, 'Nothing resting at the broker right now — the AI arms protective stops on positions that need them.');
       return;
     }
-    const list = h('div', { class: 'desk-orders-list' });
-    for (const o of rows) list.append(openOrderRow(o));
-    el.append(list);
+    // One sentence of what the protection actually amounts to, then the
+    // table. The dollar figure is what a stop is FOR — how much of the book
+    // has a floor under it — and no per-row sentence ever said it.
+    const covered = rows
+      .filter(o => o.kind === 'stop' && o.qty != null && o.stop_price != null)
+      .reduce((s, o) => s + o.qty * o.stop_price * (occParse(o.symbol) ? 100 : 1), 0);
+    el.append(h('p', { class: 'desk-orders-summary' },
+      h('strong', { text: String(rows.length) }),
+      h('span', { text: ' order' + (rows.length === 1 ? '' : 's') + ' resting at the broker' }),
+      stops
+        ? h('span', { text: ' — ' + stops + ' protective stop' + (stops === 1 ? '' : 's')
+            + (covered > 0 ? ' with a floor under ' + fmtDollar(covered) + ' of the book' : '') + '.' })
+        : h('span', { text: '.' })));
+    const table = ordersTable(rows);
+    el.append(table);
+    const more = capList([...table.querySelectorAll('tbody > tr')], ORDERS_CAP,
+      'order', 'orders');
+    if (more) el.append(more);
   } catch (err) { renderError(el, err, loadOpenOrders); }
 }
 
@@ -788,19 +955,28 @@ function pickCard(p) {
     h('div', { class: 'desk-pick-head' },
       h('a', { href: '/symbol/' + p.symbol, class: 'desk-pick-sym', text: p.symbol }),
       pill((p.action || '').toUpperCase() || '—', ACTION_CLASS[action] || 'neutral'),
-      p.why_now ? h('span', { class: 'desk-pick-why t-dim', text: p.why_now }) : null),
-    p.rationale ? h('p', { class: 'desk-pick-rationale', text: p.rationale }) : null);
-  const facts = [];
-  if (p.prediction) facts.push(['predicts', p.prediction]);
-  if (p.horizon_days != null) facts.push(['horizon', p.horizon_days + ' sessions']);
-  if (p.kill) facts.push(['abandon if', String(p.kill)]);
-  if (facts.length) {
-    card.append(h('div', { class: 'desk-pick-evidence c-chips' },
-      ...facts.map(([k, v]) => h('span', {
-        class: 'c-chip',
-        title: 'The commitment made at decision time — graded later in “Predictions vs outcomes”.',
-        text: `${k}: ${v}`,
-      }))));
+      p.why_now ? h('span', { class: 'desk-pick-why t-dim', text: dashes(p.why_now) }) : null),
+    p.rationale ? h('p', { class: 'desk-pick-rationale', text: dashes(p.rationale) }) : null);
+  // The pre-registered prediction. This is the most valuable thing on the
+  // page — a falsifiable commitment made BEFORE the trade — and until
+  // v10.3.0 it rendered as three lowercase key-colon-value chips that read
+  // like debug output. A labelled block, in plain words, instead.
+  const commitments = [];
+  if (p.prediction) commitments.push(['The bet', dashes(p.prediction)]);
+  if (p.horizon_days != null) {
+    commitments.push(['Checked by',
+      p.horizon_days + ' trading session' + (p.horizon_days === 1 ? '' : 's') + ' from now']);
+  }
+  if (p.kill) commitments.push(['Called off if', dashes(p.kill)]);
+  if (commitments.length) {
+    const dl = h('dl', {
+      class: 'desk-pick-commit',
+      title: 'What the AI committed to before buying — graded later in “Predictions vs outcomes”.',
+    });
+    for (const [k, v] of commitments) {
+      dl.append(h('dt', { text: k }), h('dd', { text: v }));
+    }
+    card.append(dl);
   }
   if (p.evidence && Object.keys(p.evidence).length) {
     const kv = h('div', { class: 'desk-pick-evidence c-chips' });
@@ -828,7 +1004,7 @@ function watchlistChips(watchlist) {
     h('span', { class: 't-dim', text: 'Watchlist: ' }),
     ...watchlist.map(w => h('span', { class: 'c-chip' },
       h('a', { href: '/symbol/' + (w.symbol || w), class: 'c-link', text: (w.symbol || w) }),
-      w.note ? h('span', { class: 't-dim', text: ' — ' + w.note }) : null)));
+      w.note ? h('span', { class: 't-dim', text: ' — ' + dashes(w.note) }) : null)));
 }
 
 async function loadDecision() {
@@ -842,7 +1018,7 @@ async function loadDecision() {
     if (!d.exists) { clear(sumEl); renderEmpty(picksEl, 'No decision recorded yet.'); clear(wlEl); whenEl.textContent = ''; return; }
     whenEl.textContent = d.ts ? fmtDateTimeET(d.ts) : '';
     clear(sumEl);
-    sumEl.append(h('p', { class: 'desk-summary', text: d.summary || '' }));
+    sumEl.append(h('p', { class: 'desk-summary', text: dashes(d.summary || '') }));
 
     clear(picksEl);
     if (!(d.picks && d.picks.length)) {
@@ -866,7 +1042,7 @@ const REGIME_PILL = { risk_on: 'up', risk_off: 'down', neutral: 'neutral' };
 
 function decisionDossier(d) {
   const box = h('div', { class: 'desk-dec-hist-body' });
-  if (d.summary) box.append(h('p', { class: 'desk-summary', text: d.summary }));
+  if (d.summary) box.append(h('p', { class: 'desk-summary', text: dashes(d.summary) }));
   for (const p of (d.picks || [])) box.append(pickCard(p));
   if (d.watchlist && d.watchlist.length) box.append(watchlistChips(d.watchlist));
   if (d.rejected && d.rejected.length) {
@@ -876,7 +1052,7 @@ function decisionDossier(d) {
         const sym = (r && r.symbol) || String(r);
         return h('li', {},
           h('a', { href: '/symbol/' + sym, class: 'c-link', text: sym }),
-          r && r.why_not ? ' — ' + r.why_not : '');
+          r && r.why_not ? ' — ' + dashes(r.why_not) : '');
       })));
   }
   return box;
@@ -985,7 +1161,7 @@ function outcomeRow(r) {
       text: r.decision_ts ? fmtDateTimeET(r.decision_ts) : '' }));
 
   const pred = h('p', { class: 'desk-outcome-pred',
-    text: r.prediction ? '“' + r.prediction + '”'
+    text: r.prediction ? '“' + dashes(r.prediction) + '”'
       : 'No prediction was recorded with this pick.' });
 
   const chips = [];
@@ -1016,9 +1192,9 @@ function outcomeRow(r) {
     chips.push(h('span', {
       class: 'c-chip',
       title: 'Trading sessions elapsed against the prediction’s own deadline.',
-      text: reached ? 'horizon reached (' + r.horizon_days + ' sessions)'
+      text: reached ? 'deadline reached (' + r.horizon_days + ' sessions)'
         : (done != null ? 'session ' + done + ' of ' + r.horizon_days
-          : r.horizon_days + '-session horizon'),
+          : r.horizon_days + '-session deadline'),
     }));
   }
   if (open && r.kill_level != null) {
@@ -1026,13 +1202,14 @@ function outcomeRow(r) {
     const now = (live != null && Number.isFinite(live)) ? live : r.mark_px;
     chips.push(h('span', {
       class: 'c-chip' + (r.kill_breached ? ' t-down' : ''),
-      title: r.kill ? 'The stated abandon condition: ' + r.kill : 'The stated abandon level.',
-      text: 'kill ' + fmtPrice(r.kill_level)
+      title: r.kill ? 'The condition that calls this pick off: ' + r.kill
+                    : 'The level that calls this pick off.',
+      text: 'called off at ' + fmtPrice(r.kill_level)
         + (now != null ? ' · now ' + fmtPrice(now) : '')
         + (r.kill_breached ? ' — BREACHED' : ''),
     }));
   } else if (open && r.kill) {
-    chips.push(h('span', { class: 'c-chip', text: 'abandon if: ' + r.kill }));
+    chips.push(h('span', { class: 'c-chip', text: 'called off if ' + r.kill }));
   }
 
   const rowEl = h('div', { class: 'desk-outcome' }, head, pred);
@@ -1071,16 +1248,18 @@ async function loadPredictions() {
         + s.closed_graded + ' closed prediction' + (s.closed_graded === 1 ? '' : 's')
         + ' judged so far, ' + (s.hit_rate_pct != null ? s.hit_rate_pct + '% came true.' : '') }));
     }
-    const opens = rows.filter(r => r.status === 'open');
-    const closed = rows.filter(r => r.status !== 'open');
-    if (opens.length) {
-      el.append(h('div', { class: 'desk-outcome-subhead', text: 'Open' }));
-      for (const r of opens) el.append(outcomeRow(r));
-    }
-    if (closed.length) {
-      el.append(h('div', { class: 'desk-outcome-subhead', text: 'Closed' }));
-      for (const r of closed) el.append(outcomeRow(r));
-    }
+    // Open and closed cap independently: an open prediction is live state a
+    // reader wants all of, a closed one is history.
+    const section = (label, list, noun) => {
+      if (!list.length) return;
+      el.append(h('div', { class: 'desk-outcome-subhead', text: label }));
+      const built = list.map(outcomeRow);
+      for (const r of built) el.append(r);
+      const more = capList(built, OUTCOMES_CAP, noun, noun + 's');
+      if (more) el.append(more);
+    };
+    section('Open', rows.filter(r => r.status === 'open'), 'open prediction');
+    section('Closed', rows.filter(r => r.status !== 'open'), 'closed prediction');
   } catch (err) { renderError(el, err, loadPredictions); }
 }
 
@@ -1232,10 +1411,14 @@ const REGIME_TAGS = {
 };
 
 function wikiBlocks(body) {
-  // markdown-lite: blank-line-separated blocks; "- " blocks \u2192 bullet lists,
-  // everything else \u2192 paragraphs. All text nodes \u2014 zero innerHTML.
-  // A [risk_on]-style tag anywhere in a bullet becomes a small plain-English
-  // pill instead of raw shorthand.
+  // markdown-lite: blank-line-separated blocks. "- " blocks \u2192 bullet lists,
+  // "#"-prefixed lines \u2192 headings, everything else \u2192 paragraphs. All text
+  // nodes \u2014 zero innerHTML. A [risk_on]-style tag anywhere in a bullet
+  // becomes a small plain-English pill instead of raw shorthand.
+  //
+  // Headings and bold were added in v10.3.0: the agent writes markdown, and
+  // without a parser for it the notebook rendered literal "## Posture:" and
+  // "**never**" down the page \u2014 its own structure showing as punctuation.
   const out = [];
   for (const block of String(body || '').split(/\n\s*\n/)) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
@@ -1244,21 +1427,39 @@ function wikiBlocks(body) {
       out.push(h('ul', { class: 'desk-wiki-list' },
         ...lines.map(l => {
           const item = h('li', {});
-          let text = l.slice(2);
+          let text = dashes(l.slice(2));
           const m = text.match(/\s*\[(risk_on|risk_off|neutral)\]\s*/);
           if (m) {
             text = (text.slice(0, m.index) + ' '
               + text.slice(m.index + m[0].length)).trim();
-            item.append(text, ' ',
+            item.append(...inlineMd(text), ' ',
               h('span', { class: 'c-pill neutral desk-wiki-tag', text: REGIME_TAGS[m[1]] }));
           } else {
-            item.append(text);
+            item.append(...inlineMd(text));
           }
           return item;
         })));
-    } else {
-      out.push(h('p', { class: 'desk-wiki-p', text: lines.join(' ') }));
+      continue;
     }
+    // Headings can lead a block that also carries prose, so walk the lines
+    // rather than classifying the block as a whole.
+    let para = [];
+    const flush = () => {
+      if (!para.length) return;
+      out.push(h('p', { class: 'desk-wiki-p' }, ...inlineMd(dashes(para.join(' ')))));
+      para = [];
+    };
+    for (const line of lines) {
+      const head = line.match(/^(#{1,4})\s+(.*)$/);
+      if (head) {
+        flush();
+        out.push(h('div', { class: 'desk-wiki-h h' + Math.min(head[1].length, 3) },
+          ...inlineMd(dashes(head[2]))));
+      } else {
+        para.push(line);
+      }
+    }
+    flush();
   }
   return out;
 }
@@ -1291,7 +1492,7 @@ function renderNotebook() {
           h('span', { class: 'desk-diary-kind' + (j.kind === 'pivot' ? ' pivot' : ''),
             text: DIARY_KIND[j.kind] || DIARY_KIND.note })),
         h('div', { class: 'desk-diary-title', text: j.title }),
-        j.body ? h('p', { class: 'desk-diary-body t-dim', text: j.body }) : null));
+        j.body ? h('p', { class: 'desk-diary-body t-dim', text: dashes(j.body) }) : null));
     }
     return;
   }
@@ -1301,16 +1502,18 @@ function renderNotebook() {
     renderEmpty(el, 'The notebook is empty \u2014 lessons appear once real results come in.');
     return;
   }
-  for (const p of pages) {
-    el.append(h('div', { class: 'desk-wiki-page' },
-      h('div', { class: 'desk-wiki-head' },
-        h('span', { class: 'desk-wiki-title',
-          text: p.title || WIKI_TITLES[p.slug] || p.slug }),
-        h('span', { class: 't-dim',
-          title: 'Rewritten ' + p.revision + ' time(s) as real results came in',
-          text: timeAgo(p.updated_at) })),
-      ...wikiBlocks(p.body)));
-  }
+  const built = pages.map(p => h('div', { class: 'desk-wiki-page' },
+    h('div', { class: 'desk-wiki-head' },
+      h('span', { class: 'desk-wiki-title',
+        text: p.title || WIKI_TITLES[p.slug] || p.slug }),
+      h('span', { class: 't-dim',
+        title: 'Rewritten ' + p.revision
+          + (p.revision === 1 ? ' time' : ' times') + ' as real results came in',
+        text: timeAgo(p.updated_at) })),
+    ...wikiBlocks(p.body)));
+  for (const page of built) el.append(page);
+  const more = capList(built, LESSONS_CAP, 'lesson page', 'lesson pages');
+  if (more) el.append(more);
 }
 
 async function loadWiki() {
@@ -1390,7 +1593,7 @@ async function loadClaims() {
       renderEmpty(el, 'No claims registered yet — they appear as the AI turns measured results into structured facts.');
       return;
     }
-    for (const r of rows) {
+    const cards = rows.map(r => {
       const tier = CLAIM_TIER[r.tier] || CLAIM_TIER.digest;
       const head = h('div', { class: 'desk-claim-head' },
         h('span', { class: 'desk-claim-cite t-dim', text: r.cite }),
@@ -1403,14 +1606,18 @@ async function loadClaims() {
           text: 'expires ' + r.expires_at + ' unless renewed' }));
       }
       const stats = claimStatsText(r.stats || {});
+      const n = r.evidence_count;
       const foot = h('div', { class: 'desk-claim-foot t-dim' },
         h('span', { text: (stats ? stats + ' · ' : '')
-          + r.evidence_count + ' evidence ref(s)' }));
-      el.append(h('div', { class: 'desk-claim' },
+          + n + (n === 1 ? ' piece of evidence' : ' pieces of evidence') }));
+      return h('div', { class: 'desk-claim' },
         head,
-        h('p', { class: 'desk-claim-statement', text: r.statement }),
-        foot));
-    }
+        h('p', { class: 'desk-claim-statement', text: dashes(r.statement) }),
+        foot);
+    });
+    for (const c of cards) el.append(c);
+    const more = capList(cards, CLAIMS_CAP, 'claim', 'claims');
+    if (more) el.append(more);
   } catch (err) { renderError(el, err, loadClaims); }
 }
 
@@ -1594,6 +1801,15 @@ async function loadFills() {
           whyCell);
       })));
     el.append(table);
+    const more = capList([...table.querySelectorAll('tbody > tr')], FILLS_CAP,
+      'fill', 'fills');
+    if (more) el.append(more);
+    // /trades is the real archive — every fill, both eras, with realized P&L
+    // per row. This card is a recent-activity window, so say where the rest is
+    // rather than growing to 200 rows pretending to be the ledger.
+    el.append(h('p', { class: 'desk-fills-allnote t-dim' },
+      h('a', { href: '/trades', class: 'c-link', text: 'The full trade history' }),
+      h('span', { text: ' — every fill with the profit it realized.' })));
   } catch (err) { renderError(el, err, loadFills); }
 }
 
@@ -1747,21 +1963,21 @@ function saveCollapseSet(set) {
   try { localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...set])); }
   catch (e) { /* private mode, quota — silent */ }
 }
-/* Cards that arrive COLLAPSED on a phone. These are the long-form corpora —
-   the wiki pages, the 100+ entry claims registry, the thinking feed, the
-   outcome ledger, the lab board. Rendered open they measured ~60,000px at
-   390px wide: 71 phone screens, with the account and the book buried at the
-   top of a scroll nobody finishes. Desktop first-visit behaviour is
-   deliberately untouched — there the width earns the length.
+/* Cards that arrive COLLAPSED on a phone.
 
-   Left OPEN on purpose: equity (the curve), positions (the book), decision
-   (what it just did) — what a phone glance is actually for.
+   Much shorter than it was. Tabs (v10.3.0) already keep the long-form
+   corpora — claims, notebook, lab, predictions — off the landing view
+   entirely, and every list is now capped; collapsing a card the reader
+   deliberately switched tabs to reach would hide it twice for no gain.
 
-   `orders` is collapsed despite being live state: its header meta ("3
-   resting · 2 stops") already answers the only question a glance asks —
-   is the protection armed. */
-const MOBILE_COLLAPSED = ['orders', 'thinking', 'predictions', 'lab', 'wiki',
-  'claims'];
+   What remains is the two cards on the Now tab that a phone glance does not
+   need open: `orders`, whose header meta ("3 resting · 2 stops") already
+   answers the only question a glance asks — is the protection armed — and
+   `thinking`, which is prose.
+
+   Left OPEN on purpose: decision (what it just did), equity (the curve),
+   positions (the book) — what a phone glance is actually for. */
+const MOBILE_COLLAPSED = ['orders', 'thinking'];
 const MOBILE_Q = '(max-width: 768px)';
 
 /* Rather than branch the collapse logic on viewport, stamp the SAME
@@ -1786,7 +2002,7 @@ function applyMobileCollapseDefaults() {
    button only ever exists where there is actually a .c-card-sub to reveal.
    CSS keeps it display:none above 768px, so desktop is unaffected. */
 function wireInfoToggles() {
-  for (const card of document.querySelectorAll('.desk-card, .desk-topcard')) {
+  for (const card of document.querySelectorAll('.desk-card')) {
     const header = card.querySelector('.c-card-header');
     const sub = card.querySelector('.c-card-sub');
     if (!header || !sub || header.querySelector('.desk-info-btn')) continue;
@@ -1840,47 +2056,71 @@ function wireCollapse() {
   });
 }
 
-/* ── anchor nav scrollspy: highlight the visible zone in the sticky nav.
-   Also smooth-scroll into view on click, respecting scroll-margin-top so
-   the target zone header clears the sticky topnav + anchor bar. ── */
-function wireAnchorNav() {
-  const nav = document.getElementById('desk-anchornav');
-  if (!nav) return;
-  const anchors = [...nav.querySelectorAll('.desk-anchor')];
-  const setActive = zoneId => {
-    for (const a of anchors) {
-      const on = a.getAttribute('data-zone') === zoneId;
-      a.classList.toggle('active', on);
+/* ── tabs: one panel renders at a time ──
+   These replaced anchor links in v10.3.0. The zones were always there, but
+   scroll-jumping between them left the page 40,971px tall and put the nav
+   itself 3.6 screens down. Panels stay POPULATED while hidden — every loader
+   already runs on the shared interval — so switching is instant and costs no
+   request. ── */
+const TAB_KEY = 'ef-desk-tab-v1';
+/* Old #zone-* deep links still land somewhere sensible. */
+const LEGACY_HASH = {
+  'desk-hero': 'panel-now',
+  'zone-reasoning': 'panel-now',
+  'zone-history': 'panel-learned',
+};
+
+function wireTabs() {
+  const bar = document.getElementById('desk-tabs');
+  if (!bar) return;
+  const tabs = [...bar.querySelectorAll('.desk-tab')];
+  if (!tabs.length) return;
+
+  const show = (panelId, { focus = false, remember = true } = {}) => {
+    let matched = false;
+    for (const t of tabs) {
+      const on = t.dataset.panel === panelId;
+      matched = matched || on;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.tabIndex = on ? 0 : -1;
+      const panel = document.getElementById(t.dataset.panel);
+      if (panel) panel.hidden = !on;
+      if (on && focus) t.focus();
     }
+    if (!matched) return false;
+    if (remember) {
+      try { localStorage.setItem(TAB_KEY, panelId); } catch (e) { /* private mode */ }
+      history.replaceState(null, '', '#' + panelId);
+    }
+    // A chart or treemap built inside a hidden panel measured 0px wide.
+    // Charts re-measure through their own ResizeObserver; the holdings
+    // treemap is laid out imperatively, so it needs an explicit redraw.
+    window.dispatchEvent(new Event('resize'));
+    redrawAllocation();
+    return true;
   };
-  // click: smooth-scroll to the zone
-  nav.addEventListener('click', ev => {
-    const a = ev.target.closest('.desk-anchor');
-    if (!a) return;
-    const zoneId = a.getAttribute('data-zone');
-    const zone = document.getElementById(zoneId);
-    if (!zone) return;
+
+  bar.addEventListener('click', ev => {
+    const t = ev.target.closest('.desk-tab');
+    if (t) show(t.dataset.panel);
+  });
+  // Left/right arrows move between tabs, per the ARIA tablist pattern.
+  bar.addEventListener('keydown', ev => {
+    if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+    const i = tabs.findIndex(t => t.classList.contains('active'));
+    if (i < 0) return;
     ev.preventDefault();
-    zone.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setActive(zoneId);
-    history.replaceState(null, '', '#' + zoneId);
+    const next = (i + (ev.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length;
+    show(tabs[next].dataset.panel, { focus: true });
   });
-  // scrollspy: highlight whichever zone the reader is looking at
-  const zones = [...document.querySelectorAll('.desk-zone')];
-  if (!zones.length || !('IntersectionObserver' in window)) return;
-  const io = new IntersectionObserver(entries => {
-    const visible = entries
-      .filter(e => e.isIntersecting)
-      .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
-    if (visible.length) setActive(visible[0].target.id);
-  }, {
-    // Zone counts as "visible" when its top clears the sticky bar
-    rootMargin: '-120px 0px -55% 0px',
-    threshold: [0, 0.1, 0.25, 0.5],
-  });
-  for (const z of zones) io.observe(z);
-  // default: first zone is active
-  setActive(zones[0].id);
+
+  const fromHash = (location.hash || '').slice(1);
+  const wanted = LEGACY_HASH[fromHash] || fromHash;
+  let stored = null;
+  try { stored = localStorage.getItem(TAB_KEY); } catch (e) { /* private mode */ }
+  // A hash wins over the remembered tab: it is an explicit request.
+  if (!show(wanted, { remember: false })) show(stored || tabs[0].dataset.panel, { remember: false });
 }
 
 /* ── card-header seg toggles (lab: board/tests, notebook: lessons/diary) ── */
@@ -1903,7 +2143,7 @@ function wireSegs() {
 
 wireCollapse();
 wireInfoToggles();
-wireAnchorNav();
+wireTabs();
 wireSegs();
 loadAll();
 startTape();

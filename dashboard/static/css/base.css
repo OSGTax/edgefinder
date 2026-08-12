@@ -150,7 +150,7 @@ a:hover { text-decoration: underline; }
   font-family: var(--t-font-ui);
 }
 .tabbar-item .glyph { font-size: 17px; line-height: 1; }
-.tabbar-item.active { color: var(--t-accent); }
+.tabbar-item.active { color: var(--t-link); }
 
 /* ── "More" bottom sheet ── */
 .sheet-backdrop {
@@ -204,7 +204,7 @@ a:hover { text-decoration: underline; }
   text-align: left;
 }
 .sheet-link:last-child { border-bottom: none; }
-.sheet-link.active { color: var(--t-accent); }
+.sheet-link.active { color: var(--t-link); }
 
 /* ── page container ── */
 .page {
@@ -290,7 +290,7 @@ a:hover { text-decoration: underline; }
     --t-fs-sm: 13px;
     --t-fs-base: 14px;
   }
-  html .desk-anchor,
+  html .desk-tab,
   html .desk-collapse,
   html .c-chip,
   html .c-seg button,
