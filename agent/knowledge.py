@@ -32,6 +32,8 @@ import json
 import re
 from datetime import date, datetime, timedelta, timezone
 
+from agent import occ
+
 # ── policy constants (SCHEMA.md §5 — owner adjusts here) ─────────────────
 
 KCLASSES = ("market_strategy", "system_mechanics", "operational", "risk_rule")
@@ -323,10 +325,23 @@ def _resolve_evidence(store, refs: list, account: str) -> dict:
                             continue
                 elif ref.get("run_id"):
                     f = {"account": account, "run_id": ref["run_id"]}
-                    if ref.get("symbol"):
-                        f["symbol"] = ref["symbol"]
+                    sym = str(ref.get("symbol") or "").strip().upper()
+                    if sym:
+                        f["symbol"] = sym
                     found = bool(store.select("desk_orders", filters=f,
                                               limit=1))
+                    if not found and sym:
+                        # An option structure is cited by its underlying;
+                        # the mirror keys the legs by OCC symbol. Match the
+                        # run's rows on their parsed underlying.
+                        rows = store.select("desk_orders", columns="symbol",
+                                            filters={"account": account,
+                                                     "run_id": ref["run_id"]},
+                                            limit=100)
+                        found = any(
+                            occ.is_option(r.get("symbol") or "")
+                            and occ.parse(r["symbol"])["underlying"] == sym
+                            for r in rows)
                 if not found:
                     orphans.append(ref)
             elif kind == "backtest":
@@ -335,6 +350,13 @@ def _resolve_evidence(store, refs: list, account: str) -> dict:
                 elif ref.get("run_id"):
                     # backtest_tool --save stamps the saving run's id
                     f = {"account": account, "run_id": ref["run_id"]}
+                elif ref.get("rule") and ref.get("universe") \
+                        and ref.get("schedule"):
+                    # a lab combo IS its (rule, universe, schedule) triple —
+                    # agent.lab stamps it verbatim into the row label
+                    f = {"account": account,
+                         "label": (f"lab:{ref['rule']}@{ref['universe']}"
+                                   f"/{ref['schedule']}")}
                 else:
                     f = None  # nothing machine-resolvable on the ref
                 if not (f and store.select("desk_backtests", filters=f,

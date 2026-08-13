@@ -389,6 +389,56 @@ def test_unattributable_evidence_still_orphans(store):
     assert "\n".join(out["errors"]).count("unresolvable") == 2
 
 
+def test_option_trade_ref_resolves_by_underlying(store):
+    """An option structure is cited by its underlying; the mirror keys the
+    legs by OCC symbol. The (run_id, underlying) ref must match the legs."""
+    from agent.knowledge import claim_add, lint
+
+    store.insert("desk_orders", {
+        "account": "agent", "run_id": "RO", "alpaca_order_id": "o1",
+        "symbol": "SNOW260918C00340000", "side": "buy", "status": "filled",
+    }, returning=False)
+    claim_add(store, kclass="market_strategy", tier="candidate",
+              statement="s", scope=SCOPE,
+              evidence=[{"kind": "trade", "run_id": "RO", "symbol": "SNOW"}],
+              promotion_criteria={"min_n": 5})
+    out = lint(store)
+    assert "unresolvable" not in "\n".join(out["errors"])
+
+
+def test_underlying_match_requires_a_leg_in_that_run(store):
+    from agent.knowledge import claim_add, lint
+
+    store.insert("desk_orders", {
+        "account": "agent", "run_id": "RO2", "alpaca_order_id": "o2",
+        "symbol": "AAPL", "side": "buy", "status": "filled",
+    }, returning=False)
+    claim_add(store, kclass="market_strategy", tier="candidate",
+              statement="s", scope=SCOPE,
+              evidence=[{"kind": "trade", "run_id": "RO2", "symbol": "SNOW"}],
+              promotion_criteria={"min_n": 5})
+    out = lint(store)
+    assert "unresolvable" in "\n".join(out["errors"])
+
+
+def test_lab_combo_backtest_ref_resolves_by_label(store):
+    """A lab combo IS its (rule, universe, schedule) triple — agent.lab
+    stamps it verbatim into the desk_backtests row label."""
+    from agent.knowledge import claim_add, lint
+
+    store.insert("desk_backtests", {
+        "account": "agent", "run_id": "lab-2026-07-28",
+        "label": "lab:momo_trend:3@mid200/monthly",
+    }, returning=False)
+    claim_add(store, kclass="market_strategy", tier="candidate",
+              statement="s", scope=SCOPE,
+              evidence=[{"kind": "backtest", "rule": "momo_trend:3",
+                         "universe": "mid200", "schedule": "monthly"}],
+              promotion_criteria={"min_n": 5})
+    out = lint(store)
+    assert "unresolvable" not in "\n".join(out["errors"])
+
+
 def test_promotion_not_blocked_by_run_attributed_trade_ref(store):
     from agent.knowledge import claim_promote
 
