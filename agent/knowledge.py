@@ -193,8 +193,20 @@ def claim_add(store=None, *, kclass: str, tier: str, statement: str,
                    detail={"warning": f"supersedes {supersedes} not found"},
                    account=account)
 
-    return {"ok": True, "id": row["id"], "tier": tier, "kclass": kclass,
-            "decay_class": dc, "expires_at": str(exp) if exp else None}
+    out = {"ok": True, "id": row["id"], "tier": tier, "kclass": kclass,
+           "decay_class": dc, "expires_at": str(exp) if exp else None}
+    if evidence:
+        # Non-blocking: a candidate is allowed to cite evidence that hasn't
+        # resolved YET (e.g. a still-open pick, registered before results —
+        # SCHEMA.md outcome 2). But a ref shaped so it can NEVER resolve
+        # (wrong key name, e.g. "ref" instead of "run_id"/"symbol") is a
+        # write-time typo, not a future citation — surface it here, in the
+        # same response the author is already reading, instead of waiting
+        # for `lint` to catch it a reflection later.
+        orphans = _resolve_evidence(store, evidence, account)["orphans"]
+        if orphans:
+            out["unresolved_evidence"] = orphans
+    return out
 
 
 def get_claim(store=None, *, claim_id: int, account: str = ACCOUNT) -> dict:

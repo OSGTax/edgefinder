@@ -344,6 +344,46 @@ def test_reconcile_warns_on_aging_gtc_stop(store):
     assert warns[0]["age_days"] >= 80
 
 
+def _seed_decision_with_kill(store, run_id, symbol, kill_text):
+    from datetime import datetime as _dt
+
+    store.insert("desk_decisions", {
+        "account": "agent", "run_id": run_id, "regime": "risk_on",
+        "ts": _dt(2026, 8, 20, 14, 17, 0),
+        "picks": [{"symbol": symbol, "action": "buy",
+                   "prediction": "x", "horizon_days": 8, "kill": kill_text}],
+    }, returning=False)
+
+
+def test_reconcile_flags_a_stop_drifted_from_its_stated_kill(store):
+    # PWR (08-21): kill stated at $640, the resting GTC stop had drifted to
+    # $588 with no journal note flagging the mismatch — nothing caught the
+    # disagreement until a later cycle noticed by hand.
+    t, fake = _trade(store)
+    _seed_decision_with_kill(store, "R1", "PWR",
+                             "PWR closes below $640, where the protective "
+                             "stop rests.")
+    fake.add_order(symbol="PWR", side="sell", qty=1.0, order_type="stop",
+                   stop_price=588.0, time_in_force="gtc", status="new",
+                   submitted_at="2026-08-20T14:00:00+00:00")
+    mismatches = t.reconcile()["kill_mismatches"]
+    assert len(mismatches) == 1
+    m = mismatches[0]
+    assert m["symbol"] == "PWR"
+    assert m["stated_kill"] == 640.0
+    assert m["resting_stop_price"] == 588.0
+    assert m["drift_pct"] > 3.0
+
+
+def test_reconcile_leaves_a_matching_stop_alone(store):
+    t, fake = _trade(store)
+    _seed_decision_with_kill(store, "R1", "NVDA", "Closes below $140.")
+    fake.add_order(symbol="NVDA", side="sell", qty=10.0, order_type="stop",
+                   stop_price=140.0, time_in_force="gtc", status="new",
+                   submitted_at="2026-08-20T14:00:00+00:00")
+    assert t.reconcile()["kill_mismatches"] == []
+
+
 # ── state + snapshot ─────────────────────────────────────────────────────
 
 
@@ -357,6 +397,27 @@ def test_state_reads_alpaca_and_weights(store, monkeypatch):
     assert s["total_pnl"] == 5_000.0
     assert s["total_return_pct"] == 5.0
     assert s["positions"][0]["weight"] == round(300 * 180.0 / 105_000.0, 6)
+
+
+def test_positions_reinserts_slash_for_crypto(store):
+    # Alpaca's positions endpoint returns crypto symbols WITHOUT the slash
+    # (ETHUSD) while every (run_id, symbol) join in this codebase expects
+    # the slashed form (ETH/USD) — a live crypto position must not read as
+    # unmatched/closed just because of this shape mismatch.
+    raw = {"symbol": "ETHUSD", "asset_class": "crypto", "qty": 0.3266,
+           "qty_available": 0.3266, "avg_entry_price": 2096.81,
+           "current_price": 2528.5, "market_value": 826.0,
+           "cost_basis": 685.0, "unrealized_pl": 141.0,
+           "unrealized_plpc": 0.2, "change_today": 0.01, "side": "long"}
+    t, _ = _trade(store, positions=[raw])
+    pos = t.positions()
+    assert pos[0]["symbol"] == "ETH/USD"
+    assert pos[0]["asset_class"] == "crypto"
+
+
+def test_positions_leaves_equity_and_option_symbols_alone(store):
+    t, _ = _trade(store, positions=_positions(symbol="NVDA"))
+    assert t.positions()[0]["symbol"] == "NVDA"
 
 
 def test_snapshot_portfolio_is_idempotent(store):

@@ -74,6 +74,34 @@ def test_add_rejects_bad_shapes(store):
     assert not r["ok"] and "born established" in r["error"]
 
 
+def test_add_surfaces_unresolvable_evidence_without_blocking(store):
+    """A claim citing evidence in a shape `_resolve_evidence` can never read
+    (the recurring [C-89] pattern: a free-text "ref" key instead of
+    run_id/symbol) must still be WRITTEN — a candidate is allowed to cite a
+    pick that hasn't resolved yet (SCHEMA.md outcome 2), so claim_add can't
+    reject on resolvability alone. It must surface the orphan immediately
+    in the same response, rather than leaving it for `lint` to catch a
+    reflection later."""
+    from agent.knowledge import claim_add
+
+    r = claim_add(store, kclass="market_strategy", tier="candidate",
+                  statement="s", scope=SCOPE,
+                  evidence=[{"kind": "trade", "ref": "2026-08-20T18:01-k3wq",
+                             "note": "wrong key, never resolves"}],
+                  promotion_criteria={"min_n": 5})
+    assert r["ok"]
+    assert len(r["unresolved_evidence"]) == 1
+
+    # a well-shaped ref to a pick that simply hasn't resolved yet is NOT
+    # flagged as a shape problem the same way — still surfaces as an orphan
+    # (lint's job to keep watching), but the claim writes clean either way.
+    r2 = claim_add(store, kclass="market_strategy", tier="candidate",
+                   statement="s2", scope=SCOPE,
+                   evidence=[{"kind": "probe", "note": "n"}],
+                   promotion_criteria={"min_n": 5})
+    assert r2["ok"] and "unresolved_evidence" not in r2
+
+
 def test_risk_rule_decay_is_forced_never(store):
     from agent.knowledge import claim_add
 

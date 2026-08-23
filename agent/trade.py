@@ -50,6 +50,11 @@ logger = logging.getLogger(__name__)
 TERMINAL_STATUSES = {"filled", "canceled", "expired", "rejected", "replaced"}
 # A GTC order silently auto-cancels at 90 days on Alpaca; warn well before.
 GTC_WARN_AGE_DAYS = 80
+# A resting stop that has drifted more than this far from its pick's own
+# stated kill level disagrees with the record enough to flag — PWR (08-21)
+# drifted to $588 against a stated $640 kill (~8%) with nothing catching it
+# for at least a cycle.
+KILL_STOP_MISMATCH_PCT = 0.03
 # Default seconds `submit` polls for a terminal status before returning
 # whatever state the order is in (the order stays working either way).
 SUBMIT_POLL_SECS = 10
@@ -111,6 +116,25 @@ def asset_class_of(symbol: str) -> str:
     if occ.is_option(s):
         return "us_option"
     return "us_equity"
+
+
+CRYPTO_QUOTE_CURRENCIES = ("USD", "USDT", "USDC")
+
+
+def _normalize_position_symbol(symbol: str, asset_class) -> str:
+    """Alpaca's positions endpoint returns crypto pairs WITHOUT the slash
+    (``ETHUSD``), unlike orders/quotes/decisions everywhere else in this
+    codebase, which always use the slashed form (``ETH/USD`` — the tell
+    ``agent.broker.is_crypto`` and every ``(run_id, symbol)`` join relies
+    on). Re-insert it so a live crypto position joins cleanly against its
+    originating pick instead of silently reading as flat/closed."""
+    s = (symbol or "").strip().upper()
+    if "/" in s or _val(asset_class) != "crypto":
+        return s
+    for quote in CRYPTO_QUOTE_CURRENCIES:
+        if s.endswith(quote) and len(s) > len(quote):
+            return f"{s[:-len(quote)]}/{quote}"
+    return s
 
 
 def _is_whole(x) -> bool:
@@ -481,7 +505,7 @@ class Trade:
         out = []
         for p in self.client.get_all_positions():
             g = p.get if isinstance(p, dict) else lambda k, d=None: getattr(p, k, d)
-            sym = (g("symbol") or "").upper()
+            sym = _normalize_position_symbol(g("symbol"), g("asset_class"))
             out.append({
                 "symbol": sym,
                 "asset_class": _val(g("asset_class")) or asset_class_of(sym),
@@ -723,6 +747,56 @@ class Trade:
         res["replaced"] = canceled
         return res
 
+    def _kill_mismatches(self, stop_orders: list[dict]) -> list[dict]:
+        """Cross-check each resting stop against its pick's own stated kill.
+        grade.run's kill_breached only reads the stated kill against stored
+        closes — nothing anywhere compares it to the LIVE stop price, so a
+        stop can drift out of sync (armed at one level, then replaced or
+        hand-edited to another) with nothing catching the disagreement.
+        PWR (08-21): kill stated at $640, the resting stop had drifted to
+        $588 with no journal note — the mismatch went unnoticed for at
+        least a cycle before a later session caught it by hand."""
+        from agent.grade import _parse_kill
+        from agent.models import ACCOUNT
+
+        candidates = [o for o in stop_orders
+                     if (o.get("order_type") or "") in ("stop", "stop_limit")
+                     and o.get("stop_price")]
+        if not candidates:
+            return []
+        symbols = {o["symbol"] for o in candidates}
+        decisions = self.store.select(
+            "desk_decisions", filters={"account": ACCOUNT},
+            order=[("ts", "desc")], limit=400)
+        kill_by_symbol: dict[str, str] = {}
+        for d in decisions:
+            for p in (d.get("picks") or []):
+                sym = str(p.get("symbol") or "").upper()
+                action = str(p.get("action") or "").lower()
+                if sym in symbols and sym not in kill_by_symbol \
+                        and action in ("buy", "add") and p.get("kill"):
+                    kill_by_symbol[sym] = p["kill"]
+
+        mismatches = []
+        for o in candidates:
+            kill_text = kill_by_symbol.get(o["symbol"])
+            if not kill_text:
+                continue
+            level = _parse_kill(kill_text)
+            if level is None:
+                continue
+            stop_price = float(o["stop_price"])
+            drift = abs(stop_price - level) / level
+            if drift > KILL_STOP_MISMATCH_PCT:
+                mismatches.append({
+                    "symbol": o["symbol"], "alpaca_order_id": o["alpaca_order_id"],
+                    "stated_kill": level, "resting_stop_price": stop_price,
+                    "drift_pct": round(drift * 100, 2),
+                    "note": "resting stop disagrees with the pick's own "
+                            "stated kill — reconcile which one is right "
+                            "before treating either as the live protection"})
+        return mismatches
+
     # -- composed reads --
 
     def reconcile(self, *, order_limit: int = 100) -> dict:
@@ -768,12 +842,14 @@ class Trade:
                     {"symbol": o["symbol"], "alpaca_order_id": o["alpaca_order_id"],
                      "age_days": age,
                      "note": f"GTC auto-cancels at 90 days — re-arm before day 90"})
+        kill_mismatches = self._kill_mismatches(open_orders)
         return {"account": self.account(),
                 "orders_synced": len(orders),
                 "activities_added": added,
                 "fills_last_24h": filled_recent,
                 "open_orders": open_orders,
-                "gtc_stop_warnings": stop_warnings}
+                "gtc_stop_warnings": stop_warnings,
+                "kill_mismatches": kill_mismatches}
 
     def state(self) -> dict:
         """The account header everything reads — the `agent.ledger state`

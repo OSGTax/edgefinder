@@ -34,6 +34,15 @@ STOCH_RSI_D = 3
 WILLIAMS_R_PERIOD = 14
 VOLUME_AVG_PERIOD = 20
 
+# _rsi/_adx apply Wilder EWM smoothing with no burn-in reset: fed the full
+# history, a single large one-day gap can keep distorting "today's" reading
+# for weeks (avg_loss decays toward zero faster than avg_gain when the gap
+# isn't followed by comparable volatility, so the RS ratio blows up even as
+# both sides are individually decaying — [C-183]). Bounding the input to a
+# fixed trailing window keeps any one shock's influence gone entirely after
+# a bounded, known number of sessions instead of lingering indefinitely.
+RSI_ADX_WARMUP_BARS = 100
+
 
 # ── Pure pandas indicator functions (from signals/engine.py) ──
 
@@ -154,6 +163,12 @@ def compute_indicators_from_bars(df: pd.DataFrame) -> IndicatorSnapshot | None:
     high = df["high"]
     low = df["low"]
     volume = df["volume"]
+    # Bounded trailing window for the unbounded-EWM indicators only (RSI/ADX/
+    # Stoch-RSI) — see RSI_ADX_WARMUP_BARS. Everything else (EMAs, MACD,
+    # Bollinger, ATR, volume) keeps the full frame; some (ema_200) need it.
+    wclose = close.tail(RSI_ADX_WARMUP_BARS)
+    whigh = high.tail(RSI_ADX_WARMUP_BARS)
+    wlow = low.tail(RSI_ADX_WARMUP_BARS)
 
     # EMAs
     ema_9 = _ema(close, 9)
@@ -162,7 +177,7 @@ def compute_indicators_from_bars(df: pd.DataFrame) -> IndicatorSnapshot | None:
     ema_200 = _ema(close, 200) if len(df) >= 200 else pd.Series([None] * len(df))
 
     # RSI
-    rsi = _rsi(close, RSI_PERIOD)
+    rsi = _rsi(wclose, RSI_PERIOD)
 
     # MACD
     macd_line, macd_signal, macd_hist = _macd(
@@ -180,12 +195,12 @@ def compute_indicators_from_bars(df: pd.DataFrame) -> IndicatorSnapshot | None:
 
     # ADX
     adx_series, plus_di_series, minus_di_series = _adx(
-        high, low, close, ADX_PERIOD
+        whigh, wlow, wclose, ADX_PERIOD
     )
 
     # Stochastic RSI
     stoch_k, stoch_d = _stochastic_rsi(
-        close, STOCH_RSI_PERIOD,
+        wclose, STOCH_RSI_PERIOD,
         STOCH_RSI_K, STOCH_RSI_D,
     )
 
