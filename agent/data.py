@@ -204,8 +204,17 @@ def load_bars(
 
 def latest_indicators(symbols: list[str], *, as_of: date | None = None,
                       source: str = "auto") -> dict[str, dict]:
-    """Latest close + computed indicators per symbol as of ``as_of`` (or today)."""
-    from edgefinder.data.indicator_engine import compute_snapshot_series
+    """Latest close + computed indicators per symbol as of ``as_of`` (or today).
+
+    Uses ``compute_indicators_from_bars`` (a single final-row computation),
+    not ``compute_snapshot_series`` (a full per-day historical replay) --
+    this call only ever reads the last row, so the full series was pure
+    waste, and ``compute_indicators_from_bars`` bounds its RSI/ADX/Stoch-RSI
+    inputs to a trailing window ([C-183]: unbounded Wilder smoothing over
+    the whole 560-day frame lets one big historical gap keep distorting
+    "today's" reading for weeks) while the series path does not yet.
+    """
+    from edgefinder.data.indicator_engine import compute_indicators_from_bars
 
     start = (as_of or date.today()) - timedelta(days=560)
     bars = load_bars(symbols, start=start, end=as_of, div_adjust=False, source=source)
@@ -214,10 +223,18 @@ def latest_indicators(symbols: list[str], *, as_of: date | None = None,
         if df is None or not len(df):
             continue
         d = df.sort_values("date").reset_index(drop=True)
-        snaps = compute_snapshot_series(d[["open", "high", "low", "close", "volume"]])
-        if not snaps:
-            continue
-        snap = snaps[-1].to_dict()
+        snap_obj = compute_indicators_from_bars(d[["open", "high", "low", "close", "volume"]])
+        if snap_obj is None:
+            # Fewer than MIN_BARS rows: same as compute_snapshot_series used
+            # to return for a too-short frame — OHLCV present, every
+            # indicator None, rather than dropping the symbol outright.
+            from edgefinder.data.market_data import IndicatorSnapshot
+            last = d.iloc[-1]
+            snap_obj = IndicatorSnapshot(
+                close=float(last["close"]), open=float(last["open"]),
+                high=float(last["high"]), low=float(last["low"]),
+                volume=float(last["volume"]))
+        snap = snap_obj.to_dict()
         out[sym] = {
             "symbol": sym,
             "date": str(d["date"].iloc[-1]),
