@@ -972,8 +972,13 @@ def lint(store=None, *, account: str = ACCOUNT) -> dict:
     errors: list[str] = []
     warnings: list[str] = []
 
+    # Unbounded on purpose: this builds the ONLY index lint uses to decide
+    # whether a citation is real. A capped read here silently reads real
+    # claims as missing once the table outgrows the cap — the same
+    # oldest-first-truncation shape already fixed twice for context_claims
+    # ([C-96], [C-97]) and found again here at 511 rows against a 500 cap.
     claims = store.select("desk_claims", filters={"account": account},
-                          order=[("id", "asc")], limit=500)
+                          order=[("id", "asc")])
     by_id = {c["id"]: c for c in claims}
 
     # 1. every [C-n] token in wiki prose resolves to an ACTIVE claim

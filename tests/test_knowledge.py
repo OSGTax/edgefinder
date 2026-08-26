@@ -373,6 +373,30 @@ def test_lint_catches_the_step2_failure_modes(store):
     assert "unjudged" in text
 
 
+def test_lint_sees_claims_past_the_old_500_cap(store):
+    """lint's own by_id index used to cap at 500 rows, oldest-first -- the
+    same shape already fixed twice for context_claims ([C-96], [C-97]).
+    Once the table outgrows the cap, a citation of any claim past it reads
+    as "no such claim" even though the claim exists and is active. Seed
+    past 500 and prove a citation of a late-id claim resolves clean."""
+    from agent.brain import set_wiki
+    from agent.knowledge import claim_add, lint
+
+    last_id = None
+    for i in range(505):
+        r = claim_add(store, kclass="operational", tier="observation",
+                      statement=f"filler {i}", scope={"account": "paper"})
+        last_id = r["id"]
+    assert last_id >= 505
+
+    set_wiki(store, slug="lessons", body=f"Filler lesson [C-{last_id}].",
+             reason="test", run_id="R")
+    out = lint(store)
+    text = "\n".join(out["errors"])
+    assert f"[C-{last_id}]" not in text, (
+        f"claim {last_id} (past the old 500-row cap) read as missing")
+
+
 def test_run_attributed_trade_and_backtest_refs_resolve(store):
     """V4 refs carry no mirror row id — they cite the (run_id, symbol) pair
     desk_orders is indexed for, and the run_id backtest_tool --save stamps.
