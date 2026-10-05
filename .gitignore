@@ -1,47 +1,7 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg-info/
+node_modules/
 dist/
-build/
-*.egg
-
-# Virtual environments
-venv/
-.venv/
-env/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-
-# EdgeFinder data (generated at runtime, don't commit)
-data/*.db
-data/*.db-shm
-data/*.db-wal
-data/*.log
-data/*.csv
-data/cache/
-*.parquet
-
-# Secrets (never commit)
-config/secrets.env
-.env
-
-# Management-agent runtime config — kill switch lives here, must be per-env
-.claude/agent-config.json
-
-# OS
+dist-single/
+*.log
 .DS_Store
-Thumbs.db
-.superpowers/
+.vite/
+coverage/
