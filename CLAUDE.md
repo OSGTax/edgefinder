@@ -4,17 +4,17 @@ A backyard-baseball game (working title) for web, iOS and Android. The owner
 is the product owner, not a developer — see `GAME-PLAN.md` for the vision,
 status and roadmap in plain language, and keep it current when phases change.
 
-**Direction change (v2, owner decision):** the game is moving to real 3D with
-much more realistic graphics. See `docs/3D-FRAMEWORK.md` (Three.js renderer on
-top of the existing `src/sim`; glTF characters) and `docs/LEAGUE-FRAMEWORK.md`
-(10 teams × 9 kids, 4 traits: Hitting/Speed/Fielding/Pitching, everyone pitches,
-no benches/injuries/trades, no pick-up draft, one home field per team). The
-owner asked for frameworks/plans first; don't build large pieces of the 3D
-version until the art-source decision in `docs/3D-FRAMEWORK.md` is made.
+**Current state: the 3D demo** — two teams (Maple Street Mudcats at Cedar Lane
+Comets), one heavily detailed yard (Pool Party Paradise), real 3D kids and
+gameplay. This is the quality bar for the final game; the owner wants the
+demo polished before more teams/yards are built. League build-out plans:
+`plans/LEAGUE-FRAMEWORK.md` (10 teams × 9 kids, 4 traits: Hitting/Speed/
+Fielding/Pitching, everyone pitches, no benches/injuries/trades, no pick-up
+draft, one home field per team) and `plans/3D-FRAMEWORK.md`. The v0.1 2D kids
+and yards live in git history (commit `a00d3e8`).
 
-**v0.1 asset rule (still true for the current prototype):** every asset is
-generated in code. The 3D version will add real 3D models and textures for
-characters; yards, sound and music should stay code-generated where possible.
+**Asset rule:** every asset is generated in code — 3D geometry, textures,
+faces, uniforms, sound, music. No model, image or audio files.
 
 **Originality rule:** inspired by 90s backyard baseball games, but never use
 their names, characters, art, music or trademarks ("Backyard Baseball",
@@ -22,84 +22,100 @@ their names, characters, art, music or trademarks ("Backyard Baseball",
 
 ## Stack
 
-TypeScript (strict) + Vite, no framework. Canvas 2D for the game scene
-(pseudo-3D via our own perspective camera), plain DOM + CSS for HUD and
-menus, Web Audio for sound. Vitest for tests. Mobile builds will wrap the web
-build with Capacitor (not set up yet — Phase 5 in the plan).
+TypeScript (strict) + Vite, Three.js (WebGL2) for the game scene, plain DOM +
+CSS for HUD and menus, Web Audio for sound. Vitest for tests. Mobile builds
+will wrap the web build with Capacitor (not set up yet).
 
 ## Commands
 
 ```bash
 npm install
-npm run dev            # http://localhost:5173  (dev-only: #gallery, #scene=<yardId>&cam=bat|field|overview)
-npm test               # vitest: sim balance, season, human-hitting, audio
+npm run dev            # http://localhost:5173
+npm test               # vitest: sim balance + determinism, human-hitting, audio
 npm run typecheck
-npm run build          # dist/ (normal hashed assets)
-npm run build:web      # dist-single/index.html (one file) + dist-single/page.html (body-only, for hosts that add their own <head>)
+npm run build          # dist/ (hashed assets; deploy this folder)
 ```
 
-The published preview lives at https://claude.ai/artifact/KGG4KBQdjTg3MHKAyHEP1U
-— republish `dist-single/page.html` there after `npm run build:web`.
+Dev-only URL hashes (combine with `&`): `#gallery` (all kids; `&faces`,
+`&poses=run,swing,...&t=0.3`, `&kid=bo`, `&expr=yell`), `#dev=<cam>` (empty
+yard from a named camera: bat, field, house, patio, pool, cf, street, high,
+dugout...), `#play=mudcats|comets` (skip menus; `&cpu` = CPU vs CPU),
+`q=low|medium|high` (force graphics tier), `ff=N` (simulate N fixed steps per
+rendered frame — for the slow software renderer in headless Chromium).
 
 ## Layout
 
 ```
 src/
-  engine/   math (Vec, segIntersect...), seeded Rng, safe localStorage
-  data/     types.ts (Kid/Team/Yard...), kids.ts (72 mini-adult kids),
-            teams.ts (8 teams + announcers), yards.ts (8 yards), palette.ts
-  sim/      the game engine — pure, no DOM, deterministic from a seed
-    field.ts     yard geometry, surfaces, obstacles, fair/foul, zone
-    physics.ts   ball flight/bounce/roll, fences, trees, boxes; predict()
-    pitching.ts  pitch types, trajectories (break, knuckle wobble, Brain Freeze time-warp)
-    batting.ts   swing timing+aim → contact, exit velo, launch, spray
-    play.ts      LivePlay: fielder AI (intercepts, covers, throws), runner AI, outs, end of play
-    ai.ts        CPU pitch selection and swing decisions
-    match.ts     Match: counts/innings/score/box score/hype/specials; simulateMatch() headless
-    lineup.ts    auto positions + batting order
-  league/   season.ts (schedule, standings, leaders, playoffs), draft.ts (pick-up game)
-  art/      kid.ts (procedural chibi kids + costume pieces + portraits), yard.ts
-            (ground, fences, props), grownup.ts, logo.ts, draw3d.ts (projected primitives)
-  render/   camera.ts (perspective camera, plate-plane raycast), cameras.ts (presets), scene.ts
-  audio/    Web Audio synth: sfx, music sequencer + songs, ambience (no-op without AudioContext)
-  ui/       app.ts (menus, season hub, draft UI), game.ts (game screen: input, camera director,
-            HUD, events → sounds/popups/commentary), commentary.ts (Chet & Dottie), style.css
-  dev/      gallery/scenes — dev-only art previews
-tests/      sim balance + determinism, season, human-hitting, audio
-scripts/    web-page.mjs (single-file build → body-only page)
+  engine/   math, seeded Rng, safe localStorage
+  data/     types.ts (Kid/Traits/Team/Yard...), kids.ts (18 kids), teams.ts (2 teams +
+            announcers), yards.ts (Pool Party Paradise), palette.ts (skin/hair)
+  sim/      the game engine — pure, no DOM, deterministic from a seed (unchanged from v0.1
+            apart from traits + pitching changes): field, physics, pitching, batting,
+            play (LivePlay fielder/runner AI), ai, match (phases, specials, simulateMatch), lineup
+  gfx/      Three.js basics: renderer, quality tiers, sky + sun + PMREM environment,
+            ground (splat-map lawn shader + instanced grass blades), procedural canvas
+            textures + normal maps, material library, geometry batching (merge per material)
+  world/    the ballpark: stadium.ts (assembles everything, LAYOUT of patio/dugouts),
+            house.ts, pool.ts (water + caustics shaders), fences.ts (pickets, hedge, leaf
+            cards), trees.ts (procedural trees + far-tree blobs), props.ts (patio set, grill,
+            bases, flamingos, dugouts...), neighborhood.ts (houses, street, poles, water tower)
+  kid3d/    3D kids: rig.ts (skeleton + proportions from KidLook), geom.ts (lofts, limbs,
+            skin weights), model.ts (KidModel: one skeleton, ~7 skinned meshes), face.ts
+            (painted expression atlas), uniform.ts (jersey texture, numbers), costume.ts
+            (hair, hats, persona pieces), items.ts (bat, glove, ball, props), anim.ts
+            (Animator: poses, cycles, IK, look-at, blinks), ik.ts
+  game/     world.ts (World: stadium + 18 Actors + ball + overlays; sync(match) maps sim
+            state to kids each frame), director.ts (camera shots), screen.ts (GameScreen:
+            HUD, input, events → sounds/popups/fx/commentary), fx.ts (particles, ball trail),
+            portraits.ts (3D portraits for HUD/menus)
+  audio/    Web Audio synth: sfx, music sequencer + songs, ambience
+  ui/       app.ts (loading, title over an attract-mode CPU game, team pick, roster, how-to,
+            settings), commentary.ts (Chet & Dottie), settings.ts, dom.ts, style.css
+  dev/      view3d.ts (#dev), gallery3d.ts (#gallery) — dev-only
+tests/      sim balance + determinism, human-hitting, audio
 ```
 
-World units are feet. Home plate is the origin, +y toward second base/center
-field, +x toward first base, +z up. Bases are 60 ft apart (Little League).
+World units are feet. **Sim coordinates:** home plate is the origin, +y toward
+second base/center field, +x toward first base, +z up. **Three.js coordinates:**
+`three = (sim.x, sim.z, -sim.y)` — use `W(x, y, z)` from `gfx/units.ts`; a sim
+facing angle `f` (0 = +y, clockwise) becomes yaw `π - f` (`yawOf`). Kid models
+face local +z; their left is +x.
 
 ## How the engine fits together
 
 - `Match.update(dt)` drives phases: `prePitch → windup → pitch → (live) → result → halfOver → over`.
 - Human input enters via `Match.selectPitch / swing / throwTo / runners`; anything
-  the human doesn't decide, the CPU does (throws after `autoThrowDelay`).
+  the human doesn't decide, the CPU does.
 - `LivePlay` owns fielders, runners and the ball during a ball in play and emits
-  `MatchEvent`s; `GameScreen.handleEvents` turns events into sounds, popups and commentary.
-- League games are simulated with the same engine (`simulateMatch`, ~0.3 s per 6-inning game).
+  `MatchEvent`s; `GameScreen.handleEvents` turns them into sounds, popups, effects and commentary.
+- `World.sync(match)` decides where every kid should be and in which animation `Mode`
+  (`kid3d/anim.ts`); kids not in the play jog to their team's dugout.
+- The app builds one `World` at startup and reuses it for the title attract game and
+  every match.
 
 ## Balancing
 
-`tests/sim.test.ts` prints league-wide numbers (AVG, runs, HR, K%, BB%, errors)
-from many CPU games and asserts sane ranges; `tests/human.test.ts` checks a
-pretend human can hit on Rookie and that All-Star is harder. When changing
-physics/AI constants, run them and look at the printed summary. Current
-targets: AVG ~.33–.37, 4–5 runs per team per 6 innings, ~1 HR/team-game,
-2–3 errors/game, K% ~10–14%.
+`tests/sim.test.ts` prints league-wide numbers from many CPU games and asserts sane
+ranges; `tests/human.test.ts` checks a pretend human can hit on Rookie and that
+All-Star is harder. Current: AVG ~.33, ~3.7 runs and ~1.2 HR per team per 6 innings,
+~2.8 errors/game, K% ~10%.
 
 ## Verifying visually
 
-Chromium + Playwright are preinstalled in the cloud container. Run `npm run dev`
-and screenshot with Playwright (import from `$(npm root -g)/playwright/index.mjs`);
-`#gallery` shows every kid and pose, `#scene=<yard>&cam=…` shows a yard.
+Chromium + Playwright are preinstalled in the cloud container (software WebGL via
+SwiftShader: ~1 frame/s, so use `q=low` and `ff=`). Launch with
+`--enable-unsafe-swiftshader --ignore-gpu-blocklist`, `goto(..., {waitUntil:'commit'})`,
+and wait for `window.__ready` (dev views) or `window.__game.ready` (games).
 
 ## Conventions
 
-- Keep `src/sim` free of DOM/canvas so it runs headless in tests.
-- Determinism: all randomness goes through the match/season `Rng`.
+- Keep `src/sim` free of DOM/Three so it runs headless in tests.
+- Determinism: all game randomness goes through the match `Rng` (cosmetic randomness in
+  the renderer is fine).
 - Storage must stay optional (wrapped in try/catch) — the game must run without it.
-- No `alert/confirm/prompt` (blocked in embedded hosts) — use in-page UI.
+- No `alert/confirm/prompt` — use in-page UI.
+- Static scenery: add primitives to a `Batch` (one mesh per material). Textures are
+  painted neutral and tinted per material (`gfx/materials.ts`) — painting a new texture
+  per colour costs seconds at load.
 - Test gate before committing: `npm run typecheck && npm test && npm run build`.

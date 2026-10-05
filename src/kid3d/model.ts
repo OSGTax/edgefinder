@@ -1,12 +1,12 @@
 import {
-  Bone, Color, DoubleSide, Group, Matrix4, MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, SphereGeometry,
-  Vector2, Vector3, type BufferGeometry, type Material, type Skeleton,
+  Bone, CanvasTexture, Color, DoubleSide, Group, SRGBColorSpace, Matrix4, MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, SphereGeometry,
+  Vector2, Vector3, type BufferGeometry, type Material, type Skeleton, type Texture,
 } from 'three';
 import type { Kid, Team } from '../data/types';
 import { HAIR, SKIN } from '../data/palette';
 import { fabricNormal } from '../gfx/textures';
 import { alongMatrix, blended, limb, loft, paint, paintFn, PartList, ramp, rigid, type Ring } from './geom';
-import { B, makeSkeleton, proportions, type BoneName, type Proportions } from './rig';
+import { B, HEAD_SHAPE, makeSkeleton, proportions, type BoneName, type Proportions } from './rig';
 import { ATLAS_COLS, ATLAS_ROWS, EXPRESSIONS, FACE_PATCH, paintFaceAtlas, type Expression } from './face';
 import { JERSEY_V0, paintJersey, uniformColors, type UniformColors } from './uniform';
 import { addCostume, addHair, addHat } from './costume';
@@ -34,6 +34,9 @@ function clothMaterial() {
   });
 }
 
+/** A non-uniform look (for grown-ups): a shirt texture in the jersey layout and colour overrides. */
+export interface Outfit { shirt?: Texture; colors?: Partial<UniformColors> }
+
 /** Everything the animator needs from a built kid. */
 export class KidModel {
   readonly group = new Group();
@@ -49,12 +52,13 @@ export class KidModel {
   private expr: Expression = 'neutral';
   readonly colors: UniformColors;
 
-  constructor(readonly kid: Kid, readonly team: Team, quality: { faceCell: number; jersey: number } = { faceCell: 256, jersey: 512 }) {
+  constructor(readonly kid: Kid, readonly team: Team, o: { faceCell?: number; jersey?: number; outfit?: Outfit } = {}) {
+    const quality = { faceCell: o.faceCell ?? 256, jersey: o.jersey ?? 512 };
     this.p = proportions(kid.look);
     const { skeleton, bones } = makeSkeleton(this.p);
     this.skeleton = skeleton;
     this.bones = Object.fromEntries(bones.map((b) => [b.name, b])) as Record<BoneName, Bone>;
-    this.colors = uniformColors(team);
+    this.colors = { ...uniformColors(team), ...o.outfit?.colors };
     const L: Lists = {
       skin: new PartList(), cloth: new PartList(), jersey: new PartList(), hair: new PartList(),
       eyes: new PartList(), face: new PartList(), shiny: new PartList(),
@@ -67,9 +71,10 @@ export class KidModel {
     const skinHex = SKIN[kid.look.skin] ?? SKIN[1];
     const skinMat = sharedMat(`kidSkin${skinHex}`, () => new MeshStandardMaterial({ color: skinHex, roughness: 0.58 }));
     const hairMat = sharedMat(`kidHair${kid.look.hairColor}`, () => new MeshStandardMaterial({ color: HAIR[kid.look.hairColor] ?? HAIR[0], roughness: 0.5 }));
-    const eyeMat = sharedMat('kidEyes', () => new MeshStandardMaterial({ vertexColors: true, roughness: 0.08, envMapIntensity: 1.4 }));
+    const eyeHex = irisColor(kid);
+    const eyeMat = sharedMat(`kidEyes${eyeHex}`, () => new MeshStandardMaterial({ map: eyeTexture(eyeHex), roughness: 0.08, envMapIntensity: 1.4 }));
     const shinyMat = sharedMat('kidShiny', () => new MeshStandardMaterial({ vertexColors: true, roughness: 0.22, metalness: 0.35 }));
-    const jerseyMat = new MeshStandardMaterial({ map: paintJersey(kid, team, quality.jersey), roughness: 0.8, normalMap: clothMaterial().normalMap, normalScale: new Vector2(0.3, 0.3) });
+    const jerseyMat = new MeshStandardMaterial({ map: o.outfit?.shirt ?? paintJersey(kid, team, quality.jersey), roughness: 0.8, normalMap: clothMaterial().normalMap, normalScale: new Vector2(0.3, 0.3) });
     jerseyMat.name = `jersey-${kid.id}`;
     const faceTex = paintFaceAtlas({ look: kid.look, eyePhi: 21, eyeTheta: 3, eyeSize: 12 }, quality.faceCell);
     faceTex.repeat.set(1 / ATLAS_COLS, 1 / ATLAS_ROWS);
@@ -92,7 +97,7 @@ export class KidModel {
     add(L.cloth, clothMaterial(), true);
     add(L.jersey, jerseyMat, false);
     add(L.hair, hairMat, false);
-    add(L.eyes, eyeMat, true, false);
+    add(L.eyes, eyeMat, false, false);
     add(L.shiny, shinyMat, true);
     add(L.face, this.faceMat, false, false, 1);
     this.group.add(bones[0]);
@@ -107,6 +112,8 @@ export class KidModel {
     this.bones.handL.add(this.gripL);
     this.bones.handR.add(this.gripR);
     void hl; void hr;
+    // eyes open at rest (the animator blinks them)
+    this.bones.lidL.rotation.x = this.bones.lidR.rotation.x = -0.62;
     this.hatTop.position.set(0, this.p.headR * 1.95, 0.02);
     this.bones.head.add(this.hatTop);
     this.setExpression('neutral');
@@ -141,7 +148,7 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
   const look = kid.look;
 
   // ── head: a slightly egg-shaped sphere with a narrower jaw, plus ears and a button nose
-  const shape = { round: [1, 1, 1], oval: [0.93, 1.08, 0.97], square: [1.05, 0.97, 1.0], wide: [1.12, 0.95, 1.03] }[look.head] ?? [1, 1, 1];
+  const shape = HEAD_SHAPE[look.head] ?? HEAD_SHAPE.round;
   const R = p.headR;
   const hc = headCentre(p);
   const head = new SphereGeometry(R, 34, 24);
@@ -169,19 +176,13 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
   L.skin.add(rigid(nose, B.head), new Matrix4().makeTranslation(hc.x, hc.y - R * 0.16, hc.z + R * 0.98 * shape[2]));
 
   // ── eyes: glossy whites with a coloured iris and pupil, and upper lids that blink
-  const iris = new Color(irisColor(kid));
   for (const side of ['L', 'R'] as const) {
     const bi = side === 'L' ? B.eyeL : B.eyeR;
     const e = j[side === 'L' ? 'eyeL' : 'eyeR'];
-    const eye = new SphereGeometry(p.eyeR, 22, 16);
+    // the sphere's pole looks forward, so the iris and pupil are perfectly round bands of the texture
+    const eye = new SphereGeometry(p.eyeR, 28, 20);
+    eye.rotateX(Math.PI / 2);
     eye.scale(1, 1.08, 0.86);
-    paintFn(eye, (q) => {
-      const a = Math.acos(Math.max(-1, Math.min(1, q.z / (p.eyeR * 0.86))));
-      if (a < 0.26) return new Color('#0d0a08');
-      if (a < 0.5) return iris.clone().multiplyScalar(0.75 + (a - 0.26) * 1.2);
-      if (a < 0.56) return iris.clone().multiplyScalar(0.45);
-      return new Color('#fbfbf7');
-    });
     L.eyes.add(rigid(eye, bi), new Matrix4().makeTranslation(e.x, e.y, e.z));
     // upper lid: a skin-coloured shell cap; the lid bone rotates it closed
     const lid = new SphereGeometry(p.eyeR * 1.1, 24, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
@@ -252,12 +253,14 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     const ball = new SphereGeometry(p.armR * 1.45, 18, 12);
     L.cloth.add(paint(rigid(ball, armBone), col.jersey), new Matrix4().makeTranslation(sh.x - side * 0.03, sh.y - 0.04, sh.z));
     const sleeve = loft([
-      { y: -ua * 0.62, rx: p.armR * 1.38, rz: p.armR * 1.32 },
-      { y: -ua * 0.58, rx: p.armR * 1.42, rz: p.armR * 1.36 },
-      { y: -ua * 0.2, rx: p.armR * 1.5, rz: p.armR * 1.42 },
-      { y: 0.02, rx: p.armR * 1.52, rz: p.armR * 1.45 },
+      { y: -ua * 0.62, rx: p.armR * 1.36, rz: p.armR * 1.3 },
+      { y: -ua * 0.6, rx: p.armR * 1.4, rz: p.armR * 1.34 },
+      { y: -ua * 0.545, rx: p.armR * 1.42, rz: p.armR * 1.36 },
+      { y: -ua * 0.535, rx: p.armR * 1.42, rz: p.armR * 1.36 },
+      { y: -ua * 0.2, rx: p.armR * 1.48, rz: p.armR * 1.41 },
+      { y: 0.02, rx: p.armR * 1.5, rz: p.armR * 1.44 },
     ], 18);
-    L.cloth.add(paintFn(rigid(sleeve, armBone), (q) => new Color(q.y < -ua * 0.52 ? col.trim : col.jersey)), alongMatrix(sh, el));
+    L.cloth.add(paintFn(rigid(sleeve, armBone), (q) => new Color(q.y < -ua * 0.54 ? col.trim : col.jersey)), alongMatrix(sh, el));
     L.skin.add(rigid(limb(ua * 0.98, p.armR, p.armR * 0.88, 14), armBone), alongMatrix(sh, el));
     const fa = wr.clone().sub(el).length();
     L.skin.add(rigid(limb(fa * 0.95, p.armR * 0.9, p.armR * 0.72, 14), foreBone), alongMatrix(el, wr));
@@ -298,11 +301,12 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     ], 16, false, true);
     L.cloth.add(paintFn(rigid(shinPants, shinBone), (q) => (kneeStain && q.y > -sl * 0.15 && q.z > 0 ? pants.clone().lerp(stain, 0.55) : pants)), alongMatrix(knee, ank));
     const sock = limb(sl * 0.98, p.legR * 0.86, p.legR * 0.7, 14);
-    const sockC = new Color(col.socks), stripe = new Color(col.sockStripe);
-    L.cloth.add(paintFn(rigid(sock, shinBone), (q) => {
-      const t = -q.y / sl;
-      return t > 0.62 && t < 0.68 || t > 0.72 && t < 0.76 ? stripe : t > 0.88 ? new Color('#f5f5f0') : sockC;
-    }), alongMatrix(knee, ank));
+    L.cloth.add(paint(rigid(sock, shinBone), col.socks), alongMatrix(knee, ank));
+    for (const [t0, t1] of [[0.6, 0.66], [0.7, 0.74]]) {
+      const r0 = p.legR * (0.86 + (0.7 - 0.86) * t0) + 0.006, r1 = p.legR * (0.86 + (0.7 - 0.86) * t1) + 0.006;
+      const band = loft([{ y: -sl * t1, rx: r1, rz: r1 }, { y: -sl * t0, rx: r0, rz: r0 }], 14);
+      L.cloth.add(paint(rigid(band, shinBone), col.sockStripe), alongMatrix(knee, ank));
+    }
     addShoe(L, p, ank, footBone, kid);
   }
 }
@@ -348,6 +352,47 @@ function addShoe(L: Lists, p: Proportions, ank: Vector3, bone: number, kid: Kid)
     const lace = limb(w * 0.55, 0.012 * s, 0.012 * s, 5);
     L.cloth.add(paint(rigid(lace, bone), '#ffffff'), new Matrix4().makeTranslation(ank.x + w * 0.27, 0.2 * s + k * 0.01, ank.z + len * (0.28 + k * 0.08)).multiply(new Matrix4().makeRotationZ(Math.PI / 2)));
   }
+}
+
+const eyeTex = new Map<string, CanvasTexture>();
+/** Eye texture: v = 1 is the front of the eye (pupil), bands outward: iris with streaks, rim, white. */
+function eyeTexture(irisHex: string): CanvasTexture {
+  let t = eyeTex.get(irisHex);
+  if (t) return t;
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 256;
+  const g = c.getContext('2d')!;
+  const H = 256;
+  g.fillStyle = '#fbfbf7';
+  g.fillRect(0, 0, 64, H);
+  // a hint of shadow toward the back of the eyeball
+  const sh = g.createLinearGradient(0, H * 0.25, 0, H);
+  sh.addColorStop(0, 'rgba(0,0,0,0)');
+  sh.addColorStop(1, 'rgba(120,110,120,0.35)');
+  g.fillStyle = sh;
+  g.fillRect(0, H * 0.25, 64, H * 0.75);
+  const irisEnd = H * (0.5 / Math.PI) * 1.05, pupilEnd = H * (0.24 / Math.PI);
+  const ig = g.createLinearGradient(0, 0, 0, irisEnd);
+  ig.addColorStop(0, shadeHex(irisHex, 1.25));
+  ig.addColorStop(0.7, irisHex);
+  ig.addColorStop(1, shadeHex(irisHex, 0.45));
+  g.fillStyle = ig;
+  g.fillRect(0, 0, 64, irisEnd);
+  for (let i = 0; i < 64; i += 3) { g.fillStyle = `rgba(255,255,255,${0.05 + (i % 7) * 0.012})`; g.fillRect(i, pupilEnd, 1, irisEnd - pupilEnd); }
+  g.fillStyle = shadeHex(irisHex, 0.35);
+  g.fillRect(0, irisEnd - 3, 64, 3);
+  g.fillStyle = '#0b0807';
+  g.fillRect(0, 0, 64, pupilEnd);
+  t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  eyeTex.set(irisHex, t);
+  return t;
+}
+
+function shadeHex(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v: number) => Math.max(0, Math.min(255, Math.round(v * k)));
+  return `rgb(${f((n >> 16) & 255)},${f((n >> 8) & 255)},${f(n & 255)})`;
 }
 
 function irisColor(kid: Kid): string {

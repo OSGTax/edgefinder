@@ -55,7 +55,7 @@ export type BodyFlair = 'none' | 'suspenders' | 'apron' | 'pocketProtector' | 't
 export type Holding =
   | 'none' | 'coffee' | 'clipboard' | 'briefcase' | 'newspaper' | 'calculator' | 'binoculars'
   | 'gavel' | 'microphone' | 'magnifier' | 'phone' | 'juicebox' | 'lunchpail' | 'wand' | 'trophy'
-  | 'rollingPin' | 'wrench' | 'flag' | 'horseshoe' | 'bowlingBall' | 'fishingRod' | 'crystalBall' | 'dumbbell';
+  | 'rollingPin' | 'wrench' | 'spatula' | 'flag' | 'horseshoe' | 'bowlingBall' | 'fishingRod' | 'crystalBall' | 'dumbbell';
 
 export interface KidLook {
   skin: number;       // index into SKIN palette

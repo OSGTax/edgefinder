@@ -1,17 +1,20 @@
 # Grass Stain League
 
-Backyard baseball, played by tiny professionals.
+Backyard baseball, played by very serious kids.
 
-A neighborhood baseball league of comical mini-adult kids, eight backyards with
-their own ground rules, and a season that ends with the Lemonade Cup. Every
-character, yard, sound and song is generated in code: no image or audio files.
+A 3D backyard-baseball game where every kid is a comical mini adult — a CPA,
+a retired plumber, a monster-truck announcer — playing in the neighborhood's
+backyards. This is the **demo**: the Maple Street Mudcats visit the Cedar Lane
+Comets at Pool Party Paradise. Every model, texture, sound and song is
+generated in code: there are no image, model or audio files.
 
-- **Play the prototype:** https://claude.ai/artifact/KGG4KBQdjTg3MHKAyHEP1U (private preview)
+- **Play it:** https://osgtax.github.io/edgefinder/ (once GitHub Pages is switched on: Settings → Pages → *Deploy from a branch* → this branch, `/docs` folder)
 - **The plan and roadmap:** [GAME-PLAN.md](GAME-PLAN.md)
 - **For developers:** [CLAUDE.md](CLAUDE.md)
 
 ```bash
 npm install
-npm run dev     # play locally at http://localhost:5173
+npm run dev          # play locally at http://localhost:5173
 npm test
+npm run build:pages  # rebuild the playable site in docs/
 ```

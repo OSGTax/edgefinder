@@ -282,6 +282,7 @@ class Attract {
     this.director.update(this.match, dt, null);
     this.studio.update();
     this.world.render();
+    this.world.adapt(dt);
     this.raf = requestAnimationFrame(this.frame);
   };
 

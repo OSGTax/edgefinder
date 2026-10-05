@@ -46,11 +46,26 @@ export class Director {
     const k = snap ? 1 : 1 - Math.exp(-dt * rate);
     this.cur.pos.lerp(want.pos, k);
     this.cur.look.lerp(want.look, k);
+    // keep the same sideways view on tall (portrait) screens
+    const aspect = this.cam.aspect || 16 / 9;
+    if (aspect < 1.5) {
+      const h = 2 * Math.atan(Math.tan((want.fov * Math.PI) / 360) * (16 / 9));
+      want.fov = Math.min(95, Math.max(want.fov, (2 * Math.atan(Math.tan(h / 2) / aspect) * 180) / Math.PI * 0.82));
+    }
     this.cur.fov = MathUtils.lerp(this.cur.fov, want.fov, k);
     this.cam.position.copy(this.cur.pos);
+    if (this.shakeAmt > 0.001) {
+      const a = this.shakeAmt;
+      this.cam.position.add(new Vector3(Math.sin(this.time * 61) * a * 0.3, Math.sin(this.time * 47 + 1) * a * 0.25, 0));
+      this.shakeAmt *= Math.exp(-dt * 6);
+    }
     this.cam.lookAt(this.cur.look);
     if (Math.abs(this.cam.fov - this.cur.fov) > 0.01) { this.cam.fov = this.cur.fov; this.cam.updateProjectionMatrix(); }
   }
+
+  private shakeAmt = 0;
+  /** a little camera kick (big hits) */
+  shake(a: number) { this.shakeAmt = Math.max(this.shakeAmt, a); }
 
   /** start from wherever the camera is now */
   adopt(cam: PerspectiveCamera) {

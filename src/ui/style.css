@@ -315,3 +315,27 @@ canvas { display: block; }
 }
 .team-pick, .tp-kids { min-width: 0; }
 .tp-kids .portrait { min-width: 0; }
+.radar { position: absolute; right: max(12px, env(safe-area-inset-right)); top: 62px; background: rgba(43, 29, 20, 0.8); color: #7dff9a; font-family: "Courier New", monospace; font-weight: 900; font-size: 14px; padding: 4px 10px; border-radius: 8px; opacity: 0; pointer-events: none; }
+.radar.show { animation: radar 2.6s ease-out; }
+@keyframes radar { 0% { opacity: 0; transform: translateY(-6px); } 10%, 75% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+/* the game layer sits over the canvas: let clicks through except on real controls */
+.game { pointer-events: none; }
+.game > * { pointer-events: auto; }
+.game > .hud { pointer-events: none; }
+@media (max-height: 520px) {
+  .logo-big { margin-top: 0; }
+  .logo-word { font-size: clamp(30px, 13vh, 72px); -webkit-text-stroke-width: 3px; text-shadow: 0 4px 0 var(--ink); }
+  .logo-small { font-size: 14px; }
+  .screen.title { gap: 8px; padding-top: 8px; }
+  .tagline { font-size: 12px; padding: 3px 12px; }
+  .menu-col { gap: 6px; width: min(340px, 80vw); }
+  .btn.big { font-size: 17px; padding: 0.4em 0.8em; }
+  .footer { display: none; }
+  .screen { gap: 8px; padding-top: 8px; }
+  .screen-head { padding: 4px 10px; }
+  .team-pick { padding: 8px; gap: 5px; }
+  .options { padding: 6px 10px; gap: 4px; }
+}
+.rotate-hint { display: none; position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%); background: rgba(43, 29, 20, 0.85); color: #fff; font-weight: 900; padding: 10px 16px; border-radius: 14px; text-align: center; pointer-events: none; animation: fadeaway 5s ease-in forwards; }
+@keyframes fadeaway { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+@media (orientation: portrait) and (pointer: coarse) { .rotate-hint { display: block; } }

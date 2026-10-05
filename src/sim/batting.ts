@@ -77,7 +77,7 @@ export function resolveSwing(
     la = -14 + dzRel * 14 + rng.gauss() * 5;
     spray = clamp(-s.aimX * 22 + rng.gauss() * 16, -60, 60);
   } else {
-    const base = 38 + k.traits.hitting * 4.1 + (s.kind === 'power' ? 7 : 0);
+    const base = 37 + k.traits.hitting * 3.8 + (s.kind === 'power' ? 6 : 0);
     evMph = base * (0.55 + 0.45 * quality) + pitch.mph * 0.1;
     la = 10 + dzRel * 34 + rng.gauss() * 7 + (s.kind === 'power' ? 5 : 0);
     spray = pull * (-delta / w) * 34 - pull * dxRel * 8 + rng.gauss() * 9;

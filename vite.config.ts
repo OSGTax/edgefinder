@@ -1,14 +1,19 @@
 import { defineConfig } from 'vitest/config';
-import { viteSingleFile } from 'vite-plugin-singlefile';
 
-// `--mode single` inlines everything into one index.html (used for the
-// shareable web build); the default build emits normal hashed assets.
+// `--mode pages` builds the playable site into docs/ for GitHub Pages
+// (Settings → Pages → deploy from this branch, /docs folder).
 export default defineConfig(({ mode }) => ({
   base: './',
-  plugins: mode === 'single' ? [viteSingleFile()] : [],
   build: {
-    outDir: mode === 'single' ? 'dist-single' : 'dist',
+    outDir: mode === 'pages' ? 'docs' : 'dist',
+    emptyOutDir: true,
     target: 'es2020',
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => (id.includes('node_modules/three') ? 'three' : undefined),
+      },
+    },
   },
   test: {
     include: ['tests/**/*.test.ts'],

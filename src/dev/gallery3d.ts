@@ -38,14 +38,14 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
     const m = new KidModel(k, team);
     const row = Math.floor(i / 9), col = i % 9;
     if (opts.has('faces') && row > 0) { m.group.visible = false; }
-    m.group.position.set((col - 4) * 2.4, 0, -row * 4);
+    m.group.position.set(only ? 0 : (col - 4) * 2.4, 0, -row * 4);
     if (opts.has('back')) m.group.rotation.y = Math.PI;
     if (expr) m.setExpression(expr as (typeof EXPRESSIONS)[number]);
     scene.add(m.group);
     models.push(m);
   });
   const cam = new PerspectiveCamera(only ? 22 : 30, window.innerWidth / window.innerHeight, 0.1, 500);
-  if (only) { cam.position.set(0, 4.2, 9); cam.lookAt(0, 3.0, 0); }
+  if (only) { cam.position.set(0, 4.0, 6.5); cam.lookAt(0, 3.6, 0); }
   else if (opts.has('faces')) { cam.position.set(0, 4.3, 14); cam.lookAt(0, 3.9, 0); cam.fov = 30; cam.updateProjectionMatrix(); }
   else { cam.position.set(0, 7, 28); cam.lookAt(0, 2.4, -2); }
   (window as unknown as { __models: KidModel[] }).__models = models;

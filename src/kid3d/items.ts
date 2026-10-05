@@ -154,6 +154,10 @@ export function makeProp(kind: Holding): Group | null {
       add(box(0.08, 1.0, 0.04), '#9aa0a6', 0, 0.3, 0.05);
       add(new TorusGeometry(0.11, 0.04, 6, 12, Math.PI * 1.5), '#9aa0a6', 0, 0.85, 0.05);
       break;
+    case 'spatula':
+      add(new CylinderGeometry(0.03, 0.03, 0.9, 6), '#2a2a2a', 0, 0.25, 0.05);
+      add(box(0.32, 0.38, 0.02), '#c9cdd1', 0, 0.86, 0.05);
+      break;
     case 'juicebox':
       add(box(0.25, 0.38, 0.16), '#ff8a3d', 0, 0.1, 0.1);
       add(new CylinderGeometry(0.01, 0.01, 0.25, 4), '#ffffff', 0.05, 0.38, 0.1, 0, 0, 0.3);

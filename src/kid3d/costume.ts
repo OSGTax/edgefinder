@@ -62,10 +62,11 @@ export function addHair(L: Lists, p: Proportions, kid: Kid) {
     case 'messy':
       scalp(1.06);
       for (let i = 0; i < 16; i++) {
-        const a = rnd() * Math.PI * 2, el = 0.25 + rnd() * 0.9;
+        const a = rnd() * Math.PI * 2, el = hatted ? -0.1 + rnd() * 0.3 : 0.25 + rnd() * 0.9;
         const d = new Vector3(Math.cos(a) * Math.cos(el), Math.sin(el), Math.sin(a) * Math.cos(el) * 0.8 - 0.25);
         if (d.z > 0.55 && d.y < 0.6) continue;
-        const g = new CylinderGeometry(0, R * 0.16, R * 0.45, 7);
+        if (hatted && d.z > -0.1) continue; // under a cap only the back tufts show
+        const g = new CylinderGeometry(0, R * 0.16, R * (hatted ? 0.3 : 0.45), 7);
         const q = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), d.clone().normalize());
         H(g, new Matrix4().compose(hc.clone().addScaledVector(d.normalize(), R * 1.02), q, new Vector3(1, 1, 1)));
       }
@@ -75,9 +76,10 @@ export function addHair(L: Lists, p: Proportions, kid: Kid) {
       const n = hatted ? 7 : 12;
       for (let i = 0; i < n; i++) {
         const a = (i / n) * Math.PI * 2 + rnd() * 0.4;
-        const el = hatted ? 0.05 + rnd() * 0.15 : 0.45 + rnd() * 0.7;
+        const el = hatted ? -0.15 + rnd() * 0.2 : 0.45 + rnd() * 0.7;
         const d = new Vector3(Math.cos(a) * Math.cos(el), Math.sin(el), Math.sin(a) * Math.cos(el) * 0.9 - 0.15).normalize();
         if (d.z > 0.7 && d.y < 0.4) continue;
+        if (hatted && d.z > -0.25) continue; // spikes stick out the back under a cap
         const len = R * (hatted ? 0.35 : 0.55 + rnd() * 0.25);
         const g = new CylinderGeometry(0, R * 0.17, len, 6);
         g.translate(0, len / 2, 0);
@@ -119,7 +121,7 @@ export function addHair(L: Lists, p: Proportions, kid: Kid) {
       for (const sx of [-1, 1]) {
         H(new SphereGeometry(R * 0.11, 8, 6), at(sx * R * 0.92, -R * 0.05, -R * 0.2));
         if (look.hair === 'pigtails') {
-          toChest(lumpy(limb(R * 0.9, R * 0.22, R * 0.1, 10), 0.04, 20, sx), at(sx * R * 1.0, -R * 0.08, -R * 0.25, 0, 0, sx * 0.55));
+          toChest(lumpy(limb(R * 0.85, R * 0.2, R * 0.1, 10), 0.04, 20, sx), at(sx * R * 0.98, -R * 0.12, -R * 0.3, 0.25, 0, sx * 0.22));
         } else {
           for (let k = 0; k < 7; k++) {
             const g = new SphereGeometry(R * (0.15 - k * 0.008), 10, 8);

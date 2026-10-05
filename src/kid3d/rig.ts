@@ -24,6 +24,11 @@ const PARENT: Record<BoneName, BoneName | null> = {
   thighR: 'hips', shinR: 'thighR', footR: 'shinR',
 };
 
+/** Head ellipsoid scale (x, y, z) per head shape. */
+export const HEAD_SHAPE: Record<KidLook['head'], [number, number, number]> = {
+  round: [1, 1, 1], oval: [0.93, 1.08, 0.97], square: [1.05, 0.97, 1.0], wide: [1.12, 0.95, 1.03],
+};
+
 /** Body measurements in feet, all derived from the kid's look. */
 export interface Proportions {
   H: number;          // standing height to the top of the head
@@ -58,6 +63,11 @@ export function proportions(look: KidLook): Proportions {
   const upperArm = 0.62 * s, foreArm = 0.56 * s;
   const eyeR = 0.165 * hs;
   const headC = headBase + headR * 0.92;
+  // eyes sit on the actual head surface (whatever its shape), about half proud of it
+  const [sx, sy, sz] = HEAD_SHAPE[look.head] ?? HEAD_SHAPE.round;
+  const ex = headR * 0.35 * Math.max(1, sx * 0.95), ey = headR * 0.05;
+  const surf = 0.04 + headR * sz * Math.sqrt(Math.max(0, 1 - (ex / (headR * sx)) ** 2 - (ey / (headR * sy)) ** 2));
+  const eyeZ = surf - eyeR * 0.42;
   const j: Record<BoneName, Vector3> = {
     root: new Vector3(0, 0, 0),
     hips: new Vector3(0, hipY + 0.05 * s, 0),
@@ -65,10 +75,10 @@ export function proportions(look: KidLook): Proportions {
     chest: new Vector3(0, chestY, 0),
     neck: new Vector3(0, neckY, 0),
     head: new Vector3(0, headBase, 0.02),
-    eyeL: new Vector3(headR * 0.35, headC + headR * 0.05, headR * 0.79 + 0.02),
-    eyeR: new Vector3(-headR * 0.35, headC + headR * 0.05, headR * 0.79 + 0.02),
-    lidL: new Vector3(headR * 0.35, headC + headR * 0.05, headR * 0.79 + 0.02),
-    lidR: new Vector3(-headR * 0.35, headC + headR * 0.05, headR * 0.79 + 0.02),
+    eyeL: new Vector3(ex, headC + ey, eyeZ),
+    eyeR: new Vector3(-ex, headC + ey, eyeZ),
+    lidL: new Vector3(ex, headC + ey, eyeZ),
+    lidR: new Vector3(-ex, headC + ey, eyeZ),
     shoulderL: new Vector3(0.16 * wf, shoulderY - 0.04, 0),
     armL: new Vector3(shoulderX, shoulderY, 0),
     foreL: new Vector3(shoulderX + 0.09, shoulderY - upperArm, 0.02),

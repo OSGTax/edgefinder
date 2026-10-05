@@ -136,6 +136,7 @@ export class GameScreen {
 
   // ─────────────────────────────────────────────────────────── main loop
 
+  private slowmo = 0;
   /** dev only: simulate this many fixed steps per rendered frame (slow headless browsers) */
   ff = 0;
 
@@ -144,8 +145,11 @@ export class GameScreen {
     const real = Math.min(0.05, (now - this.last) / 1000);
     this.last = now;
     const steps = this.ff > 0 ? this.ff : 1;
+    // a crushed ball gets a moment of slow motion
+    this.slowmo = Math.max(0, this.slowmo - real);
+    const scale = this.slowmo > 0 ? 0.3 : 1;
     for (let i = 0; i < steps && !this.paused && this.ready; i++) {
-      const dt = this.ff > 0 ? 1 / 30 : real;
+      const dt = (this.ff > 0 ? 1 / 30 : real) * scale;
       this.time += dt;
       this.updateAimAssist(dt);
       if (this.introT <= 0) this.match.update(dt);
@@ -158,6 +162,7 @@ export class GameScreen {
     if (this.ready) {
       this.studio.update();
       this.world.render();
+      this.world.adapt(real);
     }
     this.raf = requestAnimationFrame(this.frame);
   };
@@ -391,6 +396,7 @@ export class GameScreen {
         case 'pitch':
           if (e.special) { this.popup(SPECIAL_INFO[e.special].label.toUpperCase() + '!', '#c39bff', 1); audio.play('special'); }
           else audio.play('throw', { intensity: 0.4 });
+          this.radar(`${PITCHES[e.pitch as PitchType]?.label ?? e.pitch} · ${Math.round(e.mph)} mph`);
           break;
         case 'special':
           audio.play('special');
@@ -400,6 +406,7 @@ export class GameScreen {
           const strong = e.quality > 0.55 && e.ev > 55;
           audio.play(strong ? 'batCrack' : 'batTink', { intensity: clamp((e.ev - 30) / 60, 0, 1) });
           if (strong) fx.sparkle(this.world.ball.position.clone(), '#fff6c4');
+          if (strong && e.ev > 62 && e.la > 14 && e.la < 40) { this.slowmo = 0.45; this.director.shake(0.5); }
           break;
         }
         case 'whiff':
@@ -542,7 +549,8 @@ export class GameScreen {
     this.bannerEl = h('div', { class: 'banner hidden', onpointerdown: () => { audio.unlock(); if (this.introT > 0) this.endIntro(); } });
     this.hintEl = h('div', { class: 'hint' });
     const pause = h('button', { class: 'btn icon pause', 'aria-label': 'Pause', onclick: () => this.togglePause() }, '❚❚');
-    this.hud = h('div', { class: 'hud' }, this.sbEl, pause, this.cardsEl, this.tickerEl, this.bubbleEl, this.hintEl, this.controlsEl, this.popEl, this.bannerEl);
+    const rotate = h('div', { class: 'rotate-hint' }, '📱↻ Turn your phone sideways for the best view');
+    this.hud = h('div', { class: 'hud' }, this.sbEl, pause, this.cardsEl, this.tickerEl, this.bubbleEl, this.hintEl, this.controlsEl, this.popEl, this.bannerEl, rotate);
     this.root.appendChild(this.hud);
   }
 
@@ -661,6 +669,16 @@ export class GameScreen {
       default:
         hint(m.humanBatting || m.humanPitching ? '' : 'Watching the kids play');
     }
+  }
+
+  private radarEl: HTMLElement | null = null;
+  /** the radar-gun readout after each pitch */
+  private radar(text: string) {
+    if (!this.radarEl) { this.radarEl = h('div', { class: 'radar' }); this.hud.appendChild(this.radarEl); }
+    this.radarEl.textContent = text;
+    this.radarEl.classList.remove('show');
+    void this.radarEl.offsetWidth;
+    this.radarEl.classList.add('show');
   }
 
   private popup(text: string, color: string, scale = 1) {

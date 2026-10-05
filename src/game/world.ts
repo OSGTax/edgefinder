@@ -7,7 +7,7 @@ import { kid as kidById } from '../data/kids';
 import { createRenderer } from '../gfx/renderer';
 import { getQuality, type Quality } from '../gfx/quality';
 import { W, yawOf } from '../gfx/units';
-import type { Field } from '../sim/field';
+import { surfaceAt, type Field } from '../sim/field';
 import { WINDUP, type Match } from '../sim/match';
 import { FIELD_ORDER, type LivePlay } from '../sim/play';
 import type { FielderAnim, RunnerAnim } from '../sim/types';
@@ -16,6 +16,8 @@ import { KidModel } from '../kid3d/model';
 import { Animator, type AnimInput, type Mode } from '../kid3d/anim';
 import { makeBall, makeBat, makeGlove, makeProp } from '../kid3d/items';
 import { Effects } from './fx';
+import { hawaiianShirt } from '../kid3d/outfits';
+import { GROWNUP_SCALE, MR_MENDOZA } from '../world/grownups';
 
 // The 3D side of a game: the yard, all eighteen kids, the ball, overlays.
 // Each frame `sync` reads the Match and tells every kid where to be and what
@@ -57,8 +59,8 @@ class Actor {
   private placed = false;
   lefty: boolean;
 
-  constructor(readonly kid: Kid, readonly team: Team, scene: Scene) {
-    this.model = new KidModel(kid, team);
+  constructor(readonly kid: Kid, readonly team: Team, scene: Scene, outfit?: ConstructorParameters<typeof KidModel>[2]) {
+    this.model = new KidModel(kid, team, outfit);
     this.anim = new Animator(this.model);
     this.lefty = kid.throws === 'L';
     this.glove = makeGlove(this.model.p.s);
@@ -151,6 +153,13 @@ export class World {
   private mitt: Mesh;
   private baseRings: Mesh[] = [];
   private smokeT = 0;
+  /** the bat a batter drops when they take off for first */
+  private looseBat = makeBat('wood', 2.6);
+  private looseT = -1;
+  private looseFrom = { pos: new Vector3(), dir: new Vector3() };
+  private batWasUp: string | null = null;
+  /** Mr. Mendoza, at the grill */
+  readonly mendoza: Actor;
   time = 0;
 
   constructor(canvas: HTMLCanvasElement, readonly field: Field, readonly teams: [Team, Team]) {
@@ -160,7 +169,13 @@ export class World {
     this.stadium = new Stadium(this.scene, this.renderer, field, this.q);
     this.fx = new Effects(this.scene, this.q.pixelRatio);
     this.scene.add(this.ball);
+    this.looseBat.visible = false;
+    this.scene.add(this.looseBat);
     for (const t of teams) for (const id of t.roster) this.actors.set(id, new Actor(kidById(id), t, this.scene));
+    this.mendoza = new Actor(MR_MENDOZA, teams[1], this.scene, {
+      outfit: { shirt: hawaiianShirt('#1f8a8a'), colors: { pants: '#c8b48a', trim: '#1f8a8a', jersey: '#1f8a8a', socks: '#f4f4f0', sockStripe: '#f4f4f0' } },
+    });
+    this.mendoza.model.group.scale.setScalar(GROWNUP_SCALE);
 
     // strike zone + aim overlays (drawn in the plate plane)
     const zg = new BufferGeometry();
@@ -188,10 +203,41 @@ export class World {
     }
   }
 
+  private size = { w: 1280, h: 720 };
+  private frameAvg = 16;
+  private slowT = 0;
+  private fastT = 0;
+  private scale = 1;
+
   resize(w: number, h: number) {
+    this.size = { w, h };
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Adaptive resolution: if frames are slow for a while, render fewer
+   * pixels; if there's headroom, creep back up to the tier's sharpness.
+   */
+  /** off when a graphics tier is forced in the URL (screenshots, testing) */
+  private adaptive = typeof location === 'undefined' || !new URLSearchParams(location.hash.slice(1)).has('q');
+
+  adapt(realDt: number) {
+    if (!this.adaptive || realDt <= 0 || realDt > 0.25) return;
+    this.frameAvg += (realDt * 1000 - this.frameAvg) * 0.05;
+    if (this.frameAvg > 24) { this.slowT += realDt; this.fastT = 0; }
+    else if (this.frameAvg < 13) { this.fastT += realDt; this.slowT = 0; }
+    else { this.slowT = 0; this.fastT = 0; }
+    let next = this.scale;
+    if (this.slowT > 1.5 && this.scale > 0.55) next = Math.max(0.55, this.scale - 0.15);
+    if (this.fastT > 4 && this.scale < 1) next = Math.min(1, this.scale + 0.1);
+    if (next !== this.scale) {
+      this.scale = next;
+      this.slowT = this.fastT = 0;
+      this.renderer.setPixelRatio(Math.max(0.5, this.q.pixelRatio * this.scale));
+      this.renderer.setSize(this.size.w, this.size.h, false);
+    }
   }
 
   /** where a kid's throwing hand is, in three space */
@@ -219,6 +265,7 @@ export class World {
     const batTeamSide = m.battingSide;
     let ballSim: { x: number; y: number; z: number } | null = null;
     let ballHolder: string | null = null;
+    let tossT = -1;
 
     if (play && phase !== 'halfOver' && phase !== 'over') {
       const live = play.mode !== 'held' ? W(play.ball.p.x, play.ball.p.y, play.ball.p.z) : null;
@@ -263,7 +310,9 @@ export class World {
       const c = defense[1];
       const pb = m.pitchBallPos();
       const mittAt = m.pitch ? W(m.pitch.arrival.x, -1.6, Math.max(0.6, m.pitch.arrival.z)) : null;
-      want.set(c.id, { x: 0, y: -5.3, facing: 0, mode: 'crouch', t: 0, exact: phase !== 'prePitch', glove: true, reach: phase === 'pitch' || phase === 'result' ? mittAt : W(ov.pitchAim?.x ?? 0, -1.6, ov.pitchAim?.z ?? 2.2) });
+      const toss = phase === 'prePitch' && !m.lastPlay && !!m.pitch && m.phaseT < 0.9;
+      if (toss) tossT = m.phaseT;
+      want.set(c.id, { x: 0, y: -5.3, facing: 0, mode: toss && m.phaseT < 0.7 ? 'throw' : 'crouch', t: m.phaseT, exact: phase !== 'prePitch', glove: true, reach: phase === 'pitch' || phase === 'result' ? mittAt : W(ov.pitchAim?.x ?? 0, -1.6, ov.pitchAim?.z ?? 2.2) });
       // batter in the box
       const b = m.batter;
       const side = m.batterSide;
@@ -273,6 +322,10 @@ export class World {
         if (sw.kind === 'bunt') bm = 'bunt';
         else { bm = 'swing'; bt = Math.max(0, (phase === 'pitch' ? m.pitchT : m.pitchT + m.phaseT) - sw.tSwing); }
       } else if (ov.aimColor === '#6fc3ff' && m.humanBatting) bm = 'bunt';
+      // strike three: shoulders slump (after the follow-through)
+      const struckOut = phase === 'result' && m.strikes >= 3 && (m.lastCall === 'strike' || m.lastCall === 'swinging');
+      if (struckOut && (bm !== 'swing' || bt > 0.55)) { bm = 'sad'; bt = m.phaseT; }
+      if (struckOut) want.set(p.id, { x: 0, y: f.mound.y - 0.6, facing: Math.PI, mode: m.phaseT > 0.35 ? 'cheer' : 'follow', t: m.phaseT, exact: true, glove: true });
       want.set(b.id, { x: side === 'R' ? -2.55 : 2.55, y: 0.1, facing: side === 'R' ? Math.PI / 2 : -Math.PI / 2, mode: bm, t: bt, exact: phase !== 'prePitch', look: W(0, f.mound.y, 4.5) });
       // runners leading off
       m.bases.forEach((id, i) => {
@@ -325,11 +378,32 @@ export class World {
       }
     }
 
+    // the catcher lobs the ball back to the pitcher after a pitch
+    if (tossT >= 0) {
+      const c = defense[1];
+      const from = this.handOf(c.id), to = this.handOf(m.pitcher.id);
+      const u = Math.min(1, Math.max(0, (tossT - 0.22) / 0.6));
+      if (from && to && u > 0 && u < 1) {
+        const p = from.clone().lerp(to, u);
+        p.y += Math.sin(u * Math.PI) * 7;
+        ballSim = { x: p.x, y: -p.z, z: p.y };
+        ballHolder = null;
+      } else if (u <= 0) ballHolder = c.id;
+    }
     // ball position (three space)
     let ballPos: Vector3 | null = null;
     if (ballSim) ballPos = W(ballSim.x, ballSim.y, ballSim.z);
     else if (ballHolder) ballPos = this.handOf(ballHolder);
 
+    {
+      // Mr. Mendoza works the grill, and turns to watch anything exciting
+      const live = phase === 'live' && ballPos && play && !play.deadKind;
+      const g = LAYOUT.grill;
+      this.mendoza.apply({
+        x: g.x + 5.2, y: g.y + 1.6, facing: live ? null : Math.atan2(-5.2, -1.6), mode: 'grill', t: this.time, exact: true,
+        prop: true, look: live ? ballPos : W(g.x, g.y, 3),
+      }, dt, live ? ballPos : null, false);
+    }
     for (const [id, a] of this.actors) {
       const w = want.get(id);
       if (!w) continue;
@@ -337,10 +411,37 @@ export class World {
       a.apply(w, dt, ballPos, batSideL);
       a.ballInHand.visible = false;
     }
+    // the batter drops the bat on contact; it tumbles into the dirt and stays until the next batter
+    const batter = this.actors.get(m.batter.id);
+    if (batter?.anim.batActive) {
+      this.batWasUp = m.batter.id;
+      this.looseFrom.pos.copy(batter.anim.batHandle);
+      this.looseFrom.dir.copy(batter.anim.batDir);
+      if (phase === 'prePitch') { this.looseT = -1; this.looseBat.visible = false; }
+    } else if (this.batWasUp && phase === 'live') {
+      this.batWasUp = null;
+      this.looseT = 0;
+      this.looseBat.material = this.actors.get(m.batter.id)?.bat.material ?? this.looseBat.material;
+    }
+    if (this.looseT >= 0) {
+      this.looseT += dt;
+      const u = Math.min(1, this.looseT / 0.45);
+      const flat = new Vector3(this.looseFrom.dir.x, 0, this.looseFrom.dir.z).normalize();
+      if (flat.lengthSq() < 0.1) flat.set(1, 0, 0);
+      const dir = this.looseFrom.dir.clone().lerp(flat, u * u).normalize();
+      const p = this.looseFrom.pos.clone().addScaledVector(flat, u * 1.2);
+      p.y = Math.max(0.1, this.looseFrom.pos.y * (1 - u * u) + Math.sin(u * Math.PI) * 0.4);
+      this.looseBat.visible = true;
+      this.looseBat.position.copy(p);
+      this.looseBat.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), dir);
+      if (phase === 'prePitch' && m.phaseT > 0.5) { this.looseT = -1; this.looseBat.visible = false; }
+    }
     // the ball: in a hand, in flight, or on the ground
     if (ballSim) {
       this.ball.visible = true;
-      this.ball.position.copy(W(ballSim.x, ballSim.y, Math.max(0.12, ballSim.z)));
+      // a ball in the pool bobs on the water instead of resting on the lawn height
+      const wet = ballSim.z < 1 && surfaceAt(this.field, ballSim.x, ballSim.y) === 'water';
+      this.ball.position.copy(W(ballSim.x, ballSim.y, wet ? -0.48 + Math.sin(this.time * 3) * 0.04 : Math.max(0.12, ballSim.z)));
       this.ball.rotation.x += dt * 25;
     } else if (ballHolder) {
       this.ball.visible = false;
@@ -357,7 +458,7 @@ export class World {
     } else this.ball.visible = false;
     const flying = ballSim && (phase === 'pitch' || phase === 'live');
     this.fx.trailTo(flying ? this.ball.position : null, this.camera, phase === 'pitch' ? 0.8 : 1);
-    this.fx.ballShadow(this.ball.visible && ballSim ? this.ball.position : null);
+    this.fx.ballShadow(this.ball.visible && ballSim && this.ball.position.y > -0.2 ? this.ball.position : null);
 
     this.updateOverlay(m, ov);
     // grill smoke

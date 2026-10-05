@@ -12,7 +12,7 @@ import type { Expression } from './face';
 
 export type Mode =
   | 'stand' | 'ready' | 'crouch' | 'run' | 'trot' | 'walk' | 'catch' | 'throw' | 'dive' | 'jump' | 'stumble'
-  | 'slide' | 'cheer' | 'sad' | 'sit' | 'clap' | 'bat' | 'swing' | 'bunt' | 'windup' | 'follow' | 'out' | 'wave';
+  | 'slide' | 'cheer' | 'sad' | 'sit' | 'clap' | 'bat' | 'swing' | 'bunt' | 'windup' | 'follow' | 'out' | 'wave' | 'grill';
 
 export interface AnimInput {
   mode: Mode;
@@ -171,6 +171,16 @@ function clapPose(t: number): Pose {
   };
 }
 
+/** A grown-up at the grill: spatula hand flipping, the other on the hip. */
+function grillPose(t: number): Pose {
+  const flip = Math.max(0, Math.sin(t * 1.3)) ** 6;
+  return {
+    ...STAND, spine: [0.12, 0, 0], neck: [0.15, 0, 0], head: [0.2, 0, 0],
+    armR: [-0.9 - flip * 0.5, 0, -0.2], foreR: [-0.8 + flip * 0.6, flip * 0.8, 0],
+    armL: [0.1, 0, 0.55], foreL: [-1.6, 0.4, 0],
+  };
+}
+
 function wavePose(t: number): Pose {
   return { ...STAND, armR: [-0.2, 0, -2.6], foreR: [0, 0, -0.4 + Math.sin(t * 9) * 0.5] };
 }
@@ -324,6 +334,7 @@ export class Animator {
       case 'cheer': pose = cheerPose(this.time); rate = 14; expr = 'yell'; break;
       case 'clap': pose = clapPose(this.time); rate = 14; expr = 'happy'; break;
       case 'wave': pose = wavePose(this.time); rate = 12; expr = 'happy'; break;
+      case 'grill': pose = grillPose(this.time); rate = 8; expr = 'happy'; break;
       case 'sad': case 'out': pose = SAD; rate = 6; expr = 'sad'; break;
       case 'sit': {
         pose = { ...SIT, hipY: (inp.seat ?? 1.6) + 0.12 - k.p.hipY - 0.05 };
