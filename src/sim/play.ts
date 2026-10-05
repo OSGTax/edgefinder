@@ -11,7 +11,7 @@ export const FIELD_ORDER: Position[] = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 
 
 export const fielderSpeed = (k: Kid) => 11 + k.traits.speed * 1.15;
 export const runnerSpeed = (k: Kid) => 13.5 + k.traits.speed * 1.3 + (k.special === 'zoomies' ? 3.5 : 0);
-export const throwSpeed = (k: Kid) => (28 + k.traits.fielding * 2.7 + (k.special === 'rocketArm' ? 14 : 0)) * MPH;
+export const throwSpeed = (k: Kid) => (28 + k.traits.arm * 2.7 + (k.special === 'rocketArm' ? 14 : 0)) * MPH;
 /** Kids rainbow their long throws: effective speed drops past ~70 ft. */
 export const throwSpeedAt = (k: Kid, d: number) => throwSpeed(k) / (1 + Math.max(0, d - 70) / 160);
 const reachOf = (k: Kid) => 1.7 + k.traits.fielding * 0.09 + (k.special === 'flypaper' ? 0.9 : 0);
@@ -422,7 +422,7 @@ export class LivePlay {
     const high = b.p.z > kidH * 1.15;
     let p: number;
     if (thrown) {
-      p = 0.935 + fl.kid.traits.fielding * 0.005 - (this.throwInfo?.wild ? 0.35 : 0);
+      p = 0.945 + fl.kid.traits.fielding * 0.005 - (this.throwInfo?.wild ? 0.35 : 0);
     } else {
       const hot = clamp((sp - (b.touched ? 55 : 42)) / (b.touched ? 70 : 45), 0, 1);
       const groundHop = b.touched && b.p.z > 0.6 && b.p.z < 3 ? 0.03 : 0;
@@ -564,7 +564,7 @@ export class LivePlay {
       return;
     }
     if (!receiver) return;
-    const wild = this.rng.chance((0.022 + (10 - fl.kid.traits.fielding) * 0.005 + (10 - fl.kid.traits.fielding) * 0.003) * (isOF(fl.pos) ? 1.6 : 1));
+    const wild = this.rng.chance((0.022 + (10 - fl.kid.traits.fielding) * 0.005 + (10 - fl.kid.traits.arm) * 0.003) * (isOF(fl.pos) ? 1.6 : 1));
     const sigma = 0.6 + (10 - fl.kid.traits.fielding) * 0.12;
     const tx = bp.x + (wild ? this.rng.range(-1, 1) * 9 : this.rng.gauss() * sigma);
     const ty = bp.y + (wild ? this.rng.range(-1, 1) * 9 : this.rng.gauss() * sigma);

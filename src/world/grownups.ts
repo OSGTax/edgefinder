@@ -6,7 +6,7 @@ import type { Kid } from '../data/types';
 
 export const MR_MENDOZA: Kid = {
   id: 'mrMendoza', first: 'Hector', last: 'Mendoza', nick: 'Mr. Mendoza', age: 44, bats: 'R', throws: 'R',
-  traits: { hitting: 1, speed: 1, fielding: 1, pitching: 1 },
+  traits: { contact: 1, power: 1, speed: 1, fielding: 1, arm: 1, pitching: 1, control: 1 },
   pitches: ['fastball'], special: 'flypaper', persona: 'Grill Sergeant',
   look: {
     skin: 3, hair: 'sidepart', hairColor: 0, head: 'wide', mouth: 'grin', hat: 'none' as never, eyewear: 'aviators',

@@ -67,7 +67,7 @@ class Actor {
     (this.lefty ? this.model.bones.handR : this.model.bones.handL).add(this.glove);
     this.glove.rotation.y = this.lefty ? Math.PI / 2 : -Math.PI / 2;
     this.glove.position.y = -0.05;
-    this.bat = makeBat(kid.traits.hitting >= 7 ? 'metal' : 'wood', 2.2 + this.model.p.s * 0.45);
+    this.bat = makeBat(kid.traits.power >= 7 ? 'metal' : 'wood', 2.2 + this.model.p.s * 0.45);
     this.bat.visible = false;
     scene.add(this.bat);
     this.ballInHand = makeBall();

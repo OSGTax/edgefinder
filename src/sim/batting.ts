@@ -36,8 +36,8 @@ export interface SwingTuning {
 export const batArrival = (s: SwingInput) => s.tSwing + SWING_TIME[s.kind];
 
 export function contactWindow(k: Kid, s: SwingInput, tune: SwingTuning) {
-  let w = (0.05 + k.traits.hitting * 0.0045) * tune.window;
-  let r = (0.3 + k.traits.hitting * 0.021) * tune.radius;
+  let w = (0.05 + k.traits.contact * 0.004) * tune.window;
+  let r = (0.3 + k.traits.contact * 0.019) * tune.radius;
   if (s.kind === 'power') { w *= 0.8; r *= 0.8; }
   if (s.kind === 'bunt') { w = 99; r *= 1.35; }
   if (s.special && k.special === 'eagleEye') { w *= 1.6; r *= 1.9; }
@@ -64,7 +64,9 @@ export function resolveSwing(
     if (rng.chance(0.75)) return { kind: 'foulTip' };
     return { kind: 'miss', timing: delta, dist };
   }
-  const quality = clamp(1 - 0.5 * tq * tq - 0.45 * sq * sq + rng.gauss() * 0.05, 0.02, 1);
+  // contact hitters get more out of a near-miss: the sweet spot is forgiving
+  const miss = (0.5 * tq * tq + 0.45 * sq * sq) * (1.35 - k.traits.contact * 0.07);
+  const quality = clamp(1 - miss + rng.gauss() * 0.05, 0.02, 1);
   const pull = side === 'R' ? -1 : 1;
   const dzRel = clamp(dz / r, -1.2, 1.2); // + when the bat is under the ball
   const dxRel = clamp(dx / r, -1.2, 1.2);
@@ -73,13 +75,14 @@ export function resolveSwing(
   let la: number;
   let spray: number;
   if (s.kind === 'bunt') {
-    evMph = 12 + rng.range(0, 10) + k.traits.hitting * 0.4;
+    evMph = 12 + rng.range(0, 10) + k.traits.contact * 0.4;
     la = -14 + dzRel * 14 + rng.gauss() * 5;
     spray = clamp(-s.aimX * 22 + rng.gauss() * 16, -60, 60);
   } else {
-    const base = 37 + k.traits.hitting * 3.8 + (s.kind === 'power' ? 6 : 0);
+    const base = 38 + k.traits.power * 2.6 + k.traits.contact * 1.2 + (s.kind === 'power' ? 6 : 0);
     evMph = base * (0.55 + 0.45 * quality) + pitch.mph * 0.1;
-    la = 10 + dzRel * 34 + rng.gauss() * 7 + (s.kind === 'power' ? 5 : 0);
+    // good contact hitters square it up: tighter launch angles, more liners
+    la = 10 + dzRel * 34 + rng.gauss() * (4 + (10 - k.traits.contact) * 0.6) + (s.kind === 'power' ? 5 : 0);
     spray = pull * (-delta / w) * 34 - pull * dxRel * 8 + rng.gauss() * 9;
     if (s.special && k.special === 'moonshot') {
       evMph = Math.max(evMph, base * 1.05) + 16;

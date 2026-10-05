@@ -8,8 +8,8 @@ status and roadmap in plain language, and keep it current when phases change.
 Comets), one heavily detailed yard (Pool Party Paradise), real 3D kids and
 gameplay. This is the quality bar for the final game; the owner wants the
 demo polished before more teams/yards are built. League build-out plans:
-`plans/LEAGUE-FRAMEWORK.md` (10 teams × 9 kids, 4 traits: Hitting/Speed/
-Fielding/Pitching, everyone pitches, no benches/injuries/trades, no pick-up
+`plans/LEAGUE-FRAMEWORK.md` (10 teams × 9 kids, 7 traits: Contact/Power/
+Speed/Fielding/Arm/Pitching/Control, everyone pitches, no benches/injuries/trades, no pick-up
 draft, one home field per team) and `plans/3D-FRAMEWORK.md`. The v0.1 2D kids
 and yards live in git history (commit `a00d3e8`).
 
@@ -31,7 +31,7 @@ will wrap the web build with Capacitor (not set up yet).
 ```bash
 npm install
 npm run dev            # http://localhost:5173
-npm test               # vitest: sim balance + determinism, human-hitting, audio
+npm test               # vitest: sim balance + determinism, human-hitting, kid traits, audio
 npm run typecheck
 npm run build          # dist/ (hashed assets; deploy this folder)
 ```
@@ -73,7 +73,7 @@ src/
   ui/       app.ts (loading, title over an attract-mode CPU game, team pick, roster, how-to,
             settings), commentary.ts (Chet & Dottie), settings.ts, dom.ts, style.css
   dev/      view3d.ts (#dev), gallery3d.ts (#gallery) — dev-only
-tests/      sim balance + determinism, human-hitting, audio
+tests/      sim balance + determinism, human-hitting, kid traits, audio
 ```
 
 World units are feet. **Sim coordinates:** home plate is the origin, +y toward
@@ -98,8 +98,17 @@ face local +z; their left is +x.
 
 `tests/sim.test.ts` prints league-wide numbers from many CPU games and asserts sane
 ranges; `tests/human.test.ts` checks a pretend human can hit on Rookie and that
-All-Star is harder. Current: AVG ~.33, ~3.7 runs and ~1.2 HR per team per 6 innings,
-~2.8 errors/game, K% ~10%.
+All-Star is harder. Current (300-game sample): AVG ~.335, ~4 runs and ~1.3 HR per
+team per 6 innings, ~2.8 errors/game, K% ~11%, BB% ~2.5%.
+
+Where each trait (`data/types.ts` `Traits`, 1–10) feeds the sim: **contact** → swing
+window, sweet-spot size, quality of near-misses, launch-angle consistency, CPU pitch
+reading (`batting.ts`, `ai.ts`); **power** → exit velocity (contact adds a little),
+CPU power swings; **speed** → runner and fielder speed; **fielding** → reaction,
+reach, gather, catch odds, throw accuracy; **arm** → throw speed (plus a little
+pitch velocity and throw accuracy); **pitching** → fastball mph; **control** → pitch
+aim scatter; pitching + control → stamina and who relieves (`match.ts`).
+`lineup.ts` picks positions and batting order from them.
 
 ## Verifying visually
 

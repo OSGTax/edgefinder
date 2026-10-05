@@ -110,7 +110,7 @@ export class Match {
   get batterSide() { return batSide(this.batter.bats, this.pitcher.throws); }
   hypeFull(side: 0 | 1) { return this.hype[side] >= 100; }
   /** Pitches a kid can throw before tiring: better pitchers last longer. */
-  stamina(k: Kid) { return 30 + k.traits.pitching * 6; }
+  stamina(k: Kid) { return 30 + (k.traits.pitching + k.traits.control) * 3; }
   get fatigue() {
     const p = this.pitcher;
     return Math.max(0, (this.box[p.id].pitch.pitches - this.stamina(p)) / 35);
@@ -130,7 +130,7 @@ export class Match {
     for (let i = 2; i < def.length; i++) { // not the catcher
       const k = kid(def[i]);
       const used = this.box[k.id].pitch.pitches;
-      const score = k.traits.pitching * 10 - used * 0.6;
+      const score = (k.traits.pitching + k.traits.control) * 5 - used * 0.6;
       if (used < this.stamina(k) * 0.5 && score > bestScore) { bestScore = score; best = i; }
     }
     if (best < 0 || kid(def[best]).traits.pitching < 3) return;
