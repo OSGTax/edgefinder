@@ -31,7 +31,8 @@ function autoTier(): QualityName {
 }
 
 export function getQuality(): Quality {
-  const chosen = load<QualityName | 'auto'>('quality', 'auto');
+  const forced = typeof location !== 'undefined' ? new URLSearchParams(location.hash.slice(1)).get('q') : null;
+  const chosen = (forced && forced in TIERS ? forced : load<QualityName | 'auto'>('quality', 'auto')) as QualityName | 'auto';
   const name = chosen === 'auto' ? autoTier() : chosen;
   const t = TIERS[name];
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;

@@ -197,7 +197,7 @@ export function buildFarTrees(spots: { x: number; z: number; s: number; kind?: '
     const blobs = 3 + Math.floor(rnd() * 3);
     for (let k = 0; k < blobs; k++) {
       const r = (9 + rnd() * 6) * t.s;
-      const ico = new IcosahedronGeometry(r, 2);
+      const ico = new IcosahedronGeometry(r, 1);
       ico.deleteAttribute('uv');
       ico.deleteAttribute('normal');
       const g = mergeVertices(ico);
