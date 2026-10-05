@@ -1,11 +1,11 @@
 import {
-  Bone, CanvasTexture, Color, DoubleSide, Group, SRGBColorSpace, Matrix4, MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, SphereGeometry,
+  Bone, CanvasTexture, Color, DoubleSide, TorusGeometry, Group, SRGBColorSpace, Matrix4, MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, SphereGeometry,
   Vector2, Vector3, type BufferGeometry, type Material, type Skeleton, type Texture,
 } from 'three';
 import type { Kid, Team } from '../data/types';
 import { HAIR, SKIN } from '../data/palette';
 import { fabricNormal } from '../gfx/textures';
-import { alongMatrix, blended, limb, loft, paint, paintFn, PartList, ramp, rigid, type Ring } from './geom';
+import { alongMatrix, blended, limb, limbRings, loft, paint, paintFn, PartList, ramp, rigid, type Ring } from './geom';
 import { B, HEAD_SHAPE, makeSkeleton, proportions, type BoneName, type Proportions } from './rig';
 import { ATLAS_COLS, ATLAS_ROWS, EXPRESSIONS, FACE_PATCH, paintFaceAtlas, type Expression } from './face';
 import { JERSEY_V0, paintJersey, uniformColors, type UniformColors } from './uniform';
@@ -72,7 +72,10 @@ export class KidModel {
     const skinMat = sharedMat(`kidSkin${skinHex}`, () => new MeshStandardMaterial({ color: skinHex, roughness: 0.58 }));
     const hairMat = sharedMat(`kidHair${kid.look.hairColor}`, () => new MeshStandardMaterial({ color: HAIR[kid.look.hairColor] ?? HAIR[0], roughness: 0.5 }));
     const eyeHex = irisColor(kid);
-    const eyeMat = sharedMat(`kidEyes${eyeHex}`, () => new MeshStandardMaterial({ map: eyeTexture(eyeHex), roughness: 0.08, envMapIntensity: 1.4 }));
+    const eyeMat = sharedMat(`kidEyes${eyeHex}`, () => {
+      const t = eyeTexture(eyeHex);
+      return new MeshStandardMaterial({ map: t, emissiveMap: t, emissive: '#ffffff', emissiveIntensity: 0.16, roughness: 0.2, envMapIntensity: 0.7 });
+    });
     const shinyMat = sharedMat('kidShiny', () => new MeshStandardMaterial({ vertexColors: true, roughness: 0.22, metalness: 0.35 }));
     const jerseyMat = new MeshStandardMaterial({ map: o.outfit?.shirt ?? paintJersey(kid, team, quality.jersey), roughness: 0.8, normalMap: clothMaterial().normalMap, normalScale: new Vector2(0.3, 0.3) });
     jerseyMat.name = `jersey-${kid.id}`;
@@ -182,15 +185,32 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     // the sphere's pole looks forward, so the iris and pupil are perfectly round bands of the texture
     const eye = new SphereGeometry(p.eyeR, 28, 20);
     eye.rotateX(Math.PI / 2);
-    eye.scale(1, 1.08, 0.86);
+    eye.scale(1, 1.05, 0.86);
     L.eyes.add(rigid(eye, bi), new Matrix4().makeTranslation(e.x, e.y, e.z));
-    // upper lid: a skin-coloured shell cap; the lid bone rotates it closed
-    const lid = new SphereGeometry(p.eyeR * 1.1, 24, 10, 0, Math.PI * 2, 0, Math.PI * 0.55);
-    lid.scale(1.02, 1.08, 0.9);
-    L.skin.add(rigid(lid, side === 'L' ? B.lidL : B.lidR), new Matrix4().makeTranslation(e.x, e.y, e.z));
-    // eyelash line along the lid edge
-    const lash = loft([0, 1].map((k) => ({ y: -0.01 + k * 0.02, rx: p.eyeR * 1.12, rz: p.eyeR * 1.0 })), 20);
-    L.cloth.add(paint(rigid(lash, side === 'L' ? B.lidL : B.lidR), '#1a120d'), new Matrix4().makeTranslation(e.x, e.y + Math.cos(Math.PI * 0.55) * p.eyeR * 1.1 * 1.08, e.z).multiply(new Matrix4().makeRotationX(-0.25)));
+    // upper lid: a skin-coloured shell hugging the eyeball; the lid bone rotates it closed
+    // (nearly round, so the eyeball never pokes through whatever angle the lid is at)
+    const lidR = p.eyeR * 1.12, lidT = Math.PI * 0.5;
+    const lid = new SphereGeometry(lidR, 22, 8, 0, Math.PI * 2, 0, lidT);
+    lid.scale(1, 1, 0.94);
+    const lidBone = side === 'L' ? B.lidL : B.lidR;
+    L.skin.add(rigid(lid, lidBone), new Matrix4().makeTranslation(e.x, e.y, e.z));
+    // lash line: a dark rim exactly on the lid's front edge (moves with the lid)
+    {
+      const arc = Math.PI * 1.15;
+      const lash = new TorusGeometry(1, 0.075, 5, 18, arc);
+      lash.rotateZ(Math.PI * 1.5 - arc / 2);
+      lash.rotateX(-Math.PI / 2);
+      const er = Math.sin(lidT);
+      lash.scale(lidR * er, lidR * 0.7, lidR * 0.94 * er);
+      // thicker toward the outer corner, a tiny flick up at the end
+      const pos = lash.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), out = (side === 'L' ? x : -x) / lidR;
+        if (out > 0.55) pos.setY(i, pos.getY(i) + (out - 0.55) * lidR * 0.35);
+      }
+      lash.computeVertexNormals();
+      L.cloth.add(paint(rigid(lash, lidBone), '#24170f'), new Matrix4().makeTranslation(e.x, e.y + Math.cos(lidT) * lidR, e.z));
+    }
   }
 
   // ── face decal: a thin patch over the front of the head for brows, mouth, cheeks
@@ -249,18 +269,23 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     const sh = j[`arm${S}` as BoneName], el = j[`fore${S}` as BoneName], wr = j[`hand${S}` as BoneName];
     const armBone = side === 1 ? B.armL : B.armR, foreBone = side === 1 ? B.foreL : B.foreR, handBone = side === 1 ? B.handL : B.handR;
     const ua = el.clone().sub(sh).length();
-    // shoulder ball (jersey) so the sleeve joins the torso
-    const ball = new SphereGeometry(p.armR * 1.45, 18, 12);
-    L.cloth.add(paint(rigid(ball, armBone), col.jersey), new Matrix4().makeTranslation(sh.x - side * 0.03, sh.y - 0.04, sh.z));
+    // one sleeve with a domed top that rounds into the shoulder; the dome follows the
+    // shoulder bone and the rest the arm, so it bends smoothly when the arm swings up
+    const a = p.armR * 1.3;
     const sleeve = loft([
-      { y: -ua * 0.62, rx: p.armR * 1.36, rz: p.armR * 1.3 },
-      { y: -ua * 0.6, rx: p.armR * 1.4, rz: p.armR * 1.34 },
-      { y: -ua * 0.545, rx: p.armR * 1.42, rz: p.armR * 1.36 },
-      { y: -ua * 0.535, rx: p.armR * 1.42, rz: p.armR * 1.36 },
-      { y: -ua * 0.2, rx: p.armR * 1.48, rz: p.armR * 1.41 },
-      { y: 0.02, rx: p.armR * 1.5, rz: p.armR * 1.44 },
-    ], 18);
-    L.cloth.add(paintFn(rigid(sleeve, armBone), (q) => new Color(q.y < -ua * 0.54 ? col.trim : col.jersey)), alongMatrix(sh, el));
+      { y: -ua * 0.6, rx: a * 0.93, rz: a * 0.9 },
+      { y: -ua * 0.585, rx: a * 0.98, rz: a * 0.95 },
+      { y: -ua * 0.5, rx: a * 0.99, rz: a * 0.96 },
+      { y: -ua * 0.49, rx: a * 0.985, rz: a * 0.955 },
+      { y: -ua * 0.25, rx: a * 0.99, rz: a * 0.96 },
+      { y: 0, rx: a, rz: a * 0.97 },
+      { y: a * 0.45, rx: a * 0.9, rz: a * 0.88 },
+      { y: a * 0.75, rx: a * 0.62, rz: a * 0.6 },
+      { y: a * 0.9, rx: a * 0.22, rz: a * 0.2 },
+    ], 18, false, true);
+    const shBone = side === 1 ? B.shoulderL : B.shoulderR;
+    paintFn(sleeve, (q) => new Color(q.y < -ua * 0.495 ? col.trim : col.jersey));
+    L.cloth.add(blended(sleeve, (q) => { const w = ramp(-q.y, -a * 0.2, ua * 0.3); return [shBone, 1 - w, armBone, w]; }), alongMatrix(sh, el));
     L.skin.add(rigid(limb(ua * 0.98, p.armR, p.armR * 0.88, 14), armBone), alongMatrix(sh, el));
     const fa = wr.clone().sub(el).length();
     L.skin.add(rigid(limb(fa * 0.95, p.armR * 0.9, p.armR * 0.72, 14), foreBone), alongMatrix(el, wr));
@@ -271,7 +296,9 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
   const pants = new Color(col.pants);
   const stain = new Color('#7d8a46');
   const pelvis = loft([
-    { y: p.hipY - 0.2 * s, rx: 0.36 * wf * s, rz: 0.27 * wf * s },
+    { y: p.hipY - 0.3 * s, rx: 0.12 * wf * s, rz: 0.12 * wf * s },
+    { y: p.hipY - 0.24 * s, rx: 0.28 * wf * s, rz: 0.22 * wf * s },
+    { y: p.hipY - 0.12 * s, rx: 0.4 * wf * s, rz: 0.29 * wf * s },
     { y: p.hipY + 0.05 * s, rx: 0.44 * wf * s, rz: 0.31 * wf * s },
     { y: p.waistY - 0.08 * s, rx: 0.45 * wf * s, rz: 0.31 * wf * s + bellyZ * 0.5, cz: bellyZ * 0.3 },
     { y: p.waistY + 0.02 * s, rx: 0.455 * wf * s, rz: 0.32 * wf * s + bellyZ * 0.6, cz: bellyZ * 0.4 },
@@ -288,18 +315,20 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     const hip = j[`thigh${S}` as BoneName], knee = j[`shin${S}` as BoneName], ank = j[`foot${S}` as BoneName];
     const thighBone = side === 1 ? B.thighL : B.thighR, shinBone = side === 1 ? B.shinL : B.shinR, footBone = side === 1 ? B.footL : B.footR;
     const tl = knee.clone().sub(hip).length();
-    const thigh = limb(tl, p.legR * 1.25, p.legR * 1.02, 16);
     const kneeStain = rnd() > 0.35;
-    L.cloth.add(paintFn(rigid(thigh, thighBone), (q) => (kneeStain && q.y < -tl * 0.82 && q.z > 0 ? pants.clone().lerp(stain, 0.55) : pants)), alongMatrix(hip, knee));
     const sl = ank.clone().sub(knee).length();
-    // baggy pant leg to mid-shin, then a sock with stirrup stripes
-    const shinPants = loft([
-      { y: -sl * 0.52, rx: p.legR * 0.98, rz: p.legR * 0.98 },
-      { y: -sl * 0.45, rx: p.legR * 1.06, rz: p.legR * 1.06 },
-      { y: 0, rx: p.legR * 1.06, rz: p.legR * 1.06 },
-      { y: p.legR * 0.6, rx: p.legR * 0.8, rz: p.legR * 0.8 },
-    ], 16, false, true);
-    L.cloth.add(paintFn(rigid(shinPants, shinBone), (q) => (kneeStain && q.y > -sl * 0.15 && q.z > 0 ? pants.clone().lerp(stain, 0.55) : pants)), alongMatrix(knee, ank));
+    // one baggy pant leg from the hip to mid-shin (the leg is straight down at bind pose),
+    // skinned thigh → shin across the knee so there's no seam; a sock with stirrup stripes below
+    const legR = p.legR, lz = (y: number) => (y > knee.y ? knee.z + (hip.z - knee.z) * (y - knee.y) / (hip.y - knee.y) : knee.z + (ank.z - knee.z) * (knee.y - y) / (knee.y - ank.y));
+    const legRings: Ring[] = ([
+      [knee.y - sl * 0.54, 0.9], [knee.y - sl * 0.5, 1.0], [knee.y - sl * 0.42, 1.1], [knee.y - sl * 0.2, 1.12], [knee.y, 1.11],
+      [knee.y + tl * 0.25, 1.13], [knee.y + tl * 0.6, 1.18], [hip.y, 1.24], [hip.y + legR * 0.5, 1.12],
+    ] as const).map(([y, r]) => ({ y, rx: legR * r, rz: legR * r * 0.97, cx: hip.x, cz: lz(y) }));
+    const leg = loft(legRings, 16);
+    paintFn(leg, (q) => (kneeStain && Math.abs(q.y - knee.y) < tl * 0.18 && q.z > lz(q.y) ? pants.clone().lerp(stain, 0.55) : pants));
+    L.cloth.add(blended(leg, (q) => { const w = ramp(q.y, knee.y - 0.1 * s, knee.y + 0.1 * s); return [shinBone, 1 - w, thighBone, w]; }));
+    // a knee filler (hidden inside the leg until the knee bends)
+    L.cloth.add(paint(rigid(new SphereGeometry(legR * 0.98, 12, 8), shinBone), pants), new Matrix4().makeTranslation(knee.x, knee.y, knee.z));
     const sock = limb(sl * 0.98, p.legR * 0.86, p.legR * 0.7, 14);
     L.cloth.add(paint(rigid(sock, shinBone), col.socks), alongMatrix(knee, ank));
     for (const [t0, t1] of [[0.6, 0.66], [0.7, 0.74]]) {
@@ -319,38 +348,49 @@ function addHand(L: Lists, p: Proportions, wr: Vector3, el: Vector3, side: 1 | -
   const s = p.s;
   const dir = wr.clone().sub(el).normalize();
   const m = alongMatrix(wr, wr.clone().add(dir));
-  // palm: a squashed ball; fingers: a rounded block curling forward; thumb in front
-  const palm = new SphereGeometry(0.15 * s, 16, 12);
-  palm.scale(0.75, 1.05, 1.05);
+  // palm: a squashed ball, flat side toward the body; four short fingers curling in; thumb in front
+  const palm = new SphereGeometry(0.14 * s, 14, 10);
+  palm.scale(0.72, 1.0, 1.05);
   L.skin.add(rigid(palm, bone), m.clone().multiply(new Matrix4().makeTranslation(0, -0.1 * s, 0.01)));
-  const fingers = limb(0.15 * s, 0.09 * s, 0.08 * s, 12, 1.5);
-  L.skin.add(rigid(fingers, bone), m.clone().multiply(new Matrix4().makeTranslation(0, -0.2 * s, 0.03)).multiply(new Matrix4().makeRotationX(0.5)));
-  const thumb = limb(0.12 * s, 0.055 * s, 0.05 * s, 10);
+  for (let k = 0; k < 4; k++) {
+    const fl = (0.13 - Math.abs(k - 1.2) * 0.012) * s;
+    const finger = loft(limbRings(fl, 0.036 * s, 0.032 * s, 2), 7);
+    L.skin.add(rigid(finger, bone), m.clone()
+      .multiply(new Matrix4().makeTranslation(0, -0.2 * s, (0.075 - k * 0.048) * s))
+      .multiply(new Matrix4().makeRotationZ(-side * 0.5))
+      .multiply(new Matrix4().makeRotationX((k - 1.5) * 0.06)));
+  }
+  const thumb = limb(0.11 * s, 0.05 * s, 0.042 * s, 8);
   L.skin.add(rigid(thumb, bone), m.clone().multiply(new Matrix4().makeTranslation(side * -0.03 * s, -0.08 * s, 0.09 * s)).multiply(new Matrix4().makeRotationX(0.9)).multiply(new Matrix4().makeRotationZ(side * 0.4)));
 }
 
 function addShoe(L: Lists, p: Proportions, ank: Vector3, bone: number, kid: Kid) {
   const s = p.s;
-  const len = p.footLen, w = 0.3 * s;
+  const len = p.footLen, w = 0.3 * s, hgt = 0.3 * s;
   const palette = [['#1f1f22', '#f4f4f0'], ['#f4f4f0', '#d63a3a'], ['#2a5bd7', '#f4f4f0'], ['#f4f4f0', '#1f1f22'], ['#d63a3a', '#f4f4f0'], ['#3a3a3a', '#f2c94c']];
   const [upper, accent] = palette[Math.abs(hash(kid.id)) % palette.length];
-  const shoe = new SphereGeometry(0.5, 16, 10);
+  // a sneaker: flat sole, rounded toe box lower than the heel, a little wider at the toes
+  const FLAT = -0.3;
+  const top = (z: number) => (z > 0.05 ? 1 - (z - 0.05) * 0.95 : 1);
+  const shoe = new SphereGeometry(0.5, 18, 10);
   const pos = shoe.attributes.position;
   for (let i = 0; i < pos.count; i++) {
-    let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-    if (y < -0.1) y = -0.1 - (y + 0.1) * 0.2; // flat sole
-    const toe = z > 0 ? 1 + z * 0.25 : 1;
-    x *= toe;
-    pos.setXYZ(i, x * w, y * 0.55 * 0.6 * s, z * len);
+    const x = pos.getX(i), y = Math.max(pos.getY(i), FLAT), z = pos.getZ(i);
+    pos.setXYZ(i, x * w * (z > 0 ? 1 + z * 0.3 : 1), (y - FLAT) * (hgt / (0.5 - FLAT)) * top(z), z * len);
   }
   shoe.computeVertexNormals();
-  const up = new Color(upper), acc = new Color(accent), sole = new Color('#f2f0ea');
-  paintFn(shoe, (q) => (q.y < -0.025 * s ? sole : Math.abs(q.x) > w * 0.42 && q.y > -0.01 && q.z < len * 0.1 && q.z > -len * 0.35 ? acc : up));
-  L.cloth.add(rigid(shoe, bone), new Matrix4().makeTranslation(ank.x, 0.11 * s, ank.z + len * 0.22));
-  // laces
+  const up = new Color(upper), acc = new Color(accent), sole = new Color('#f2f0ea'), toe = new Color(upper).lerp(new Color('#ffffff'), 0.25);
+  paintFn(shoe, (q) => (q.y < 0.05 * s ? sole
+    : q.z > len * 0.3 && q.y < 0.12 * s ? toe
+      : Math.abs(q.x) > w * 0.4 && q.y > 0.08 * s && q.y < 0.17 * s && q.z < len * 0.15 && q.z > -len * 0.3 ? acc : up));
+  const at = new Vector3(ank.x, 0.012, ank.z + len * 0.22);
+  L.cloth.add(rigid(shoe, bone), new Matrix4().makeTranslation(at.x, at.y, at.z));
+  // laces across the top of the instep
   for (let k = 0; k < 3; k++) {
-    const lace = limb(w * 0.55, 0.012 * s, 0.012 * s, 5);
-    L.cloth.add(paint(rigid(lace, bone), '#ffffff'), new Matrix4().makeTranslation(ank.x + w * 0.27, 0.2 * s + k * 0.01, ank.z + len * (0.28 + k * 0.08)).multiply(new Matrix4().makeRotationZ(Math.PI / 2)));
+    const zn = 0.02 + k * 0.08;
+    const y = (Math.sqrt(0.25 - zn * zn) - FLAT) * (hgt / (0.5 - FLAT)) * top(zn) + 0.004;
+    const lace = limb(w * 0.42, 0.014 * s, 0.014 * s, 5);
+    L.cloth.add(paint(rigid(lace, bone), '#ffffff'), new Matrix4().makeTranslation(at.x - w * 0.21, at.y + y, at.z + zn * len).multiply(new Matrix4().makeRotationZ(Math.PI / 2)));
   }
 }
 
@@ -383,6 +423,12 @@ function eyeTexture(irisHex: string): CanvasTexture {
   g.fillRect(0, irisEnd - 3, 64, 3);
   g.fillStyle = '#0b0807';
   g.fillRect(0, 0, 64, pupilEnd);
+  // catchlights: a big one up and to the viewer's left of the pupil, a small one opposite
+  // (u = 0.75 is straight up on the eyeball, u = 0.875 up-and-toward the kid's right)
+  g.fillStyle = 'rgba(255,255,255,0.95)';
+  g.beginPath(); g.ellipse(64 * 0.86, pupilEnd * 0.95, 6, 9, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.7)';
+  g.beginPath(); g.ellipse(64 * 0.36, pupilEnd * 1.15, 3, 4.5, 0, 0, Math.PI * 2); g.fill();
   t = new CanvasTexture(c);
   t.colorSpace = SRGBColorSpace;
   eyeTex.set(irisHex, t);

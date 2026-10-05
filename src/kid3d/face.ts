@@ -94,7 +94,7 @@ function paintFace(ctx: CanvasRenderingContext2D, S: number, spec: FaceSpec, e: 
     oops: { lift: 5, tilt: -12, arch: 0.6 },
   };
   const bs = browShape[e];
-  const by = spec.eyeTheta + spec.eyeSize + 6 + bs.lift;
+  const by = spec.eyeTheta + spec.eyeSize + 4 + bs.lift;
   ctx.strokeStyle = brow;
   ctx.lineCap = 'round';
   ctx.lineWidth = S * (look.face === 'unibrow' ? 0.04 : 0.032);
@@ -136,33 +136,37 @@ function paintFace(ctx: CanvasRenderingContext2D, S: number, spec: FaceSpec, e: 
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   const style = look.mouth;
-  const openMouth = (wid: number, hgt: number, smile: number) => {
-    // dark mouth with teeth and tongue
+  /** an open mouth: corners at my + corner, top lip curve through my + top, bottom through my + bottom */
+  const openMouth = (wid: number, top: number, bottom: number, corner: number) => {
+    const path = () => {
+      ctx.beginPath();
+      ctx.moveTo(mx - wid, my + corner);
+      ctx.quadraticCurveTo(mx, my + top * 2 - corner, mx + wid, my + corner);
+      ctx.quadraticCurveTo(mx, my + bottom * 2 - corner, mx - wid, my + corner);
+      ctx.closePath();
+    };
     ctx.fillStyle = '#5a1f1c';
-    ctx.beginPath();
-    ctx.moveTo(mx - wid, my - smile * 0.3);
-    ctx.quadraticCurveTo(mx, my + hgt * 2 - smile * 0.2, mx + wid, my - smile * 0.3);
-    ctx.quadraticCurveTo(mx, my - hgt * 0.35 - smile * 0.4, mx - wid, my - smile * 0.3);
+    path();
     ctx.fill();
     ctx.save();
     ctx.clip();
+    // upper teeth along the top lip, tongue at the bottom
+    const teethY = my + top;
     ctx.fillStyle = '#fbf7ef';
-    if (style !== 'gap') ctx.fillRect(mx - wid, my - hgt, wid * 2, hgt * 0.75);
-    else { ctx.fillRect(mx - wid, my - hgt, wid * 0.85, hgt * 0.75); ctx.fillRect(mx + wid * 0.15, my - hgt, wid * 0.85, hgt * 0.75); }
+    const th = S * 0.032;
+    if (style !== 'gap') ctx.fillRect(mx - wid, teethY - S * 0.05, wid * 2, S * 0.05 + th);
+    else { ctx.fillRect(mx - wid, teethY - S * 0.05, wid * 0.85, S * 0.05 + th); ctx.fillRect(mx + wid * 0.15, teethY - S * 0.05, wid * 0.85, S * 0.05 + th); }
     if (style === 'braces') {
       ctx.fillStyle = '#9aa3ad';
-      ctx.fillRect(mx - wid, my - hgt * 0.45, wid * 2, hgt * 0.14);
-      for (let i = -3; i <= 3; i++) ctx.fillRect(mx + i * wid * 0.28 - 2, my - hgt * 0.55, 4, hgt * 0.3);
+      ctx.fillRect(mx - wid, teethY + th * 0.4, wid * 2, th * 0.25);
+      for (let i = -3; i <= 3; i++) ctx.fillRect(mx + i * wid * 0.28 - S * 0.006, teethY + th * 0.2, S * 0.012, th * 0.6);
     }
     ctx.fillStyle = '#e06a74';
-    ctx.beginPath(); ctx.ellipse(mx, my + hgt * 1.25, wid * 0.55, hgt * 0.55, 0, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(mx, my + bottom + S * 0.01, wid * 0.6, Math.max(S * 0.025, (bottom - top) * 0.45), 0, 0, 7); ctx.fill();
     ctx.restore();
     ctx.strokeStyle = ink;
-    ctx.lineWidth = S * 0.012;
-    ctx.beginPath();
-    ctx.moveTo(mx - wid, my - smile * 0.3);
-    ctx.quadraticCurveTo(mx, my + hgt * 2 - smile * 0.2, mx + wid, my - smile * 0.3);
-    ctx.quadraticCurveTo(mx, my - hgt * 0.35 - smile * 0.4, mx - wid, my - smile * 0.3);
+    ctx.lineWidth = S * 0.013;
+    path();
     ctx.stroke();
   };
   const line = (pts: [number, number][], width = 0.018) => {
@@ -177,7 +181,7 @@ function paintFace(ctx: CanvasRenderingContext2D, S: number, spec: FaceSpec, e: 
   const smile = (curve: number, wid = w) => line([[mx - wid, my - curve * 0.3], [mx, my + curve], [mx + wid, my - curve * 0.3]]);
   switch (e) {
     case 'neutral':
-      if (style === 'open' || style === 'gap' || style === 'braces') openMouth(w * 0.85, S * 0.035, S * 0.03);
+      if (style === 'open' || style === 'gap' || style === 'braces') openMouth(w * 0.8, -S * 0.005, S * 0.06, -S * 0.025);
       else if (style === 'tongue') {
         smile(S * 0.04);
         ctx.fillStyle = '#e06a74';
@@ -188,7 +192,7 @@ function paintFace(ctx: CanvasRenderingContext2D, S: number, spec: FaceSpec, e: 
       else if (style === 'whistle') { ctx.fillStyle = '#5a1f1c'; ctx.beginPath(); ctx.ellipse(mx, my, S * 0.022, S * 0.026, 0, 0, 7); ctx.fill(); line([[mx - S * 0.03, my - S * 0.035], [mx, my - S * 0.045], [mx + S * 0.03, my - S * 0.035]], 0.012); }
       else smile(S * 0.045);
       break;
-    case 'happy': openMouth(w * 1.05, S * 0.04, S * 0.07); break;
+    case 'happy': openMouth(w * 1.05, -S * 0.012, S * 0.1, -S * 0.04); break;
     case 'focus':
       line([[mx - w * 0.7, my], [mx, my + S * 0.006], [mx + w * 0.7, my]]);
       ctx.fillStyle = '#fbf7ef';
@@ -196,11 +200,11 @@ function paintFace(ctx: CanvasRenderingContext2D, S: number, spec: FaceSpec, e: 
       break;
     case 'surprised':
       ctx.fillStyle = '#5a1f1c';
-      ctx.beginPath(); ctx.ellipse(mx, my + S * 0.01, S * 0.04, S * 0.055, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(mx, my + S * 0.015, S * 0.045, S * 0.062, 0, 0, 7); ctx.fill();
       ctx.strokeStyle = ink; ctx.lineWidth = S * 0.012; ctx.stroke();
       break;
     case 'sad': smile(-S * 0.05, w * 0.8); break;
-    case 'yell': openMouth(w * 1.1, S * 0.07, S * 0.02); break;
+    case 'yell': openMouth(w * 0.78, -S * 0.06, S * 0.11, -S * 0.005); break;
     case 'smug': line([[mx - w * 0.9, my + S * 0.005], [mx + w * 0.1, my + S * 0.03], [mx + w * 1.0, my - S * 0.045]], 0.02); break;
     case 'oops':
       line([[mx - w * 0.8, my], [mx - w * 0.4, my - S * 0.02], [mx, my], [mx + w * 0.4, my - S * 0.02], [mx + w * 0.8, my]], 0.016);
