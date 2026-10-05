@@ -3,6 +3,7 @@ import { yard } from '../data/yards';
 import { buildField } from '../sim/field';
 import { createRenderer } from '../gfx/renderer';
 import { Stadium } from '../world/stadium';
+import { runNow } from '../engine/steps';
 import { getQuality } from '../gfx/quality';
 import { W } from '../gfx/units';
 
@@ -18,6 +19,7 @@ export function devView(root: HTMLElement, camName: string) {
   const field = buildField(yard('poolparty'));
   const tb = performance.now();
   const stadium = new Stadium(scene, r, field, q);
+  runNow(stadium.build());
   console.warn(`stadium built in ${Math.round(performance.now() - tb)} ms`);
   const cam = new PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.3, 12000);
   const views: Record<string, [number[], number[], number]> = {

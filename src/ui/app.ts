@@ -10,6 +10,7 @@ import { PITCHES } from '../sim/pitching';
 import type { Difficulty } from '../sim/types';
 import { qualitySetting, setQuality, type QualityName } from '../gfx/quality';
 import { World } from '../game/world';
+import { nextPaint, runPaced, type Step } from '../engine/steps';
 import { Director } from '../game/director';
 import { PortraitStudio } from '../game/portraits';
 import { GameScreen, teamBadge } from '../game/screen';
@@ -37,7 +38,11 @@ class App {
 
   constructor(private root: HTMLElement) {
     root.appendChild(this.canvas);
-    const loading = h('div', { class: 'loading' }, h('div', { class: 'loading-ball' }), h('div', null, 'Mowing the lawn…'), h('div', { class: 'loading-sub' }, 'Building the Mendozas\' backyard and eighteen very serious kids'));
+    const loadMsg = h('div', null, 'Unrolling the tarp…');
+    const loadBar = h('i');
+    const loading = h('div', { class: 'loading' }, h('div', { class: 'loading-ball' }), loadMsg,
+      h('div', { class: 'loading-bar' }, loadBar),
+      h('div', { class: 'loading-sub' }, 'Building the Mendozas\' backyard and eighteen very serious kids'));
     root.appendChild(loading);
     root.appendChild(this.menus);
     window.addEventListener('resize', () => this.resize());
@@ -46,9 +51,14 @@ class App {
     const unlock = () => audio.unlock();
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
-    requestAnimationFrame(() => setTimeout(() => {
+    requestAnimationFrame(() => setTimeout(async () => {
       const t0 = performance.now();
+      const show = (s: Step) => { loadMsg.textContent = `${s.msg}…`; loadBar.style.width = `${Math.round(s.done * 100)}%`; };
       this.world = new World(this.canvas, buildField(yard('poolparty')), [TEAMS[0], TEAMS[1]]);
+      await runPaced(this.world.build(), show);
+      show({ done: 0.97, msg: 'Chalking the baselines' });
+      await nextPaint();
+      await this.world.warmUp();
       this.studio = new PortraitStudio(this.world.renderer, this.world.scene.environment);
       if (import.meta.env.DEV) console.debug(`[app] world built in ${Math.round(performance.now() - t0)} ms`);
       this.resize();

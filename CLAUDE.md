@@ -47,7 +47,7 @@ rendered frame — for the slow software renderer in headless Chromium).
 
 ```
 src/
-  engine/   math, seeded Rng, safe localStorage
+  engine/   math, seeded Rng, safe localStorage, steps (generator builds paced for the loading bar)
   data/     types.ts (Kid/Traits/Team/Yard...), kids.ts (18 kids), teams.ts (2 teams +
             announcers), yards.ts (Pool Party Paradise), palette.ts (skin/hair)
   sim/      the game engine — pure, no DOM, deterministic from a seed (unchanged from v0.1
@@ -92,7 +92,9 @@ face local +z; their left is +x.
 - `World.sync(match)` decides where every kid should be and in which animation `Mode`
   (`kid3d/anim.ts`); kids not in the play jog to their team's dugout.
 - The app builds one `World` at startup and reuses it for the title attract game and
-  every match.
+  every match. `World.build()` / `Stadium.build()` are generators of loading steps
+  (`engine/steps.ts`): `runPaced` lets the loading bar paint between them, `runNow`
+  builds straight through.
 
 ## Balancing
 

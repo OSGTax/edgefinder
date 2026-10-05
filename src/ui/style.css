@@ -344,3 +344,5 @@ canvas { display: block; }
 .rotate-hint { display: none; position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%); background: rgba(43, 29, 20, 0.85); color: #fff; font-weight: 900; padding: 10px 16px; border-radius: 14px; text-align: center; pointer-events: none; animation: fadeaway 5s ease-in forwards; }
 @keyframes fadeaway { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
 @media (orientation: portrait) and (pointer: coarse) { .rotate-hint { display: block; } }
+.loading-bar { width: min(280px, 70vw); height: 12px; border: 3px solid var(--ink); border-radius: 99px; background: rgba(255, 255, 255, 0.35); overflow: hidden; box-shadow: 0 3px 0 var(--ink); }
+.loading-bar i { display: block; height: 100%; width: 0; background: linear-gradient(#ffe98a, #ffc61a); transition: width 0.25s ease-out; }

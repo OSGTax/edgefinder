@@ -5,6 +5,7 @@ import { Ground } from '../gfx/ground';
 import { Batch, T, boxFt, cyl } from '../gfx/build';
 import { M, setMaterialTexSize } from '../gfx/materials';
 import type { Quality } from '../gfx/quality';
+import type { Step, Steps } from '../engine/steps';
 import { W } from '../gfx/units';
 import { TEAMS } from '../data/teams';
 import { buildHouse, FACADE, MENDOZA_STYLE } from './house';
@@ -36,15 +37,22 @@ export const LAYOUT = {
 /** Everything static (and gently animated) about the ballpark. */
 export class Stadium {
   readonly group = new Group();
-  readonly env: Environment;
-  readonly ground: Ground;
+  env!: Environment;
+  ground!: Ground;
   /** where Mr. Mendoza's grill smoke comes out (three space) */
   grillTop = new Vector3();
   private updaters: ((t: number, dt: number) => void)[] = [];
 
-  constructor(scene: Scene, renderer: WebGLRenderer, readonly field: Field, readonly q: Quality) {
+  /** Nothing is built until `build()` runs (see engine/steps). */
+  constructor(private scene: Scene, private renderer: WebGLRenderer, readonly field: Field, readonly q: Quality) {}
+
+  /** Build the ballpark a piece at a time; `from`..`to` is its share of the loading bar. */
+  *build(from = 0, to = 1): Steps {
+    const { scene, renderer, field, q } = this;
+    const at = (f: number, msg: string): Step => ({ done: from + (to - from) * f, msg });
     setMaterialTexSize(q.texSize);
     const timer = (label: string, t0: number) => { if (import.meta.env?.DEV) console.debug(`[stadium] ${label} ${Math.round(performance.now() - t0)} ms`); };
+    yield at(0, 'Painting the sky');
     let t0 = performance.now();
     this.env = new Environment(scene, renderer, q, { elevation: 50, azimuth: -100 });
     timer('environment', t0);
@@ -60,22 +68,26 @@ export class Stadium {
       return rect(d.x + fx, d.y + fy, 5.2, 3.2, -d.rot);
     });
     const bed = rect(4, -26.5, 9.2, 1.6);
+    yield at(0.1, 'Mowing the lawn');
     t0 = performance.now();
     this.ground = new Ground(field, q, { holes: [...(pool ? [poolDeckPoly(pool)] : []), patioPoly, bed, ...blankets] });
     this.group.add(this.ground.mesh);
     if (this.ground.grass) this.group.add(this.ground.grass);
     timer('ground', t0);
 
+    yield at(0.3, 'Building the Mendozas\' house');
     t0 = performance.now();
     this.group.add(buildHouse(MENDOZA_STYLE));
     timer('house', t0);
 
+    yield at(0.49, 'Painting the picket fence');
     t0 = performance.now();
     const fence = yard.fence;
     this.group.add(buildPicketFence(fence.filter((f) => f.kind === 'picket')));
     this.group.add(buildHedge(fence.filter((f) => f.kind === 'hedge'), q));
     timer('fences', t0);
 
+    yield at(0.56, 'Planting trees');
     t0 = performance.now();
     const treeSpecs: TreeSpec[] = [];
     // yard trees match their physics canopies (see sim/field obstaclesFromProps)
@@ -101,6 +113,7 @@ export class Stadium {
     this.group.add(trees.group);
     timer('trees', t0);
 
+    yield at(0.71, 'Filling the pool');
     t0 = performance.now();
     if (pool) {
       const p = buildPool(pool);
@@ -109,6 +122,7 @@ export class Stadium {
     }
     timer('pool', t0);
 
+    yield at(0.75, 'Lighting the grill');
     t0 = performance.now();
     const b = new Batch();
     // ── the field
@@ -168,6 +182,7 @@ export class Stadium {
     trees.leaves.push(sh);
     timer('props', t0);
 
+    yield at(0.79, 'Waking up the neighbors');
     t0 = performance.now();
     this.group.add(buildNeighborhood().group);
     timer('neighborhood', t0);

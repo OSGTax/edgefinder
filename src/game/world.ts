@@ -17,6 +17,7 @@ import { KidModel } from '../kid3d/model';
 import { Animator, type AnimInput, type Mode } from '../kid3d/anim';
 import { makeBall, makeBat, makeGlove, makeProp } from '../kid3d/items';
 import { Effects } from './fx';
+import type { Steps } from '../engine/steps';
 import { hawaiianShirt } from '../kid3d/outfits';
 import { GROWNUP_SCALE, MR_MENDOZA } from '../world/grownups';
 
@@ -160,28 +161,19 @@ export class World {
   private looseFrom = { pos: new Vector3(), dir: new Vector3() };
   private batWasUp: string | null = null;
   /** Mr. Mendoza, at the grill */
-  readonly mendoza: Actor;
+  mendoza!: Actor;
   time = 0;
 
+  /** Cheap setup only: run `build()` (all at once or paced) before using the World. */
   constructor(canvas: HTMLCanvasElement, readonly field: Field, readonly teams: [Team, Team]) {
     this.q = getQuality();
     this.renderer = createRenderer(canvas, this.q);
     this.camera = new PerspectiveCamera(45, 16 / 9, 0.3, 12000);
     this.stadium = new Stadium(this.scene, this.renderer, field, this.q);
-    const tk = performance.now();
     this.fx = new Effects(this.scene, this.q.pixelRatio);
     this.scene.add(this.ball);
     this.looseBat.visible = false;
     this.scene.add(this.looseBat);
-    for (const t of teams) for (const id of t.roster) this.actors.set(id, new Actor(kidById(id), t, this.scene));
-    this.mendoza = new Actor(MR_MENDOZA, teams[1], this.scene, {
-      outfit: { shirt: hawaiianShirt('#1f8a8a'), colors: { pants: '#c8b48a', trim: '#1f8a8a', jersey: '#1f8a8a', socks: '#f4f4f0', sockStripe: '#f4f4f0' } },
-    });
-    this.mendoza.model.group.scale.setScalar(GROWNUP_SCALE);
-    if (import.meta.env?.DEV) {
-      console.debug(`[world] kids + fx ${Math.round(performance.now() - tk)} ms`);
-      (window as unknown as { __world: World }).__world = this;
-    }
 
     // strike zone + aim overlays (drawn in the plate plane)
     const zg = new BufferGeometry();
@@ -207,9 +199,34 @@ export class World {
       this.baseRings.push(ring);
       this.scene.add(ring);
     }
-    // start compiling every shader now, in parallel where the browser can,
-    // instead of one at a time during the first frames
-    this.renderer.compileAsync(this.scene, this.camera).catch(() => {});
+  }
+
+  /** The yard, then the kids, one team at a time. */
+  *build(): Steps {
+    yield* this.stadium.build(0, 0.62);
+    const tk = performance.now();
+    for (const [i, t] of this.teams.entries()) {
+      yield { done: 0.62 + i * 0.15, msg: `Rounding up the ${t.name}` };
+      for (const id of t.roster) this.actors.set(id, new Actor(kidById(id), t, this.scene));
+    }
+    yield { done: 0.92, msg: 'Handing Mr. Mendoza his spatula' };
+    this.mendoza = new Actor(MR_MENDOZA, this.teams[1], this.scene, {
+      outfit: { shirt: hawaiianShirt('#1f8a8a'), colors: { pants: '#c8b48a', trim: '#1f8a8a', jersey: '#1f8a8a', socks: '#f4f4f0', sockStripe: '#f4f4f0' } },
+    });
+    this.mendoza.model.group.scale.setScalar(GROWNUP_SCALE);
+    if (import.meta.env?.DEV) {
+      console.debug(`[world] kids ${Math.round(performance.now() - tk)} ms`);
+      (window as unknown as { __world: World }).__world = this;
+    }
+  }
+
+  /**
+   * Compile every shader now, in parallel where the browser can, instead of
+   * one at a time during the first frames. Never waits more than a few seconds.
+   */
+  warmUp(): Promise<void> {
+    const done = this.renderer.compileAsync(this.scene, this.camera).then(() => {}, () => {});
+    return Promise.race([done, new Promise<void>((ok) => setTimeout(ok, 5000))]);
   }
 
   private size = { w: 1280, h: 720 };
