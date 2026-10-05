@@ -1,7 +1,7 @@
 import { Group, type Material } from 'three';
 import { Batch, T, boxFt, cyl, gable, quad, type Adder } from '../gfx/build';
 import { M } from '../gfx/materials';
-import { windowTex } from '../gfx/textures';
+import { WINDOW_VARIANTS, windowTex } from '../gfx/textures';
 
 // The Mendozas' two-story house sits behind home plate. Built in three space:
 // x = toward first base, z = toward the street (the yard is at -z),
@@ -23,10 +23,14 @@ export interface WindowSpec { x: number; y: number; w: number; h: number; kind?:
 /** Window or glass door on a wall facing -z at depth zFace: glass, casing, sill, optional shutters. */
 export function addWindow(b: Adder, zFace: number, s: WindowSpec, style: HouseStyle, seed: number, facing: 1 | -1 = -1) {
   const trim = M.paint(style.trim, 0.55);
-  const glassMat = M.tex(`win${s.kind ?? 'double'}${style.curtain}${seed % 3}`, windowTex(s.kind ?? 'double', style.curtain, seed % 3), { roughness: 0.08, metalness: 0.15 });
+  const glassMat = M.tex(`win${s.kind ?? 'double'}${style.curtain}`, windowTex(s.kind ?? 'double', style.curtain), { roughness: 0.08, metalness: 0.15 });
   const ry = facing === -1 ? Math.PI : 0;
   const zf = zFace + facing * 0.03;
-  b.add(glassMat, quad(s.w, s.h), T(s.x, s.y + s.h / 2, zf, ry), { castShadow: false });
+  // pick this window's cell of the atlas
+  const glass = quad(s.w, s.h);
+  const uv = glass.attributes.uv, cell = seed % WINDOW_VARIANTS;
+  for (let i = 0; i < uv.count; i++) uv.setX(i, (uv.getX(i) + cell) / WINDOW_VARIANTS);
+  b.add(glassMat, glass, T(s.x, s.y + s.h / 2, zf, ry), { castShadow: false });
   const t = 0.35, d = 0.28;
   const zc = zFace + facing * d / 2;
   b.add(trim, boxFt(s.w + t * 2, t, d), T(s.x, s.y + s.h + t / 2, zc));

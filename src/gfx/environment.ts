@@ -1,8 +1,9 @@
 import {
-  Color, DirectionalLight, Fog, Group, HemisphereLight, MathUtils, Mesh, MeshBasicMaterial, PMREMGenerator, PlaneGeometry,
+  Color, DirectionalLight, Fog, Group, HemisphereLight, MathUtils, Mesh, MeshBasicMaterial, Object3D, PMREMGenerator, PlaneGeometry,
   Scene, Vector3, type WebGLRenderer,
 } from 'three';
-import { cloudTex } from './textures';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { cloudAtlas } from './textures';
 import { makeSky, NOON_SKY } from './sky';
 import { mulberry } from './noise';
 import type { Quality } from './quality';
@@ -63,20 +64,32 @@ export class Environment {
     scene.add(this.clouds);
   }
 
+  /** Sixteen cloud cards sharing one atlas, merged into a single mesh (one draw call). */
   private addClouds() {
     const rnd = mulberry(1234);
+    const kinds = 5;
+    const parts: PlaneGeometry[] = [];
+    const o = new Object3D();
     for (let i = 0; i < 16; i++) {
-      const tex = cloudTex(256, 1 + (i % 5));
-      const m = new MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: 0.95 });
       const w = 900 + rnd() * 1300;
-      const mesh = new Mesh(new PlaneGeometry(w, w * 0.5), m);
+      const g = new PlaneGeometry(w, w * 0.5);
+      // pick cloud (i % kinds) from the vertically stacked atlas (canvas top = v 1)
+      const uv = g.attributes.uv, row = kinds - 1 - (i % kinds);
+      for (let k = 0; k < uv.count; k++) uv.setY(k, (uv.getY(k) + row) / kinds);
       const a = (rnd() * 1.6 - 0.8) * Math.PI;
       const r = 3200 + rnd() * 1600;
-      mesh.position.set(Math.sin(a) * r, 600 + rnd() * 900, -Math.cos(a) * r);
-      mesh.lookAt(0, mesh.position.y * 0.6, 0);
-      mesh.renderOrder = -1;
-      this.clouds.add(mesh);
+      o.position.set(Math.sin(a) * r, 600 + rnd() * 900, -Math.cos(a) * r);
+      o.lookAt(0, o.position.y * 0.6, 0);
+      o.updateMatrix();
+      parts.push(g.applyMatrix4(o.matrix) as PlaneGeometry);
     }
+    const m = new MeshBasicMaterial({ map: cloudAtlas(256, kinds), transparent: true, depthWrite: false, fog: false, opacity: 0.95 });
+    const mesh = new Mesh(mergeGeometries(parts, false), m);
+    mesh.renderOrder = -1;
+    mesh.frustumCulled = false;
+    mesh.name = 'clouds';
+    this.clouds.add(mesh);
+    for (const g of parts) g.dispose();
   }
 
   update(t: number) {

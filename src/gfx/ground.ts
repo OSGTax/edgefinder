@@ -163,7 +163,7 @@ export class Ground {
 
   private buildMesh(): Mesh {
     const ext = 1800;
-    const seg = 160;
+    const seg = this.q.groundSeg;
     const geo = new PlaneGeometry(ext * 2, ext * 2, seg, seg);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as BufferAttribute;

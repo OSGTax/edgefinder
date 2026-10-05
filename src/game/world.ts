@@ -5,6 +5,7 @@ import {
 import type { Kid, Team } from '../data/types';
 import { kid as kidById } from '../data/kids';
 import { createRenderer } from '../gfx/renderer';
+import { mergeByMaterial } from '../gfx/build';
 import { getQuality, type Quality } from '../gfx/quality';
 import { W, yawOf } from '../gfx/units';
 import { surfaceAt, type Field } from '../sim/field';
@@ -63,7 +64,7 @@ class Actor {
     this.model = new KidModel(kid, team, outfit);
     this.anim = new Animator(this.model);
     this.lefty = kid.throws === 'L';
-    this.glove = makeGlove(this.model.p.s);
+    this.glove = mergeByMaterial(makeGlove(this.model.p.s));
     (this.lefty ? this.model.bones.handR : this.model.bones.handL).add(this.glove);
     this.glove.rotation.y = this.lefty ? Math.PI / 2 : -Math.PI / 2;
     this.glove.position.y = -0.05;
@@ -167,6 +168,7 @@ export class World {
     this.renderer = createRenderer(canvas, this.q);
     this.camera = new PerspectiveCamera(45, 16 / 9, 0.3, 12000);
     this.stadium = new Stadium(this.scene, this.renderer, field, this.q);
+    const tk = performance.now();
     this.fx = new Effects(this.scene, this.q.pixelRatio);
     this.scene.add(this.ball);
     this.looseBat.visible = false;
@@ -176,6 +178,10 @@ export class World {
       outfit: { shirt: hawaiianShirt('#1f8a8a'), colors: { pants: '#c8b48a', trim: '#1f8a8a', jersey: '#1f8a8a', socks: '#f4f4f0', sockStripe: '#f4f4f0' } },
     });
     this.mendoza.model.group.scale.setScalar(GROWNUP_SCALE);
+    if (import.meta.env?.DEV) {
+      console.debug(`[world] kids + fx ${Math.round(performance.now() - tk)} ms`);
+      (window as unknown as { __world: World }).__world = this;
+    }
 
     // strike zone + aim overlays (drawn in the plate plane)
     const zg = new BufferGeometry();
@@ -201,6 +207,9 @@ export class World {
       this.baseRings.push(ring);
       this.scene.add(ring);
     }
+    // start compiling every shader now, in parallel where the browser can,
+    // instead of one at a time during the first frames
+    this.renderer.compileAsync(this.scene, this.camera).catch(() => {});
   }
 
   private size = { w: 1280, h: 720 };

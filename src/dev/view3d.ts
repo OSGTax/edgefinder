@@ -46,14 +46,17 @@ export function devView(root: HTMLElement, camName: string) {
   setCam(camName);
   (window as unknown as { __setCam: (n: string) => void }).__setCam = setCam;
   (window as unknown as { __scene: Scene }).__scene = scene;
+  (window as unknown as { __renderer: typeof r }).__renderer = r;
   const t0 = performance.now();
   let last = 0;
   const loop = () => {
     const tt = (performance.now() - t0) / 1000;
     stadium.update(tt, tt - last);
     last = tt;
-    (window as unknown as { __ready: boolean }).__ready = true;
+    const tr = performance.now();
     r.render(scene, cam);
+    if (!(window as unknown as { __ready: boolean }).__ready) console.warn(`first render ${Math.round(performance.now() - tr)} ms`);
+    (window as unknown as { __ready: boolean }).__ready = true;
     requestAnimationFrame(loop);
   };
   loop();
