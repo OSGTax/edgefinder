@@ -283,9 +283,12 @@ canvas { display: block; }
 .pops { position: absolute; left: 0; right: 0; top: 30%; display: flex; justify-content: center; pointer-events: none; }
 .pop { font-size: calc(44px * var(--s, 1)); font-weight: 900; color: var(--c, #ffe14d); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; text-shadow: 0 5px 0 var(--ink); animation: popin 1.4s ease-out forwards; letter-spacing: 0.02em; white-space: nowrap; }
 @keyframes popin { 0% { transform: scale(0.3) rotate(-8deg); opacity: 0; } 12% { transform: scale(1.15) rotate(2deg); opacity: 1; } 22% { transform: scale(1) rotate(-1deg); } 80% { opacity: 1; transform: translateY(-6px); } 100% { opacity: 0; transform: translateY(-24px); } }
-.card-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 8px; margin-top: 2px; min-width: 128px; }
-.card-bars .bar span { width: 22px; font-size: 9px; color: #8a6d4a; }
+.card-bars { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; margin-top: 2px; min-width: 132px; }
+.card-bars .bar { line-height: 1.15; }
+.card-bars .bar span { width: 22px; font-size: 8.5px; color: #8a6d4a; }
+.card-bars .bar i { height: 5px; }
 .card img.portrait, .bubble img.portrait, .star img.portrait { display: block; object-fit: cover; }
+@media (max-height: 560px) { .card-bars { margin-top: 0; } .card-bars .bar { line-height: 1; } .card-bars .bar i { height: 4px; } }
 @media (max-height: 460px) { .card-bars { display: none; } .pop { font-size: calc(30px * var(--s, 1)); } }
 .scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 .loading-sub { font-size: 14px; font-weight: 700; opacity: 0.9; }
@@ -298,11 +301,13 @@ canvas { display: block; }
 .tp-head { display: flex; align-items: center; gap: 10px; }
 .tp-kids { display: grid; grid-template-columns: repeat(9, 1fr); gap: 4px; }
 .tp-kids .portrait { width: 100%; height: auto; aspect-ratio: 1; border-radius: 10px; border: 2px solid var(--ink); }
-.traits { display: flex; flex-direction: column; gap: 2px; margin: 4px 0; }
+.traits { display: flex; flex-direction: column; gap: 1px; margin: 4px 0; }
+.traits .bar { line-height: 1.25; }
 .traits .bar span { width: 56px; font-size: 11px; }
 .traits .bar em { font-style: normal; font-weight: 900; width: 18px; text-align: right; font-size: 11px; }
 .kid-card { font: inherit; color: var(--ink); text-align: left; cursor: pointer; align-items: flex-start; }
 .kid-card > .portrait { width: 76px; height: 76px; border-radius: 12px; border: 2px solid var(--ink); flex: none; }
+.kid-card > .traits { width: 100%; margin: 0 2px 2px; }
 .km-faces { display: flex; gap: 8px; align-items: flex-end; justify-content: center; }
 .km-faces .portrait { border-radius: 16px; border: 3px solid var(--ink); }
 .km-faces .portrait:first-child { width: 150px; height: 150px; }

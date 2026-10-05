@@ -72,7 +72,7 @@ Goal: move from the v0.1 drawn-in-code 2.5D look to **real 3D with much better, 
 
 | # | Milestone | What you'll see |
 |---|---|---|
-| 0 | **League switch** (can happen in today's version) | 10 teams × 9, four traits, everyone can pitch, Pick-Up mode removed, two new teams and fields |
+| 0 | **League switch** (can happen in today's version) | 10 teams × 9, seven traits, everyone can pitch, Pick-Up mode removed, two new teams and fields |
 | 1 | **3D proof** | One yard in real 3D with lighting and shadows; simple stand-in players driven by the real simulation; working cameras; frame rate checked on phones |
 | 2 | **First real kid** | One fully animated 3D kid batting, pitching, running and fielding |
 | 3 | **All 90 kids** | The parts system plus persona costumes |

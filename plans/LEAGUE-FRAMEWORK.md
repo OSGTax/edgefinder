@@ -10,28 +10,42 @@ The owner's rules for the league. These replace the v0.1 prototype's structure.
 - **Everyone can pitch.** Any of the nine can take the mound. When a pitcher tires, they swap positions with a fielder. Nobody leaves the game.
 - **Each kid has their own personality**: the mini-adult persona, bio and catchphrases carry over.
 
-## Four traits per kid
+## Seven traits per kid
 
-Each trait is rated 1–10 and shown on the player card:
+Each trait is rated 1–10 and shown on the player card (the in-game card uses
+short labels: CON POW SPD FLD ARM PIT CTL):
 
 | Trait | What it does in the game |
 |---|---|
-| **Hitting** | How hard and how often they hit it (bat speed, exit velocity, sweet-spot size) |
+| **Contact** | How often they hit it: bigger sweet spot and timing window, better at laying off bad pitches, more line drives |
+| **Power** | How hard and far the ball comes off the bat |
 | **Speed** | Running the bases and covering ground in the field |
-| **Fielding** | Catching, range and throwing arm |
-| **Pitching** | Pitch speed, movement, accuracy and stamina |
+| **Fielding** | The glove: reaction, reach, sure hands, getting the ball out quickly |
+| **Arm** | How hard they throw (a little extra pitch speed, too) |
+| **Pitching** | Pitch speed and movement ("stuff") |
+| **Control** | Whether the pitch goes where they aimed it |
+
+Pitching + Control together decide how long a pitcher lasts before tiring.
 
 Rules that keep the league fair and interesting:
 
-1. **No two kids share the same four numbers.** Every profile in the league is unique.
-2. **Equal talent per team.** Each team's 36 trait points (9 kids × 4 traits) total within ±3 of every other team. Teams differ in *shape* (a slugging team, a speed team, a pitching team), not in overall strength.
-3. **Everyone is good at something.** Each kid has at least one trait of 7 or higher, or is a true all-rounder (no trait below 5).
-4. **Every team has at least three real pitchers** (Pitching 6+), so the rotation works.
-5. Hidden flavor from personality (optional): a nudge like "free swinger" or "patient", taken from the persona rather than the stats.
+1. **No two kids share the same seven numbers.** Every profile in the league is unique.
+2. **Equal talent per team.** Each team's trait points (9 kids × 7 traits) total within ±5 of every other team. Teams differ in *shape* (a slugging team, a speed team, a pitching team), not in overall strength.
+3. **Everyone is good at something.** Each kid has at least one trait of 8 or higher, or is a true all-rounder (no trait below 5).
+4. **Every team has at least three real pitchers** (Pitching or Control 7+, and the other 5+), so the rotation works.
+5. **Specials match the numbers.** Moonshot kids have Power 9–10; Laser Beam / Eagle Eye kids have high Contact; Heater kids have high Pitching; Rocket Arm 9–10 Arm; Flypaper 9–10 Fielding; Zoomies 9–10 Speed.
+6. Hidden flavor from personality (optional): a nudge like "free swinger" or "patient", taken from the persona rather than the stats.
 
-**Mapping the current 72 kids:** Hitting = average of their old contact and power; Fielding = 60% old fielding + 40% old arm; Speed and Pitching carry over. Then nudge by ±1 until rules 1–4 hold. (A small script can do this and verify it automatically.)
+**Mapping the current 72 kids:** the v0.1 kids already had contact, power, speed,
+fielding, arm and pitching, so those carry over; Control starts from their old
+pitching, nudged by persona (fussy, precise grown-ups throw strikes; showboats are
+wild). The 18 demo kids were moved from the old four traits by splitting Hitting
+into Contact/Power, Fielding into Fielding/Arm and Pitching into Pitching/Control,
+then nudged by personality. Then nudge by ±1 until rules 1–5 hold. (A small script
+can do this and verify it automatically.)
 
-**Engine impact:** small. The simulation already reads contact, power, speed, arm, fielding and pitching. Hitting feeds contact and power together, and Fielding feeds fielding and arm together. Rules, physics and AI stay the same.
+**Engine impact:** done. The simulation reads all seven traits (see CLAUDE.md,
+"Balancing").
 
 ## Pitcher rotation (all-pitch rule)
 
@@ -61,7 +75,7 @@ The existing eight stay as they are, each at its current yard. Two new teams joi
 
 ## 18 new kids (sketch)
 
-All mini adults, like the rest. The traits listed are each kid's standout, to be balanced under the rules above.
+All mini adults, like the rest. The trait listed is each kid's standout, to be balanced under the rules above.
 
 **Riverbend Raccoons**
 
@@ -69,9 +83,9 @@ All mini adults, like the rest. The traits listed are each kid's standout, to be
 |---|---|---|
 | Audrey "The Auditor" Pratt | The IRS Auditor ("I'll need receipts for that double.") | Fielding |
 | Rusty "Ranger" Okoye | The Park Ranger | Speed |
-| Monty "Late Show" Carver | The Late-Night Talk Show Host | Hitting |
-| Pip Lavalle | The Mime (silent; pantomimes every quip) | Pitching |
-| Skip "Captain" Holloway | The Yacht Captain | Hitting |
+| Monty "Late Show" Carver | The Late-Night Talk Show Host | Contact |
+| Pip Lavalle | The Mime (silent; pantomimes every quip) | Control |
+| Skip "Captain" Holloway | The Yacht Captain | Power |
 | Bree "Believe It" Santos | The Motivational Speaker | All-rounder |
 | Gil "Counselor" Nakashima | The Camp Counselor | Pitching |
 | Harmony Brooks-Bell | The Barbershop Quartet Tenor | Speed |
@@ -82,13 +96,13 @@ All mini adults, like the rest. The traits listed are each kid's standout, to be
 | Kid | Persona | Standout |
 |---|---|---|
 | Sven "Slopes" Albrecht | The Ski Instructor | Speed |
-| Dolly "Ding-Ding" Ferreira | The Ice Cream Truck Driver | Hitting |
+| Dolly "Ding-Ding" Ferreira | The Ice Cream Truck Driver | Contact |
 | Otto Polka | The Accordion Busker | Pitching |
-| Frankie "Relish" Russo-Kim | The Hot Dog Vendor | Hitting |
+| Frankie "Relish" Russo-Kim | The Hot Dog Vendor | Power |
 | Stella "Steno" Abernathy-Ruiz | The Court Stenographer (types everything) | Fielding |
 | Gus "Left at the Light" Tran | The Tour Bus Guide | All-rounder |
-| Bonnie "Stop Sign" Lacroix | The Crossing Guard | Fielding |
-| Mabel "Shhh" Okafor-Li | The Shushing Librarian | Pitching |
-| Dex & Mr. Buttons | The Ventriloquist (the dummy does the trash talk) | Hitting |
+| Bonnie "Stop Sign" Lacroix | The Crossing Guard | Arm |
+| Mabel "Shhh" Okafor-Li | The Shushing Librarian | Control |
+| Dex & Mr. Buttons | The Ventriloquist (the dummy does the trash talk) | Contact |
 
 Names and personas are drafts. Bios and catchphrases get written when the roster is built.

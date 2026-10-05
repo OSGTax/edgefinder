@@ -176,8 +176,8 @@ class App {
           h('div', { class: 'kc-body' },
             h('div', { class: 'kc-name' }, `${k.first} "${k.nick}" ${k.last}`),
             h('div', { class: 'kc-persona' }, k.persona),
-            this.traitBars(k.traits),
-            h('div', { class: 'kc-special' }, `⚡ ${SPECIAL_INFO[k.special].label}`)));
+            h('div', { class: 'kc-special' }, `⚡ ${SPECIAL_INFO[k.special].label}`)),
+          this.traitBars(k.traits));
       })));
     this.show(h('div', { class: 'screen' },
       this.head('Meet the Kids', () => this.title()),

@@ -78,22 +78,46 @@ export interface KidLook {
 }
 
 /**
- * Every kid has exactly four traits, each 1–10, and no two kids share the
- * same four numbers. Hitting covers contact and power, Fielding covers glove
- * and arm. Everyone can pitch.
+ * Every kid has seven traits, each 1–10, and no two kids share the same seven
+ * numbers. Everyone can pitch.
  */
 export interface Traits {
-  hitting: number;
+  /** making contact: sweet-spot size, timing window, reading pitches */
+  contact: number;
+  /** how hard and far the ball comes off the bat */
+  power: number;
+  /** running and fielder range */
   speed: number;
+  /** the glove: reaction, reach, sure hands, getting the ball out */
   fielding: number;
+  /** throwing strength */
+  arm: number;
+  /** pitch velocity and movement ("stuff") */
   pitching: number;
+  /** pitch accuracy */
+  control: number;
 }
 
+/** Display order for trait bars. */
 export const TRAIT_LABELS: Record<keyof Traits, string> = {
-  hitting: 'Hitting',
+  contact: 'Contact',
+  power: 'Power',
   speed: 'Speed',
   fielding: 'Fielding',
+  arm: 'Arm',
   pitching: 'Pitching',
+  control: 'Control',
+};
+
+/** Three-letter labels for compact trait bars (HUD cards). */
+export const TRAIT_SHORT: Record<keyof Traits, string> = {
+  contact: 'CON',
+  power: 'POW',
+  speed: 'SPD',
+  fielding: 'FLD',
+  arm: 'ARM',
+  pitching: 'PIT',
+  control: 'CTL',
 };
 
 export interface Kid {

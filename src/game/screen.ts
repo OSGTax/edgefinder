@@ -2,7 +2,7 @@ import { Plane, Raycaster, Vector2, Vector3 } from 'three';
 import { clamp } from '../engine/math';
 import { audio } from '../audio';
 import { kid } from '../data/kids';
-import { SPECIAL_INFO, type Kid, type PitchType, type Team } from '../data/types';
+import { SPECIAL_INFO, TRAIT_SHORT, type Kid, type PitchType, type Team, type Traits } from '../data/types';
 import { contactWindow, type SwingKind } from '../sim/batting';
 import { Match, type MatchConfig } from '../sim/match';
 import { PITCHES } from '../sim/pitching';
@@ -590,7 +590,7 @@ export class GameScreen {
         h('div', { class: 'card-label' }, label),
         h('div', { class: 'card-name' }, k.nick),
         h('div', { class: 'card-sub' }, sub),
-        h('div', { class: 'card-bars' }, bar('HIT', t.hitting), bar('SPD', t.speed), bar('FLD', t.fielding), bar('PIT', t.pitching))));
+        h('div', { class: 'card-bars' }, ...(Object.keys(TRAIT_SHORT) as (keyof Traits)[]).map((key) => bar(TRAIT_SHORT[key], t[key])))));
   }
 
   private renderScoreboard() {
