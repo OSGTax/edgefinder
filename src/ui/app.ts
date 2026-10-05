@@ -318,6 +318,7 @@ export class App {
 
   private kidCard(k: Kid, t: Team | null, onPick?: () => void) {
     const s = k.stats;
+    t = t ?? TEAMS.find((tt) => tt.roster.includes(k.id)) ?? null;
     const bar = (label: string, v: number) => h('div', { class: 'bar' }, h('span', null, label), h('i', null, h('b', { style: `width:${v * 10}%` })));
     return h('div', { class: 'kid-card' },
       h('button', { class: 'kc-face', onclick: () => this.kidModal(k, t) }, portraitCanvas(k, t, 76, 76, '#fff3d6')),
@@ -479,7 +480,7 @@ export class App {
       body,
       !s.champion ? h('div', { class: 'cta' },
         h('button', { class: 'btn small ghost', onclick: () => { this.simRest(); rerender(); } }, 'Sim the rest of the season'),
-        h('button', { class: 'btn small ghost danger', onclick: () => { if (confirm('Throw away this season and start over?')) { remove('season'); this.season = null; this.go(() => this.seasonSetup()); } } }, 'Abandon season')) : null);
+        confirmButton('Abandon season', 'Tap again to throw it away', () => { remove('season'); this.season = null; this.go(() => this.seasonSetup()); })) : null);
   }
 
   private playSeasonGame(g: ScheduledGame) {
@@ -532,7 +533,7 @@ export class App {
         this.segmented<'auto' | 'on' | 'off'>('Aim assist', [['auto', 'By difficulty'], ['on', 'Always'], ['off', 'Off']], settings.aimAssist, (v) => { settings.aimAssist = v; saveSettings(); rerender(); }),
         this.segmented<number>('Throw timer', [[1, 'Quick'], [1.6, 'Normal'], [3, 'Relaxed']], settings.autoThrow, (v) => { settings.autoThrow = v; saveSettings(); rerender(); }),
         this.diffSeg(settings.difficulty, (d) => { settings.difficulty = d; this.qs.difficulty = d; this.draftOpts.difficulty = d; this.seasonOpts.difficulty = d; saveSettings(); rerender(); }),
-        h('button', { class: 'btn small ghost danger', onclick: () => { if (confirm('Erase your season and settings?')) { remove('season'); remove('settings'); this.season = null; location.reload(); } } }, 'Erase saved data')));
+        confirmButton('Erase saved data', 'Tap again to erase everything', () => { remove('season'); remove('settings'); this.season = null; location.reload(); })));
   }
 
   private howTo(): HTMLElement {
@@ -546,6 +547,23 @@ export class App {
       sec('Specials & Hype', 'Big plays fill your team\'s Hype meter (the bar next to your score).', 'When it\'s full, the batter or pitcher can unleash their special: Moonshots, Brain Freezes, Wobblers and more.', 'Some kids have perks instead: Rocket Arms, Flypaper Gloves, Spring Sneakers, The Zoomies.'),
       sec('Backyard rules', 'Every yard has its own ground rules. Into the pool is a Splash Double. Over the barn is a Barn Burner. Do not step on Grandma Bea\'s tomatoes.'));
   }
+}
+
+/** A danger button that asks for a second tap instead of a pop-up dialog. */
+function confirmButton(label: string, confirmLabel: string, onConfirm: () => void) {
+  let armed = false;
+  let timer = 0;
+  const btn = h('button', {
+    class: 'btn small ghost danger',
+    onclick: () => {
+      if (armed) { window.clearTimeout(timer); onConfirm(); return; }
+      armed = true;
+      btn.textContent = confirmLabel;
+      btn.classList.add('armed');
+      timer = window.setTimeout(() => { armed = false; btn.textContent = label; btn.classList.remove('armed'); }, 3000);
+    },
+  }, label);
+  return btn;
 }
 
 function ordinalRank(n: number) {

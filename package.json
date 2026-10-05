@@ -6,10 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:single": "tsc --noEmit && vite build --mode single",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:web": "tsc --noEmit && vite build --mode single && node scripts/web-page.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

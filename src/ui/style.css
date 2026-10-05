@@ -39,6 +39,7 @@ canvas { display: block; }
 .btn.on { background: #7dff9a; }
 .btn.ghost { background: #ffffff; }
 .btn.danger { background: #ffd6d6; }
+.btn.danger.armed { background: var(--red); color: #fff; }
 .btn.small { font-size: 15px; padding: 0.45em 0.9em; border-radius: 12px; }
 .btn.icon { padding: 0.3em 0.6em; font-size: 16px; }
 .btn.swing {
@@ -209,7 +210,7 @@ canvas { display: block; }
 .bar b { display: block; height: 100%; background: linear-gradient(90deg, #ffd23f, #ff7eb6); }
 .kc-special { font-size: 11px; margin-top: 3px; color: #7a3fb0; font-weight: 900; }
 .kc-season { width: 100%; font-size: 11px; background: #fff3d6; border-radius: 8px; padding: 2px 6px; }
-.kid-card .pick { position: absolute; right: 8px; bottom: 8px; }
+.kid-card .pick { width: 100%; }
 
 .draft { display: grid; grid-template-columns: 170px 1fr 170px; gap: 10px; align-items: start; }
 .draft-side, .lineup { background: var(--panel); border: 3px solid var(--ink); border-radius: 16px; padding: 8px; box-shadow: var(--shadow); }

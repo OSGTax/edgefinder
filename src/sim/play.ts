@@ -422,13 +422,16 @@ export class LivePlay {
     const high = b.p.z > kidH * 1.15;
     let p: number;
     if (thrown) {
-      p = 0.975 + fl.kid.stats.fielding * 0.002 - (this.throwInfo?.wild ? 0.35 : 0);
+      p = 0.935 + fl.kid.stats.fielding * 0.005 - (this.throwInfo?.wild ? 0.35 : 0);
     } else {
       const hot = clamp((sp - (b.touched ? 55 : 42)) / (b.touched ? 70 : 45), 0, 1);
       const groundHop = b.touched && b.p.z > 0.6 && b.p.z < 3 ? 0.03 : 0;
-      // catching on the dead run is hard when you're ten
-      const onTheRun = dist2(fl.p, fl.target) > 2.5 && (fl.task === 'chase') ? 0.14 : 0;
-      p = 0.97 - 0.2 * hot - 0.25 * Math.max(0, edge - 0.5) - (10 - fl.kid.stats.fielding) * 0.012 - groundHop - (high ? 0.1 : 0) - onTheRun;
+      // catching on the dead run is hard when you're ten (flies only — rollers are easy)
+      const inAir = !b.touched;
+      const onTheRun = inAir && dist2(fl.p, fl.target) > 2.5 && fl.task === 'chase' ? 0.14 : 0;
+      const slow = sp < 18;
+      p = 0.97 - 0.2 * hot - (slow ? 0.05 : 0.25) * Math.max(0, edge - 0.5) - (10 - fl.kid.stats.fielding) * 0.012 - groundHop - (high ? 0.1 : 0) - onTheRun;
+      if (slow && b.touched) p = Math.max(p, 0.95);
       if (fl.kid.special === 'flypaper') p = 1 - (1 - p) * 0.35;
       if (this.setup.cpuDefense) p = 1 - (1 - p) * diffCatch(this.setup.difficulty);
     }
@@ -514,7 +517,7 @@ export class LivePlay {
       else { fl.target = this.runnerPos(r); return; }
     }
     const human = this.setup.humanDefense;
-    const gather = gatherOf(fl.kid) + (isOF(fl.pos) && this.scooped ? 0.35 : 0);
+    const gather = gatherOf(fl.kid) + (isOF(fl.pos) && this.scooped ? 0.55 : 0);
     if (fl.holdT < gather) return; // still getting the ball out of the glove
     if (human && this.throwRequest !== null) {
       const b = this.throwRequest;
@@ -561,7 +564,7 @@ export class LivePlay {
       return;
     }
     if (!receiver) return;
-    const wild = this.rng.chance(0.012 + (10 - fl.kid.stats.fielding) * 0.004 + (10 - fl.kid.stats.arm) * 0.002);
+    const wild = this.rng.chance((0.022 + (10 - fl.kid.stats.fielding) * 0.005 + (10 - fl.kid.stats.arm) * 0.003) * (isOF(fl.pos) ? 1.6 : 1));
     const sigma = 0.6 + (10 - fl.kid.stats.arm) * 0.12;
     const tx = bp.x + (wild ? this.rng.range(-1, 1) * 9 : this.rng.gauss() * sigma);
     const ty = bp.y + (wild ? this.rng.range(-1, 1) * 9 : this.rng.gauss() * sigma);
@@ -655,9 +658,11 @@ export class LivePlay {
   private initialRead(r: RunnerState) {
     if (this.outs >= 2) { r.dir = 1; r.anim = 'run'; return; }
     if (this.plan.fly) {
-      // catchable fly: go halfway (or tag up from third) and see what happens
+      // catchable fly: go partway (or tag up from third) and see what happens;
+      // deep flies get a bigger lead than liners an infielder might snag
       if (r.base === 3) { r.dir = 0; return; }
-      r.holdAt = this.L * 0.42;
+      const deep = Math.hypot(this.plan.point.x, this.plan.point.y) > 95;
+      r.holdAt = this.L * (deep ? 0.5 : 0.25);
       r.dir = 1;
       r.anim = 'run';
       return;
@@ -676,7 +681,7 @@ export class LivePlay {
     if (this.mode === 'held' && this.holder >= 0) {
       const fl = this.fielders[this.holder];
       const d = dist2(fl.p, bp);
-      const g = gatherOf(fl.kid) + (isOF(fl.pos) && this.scooped ? 0.35 : 0);
+      const g = gatherOf(fl.kid) + (isOF(fl.pos) && this.scooped ? 0.55 : 0);
       return Math.min(d / fl.speed, 0.15 + d / throwSpeedAt(fl.kid, d)) + Math.max(0, g - fl.holdT);
     }
     if (this.mode === 'thrown' && this.throwInfo) {
@@ -690,7 +695,7 @@ export class LivePlay {
     if (this.plan.chaser < 0) return 9;
     const ch = this.fielders[this.plan.chaser];
     const tReach = Math.max(0, this.plan.t - this.t) + 0.25;
-    const scoop = isOF(ch.pos) && this.ball.touched ? 0.35 : 0;
+    const scoop = isOF(ch.pos) && this.ball.touched ? 0.55 : 0;
     const dd = dist2(this.plan.point, bp);
     return tReach + gatherOf(ch.kid) + scoop + 0.15 + dd / throwSpeedAt(ch.kid, dd);
   }
@@ -706,7 +711,8 @@ export class LivePlay {
     if (this.plan.fly && this.mode === 'batted' && this.outs < 2) return false;
     const tRun = this.L / r.speed;
     const margin = this.threatTime(next) - tRun;
-    let need = next === 4 ? 0.12 : 0.05;
+    // kid coaches wave everybody around: close plays at the plate are the fun part
+    let need = next === 4 ? -0.25 : -0.05;
     if (r.kid.special === 'zoomies') need -= 0.2;
     if (this.outs >= 2) need -= 0.15;
     return margin > need;
@@ -770,7 +776,7 @@ export class LivePlay {
     const next = r.base + 1;
     if (this.aheadBlocked(r, next)) return false;
     const margin = this.threatTime(next) - (this.L - r.d) / r.speed;
-    return margin > (next === 4 ? 0.45 : 0.3);
+    return margin > (next === 4 ? -0.1 : 0.05);
   }
 
   private onFielded() {

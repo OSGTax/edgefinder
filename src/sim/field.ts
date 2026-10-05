@@ -11,8 +11,8 @@ export interface SurfaceProps {
 }
 
 export const SURFACE: Record<Surface, SurfaceProps> = {
-  grass: { bounce: 0.42, scrub: 0.22, roll: 9 },
-  dirt: { bounce: 0.5, scrub: 0.14, roll: 6.5 },
+  grass: { bounce: 0.42, scrub: 0.16, roll: 6 },
+  dirt: { bounce: 0.5, scrub: 0.1, roll: 4.5 },
   patio: { bounce: 0.62, scrub: 0.08, roll: 4.5 },
   sand: { bounce: 0.12, scrub: 0.6, roll: 30 },
   mud: { bounce: 0.05, scrub: 0.85, roll: 60 },
