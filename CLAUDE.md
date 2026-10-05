@@ -34,6 +34,7 @@ npm run dev            # http://localhost:5173
 npm test               # vitest: sim balance + determinism, human-hitting, kid traits, audio
 npm run typecheck
 npm run build          # dist/ (hashed assets; deploy this folder)
+npm run deploy         # build docs/ and publish it to the gh-pages branch → https://osgtax.github.io/edgefinder/
 ```
 
 Dev-only URL hashes (combine with `&`): `#gallery` (all kids; `&faces`,

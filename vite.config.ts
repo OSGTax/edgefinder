@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
-// `--mode pages` builds the playable site into docs/ for GitHub Pages
-// (Settings → Pages → deploy from this branch, /docs folder).
+// `--mode pages` builds the playable site into docs/; `npm run deploy` copies it
+// to the gh-pages branch, which GitHub Pages serves.
 export default defineConfig(({ mode }) => ({
   base: './',
   build: {

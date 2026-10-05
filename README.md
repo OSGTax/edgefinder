@@ -8,7 +8,7 @@ backyards. This is the **demo**: the Maple Street Mudcats visit the Cedar Lane
 Comets at Pool Party Paradise. Every model, texture, sound and song is
 generated in code: there are no image, model or audio files.
 
-- **Play it:** https://osgtax.github.io/edgefinder/ (once GitHub Pages is switched on: Settings → Pages → *Deploy from a branch* → this branch, `/docs` folder)
+- **Play it:** https://osgtax.github.io/edgefinder/ (served by GitHub Pages from the `gh-pages` branch; refresh it with `npm run deploy`)
 - **The plan and roadmap:** [GAME-PLAN.md](GAME-PLAN.md)
 - **For developers:** [CLAUDE.md](CLAUDE.md)
 

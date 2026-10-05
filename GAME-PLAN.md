@@ -12,6 +12,8 @@ Even the announcers are kids playing at being a network broadcast booth: Chet Va
 
 ## Where it stands today: the 3D demo
 
+**Play it:** https://osgtax.github.io/edgefinder/ (any modern browser, phone or computer; turn the phone sideways). I refresh this link whenever the demo changes.
+
 You asked for a playable demo that shows what the final game should look and feel like before we build out more teams. That's what's here:
 
 - **Two teams, one heavily detailed backyard.** The Maple Street Mudcats visit the Cedar Lane Comets at **Pool Party Paradise**, the Mendozas' place: a two-story house behind home plate with a back patio and string lights, where Mr. Mendoza (Hawaiian shirt, walrus mustache, spatula) works a smoking grill and turns to watch the big plays; an in-ground pool in shallow right field with a diving board, ladder, loungers and a flamingo floatie; a short white picket fence in right; a clipped hedge in left; big leafy trees that sway in the wind; flower beds, lawn flamingos, a garden gnome, a garden hose, a kid's bike in the grass; each team's "dugout" (a bench, a picnic blanket and a hand-painted sign). Around it is a whole neighborhood: houses next door, a street with parked cars, telephone poles, a swing set and trampoline in the neighbors' yards, and a water tower on the hill.
