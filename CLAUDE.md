@@ -4,9 +4,17 @@ A backyard-baseball game (working title) for web, iOS and Android. The owner
 is the product owner, not a developer — see `GAME-PLAN.md` for the vision,
 status and roadmap in plain language, and keep it current when phases change.
 
-**Hard rule: every asset is generated in code.** No image, audio, font or
-model files. Kids, yards, logos, sounds and music are all drawn/synthesized
-procedurally. Keep it that way.
+**Direction change (v2, owner decision):** the game is moving to real 3D with
+much more realistic graphics. See `docs/3D-FRAMEWORK.md` (Three.js renderer on
+top of the existing `src/sim`; glTF characters) and `docs/LEAGUE-FRAMEWORK.md`
+(10 teams × 9 kids, 4 traits: Hitting/Speed/Fielding/Pitching, everyone pitches,
+no benches/injuries/trades, no pick-up draft, one home field per team). The
+owner asked for frameworks/plans first; don't build large pieces of the 3D
+version until the art-source decision in `docs/3D-FRAMEWORK.md` is made.
+
+**v0.1 asset rule (still true for the current prototype):** every asset is
+generated in code. The 3D version will add real 3D models and textures for
+characters; yards, sound and music should stay code-generated where possible.
 
 **Originality rule:** inspired by 90s backyard baseball games, but never use
 their names, characters, art, music or trademarks ("Backyard Baseball",

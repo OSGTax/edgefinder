@@ -2,6 +2,17 @@
 
 *Working title. The repo will be renamed later; the name lives in one place in the code (`src/ui/app.ts`, `GAME_TITLE`).*
 
+## Direction update (v2), from the owner's feedback
+
+- **Much better, more realistic graphics, in real 3D**, gameplay included. Blueprint: [docs/3D-FRAMEWORK.md](docs/3D-FRAMEWORK.md).
+- **10 teams of exactly 9 kids** (90 total). No benches, no injuries, no team switching, and **no picking teams**: the Pick-Up Game mode goes away.
+- **Four traits per kid** (Hitting, Speed, Fielding, Pitching), unique for every kid. **Everyone can pitch.**
+- **Every team has its own home field** (8 today, plus 2 new).
+- League details: [docs/LEAGUE-FRAMEWORK.md](docs/LEAGUE-FRAMEWORK.md).
+- The v0.1 version below stays playable as the prototype. Its simulation (rules, physics, AI, seasons, sound, commentary) carries into the 3D version; its drawn-in-code visuals get replaced.
+
+The new build order is in the 3D framework's *Build milestones*. It starts with the league switch, then a 3D proof of one yard, then the first fully animated kid.
+
 ## The idea
 
 A neighborhood baseball league played in people's backyards, in the spirit of the backyard baseball games we grew up with, but entirely original. Eight teams of kids play a mini "major league" season. Each team has its own yard, and every yard has its own fences, obstacles and silly ground rules.
