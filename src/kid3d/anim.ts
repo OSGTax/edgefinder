@@ -491,7 +491,7 @@ export class Animator {
       if (this.blinkPhase >= 1) { this.blinkPhase = -1; this.blinkT = 1.5 + Math.random() * 3.5; }
     }
     const open = { neutral: -0.62, happy: -0.42, focus: -0.38, surprised: -0.9, sad: -0.3, yell: -0.5, smug: -0.32, oops: -0.7 }[expr];
-    const ang = lerp(open, 0.5, close);
+    const ang = lerp(open, 0.62, close);
     k.bones.lidL.quaternion.setFromEuler(_e.set(ang, 0, 0));
     k.bones.lidR.quaternion.setFromEuler(_e.set(ang, 0, 0));
   }

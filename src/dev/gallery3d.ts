@@ -5,6 +5,8 @@ import { createRenderer } from '../gfx/renderer';
 import { Environment } from '../gfx/environment';
 import { getQuality } from '../gfx/quality';
 import { KidModel } from '../kid3d/model';
+import { hawaiianShirt } from '../kid3d/outfits';
+import { MR_MENDOZA } from '../world/grownups';
 import { EXPRESSIONS } from '../kid3d/face';
 import { Animator, type Mode } from '../kid3d/anim';
 import { makeBat, makeGlove, makeBall } from '../kid3d/items';
@@ -30,24 +32,46 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
   floor.receiveShadow = true;
   scene.add(floor);
   const only = opts.get('kid');
-  const list = only ? KIDS.filter((k) => k.id === only) : KIDS;
+  const list = only === MR_MENDOZA.id ? [MR_MENDOZA] : only ? KIDS.filter((k) => k.id === only) : KIDS;
   const expr = opts.get('expr');
   const models: KidModel[] = [];
   list.forEach((k, i) => {
     const team = TEAMS.find((t) => t.roster.includes(k.id)) ?? TEAMS[0];
-    const m = new KidModel(k, team);
+    const m = k === MR_MENDOZA
+      ? new KidModel(k, TEAMS[1], { outfit: { shirt: hawaiianShirt('#1f8a8a'), colors: { pants: '#c8b48a', trim: '#1f8a8a', jersey: '#1f8a8a', socks: '#f4f4f0', sockStripe: '#f4f4f0' } } })
+      : new KidModel(k, team);
     const row = Math.floor(i / 9), col = i % 9;
     if (opts.has('faces') && row > 0) { m.group.visible = false; }
     m.group.position.set(only ? 0 : (col - 4) * 2.4, 0, -row * 4);
+    if (opts.has('grid')) {
+      // heads-and-shoulders contact sheet: 6 × 3, every head centre on a grid point
+      const gc = i % 6, gr = Math.floor(i / 6);
+      m.group.position.set((gc - 2.5) * 2.4, 20 - gr * 3.3 - (m.p.joints.head.y + m.p.headR * 0.92), gr * 3);
+    }
     if (opts.has('back')) m.group.rotation.y = Math.PI;
+    if (opts.has('yaw')) m.group.rotation.y = Number(opts.get('yaw'));
     if (expr) m.setExpression(expr as (typeof EXPRESSIONS)[number]);
+    // &hide=face,hair,... hides those part meshes (by material name prefix) for debugging
+    for (const h of opts.get('hide')?.split(',') ?? []) for (const me of m.meshes) if ((me.material as { name: string }).name.toLowerCase().includes(h)) me.visible = false;
     scene.add(m.group);
     models.push(m);
   });
   const cam = new PerspectiveCamera(only ? 22 : 30, window.innerWidth / window.innerHeight, 0.1, 500);
-  if (only) { cam.position.set(0, 4.0, 6.5); cam.lookAt(0, 3.6, 0); }
+  if (opts.has('grid')) { floor.visible = false; cam.fov = 6.4; cam.position.set(0, 15.4, 150); cam.lookAt(0, 15.4, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
+  else if (only && models[0]) {
+    // aim at the head (or the whole kid with &body); &zoom=2 moves in, &yaw= turns the kid
+    const m = models[0];
+    const z = Number(opts.get('zoom') ?? 1);
+    const ty = opts.has('body') ? m.p.H * 0.5 : m.p.joints.head.y + m.p.headR * 0.8;
+    const dist = (opts.has('body') ? 13 : 6.5) / z;
+    cam.position.set(0, ty + dist * 0.06, dist);
+    cam.lookAt(0, ty, 0);
+  }
   else if (opts.has('faces')) { cam.position.set(0, 4.3, 14); cam.lookAt(0, 3.9, 0); cam.fov = 30; cam.updateProjectionMatrix(); }
   else { cam.position.set(0, 7, 28); cam.lookAt(0, 2.4, -2); }
+  // &cam=x,y,z,tx,ty,tz overrides the camera
+  const cv = opts.get('cam')?.split(',').map(Number);
+  if (cv && cv.length === 6) { cam.position.set(cv[0], cv[1], cv[2]); cam.lookAt(cv[3], cv[4], cv[5]); }
   (window as unknown as { __models: KidModel[] }).__models = models;
   // pose test: each kid gets a mode (cycling through the list), a glove and a bat
   const poseModes = opts.get('poses')?.split(',') as Mode[] | undefined;
