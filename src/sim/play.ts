@@ -9,16 +9,16 @@ import type {
 
 export const FIELD_ORDER: Position[] = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
 
-export const fielderSpeed = (k: Kid) => 11 + k.stats.speed * 1.15;
-export const runnerSpeed = (k: Kid) => 13.5 + k.stats.speed * 1.3 + (k.special === 'zoomies' ? 3.5 : 0);
-export const throwSpeed = (k: Kid) => (28 + k.stats.arm * 2.7 + (k.special === 'rocketArm' ? 14 : 0)) * MPH;
+export const fielderSpeed = (k: Kid) => 11 + k.traits.speed * 1.15;
+export const runnerSpeed = (k: Kid) => 13.5 + k.traits.speed * 1.3 + (k.special === 'zoomies' ? 3.5 : 0);
+export const throwSpeed = (k: Kid) => (28 + k.traits.fielding * 2.7 + (k.special === 'rocketArm' ? 14 : 0)) * MPH;
 /** Kids rainbow their long throws: effective speed drops past ~70 ft. */
 export const throwSpeedAt = (k: Kid, d: number) => throwSpeed(k) / (1 + Math.max(0, d - 70) / 160);
-const reachOf = (k: Kid) => 1.7 + k.stats.fielding * 0.09 + (k.special === 'flypaper' ? 0.9 : 0);
+const reachOf = (k: Kid) => 1.7 + k.traits.fielding * 0.09 + (k.special === 'flypaper' ? 0.9 : 0);
 const catchHeight = (k: Kid) => kidHeightFt(k.look.height) * 1.15 + 0.6 + (k.special === 'springs' ? 4 : 0);
-const reactionOf = (k: Kid) => 0.42 - k.stats.fielding * 0.018;
+const reactionOf = (k: Kid) => 0.42 - k.traits.fielding * 0.018;
 /** seconds to get the ball out of the glove and set to throw */
-const gatherOf = (k: Kid) => 0.9 - k.stats.fielding * 0.05;
+const gatherOf = (k: Kid) => 0.9 - k.traits.fielding * 0.05;
 const isOF = (p: Position) => p === 'LF' || p === 'CF' || p === 'RF';
 
 export interface PlaySetup {
@@ -87,7 +87,7 @@ export class LivePlay {
         task: 'idle', target: { ...p }, coverBase: -1, hasBall: false,
         reaction: reactionOf(kid) + (pos === 'P' ? 0.15 : 0), catchCd: 0, holdT: 0,
         anim: 'ready', animT: 0, lift: 0,
-        misread: { x: s.rng.gauss() * (11 - kid.stats.fielding) * 1.1, y: s.rng.gauss() * (11 - kid.stats.fielding) * 2 },
+        misread: { x: s.rng.gauss() * (11 - kid.traits.fielding) * 1.1, y: s.rng.gauss() * (11 - kid.traits.fielding) * 2 },
       } satisfies FielderState;
     });
 
@@ -422,7 +422,7 @@ export class LivePlay {
     const high = b.p.z > kidH * 1.15;
     let p: number;
     if (thrown) {
-      p = 0.935 + fl.kid.stats.fielding * 0.005 - (this.throwInfo?.wild ? 0.35 : 0);
+      p = 0.935 + fl.kid.traits.fielding * 0.005 - (this.throwInfo?.wild ? 0.35 : 0);
     } else {
       const hot = clamp((sp - (b.touched ? 55 : 42)) / (b.touched ? 70 : 45), 0, 1);
       const groundHop = b.touched && b.p.z > 0.6 && b.p.z < 3 ? 0.03 : 0;
@@ -430,7 +430,7 @@ export class LivePlay {
       const inAir = !b.touched;
       const onTheRun = inAir && dist2(fl.p, fl.target) > 2.5 && fl.task === 'chase' ? 0.14 : 0;
       const slow = sp < 18;
-      p = 0.97 - 0.2 * hot - (slow ? 0.05 : 0.25) * Math.max(0, edge - 0.5) - (10 - fl.kid.stats.fielding) * 0.012 - groundHop - (high ? 0.1 : 0) - onTheRun;
+      p = 0.97 - 0.2 * hot - (slow ? 0.05 : 0.25) * Math.max(0, edge - 0.5) - (10 - fl.kid.traits.fielding) * 0.012 - groundHop - (high ? 0.1 : 0) - onTheRun;
       if (slow && b.touched) p = Math.max(p, 0.95);
       if (fl.kid.special === 'flypaper') p = 1 - (1 - p) * 0.35;
       if (this.setup.cpuDefense) p = 1 - (1 - p) * diffCatch(this.setup.difficulty);
@@ -564,8 +564,8 @@ export class LivePlay {
       return;
     }
     if (!receiver) return;
-    const wild = this.rng.chance((0.022 + (10 - fl.kid.stats.fielding) * 0.005 + (10 - fl.kid.stats.arm) * 0.003) * (isOF(fl.pos) ? 1.6 : 1));
-    const sigma = 0.6 + (10 - fl.kid.stats.arm) * 0.12;
+    const wild = this.rng.chance((0.022 + (10 - fl.kid.traits.fielding) * 0.005 + (10 - fl.kid.traits.fielding) * 0.003) * (isOF(fl.pos) ? 1.6 : 1));
+    const sigma = 0.6 + (10 - fl.kid.traits.fielding) * 0.12;
     const tx = bp.x + (wild ? this.rng.range(-1, 1) * 9 : this.rng.gauss() * sigma);
     const ty = bp.y + (wild ? this.rng.range(-1, 1) * 9 : this.rng.gauss() * sigma);
     const tz = 3.6 + (wild ? this.rng.range(-1.5, 4) : this.rng.gauss() * sigma * 0.5);

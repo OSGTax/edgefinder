@@ -81,7 +81,10 @@ export class Match {
   private playStartOuts = 0;
 
   constructor(cfg: MatchConfig) {
-    this.cfg = cfg;
+    // own copies of the lineups: pitching changes swap positions mid-game
+    const own = (sc: SideConfig): SideConfig => ({ ...sc, lineup: { order: [...sc.lineup.order], defense: [...sc.lineup.defense] } });
+    this.cfg = { ...cfg, away: own(cfg.away), home: own(cfg.home) };
+    cfg = this.cfg;
     this.field = buildField(cfg.yard);
     this.rng = new Rng(cfg.seed);
     for (const [side, sc] of [[0, cfg.away], [1, cfg.home]] as const) {
@@ -106,7 +109,36 @@ export class Match {
   get zone() { return strikeZone(kidHeightFt(this.batter.look.height)); }
   get batterSide() { return batSide(this.batter.bats, this.pitcher.throws); }
   hypeFull(side: 0 | 1) { return this.hype[side] >= 100; }
-  get fatigue() { return Math.max(0, (this.pitchCount[this.fieldingSide] - 55) / 60); }
+  /** Pitches a kid can throw before tiring: better pitchers last longer. */
+  stamina(k: Kid) { return 30 + k.traits.pitching * 6; }
+  get fatigue() {
+    const p = this.pitcher;
+    return Math.max(0, (this.box[p.id].pitch.pitches - this.stamina(p)) / 35);
+  }
+
+  /**
+   * Everyone can pitch and nobody leaves the game: a worn-out pitcher swaps
+   * positions with the best fresh arm on the field.
+   */
+  private maybeChangePitcher() {
+    const side = this.fieldingSide;
+    const def = this.side(side).lineup.defense;
+    const cur = kid(def[0]);
+    const thrown = this.box[cur.id].pitch.pitches;
+    if (thrown < this.stamina(cur) + 8) return;
+    let best = -1, bestScore = -Infinity;
+    for (let i = 2; i < def.length; i++) { // not the catcher
+      const k = kid(def[i]);
+      const used = this.box[k.id].pitch.pitches;
+      const score = k.traits.pitching * 10 - used * 0.6;
+      if (used < this.stamina(k) * 0.5 && score > bestScore) { bestScore = score; best = i; }
+    }
+    if (best < 0 || kid(def[best]).traits.pitching < 3) return;
+    const next = def[best];
+    def[best] = def[0];
+    def[0] = next;
+    this.events.push({ type: 'pitchingChange', from: cur.id, to: next });
+  }
 
   // ───────────────────────────────────────────────────── human controls
 
@@ -443,6 +475,7 @@ export class Match {
   }
 
   private nextBatter() {
+    this.maybeChangePitcher();
     const side = this.battingSide;
     this.batterIdx[side] = (this.batterIdx[side] + 1) % 9;
     this.balls = 0;

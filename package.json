@@ -12,9 +12,13 @@
     "build:web": "tsc --noEmit && vite build --mode single && node scripts/web-page.mjs"
   },
   "devDependencies": {
+    "@types/three": "^0.180.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.6",
     "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "three": "^0.180.0"
   }
 }

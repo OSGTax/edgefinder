@@ -77,15 +77,24 @@ export interface KidLook {
   build: number;
 }
 
-/** All ratings run 1–10. */
-export interface KidStats {
-  contact: number;
-  power: number;
+/**
+ * Every kid has exactly four traits, each 1–10, and no two kids share the
+ * same four numbers. Hitting covers contact and power, Fielding covers glove
+ * and arm. Everyone can pitch.
+ */
+export interface Traits {
+  hitting: number;
   speed: number;
-  arm: number;
   fielding: number;
   pitching: number;
 }
+
+export const TRAIT_LABELS: Record<keyof Traits, string> = {
+  hitting: 'Hitting',
+  speed: 'Speed',
+  fielding: 'Fielding',
+  pitching: 'Pitching',
+};
 
 export interface Kid {
   id: string;
@@ -95,7 +104,7 @@ export interface Kid {
   age: number;
   bats: Bats;
   throws: Hand;
-  stats: KidStats;
+  traits: Traits;
   pitches: PitchType[];
   special: Special;
   look: KidLook;

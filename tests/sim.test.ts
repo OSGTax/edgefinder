@@ -5,13 +5,10 @@ import { sim, totals } from './helpers';
 describe('full-game simulation', () => {
   it('plays complete games without getting stuck, with believable kid-league numbers', () => {
     const games = [];
-    let seed = 1;
     const t0 = Date.now();
-    for (const a of TEAMS) {
-      for (const h of TEAMS) {
-        if (a.id === h.id || (seed++ % 4) !== 0) continue;
-        games.push(sim(a.id, h.id, seed * 7919));
-      }
+    for (let seed = 1; seed <= 24; seed++) {
+      const [a, h] = seed % 2 ? [TEAMS[0], TEAMS[1]] : [TEAMS[1], TEAMS[0]];
+      games.push(sim(a.id, h.id, seed * 7919));
     }
     const secs = (Date.now() - t0) / 1000;
     for (const g of games) expect(g.phase).toBe('over');
@@ -41,8 +38,8 @@ describe('full-game simulation', () => {
   }, 120_000);
 
   it('is deterministic for a given seed', () => {
-    const a = sim('owls', 'frogs', 42);
-    const b = sim('owls', 'frogs', 42);
+    const a = sim('mudcats', 'comets', 42);
+    const b = sim('mudcats', 'comets', 42);
     expect(a.score).toEqual(b.score);
     expect(a.line).toEqual(b.line);
   });

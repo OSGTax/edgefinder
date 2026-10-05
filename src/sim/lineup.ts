@@ -10,16 +10,17 @@ export interface Lineup {
 
 type Scorer = (k: Kid) => number;
 
+// How well each kid fits each spot, from their four traits.
 const FIT: Record<Position, Scorer> = {
-  P: (k) => k.stats.pitching * 3 + k.stats.arm,
-  C: (k) => k.stats.arm * 1.4 + k.stats.fielding * 1.2 - k.stats.speed * 0.4,
-  SS: (k) => k.stats.fielding * 1.4 + k.stats.arm + k.stats.speed * 0.8,
-  '2B': (k) => k.stats.fielding * 1.3 + k.stats.speed * 0.8,
-  '3B': (k) => k.stats.arm * 1.3 + k.stats.fielding,
-  CF: (k) => k.stats.speed * 1.5 + k.stats.fielding,
-  RF: (k) => k.stats.arm * 1.2 + k.stats.speed * 0.6 + k.stats.fielding * 0.5,
-  LF: (k) => k.stats.speed * 0.7 + k.stats.fielding * 0.7,
-  '1B': (k) => k.stats.fielding * 0.6 + k.stats.power * 0.3 - k.stats.speed * 0.2,
+  P: (k) => k.traits.pitching * 3 + k.traits.fielding * 0.5,
+  C: (k) => k.traits.fielding * 1.5 - k.traits.speed * 0.5,
+  SS: (k) => k.traits.fielding * 1.4 + k.traits.speed * 0.9,
+  CF: (k) => k.traits.speed * 1.6 + k.traits.fielding * 0.8,
+  '2B': (k) => k.traits.fielding * 1.2 + k.traits.speed * 0.7,
+  '3B': (k) => k.traits.fielding * 1.5 + k.traits.hitting * 0.2,
+  RF: (k) => k.traits.fielding + k.traits.speed * 0.6,
+  LF: (k) => k.traits.speed * 0.7 + k.traits.fielding * 0.6,
+  '1B': (k) => k.traits.hitting * 0.5 + k.traits.fielding * 0.4 - k.traits.speed * 0.3,
 };
 
 // fill the hard spots first
@@ -36,8 +37,6 @@ export function autoDefense(kids: Kid[]): string[] {
   return FIELD_ORDER.map((p) => chosen[p]!.id);
 }
 
-const bat = (k: Kid) => k.stats.contact * 1.1 + k.stats.power;
-
 export function autoOrder(kids: Kid[]): string[] {
   const pool = [...kids];
   const take = (score: Scorer) => {
@@ -46,12 +45,12 @@ export function autoOrder(kids: Kid[]): string[] {
     return pool.splice(best, 1)[0];
   };
   const order: Kid[] = [];
-  order[0] = take((k) => k.stats.speed * 1.2 + k.stats.contact);
-  order[2] = take(bat);
-  order[3] = take((k) => k.stats.power * 1.5 + k.stats.contact * 0.5);
-  order[1] = take((k) => k.stats.contact * 1.4 + k.stats.speed * 0.4);
-  order[4] = take((k) => k.stats.power + k.stats.contact * 0.6);
-  for (let i = 5; i < 9; i++) order[i] = take(bat);
+  order[3] = take((k) => k.traits.hitting * 1.6 - k.traits.speed * 0.2); // cleanup slugger
+  order[0] = take((k) => k.traits.speed * 1.3 + k.traits.hitting * 0.8); // leadoff speed
+  order[2] = take((k) => k.traits.hitting * 1.5 + k.traits.speed * 0.2);
+  order[1] = take((k) => k.traits.hitting * 1.2 + k.traits.speed * 0.5);
+  order[4] = take((k) => k.traits.hitting);
+  for (let i = 5; i < 9; i++) order[i] = take((k) => k.traits.hitting * 1.2 + k.traits.speed * 0.3);
   return order.map((k) => k.id);
 }
 

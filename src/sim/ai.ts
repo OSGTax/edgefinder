@@ -51,7 +51,7 @@ export function cpuDecideSwing(
 ): SwingInput | null {
   const s = SKILL[diff];
   const def = PITCHES[pitch.type];
-  const readErr = (0.12 + (10 - b.stats.contact) * 0.018 + Math.abs(def.breakX) * 0.004 + def.wobble * 0.5) * s;
+  const readErr = (0.12 + (10 - b.traits.hitting) * 0.018 + Math.abs(def.breakX) * 0.004 + def.wobble * 0.5) * s;
   const seenX = pitch.arrival.x + rng.gauss() * readErr;
   const seenZ = pitch.arrival.z + rng.gauss() * readErr * 0.9;
   const looksStrike = isStrike({ x: seenX, y: 0, z: seenZ }, zone);
@@ -60,22 +60,22 @@ export function cpuDecideSwing(
   let pSwing: number;
   if (looksStrike) pSwing = count.strikes === 2 ? 0.94 : count.balls === 3 && count.strikes < 2 ? 0.55 : 0.8;
   else {
-    pSwing = offBy > 1 ? 0.03 : clamp(0.24 - offBy * 0.3 + (10 - b.stats.contact) * 0.012, 0.02, 0.4);
+    pSwing = offBy > 1 ? 0.03 : clamp(0.24 - offBy * 0.3 + (10 - b.traits.hitting) * 0.012, 0.02, 0.4);
     if (count.strikes === 2) pSwing += 0.15;
     if (count.balls === 3) pSwing *= 0.5;
   }
   if (!rng.chance(pSwing)) return null;
 
   let kind: SwingKind = 'normal';
-  if (b.stats.power >= 7 && count.balls > count.strikes && rng.chance(0.45)) kind = 'power';
-  if (b.stats.power <= 3 && b.stats.speed >= 8 && count.strikes < 2 && rng.chance(0.07)) kind = 'bunt';
+  if (b.traits.hitting >= 7 && count.balls > count.strikes && rng.chance(0.45)) kind = 'power';
+  if (b.traits.hitting <= 3 && b.traits.speed >= 8 && count.strikes < 2 && rng.chance(0.07)) kind = 'bunt';
 
   // timing: slow stuff fools you early, heat gets you late
   let bias = 0;
-  if (pitch.type === 'changeup' || pitch.type === 'curve' || pitch.type === 'knuckler') bias -= 0.03 * (1.2 - b.stats.contact / 10);
+  if (pitch.type === 'changeup' || pitch.type === 'curve' || pitch.type === 'knuckler') bias -= 0.03 * (1.2 - b.traits.hitting / 10);
   if (pitch.special === 'loopy' || pitch.special === 'freeze') bias -= 0.07;
   if (pitch.special === 'heater' || pitch.mph > 62) bias += 0.025;
-  const sigmaT = (0.04 + (10 - b.stats.contact) * 0.0055) * s;
+  const sigmaT = (0.04 + (10 - b.traits.hitting) * 0.0055) * s;
   const delta = bias + rng.gauss() * sigmaT;
   const special = hypeFull && SPECIAL_INFO[b.special].kind === 'bat' && rng.chance(0.45);
   const tSwing = kind === 'bunt' ? Math.max(0, pitch.Treal - 0.4) : pitch.Treal - SWING_TIME[kind] + delta;

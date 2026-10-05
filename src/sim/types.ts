@@ -110,4 +110,5 @@ export type MatchEvent =
   | { type: 'quip'; kid: string; text: string }
   | { type: 'halfOver'; inning: number; half: 0 | 1 }
   | { type: 'gameOver'; winner: 0 | 1 | -1 }
-  | { type: 'batterUp'; batter: string; pitcher: string };
+  | { type: 'batterUp'; batter: string; pitcher: string }
+  | { type: 'pitchingChange'; from: string; to: string };

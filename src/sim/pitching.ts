@@ -41,7 +41,7 @@ export interface ActivePitch {
 }
 
 export function fastballMph(k: Kid) {
-  return 40 + k.stats.pitching * 2.3 + k.stats.arm * 0.4;
+  return 40 + k.traits.pitching * 2.3 + k.traits.fielding * 0.4;
 }
 
 export function releasePoint(k: Kid, moundDist: number): Vec3 {
@@ -51,7 +51,7 @@ export function releasePoint(k: Kid, moundDist: number): Vec3 {
 
 /** Pitcher's aim scatter in feet (1σ). */
 export function pitchScatter(k: Kid, type: PitchType, fatigue: number) {
-  return 0.27 + (10 - k.stats.pitching) * 0.065 + PITCHES[type].control + fatigue * 0.3;
+  return 0.27 + (10 - k.traits.pitching) * 0.065 + PITCHES[type].control + fatigue * 0.3;
 }
 
 export function makePitch(

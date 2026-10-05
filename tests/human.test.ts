@@ -17,7 +17,7 @@ function humanAtBats(difficulty: Difficulty, timingSigma: number, aimSigma: numb
   const tally = { pitches: 0, swings: 0, contact: 0, pa: 0, h: 0, ab: 0, so: 0, hr: 0 };
   const rng = new Rng(99);
   for (let g = 0; g < games; g++) {
-    const a = team('owls'), h = team('frogs');
+    const a = team('mudcats'), h = team('comets');
     const m = new Match({
       away: { team: a, lineup: autoLineup(a.roster.map(kid)), human: true },
       home: { team: h, lineup: autoLineup(h.roster.map(kid)), human: false },
