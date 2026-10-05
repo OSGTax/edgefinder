@@ -321,14 +321,14 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     // skinned thigh → shin across the knee so there's no seam; a sock with stirrup stripes below
     const legR = p.legR, lz = (y: number) => (y > knee.y ? knee.z + (hip.z - knee.z) * (y - knee.y) / (hip.y - knee.y) : knee.z + (ank.z - knee.z) * (knee.y - y) / (knee.y - ank.y));
     const legRings: Ring[] = ([
-      [knee.y - sl * 0.54, 0.9], [knee.y - sl * 0.5, 1.0], [knee.y - sl * 0.42, 1.1], [knee.y - sl * 0.2, 1.12], [knee.y, 1.1],
-      [knee.y + tl * 0.25, 1.12], [knee.y + tl * 0.6, 1.18], [hip.y, 1.24], [hip.y + legR * 0.5, 1.12],
+      [knee.y - sl * 0.54, 0.9], [knee.y - sl * 0.5, 1.0], [knee.y - sl * 0.42, 1.1], [knee.y - sl * 0.2, 1.12], [knee.y, 1.11],
+      [knee.y + tl * 0.25, 1.13], [knee.y + tl * 0.6, 1.18], [hip.y, 1.24], [hip.y + legR * 0.5, 1.12],
     ] as const).map(([y, r]) => ({ y, rx: legR * r, rz: legR * r * 0.97, cx: hip.x, cz: lz(y) }));
     const leg = loft(legRings, 16);
     paintFn(leg, (q) => (kneeStain && Math.abs(q.y - knee.y) < tl * 0.18 && q.z > lz(q.y) ? pants.clone().lerp(stain, 0.55) : pants));
     L.cloth.add(blended(leg, (q) => { const w = ramp(q.y, knee.y - 0.1 * s, knee.y + 0.1 * s); return [shinBone, 1 - w, thighBone, w]; }));
     // a knee filler (hidden inside the leg until the knee bends)
-    L.cloth.add(paint(rigid(new SphereGeometry(legR * 1.04, 12, 8), shinBone), pants), new Matrix4().makeTranslation(knee.x, knee.y, knee.z));
+    L.cloth.add(paint(rigid(new SphereGeometry(legR * 0.98, 12, 8), shinBone), pants), new Matrix4().makeTranslation(knee.x, knee.y, knee.z));
     const sock = limb(sl * 0.98, p.legR * 0.86, p.legR * 0.7, 14);
     L.cloth.add(paint(rigid(sock, shinBone), col.socks), alongMatrix(knee, ank));
     for (const [t0, t1] of [[0.6, 0.66], [0.7, 0.74]]) {
@@ -357,7 +357,7 @@ function addHand(L: Lists, p: Proportions, wr: Vector3, el: Vector3, side: 1 | -
     const finger = loft(limbRings(fl, 0.036 * s, 0.032 * s, 2), 7);
     L.skin.add(rigid(finger, bone), m.clone()
       .multiply(new Matrix4().makeTranslation(0, -0.2 * s, (0.075 - k * 0.048) * s))
-      .multiply(new Matrix4().makeRotationZ(side * 0.45))
+      .multiply(new Matrix4().makeRotationZ(-side * 0.5))
       .multiply(new Matrix4().makeRotationX((k - 1.5) * 0.06)));
   }
   const thumb = limb(0.11 * s, 0.05 * s, 0.042 * s, 8);

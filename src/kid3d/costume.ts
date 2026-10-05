@@ -20,6 +20,34 @@ function cap(r: number, T: number, alpha: number, ws = 36, hs = 18): BufferGeome
   return g;
 }
 
+/**
+ * A scalp of hair with a natural hairline: high on the forehead, down at the temples into
+ * short sideburns, up and around the ears, and down to the nape. (Angles are polar angles
+ * from the top of the head, by azimuth from the front.)
+ */
+const HAIRLINE: [number, number][] = [[0, 0.78], [0.55, 0.92], [1.0, 1.42], [1.18, 1.68], [1.32, 1.62], [1.45, 1.28], [1.8, 1.32], [2.3, 1.85], [Math.PI, 2.05]];
+function hairCap(r: number, front = 0.78): BufferGeometry {
+  // (stop just short of the bottom pole so the last row is a clean edge, not a fan)
+  const g = new SphereGeometry(r, 44, 16, 0, Math.PI * 2, 0, Math.PI * 0.999);
+  const pos = g.attributes.position, uv = g.attributes.uv;
+  const edgeAt = (a: number) => {
+    const t = Math.abs(a);
+    for (let i = 1; i < HAIRLINE.length; i++) {
+      const [a1, e1] = HAIRLINE[i], [a0, e0] = HAIRLINE[i - 1];
+      if (t <= a1) return (i === 1 ? front : e0) + ((i === 1 ? e1 : e1) - (i === 1 ? front : e0)) * ramp(t, a0, a1);
+    }
+    return HAIRLINE[HAIRLINE.length - 1][1];
+  };
+  for (let i = 0; i < pos.count; i++) {
+    let a = uv.getX(i) * Math.PI * 2 - Math.PI / 2;
+    if (a > Math.PI) a -= Math.PI * 2;
+    const th = Math.acos(Math.max(-1, Math.min(1, pos.getY(i) / r))) / (Math.PI * 0.999) * edgeAt(a);
+    pos.setXYZ(i, r * Math.sin(th) * Math.sin(a), r * Math.cos(th), r * Math.sin(th) * Math.cos(a));
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 /** A band lying on a sphere of radius r around the head centre, between heights y0 ± h (a sphere zone). */
 function hugBand(r: number, y0: number, h: number, seg = 32): BufferGeometry {
   const ring = (y: number) => ({ y, rx: Math.sqrt(Math.max(0, r * r - y * y)), rz: Math.sqrt(Math.max(0, r * r - y * y)) });
@@ -128,10 +156,10 @@ export function addHair(L: Lists, p: Proportions, kid: Kid) {
   const tie = (m: Matrix4, hex: string) => L.cloth.add(paint(rigid(new TorusGeometry(R * 0.085, R * 0.04, 6, 12), B.head), hex), SH.clone().multiply(m));
   const tieCol = ['#ff6fae', '#5fb3ff', '#ffd23f', '#8be07a'][Math.abs(kid.id.charCodeAt(0)) % 4];
   const along = (from: Vector3, dir: Vector3) => new Matrix4().compose(from, new Quaternion().setFromUnitVectors(new Vector3(0, -1, 0), dir.clone().normalize()), new Vector3(1, 1, 1));
-  const scalp = (rk: number, T = 1.42, alpha = 0.68) => H(cap(R * rk, T, alpha), at(0, 0, 0));
+  const scalp = (rk: number, front = 0.78) => H(hairCap(R * rk, front), at(0, 0, 0));
   switch (look.hair) {
     case 'buzz':
-      H(lumpy(cap(R * 1.045, 1.35, 0.7), 0.006, 40, 1), at(0, 0, 0));
+      H(lumpy(hairCap(R * 1.04, 0.86), 0.006, 40, 1), at(0, 0, 0));
       break;
     case 'sidepart':
       scalp(1.05);
@@ -245,21 +273,27 @@ export function addHair(L: Lists, p: Proportions, kid: Kid) {
     }
     case 'bob':
     case 'long': {
-      scalp(1.07, 1.45, 0.7);
+      scalp(1.07, 0.72);
       const long = look.hair === 'long';
       // curtain of hair around the sides and back, open at the face
-      const curtain = new SphereGeometry(R * 1.12, 34, 18, Math.PI / 2 + 0.95, Math.PI * 2 - 1.9, 0.25, long ? Math.PI * 0.62 : Math.PI * 0.55);
+      const curtain = new SphereGeometry(R * 1.12, 34, 18, Math.PI / 2 + 0.95, Math.PI * 2 - 1.9, 0.25, long ? Math.PI * 0.62 : Math.PI * 0.6);
       H(strands(lumpy(curtain, 0.02, 18, 5), 0.025, 9), at(0, 0, -R * 0.02));
       if (long) {
         // the length falls down the back in a soft, rounded mass with strands
         const sheet = loft([
-          { y: -R * 2.35, rx: R * 0.42, rz: R * 0.12, cz: -R * 0.62 },
-          { y: -R * 2.2, rx: R * 0.66, rz: R * 0.22, cz: -R * 0.62 },
-          { y: -R * 1.7, rx: R * 0.86, rz: R * 0.33, cz: -R * 0.64 },
-          { y: -R * 1.1, rx: R * 0.98, rz: R * 0.45, cz: -R * 0.6 },
-          { y: -R * 0.4, rx: R * 1.1, rz: R * 0.62, cz: -R * 0.48 },
-        ], 24, true, false);
-        toChest(strands(lumpy(sheet, 0.02, 12, 8), 0.05, 10), at(0, 0, 0));
+          { y: -R * 2.08, rx: R * 0.3, rz: R * 0.1, cz: -R * 0.6 },
+          { y: -R * 1.98, rx: R * 0.62, rz: R * 0.2, cz: -R * 0.62 },
+          { y: -R * 1.6, rx: R * 0.84, rz: R * 0.32, cz: -R * 0.64 },
+          { y: -R * 1.05, rx: R * 0.94, rz: R * 0.45, cz: -R * 0.6 },
+          { y: -R * 0.3, rx: R * 0.98, rz: R * 0.56, cz: -R * 0.5 },
+        ], 28, true, false);
+        // pointed locks at the ends
+        const sp = sheet.attributes.position;
+        for (let i = 0; i < sp.count; i++) {
+          const y = sp.getY(i);
+          if (y < -R * 1.9) sp.setY(i, y - Math.abs(Math.sin(Math.atan2(sp.getX(i), sp.getZ(i) + R * 0.6) * 4)) * R * 0.14);
+        }
+        toChest(strands(lumpy(sheet, 0.02, 12, 8), 0.07, 12), at(0, 0, 0));
       }
       // fringe
       H(lumpy(new SphereGeometry(R * 0.6, 18, 10), 0.03, 14, 6), at(0, R * 0.68, R * 0.42, 0.5, 0, 0, [1.3, 0.35, 0.8]));
@@ -349,7 +383,7 @@ export function addHat(L: Lists, p: Proportions, kid: Kid, _team: Team, col: Uni
     }
     case 'visor': {
       // a band hugging the head above the brows, the bill high enough to show the eyes
-      C(hugBand(R * 1.075, R * 0.4, R * 0.13), '#f4f4f0', at(0, 0, 0, -0.2));
+      C(hugBand(R * 1.09, R * 0.4, R * 0.13), '#f4f4f0', at(0, 0, 0, -0.2));
       C(brim(R * 0.8, R * 0.9, 0.3 / R), col.trim, at(0, 0, 0, -0.2).multiply(M4(0, R * 0.32, R * 0.98, 0.26)));
       break;
     }
@@ -585,7 +619,7 @@ export function addCostume(L: Lists, p: Proportions, kid: Kid) {
           const bone = sx === 1 ? B.foreL : B.foreR;
           const wr = sx === 1 ? p.joints.handL : p.joints.handR;
           const el = sx === 1 ? p.joints.foreL : p.joints.foreR;
-          const g = loft([{ y: -0.07 * s, rx: p.armR * 0.95, rz: p.armR * 0.95 }, { y: 0.07 * s, rx: p.armR, rz: p.armR }], 14);
+          const g = loft([{ y: -0.07 * s, rx: p.armR * 0.8, rz: p.armR * 0.8 }, { y: 0.07 * s, rx: p.armR * 0.84, rz: p.armR * 0.84 }], 14, true, true);
           const pos = el.clone().lerp(wr, 0.82);
           const q = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), el.clone().sub(wr).normalize());
           L.cloth.add(paint(rigid(g, bone), '#f4f4f0'), new Matrix4().compose(pos, q, new Vector3(1, 1, 1)));
