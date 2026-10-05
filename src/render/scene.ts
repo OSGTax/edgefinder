@@ -49,6 +49,8 @@ export class SceneRenderer {
   popups: Popup[] = [];
   puffs: Puff[] = [];
   dpr = 1;
+  /** recent ball positions, drawn as a fading trail */
+  private trail: Vec3[] = [];
   cssW = 800;
   cssH = 450;
 
@@ -123,6 +125,30 @@ export class SceneRenderer {
             c.stroke();
           }
           drawKid(c, s.kid, s.team, p.x, p.y, p.s, pose);
+        },
+      });
+    }
+    // a fading trail makes the ball easy to follow on a small screen
+    if (frame.ball) {
+      const last = this.trail[this.trail.length - 1];
+      if (!last || Math.hypot(last.x - frame.ball.x, last.y - frame.ball.y, last.z - frame.ball.z) > 0.4) this.trail.push({ ...frame.ball });
+      if (last && Math.hypot(last.x - frame.ball.x, last.y - frame.ball.y, last.z - frame.ball.z) > 30) this.trail = [{ ...frame.ball }];
+      if (this.trail.length > 9) this.trail.shift();
+    } else this.trail = [];
+    const trail = this.trail.slice(0, -1);
+    if (trail.length > 1) {
+      items.push({
+        z: (cam.project(trail[trail.length - 1].x, trail[trail.length - 1].y, trail[trail.length - 1].z)?.z ?? 0) - 0.4,
+        draw: (c) => {
+          trail.forEach((q, i) => {
+            const p = cam.project(q.x, q.y, q.z);
+            if (!p) return;
+            const u = (i + 1) / trail.length;
+            c.fillStyle = `rgba(255,255,255,${0.35 * u})`;
+            c.beginPath();
+            c.arc(p.x, p.y, Math.max(1.5, 0.12 * (frame.ballScale ?? 2.4) * p.s) * (0.5 + 0.5 * u), 0, Math.PI * 2);
+            c.fill();
+          });
         },
       });
     }

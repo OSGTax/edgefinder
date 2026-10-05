@@ -77,10 +77,13 @@ export class GameScreen {
   private bubbleT = 0;
   private bounceSfxT = 0;
   private lastFoulBack = 0;
+  /** which side the player controls (fixed at the start, even if they sim the rest) */
+  private humanSide: -1 | 0 | 1;
 
   constructor(container: HTMLElement, opts: GameOptions) {
     this.opts = opts;
     this.match = new Match({ ...opts.cfg, autoThrowDelay: settings.autoThrow });
+    this.humanSide = opts.cfg.home.human ? 1 : opts.cfg.away.human ? 0 : -1;
     this.booth = new Booth(opts.cfg.seed);
     this.root = h('div', { class: 'game' });
     container.appendChild(this.root);
@@ -900,7 +903,7 @@ export class GameScreen {
 
   private onGameOver() {
     const m = this.match;
-    const humanSide = m.cfg.home.human ? 1 : m.cfg.away.human ? 0 : -1;
+    const humanSide = this.humanSide;
     const won = humanSide >= 0 && m.winner === humanSide;
     audio.playMusic('victory');
     if (won) audio.play('bigCheer');
