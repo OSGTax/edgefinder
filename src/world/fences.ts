@@ -2,7 +2,7 @@ import {
   BoxGeometry, BufferAttribute, Color, DoubleSide, Group, InstancedBufferAttribute, InstancedMesh, Matrix4, Mesh,
   MeshStandardMaterial, Object3D, PlaneGeometry, Vector3, type BufferGeometry, type Texture,
 } from 'three';
-import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { Batch, T, boxFt, extrude } from '../gfx/build';
 import { M } from '../gfx/materials';
 import { hedgeTex, leafAtlas } from '../gfx/textures';
@@ -99,6 +99,7 @@ export function buildHedge(segs: FenceSeg[], q: Quality, thickness = 4.5): Group
   const leafMats: Matrix4[] = [];
   const rnd = mulberry(5150);
   const v = new Vector3(), n = new Vector3(), w = new Vector3();
+  const hedgeGeos: BufferGeometry[] = [];
   for (const s of segs) {
     const { ax, az, L, ux, uz, yaw } = segFrame(s);
     const h = s.height;
@@ -119,11 +120,7 @@ export function buildHedge(segs: FenceSeg[], q: Quality, thickness = 4.5): Group
       pos.setXYZ(i, v.x, v.y, v.z);
     }
     geo.computeVertexNormals();
-    const mesh = new Mesh(geo, mat);
-    mesh.applyMatrix4(m);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    group.add(mesh);
+    hedgeGeos.push(geo.applyMatrix4(m));
 
     // leaf cards on the faces for a soft, leafy silhouette
     const cards = Math.round(L * (h * 2 + thickness) * 0.5 * (q.leaves / 1400));
@@ -144,6 +141,15 @@ export function buildHedge(segs: FenceSeg[], q: Quality, thickness = 4.5): Group
       o.updateMatrix();
       leafMats.push(o.matrix.clone());
     }
+  }
+  // every hedge run in one mesh
+  if (hedgeGeos.length) {
+    const mesh = new Mesh(mergeGeometries(hedgeGeos, false), mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.name = 'hedge';
+    group.add(mesh);
+    for (const g of hedgeGeos) g.dispose();
   }
   const leaves = leafCards(leafMats, leafAtlas(256, 98), '#c4dcae', 1.1);
   leaves.name = 'hedgeLeaves';

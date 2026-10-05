@@ -10,7 +10,12 @@ export interface TexSet { map: Texture; normal?: Texture; rough?: Texture }
 
 const cache = new Map<string, unknown>();
 function memo<T>(key: string, make: () => T): T {
-  if (!cache.has(key)) cache.set(key, make());
+  if (!cache.has(key)) {
+    const t0 = performance.now();
+    cache.set(key, make());
+    const ms = performance.now() - t0;
+    if (import.meta.env?.DEV && ms > 15) console.debug(`[tex] ${key} ${Math.round(ms)} ms`);
+  }
   return cache.get(key) as T;
 }
 
@@ -37,17 +42,20 @@ function normalFromHeight(h: Float32Array, size: number, strength: number): HTML
   const c = canvas(size);
   const ctx = c.getContext('2d')!;
   const img = ctx.createImageData(size, size);
-  const at = (x: number, y: number) => h[((y + size) % size) * size + ((x + size) % size)];
+  const d = img.data;
   for (let y = 0; y < size; y++) {
+    const row = y * size;
+    const up = ((y + size - 1) % size) * size, dn = ((y + 1) % size) * size;
     for (let x = 0; x < size; x++) {
-      const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
-      const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
-      const len = Math.hypot(dx, dy, 1);
-      const i = (y * size + x) * 4;
-      img.data[i] = (-dx / len * 0.5 + 0.5) * 255;
-      img.data[i + 1] = (dy / len * 0.5 + 0.5) * 255;
-      img.data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
-      img.data[i + 3] = 255;
+      const xl = x === 0 ? size - 1 : x - 1, xr = x === size - 1 ? 0 : x + 1;
+      const dx = (h[row + xr] - h[row + xl]) * strength;
+      const dy = (h[dn + x] - h[up + x]) * strength;
+      const inv = 1 / Math.sqrt(dx * dx + dy * dy + 1);
+      const i = (row + x) * 4;
+      d[i] = (-dx * inv * 0.5 + 0.5) * 255;
+      d[i + 1] = (dy * inv * 0.5 + 0.5) * 255;
+      d[i + 2] = (inv * 0.5 + 0.5) * 255;
+      d[i + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
@@ -276,7 +284,8 @@ export function shingleTex(size: number, color: [number, number, number]): TexSe
   });
 }
 
-export function concreteTex(size: number, tint: [number, number, number] = [205, 200, 192]): TexSet {
+/** Concrete, painted near-white; materials tint it to their colour. */
+export function concreteTex(size: number, tint: [number, number, number] = [240, 240, 240]): TexSet {
   return memo(`concrete${size}${tint.join()}`, () => {
     const noise = new Noise2(91);
     const rnd = mulberry(92);
@@ -434,24 +443,34 @@ export function leatherTex(size = 256): TexSet {
   });
 }
 
-/** Soft cloud sprite with alpha. */
-export function cloudTex(size = 256, seed = 1): Texture {
-  return memo(`cloud${size}${seed}`, () => {
-    const rnd = mulberry(seed * 97);
-    const c = canvas(size, size / 2);
+/** Soft cloud sprites with alpha: `count` clouds stacked vertically, each size × size/2. */
+export function cloudAtlas(size = 256, count = 5): Texture {
+  return memo(`clouds${size}x${count}`, () => {
+    const c = canvas(size, (size / 2) * count);
     const ctx = c.getContext('2d')!;
-    for (let i = 0; i < 26; i++) {
-      const x = size * (0.2 + rnd() * 0.6), y = size * 0.25 + (rnd() - 0.6) * size * 0.16;
-      const r = size * (0.06 + rnd() * 0.1);
-      const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-      g.addColorStop(0, 'rgba(255,255,255,0.75)');
-      g.addColorStop(0.6, 'rgba(250,252,255,0.35)');
-      g.addColorStop(1, 'rgba(240,245,255,0)');
-      ctx.fillStyle = g;
-      ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    for (let k = 0; k < count; k++) {
+      ctx.save();
+      ctx.translate(0, (size / 2) * k);
+      ctx.beginPath(); ctx.rect(0, 0, size, size / 2); ctx.clip();
+      paintCloud(ctx, size, k + 1);
+      ctx.restore();
     }
     return tex(c, true, false);
   });
+}
+
+function paintCloud(ctx: CanvasRenderingContext2D, size: number, seed: number) {
+  const rnd = mulberry(seed * 97);
+  for (let i = 0; i < 26; i++) {
+    const x = size * (0.2 + rnd() * 0.6), y = size * 0.25 + (rnd() - 0.6) * size * 0.16;
+    const r = size * (0.06 + rnd() * 0.1);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.75)');
+    g.addColorStop(0.6, 'rgba(250,252,255,0.35)');
+    g.addColorStop(1, 'rgba(240,245,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+  }
 }
 
 /** Paint arbitrary content onto a texture (labels, signs, jerseys). */
@@ -535,67 +554,84 @@ export function stripeTex(colors: string[], size = 256, vertical = true): Textur
   });
 }
 
-/** A window as seen from outside: frame, mullions, glass with a dim room and curtains. */
-export function windowTex(kind: 'double' | 'slider' | 'picture' = 'double', curtain = '#e9d9b5', seed = 1): Texture {
-  return memo(`window${kind}${curtain}${seed}`, () => {
-    const rnd = mulberry(seed * 31 + 7);
+/** How many window variants (different rooms/curtain widths) sit side by side in a window atlas. */
+export const WINDOW_VARIANTS = 3;
+
+/**
+ * Windows as seen from outside: frame, mullions, glass with a dim room and
+ * curtains. One atlas holds WINDOW_VARIANTS variants side by side, so a whole
+ * street of windows shares one texture and one draw call.
+ */
+export function windowTex(kind: 'double' | 'slider' | 'picture' = 'double', curtain = '#e9d9b5'): Texture {
+  return memo(`window${kind}${curtain}`, () => {
     const W = 256, H = kind === 'slider' ? 224 : 320;
-    const c = canvas(W, H);
+    const c = canvas(W * WINDOW_VARIANTS, H);
     const ctx = c.getContext('2d')!;
-    // the room behind the glass
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, '#3a3f45');
-    g.addColorStop(1, '#202428');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-    // hints of furniture / a lamp
-    ctx.fillStyle = 'rgba(255,220,160,0.18)';
-    ctx.beginPath(); ctx.arc(W * (0.3 + rnd() * 0.4), H * 0.45, W * 0.14, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.fillRect(W * 0.1, H * 0.7, W * 0.8, H * 0.3);
-    // curtains, gathered at the sides
-    const cw = W * (0.18 + rnd() * 0.1);
-    for (const side of [0, 1]) {
-      const x0 = side ? W - cw : 0;
-      for (let k = 0; k < 6; k++) {
-        const f = ctx.createLinearGradient(x0 + (k * cw) / 6, 0, x0 + ((k + 1) * cw) / 6, 0);
-        f.addColorStop(0, curtain);
-        f.addColorStop(0.5, shade(curtain, 0.78));
-        f.addColorStop(1, curtain);
-        ctx.fillStyle = f;
-        ctx.fillRect(x0 + (k * cw) / 6, 0, cw / 6 + 1, H);
-      }
-    }
-    // sky reflection streak across the glass
-    const r = ctx.createLinearGradient(0, 0, W, H);
-    r.addColorStop(0, 'rgba(200,225,255,0.35)');
-    r.addColorStop(0.45, 'rgba(200,225,255,0.08)');
-    r.addColorStop(0.55, 'rgba(255,255,255,0.22)');
-    r.addColorStop(0.7, 'rgba(200,225,255,0.05)');
-    ctx.fillStyle = r;
-    ctx.fillRect(0, 0, W, H);
-    // sash frames and muntins
-    ctx.strokeStyle = '#f3f1ea';
-    ctx.lineWidth = 14;
-    ctx.strokeRect(7, 7, W - 14, H - 14);
-    ctx.lineWidth = 6;
-    if (kind === 'double') {
-      ctx.lineWidth = 12;
-      ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
-      ctx.lineWidth = 5;
-      for (const hy of [0, H / 2]) {
-        ctx.beginPath(); ctx.moveTo(W / 2, hy); ctx.lineTo(W / 2, hy + H / 2); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(0, hy + H / 4); ctx.lineTo(W, hy + H / 4); ctx.stroke();
-      }
-    } else if (kind === 'slider') {
-      ctx.lineWidth = 12;
-      ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
-      // door handle
-      ctx.fillStyle = '#9aa0a6';
-      ctx.fillRect(W / 2 - 22, H * 0.48, 6, 26);
+    for (let v = 0; v < WINDOW_VARIANTS; v++) {
+      ctx.save();
+      ctx.translate(v * W, 0);
+      ctx.beginPath(); ctx.rect(0, 0, W, H); ctx.clip();
+      paintWindow(ctx, kind, curtain, v, W, H);
+      ctx.restore();
     }
     return tex(c, true, false);
   });
+}
+
+function paintWindow(ctx: CanvasRenderingContext2D, kind: 'double' | 'slider' | 'picture', curtain: string, seed: number, W: number, H: number) {
+  const rnd = mulberry(seed * 31 + 7);
+  // the room behind the glass
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#3a3f45');
+  g.addColorStop(1, '#202428');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+  // hints of furniture / a lamp
+  ctx.fillStyle = 'rgba(255,220,160,0.18)';
+  ctx.beginPath(); ctx.arc(W * (0.3 + rnd() * 0.4), H * 0.45, W * 0.14, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(W * 0.1, H * 0.7, W * 0.8, H * 0.3);
+  // curtains, gathered at the sides
+  const cw = W * (0.18 + rnd() * 0.1);
+  for (const side of [0, 1]) {
+    const x0 = side ? W - cw : 0;
+    for (let k = 0; k < 6; k++) {
+      const f = ctx.createLinearGradient(x0 + (k * cw) / 6, 0, x0 + ((k + 1) * cw) / 6, 0);
+      f.addColorStop(0, curtain);
+      f.addColorStop(0.5, shade(curtain, 0.78));
+      f.addColorStop(1, curtain);
+      ctx.fillStyle = f;
+      ctx.fillRect(x0 + (k * cw) / 6, 0, cw / 6 + 1, H);
+    }
+  }
+  // sky reflection streak across the glass
+  const r = ctx.createLinearGradient(0, 0, W, H);
+  r.addColorStop(0, 'rgba(200,225,255,0.35)');
+  r.addColorStop(0.45, 'rgba(200,225,255,0.08)');
+  r.addColorStop(0.55, 'rgba(255,255,255,0.22)');
+  r.addColorStop(0.7, 'rgba(200,225,255,0.05)');
+  ctx.fillStyle = r;
+  ctx.fillRect(0, 0, W, H);
+  // sash frames and muntins
+  ctx.strokeStyle = '#f3f1ea';
+  ctx.lineWidth = 14;
+  ctx.strokeRect(7, 7, W - 14, H - 14);
+  ctx.lineWidth = 6;
+  if (kind === 'double') {
+    ctx.lineWidth = 12;
+    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    ctx.lineWidth = 5;
+    for (const hy of [0, H / 2]) {
+      ctx.beginPath(); ctx.moveTo(W / 2, hy); ctx.lineTo(W / 2, hy + H / 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, hy + H / 4); ctx.lineTo(W, hy + H / 4); ctx.stroke();
+    }
+  } else if (kind === 'slider') {
+    ctx.lineWidth = 12;
+    ctx.beginPath(); ctx.moveTo(W / 2, 0); ctx.lineTo(W / 2, H); ctx.stroke();
+    // door handle
+    ctx.fillStyle = '#9aa0a6';
+    ctx.fillRect(W / 2 - 22, H * 0.48, 6, 26);
+  }
 }
 
 function shade(hex: string, k: number): string {

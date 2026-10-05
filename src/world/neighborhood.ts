@@ -39,7 +39,7 @@ function simpleHouse(batch: Batch, o: HouseOpts) {
     b.add(trim, boxFt(o.w + 2, 0.6, 0.12), T(0, eave - over * pitch, side * (half + over)));
   }
   for (const sx of [-1, 1]) b.add(wall, gable(o.d, rise, 0.4), T(sx * (o.w / 2 - 0.2), eave, 0, Math.PI / 2));
-  b.add(M.brick('#8a4a3a'), boxFt(3, eave + rise + 4, 3), T(-o.w / 2 + 6, (eave + rise + 4) / 2, -half + 6));
+  b.add(M.brick(), boxFt(3, eave + rise + 4, 3), T(-o.w / 2 + 6, (eave + rise + 4) / 2, -half + 6));
   // windows on the facade facing the yard (+z local) and the far side
   const rnd = mulberry(o.seed);
   const nWin = Math.max(2, Math.floor(o.w / 11));
@@ -63,6 +63,9 @@ function simpleHouse(batch: Batch, o: HouseOpts) {
 
 export interface Neighborhood { group: Group }
 
+/** All the neighbours' windows share one curtain colour, so they share one window atlas (one draw call). */
+const NEIGHBOR_CURTAIN = '#f0e8d8';
+
 /** Real (leafy) trees in the neighbours' yards, close enough to deserve detail. */
 export const NEIGHBOR_TREES: TreeSpec[] = [
   { kind: 'maple', x: -110, z: -290, crownY: 30, crownR: 16, crownRv: 14 },
@@ -82,12 +85,12 @@ export function buildNeighborhood(): Neighborhood {
   const b = new Batch();
 
   const styles: HouseStyle[] = [
-    { wall: '#b9d3e6', roof: '#4a4f55', trim: '#ffffff', shutter: '#1f3b5a', door: '#2b4a7a', curtain: '#f0e8d8' },
-    { wall: '#f2e2a6', roof: '#6b4a3a', trim: '#ffffff', shutter: '#6b4a3a', door: '#3a6b4a', curtain: '#f6efe2' },
-    { wall: '#eeeae2', roof: '#3d4a3c', trim: '#ffffff', shutter: '#2f5d3a', door: '#7a2a2a', curtain: '#e6d6c0' },
-    { wall: '#d9c0d6', roof: '#55504a', trim: '#f8f6f0', shutter: '#5a3a5a', door: '#3a3a3a', curtain: '#f4e8ef' },
-    { wall: '#c9d9c0', roof: '#5a4636', trim: '#ffffff', shutter: '#3a5a3a', door: '#a33a2a', curtain: '#efe6d2' },
-    { wall: '#e8c9a8', roof: '#4a4f55', trim: '#ffffff', shutter: '#4a3a2a', door: '#2a4a6a', curtain: '#f0e4d0' },
+    { wall: '#b9d3e6', roof: '#4a4f55', trim: '#ffffff', shutter: '#1f3b5a', door: '#2b4a7a', curtain: NEIGHBOR_CURTAIN },
+    { wall: '#f2e2a6', roof: '#6b4a3a', trim: '#ffffff', shutter: '#6b4a3a', door: '#3a6b4a', curtain: NEIGHBOR_CURTAIN },
+    { wall: '#eeeae2', roof: '#3d4a3c', trim: '#ffffff', shutter: '#2f5d3a', door: '#7a2a2a', curtain: NEIGHBOR_CURTAIN },
+    { wall: '#d9c0d6', roof: '#55504a', trim: '#f8f6f0', shutter: '#5a3a5a', door: '#3a3a3a', curtain: NEIGHBOR_CURTAIN },
+    { wall: '#c9d9c0', roof: '#5a4636', trim: '#ffffff', shutter: '#3a5a3a', door: '#a33a2a', curtain: NEIGHBOR_CURTAIN },
+    { wall: '#e8c9a8', roof: '#4a4f55', trim: '#ffffff', shutter: '#4a3a2a', door: '#2a4a6a', curtain: NEIGHBOR_CURTAIN },
   ];
   // rot: the house's local +z (its back door side) should face the Mendoza yard
   const face = (x: number, y: number, tx: number, ty: number) => Math.atan2(tx - x, -(ty - y));
@@ -165,10 +168,12 @@ export function buildNeighborhood(): Neighborhood {
   poleX.forEach((x, i) => {
     const p = W(x, poleY + (i % 2) * 3, 0);
     p.y = terrainHeight(p.x, p.z);
-    b.add(wood, cyl(0.45, 0.6, 40, 8), T(p.x, p.y + 19, p.z));
-    b.add(wood, boxFt(8, 0.5, 0.5), T(p.x, p.y + 35, p.z));
-    b.add(wood, boxFt(5, 0.45, 0.45), T(p.x, p.y + 32, p.z));
-    b.add(M.paint('#5a6066', 0.5, 0.5), cyl(0.9, 0.9, 2.4, 10), T(p.x + 1.2, p.y + 29, p.z + 0.8));
+    // far beyond the shadow map: no shadow casting
+    const far = { castShadow: false };
+    b.add(wood, cyl(0.45, 0.6, 40, 8), T(p.x, p.y + 19, p.z), far);
+    b.add(wood, boxFt(8, 0.5, 0.5), T(p.x, p.y + 35, p.z), far);
+    b.add(wood, boxFt(5, 0.45, 0.45), T(p.x, p.y + 32, p.z), far);
+    b.add(M.paint('#5a6066', 0.5, 0.5), cyl(0.9, 0.9, 2.4, 10), T(p.x + 1.2, p.y + 29, p.z + 0.8), far);
     if (i > 0) {
       const prev = W(poleX[i - 1], poleY + ((i - 1) % 2) * 3, 0);
       prev.y = terrainHeight(prev.x, prev.z);
@@ -191,20 +196,21 @@ export function buildNeighborhood(): Neighborhood {
   const wt = W(-520, 980, 0);
   wt.y = terrainHeight(wt.x, wt.z) - 2;
   const steel = M.paint('#c9d3d8', 0.45, 0.4);
+  const noShadow = { castShadow: false };
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
-    b.add(steel, cyl(0.9, 0.9, 150, 6), T(wt.x + Math.cos(a) * 14, wt.y + 75, wt.z + Math.sin(a) * 14));
+    b.add(steel, cyl(0.9, 0.9, 150, 6), T(wt.x + Math.cos(a) * 14, wt.y + 75, wt.z + Math.sin(a) * 14), noShadow);
   }
-  b.add(steel, cyl(4, 4, 150, 10), T(wt.x, wt.y + 75, wt.z));
+  b.add(steel, cyl(4, 4, 150, 10), T(wt.x, wt.y + 75, wt.z), noShadow);
   const tank = M.tex('waterTower', paintTex(1024, 256, (g) => {
     g.fillStyle = '#d8e2e6'; g.fillRect(0, 0, 1024, 256);
     g.fillStyle = '#2f5d8a'; g.font = 'bold 110px "Trebuchet MS", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText('MAPLE HOLLOW', 256, 128);
     g.fillText('MAPLE HOLLOW', 768, 128);
   }, true), { roughness: 0.5, metalness: 0.2 });
-  b.add(tank, cyl(30, 30, 34, 32), T(wt.x, wt.y + 167, wt.z));
-  b.add(steel, cyl(4, 31, 14, 32), T(wt.x, wt.y + 191, wt.z));
-  b.add(steel, cyl(31, 18, 10, 32), T(wt.x, wt.y + 145, wt.z));
+  b.add(tank, cyl(30, 30, 34, 32), T(wt.x, wt.y + 167, wt.z), noShadow);
+  b.add(steel, cyl(4, 31, 14, 32), T(wt.x, wt.y + 191, wt.z), noShadow);
+  b.add(steel, cyl(31, 18, 10, 32), T(wt.x, wt.y + 145, wt.z), noShadow);
 
   group.add(b.build('neighborhood'));
 

@@ -57,11 +57,18 @@ export function buildTrees(specs: TreeSpec[], q: Quality): Trees {
   const leaves: InstancedMesh[] = [];
   const o = new Object3D();
   const budget = q.leaves / 1400;
+  // leaf cards are pooled per kind (one instanced mesh, one draw call each);
+  // trees far outside the yard skip the shadow pass — their shadows never reach it
+  const pools = new Map<string, { kind: TreeKind; near: boolean; mats: Matrix4[]; nrm: number[] }>();
   for (const spec of specs) {
     const rnd = mulberry(spec.seed ?? Math.round(Math.abs(spec.x * 13 + spec.z * 7)) + 1);
     const k = KIND[spec.kind];
-    const mats: Matrix4[] = [];
-    const nrm: number[] = [];
+    const near = Math.hypot(spec.x, spec.z + 70) < 200;
+    // trees behind the house get their own pool so the game cameras can cull them
+    const key = `${spec.kind}${near}${spec.z > 30}`;
+    let pool = pools.get(key);
+    if (!pool) { pool = { kind: spec.kind, near, mats: [], nrm: [] }; pools.set(key, pool); }
+    const mats = pool.mats, nrm = pool.nrm, first = mats.length;
     if (spec.kind === 'pine') {
       const H = spec.height ?? 40;
       const { g, m } = limb(new Vector3(spec.x, 0, spec.z), new Vector3(spec.x, H, spec.z), H * 0.025, 0.12, 9);
@@ -90,10 +97,6 @@ export function buildTrees(specs: TreeSpec[], q: Quality): Trees {
           nrm.push(nv.x, nv.y, nv.z);
         }
       }
-      const inst = leafCards(mats, leafAtlas(256, k.hue), k.tint, k.card, { wind: 0.4, normals: new Float32Array(nrm) });
-      inst.name = 'pineNeedles';
-      group.add(inst);
-      leaves.push(inst);
       continue;
     }
 
@@ -140,7 +143,7 @@ export function buildTrees(specs: TreeSpec[], q: Quality): Trees {
     const total = Math.round(area * 4.5 * budget * k.density);
     const u = new Vector3(), p = new Vector3(), n1 = new Vector3(), n2 = new Vector3();
     let guard = 0;
-    while (mats.length < total && guard++ < total * 6) {
+    while (mats.length - first < total && guard++ < total * 6) {
       const cl = clumps[Math.floor(rnd() * clumps.length)];
       u.set(rnd() * 2 - 1, rnd() * 2 - 1, rnd() * 2 - 1);
       const l = u.length();
@@ -162,8 +165,12 @@ export function buildTrees(specs: TreeSpec[], q: Quality): Trees {
       n1.addScaledVector(n2, 0.8).add(new Vector3(0, 0.25, 0)).normalize();
       nrm.push(n1.x, n1.y, n1.z);
     }
-    const inst = leafCards(mats, leafAtlas(256, k.hue), k.tint, k.card, { wind: 1, normals: new Float32Array(nrm) });
-    inst.name = `${spec.kind}Leaves`;
+  }
+  for (const p of pools.values()) {
+    const k = KIND[p.kind];
+    const inst = leafCards(p.mats, leafAtlas(256, k.hue), k.tint, k.card, { wind: p.kind === 'pine' ? 0.4 : 1, normals: new Float32Array(p.nrm) });
+    inst.name = p.kind === 'pine' ? 'pineNeedles' : `${p.kind}Leaves`;
+    inst.castShadow = p.near;
     group.add(inst);
     leaves.push(inst);
   }
@@ -178,6 +185,12 @@ export function buildFarTrees(spots: { x: number; z: number; s: number; kind?: '
   const b = new Batch();
   const mat = new MeshLambertMaterial({ vertexColors: true });
   mat.name = 'farTrees';
+  // one welded unit icosahedron, scaled per blob (welding is the slow part)
+  const unit = new IcosahedronGeometry(1, 1);
+  unit.deleteAttribute('uv');
+  unit.deleteAttribute('normal');
+  const blob = mergeVertices(unit);
+  unit.dispose();
   const col = new Color();
   for (const t of spots) {
     const hue = 0.23 + rnd() * 0.07, light = 0.27 + rnd() * 0.1;
@@ -197,10 +210,7 @@ export function buildFarTrees(spots: { x: number; z: number; s: number; kind?: '
     const blobs = 3 + Math.floor(rnd() * 3);
     for (let k = 0; k < blobs; k++) {
       const r = (9 + rnd() * 6) * t.s;
-      const ico = new IcosahedronGeometry(r, 1);
-      ico.deleteAttribute('uv');
-      ico.deleteAttribute('normal');
-      const g = mergeVertices(ico);
+      const g = blob.clone().scale(r, r, r);
       const pos = g.attributes.position;
       for (let i = 0; i < pos.count; i++) {
         const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
@@ -213,6 +223,7 @@ export function buildFarTrees(spots: { x: number; z: number; s: number; kind?: '
       b.add(mat, g, new Matrix4().makeTranslation(t.x + Math.cos(a) * off, gy + (22 + rnd() * 6) * t.s + (k ? rnd() * 5 : 4), t.z + Math.sin(a) * off));
     }
   }
+  blob.dispose();
   const g = b.build('farTrees', { castShadow: false, receiveShadow: false });
   return g.children[0] as Mesh;
 }

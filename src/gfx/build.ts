@@ -1,6 +1,7 @@
 import {
-  BoxGeometry, BufferGeometry, CylinderGeometry, Euler, Float32BufferAttribute, Group, Matrix4, Mesh, Quaternion,
-  Shape, ExtrudeGeometry, SphereGeometry, TorusGeometry, Vector3, type Material, CatmullRomCurve3, TubeGeometry,
+  BoxGeometry, BufferGeometry, CylinderGeometry, Euler, Float32BufferAttribute, FrontSide, Group, Material, Matrix4, Mesh,
+  MeshStandardMaterial, Quaternion, Shape, ExtrudeGeometry, SphereGeometry, TorusGeometry, Vector3, CatmullRomCurve3,
+  TubeGeometry, type Side,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
@@ -98,18 +99,74 @@ export interface BatchOptions { castShadow?: boolean; receiveShadow?: boolean }
 /** Anything geometry can be added to (a Batch, or a Batch seen through a transform). */
 export interface Adder { add(mat: Material, geo: BufferGeometry, m?: Matrix4, o?: BatchOptions): unknown }
 
+/**
+ * A plain painted surface: a MeshStandardMaterial that is nothing but a colour,
+ * roughness and metalness. Batches fold all of these into one shared material
+ * (colour + roughness/metalness per vertex), so dozens of paint colours cost a
+ * single draw call instead of one each.
+ */
+function isPlain(m: Material): m is MeshStandardMaterial {
+  if (!(m instanceof MeshStandardMaterial) || m.type !== 'MeshStandardMaterial') return false;
+  return !m.map && !m.normalMap && !m.roughnessMap && !m.metalnessMap && !m.emissiveMap && !m.alphaMap && !m.aoMap
+    && !m.lightMap && !m.bumpMap && !m.displacementMap && !m.envMap && !m.vertexColors && !m.transparent && m.opacity === 1
+    && m.alphaTest === 0 && m.emissive.getHex() === 0 && m.envMapIntensity === 1 && !m.flatShading && !m.wireframe
+    && m.depthWrite && m.depthTest && !m.polygonOffset && m.visible && !m.userData.noMerge
+    && m.onBeforeCompile === Material.prototype.onBeforeCompile;
+}
+
+const plainMats = new Map<Side, MeshStandardMaterial>();
+/** The shared vertex-coloured material that plain paints are merged into. */
+function plainMaterial(side: Side): MeshStandardMaterial {
+  let m = plainMats.get(side);
+  if (m) return m;
+  m = new MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, side });
+  m.name = 'batchPaint';
+  m.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec2 aRM;\nvarying vec2 vRM;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRM = aRM;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec2 vRM;')
+      .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = vRM.x;')
+      .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = vRM.y;');
+  };
+  m.customProgramCacheKey = () => 'batchPaint';
+  plainMats.set(side, m);
+  return m;
+}
+
+/** Bake a plain material's look into per-vertex colour + roughness/metalness. */
+function bakePlain(g: BufferGeometry, m: MeshStandardMaterial) {
+  const n = g.attributes.position.count;
+  const c = new Float32Array(n * 3), rm = new Float32Array(n * 2);
+  const { r, g: gr, b } = m.color;
+  for (let i = 0; i < n; i++) {
+    c[i * 3] = r; c[i * 3 + 1] = gr; c[i * 3 + 2] = b;
+    rm[i * 2] = m.roughness; rm[i * 2 + 1] = m.metalness;
+  }
+  g.setAttribute('color', new Float32BufferAttribute(c, 3));
+  g.setAttribute('aRM', new Float32BufferAttribute(rm, 2));
+}
+
+interface Bucket { mat: Material; list: BufferGeometry[]; opts?: BatchOptions }
+
 /** Collects transformed geometry per material, then merges it. */
 export class Batch {
-  private parts = new Map<Material, BufferGeometry[]>();
-  private opts = new Map<Material, BatchOptions>();
+  private buckets = new Map<string, Bucket>();
 
   add(mat: Material, geo: BufferGeometry, m?: Matrix4, o?: BatchOptions): this {
     const g = normalize(geo);
     if (m) g.applyMatrix4(m);
-    let list = this.parts.get(mat);
-    if (!list) { list = []; this.parts.set(mat, list); }
-    list.push(g);
-    if (o) this.opts.set(mat, o);
+    let key = mat.uuid, target = mat;
+    if (isPlain(mat)) {
+      bakePlain(g, mat);
+      target = plainMaterial(mat.side ?? FrontSide);
+      key = `plain${mat.side}|${o?.castShadow ?? '-'}|${o?.receiveShadow ?? '-'}`;
+    }
+    let bucket = this.buckets.get(key);
+    if (!bucket) { bucket = { mat: target, list: [] }; this.buckets.set(key, bucket); }
+    bucket.list.push(g);
+    if (o) bucket.opts = o;
     return this;
   }
 
@@ -121,7 +178,7 @@ export class Batch {
   build(name = 'batch', defaults: BatchOptions = { castShadow: true, receiveShadow: true }): Group {
     const group = new Group();
     group.name = name;
-    for (const [mat, list] of this.parts) {
+    for (const { mat, list, opts } of this.buckets.values()) {
       // keep vertex colors only if every part has them
       const withColor = list.every((g) => g.attributes.color);
       if (!withColor) for (const g of list) if (g.attributes.color) g.deleteAttribute('color');
@@ -129,14 +186,14 @@ export class Batch {
       if (!merged) continue;
       merged.computeBoundingSphere();
       const mesh = new Mesh(merged, mat);
-      const o = { ...defaults, ...this.opts.get(mat) };
+      const o = { ...defaults, ...opts };
       mesh.castShadow = !!o.castShadow;
       mesh.receiveShadow = !!o.receiveShadow;
       mesh.name = `${name}:${mat.name || mat.type}`;
       group.add(mesh);
       for (const g of list) g.dispose();
     }
-    this.parts.clear();
+    this.buckets.clear();
     return group;
   }
 }
@@ -148,4 +205,36 @@ export function tint(g: BufferGeometry, r: number, gr: number, b: number): Buffe
   for (let i = 0; i < n; i++) { c[i * 3] = r; c[i * 3 + 1] = gr; c[i * 3 + 2] = b; }
   g.setAttribute('color', new Float32BufferAttribute(c, 3));
   return g;
+}
+
+/**
+ * Collapse a small rigid group of meshes (e.g. a glove) into one mesh per
+ * material, in place. Looks identical; costs far fewer draw calls.
+ */
+export function mergeByMaterial(group: Group): Group {
+  group.updateMatrix();
+  const lists = new Map<Material, { geos: BufferGeometry[]; cast: boolean; receive: boolean }>();
+  const meshes = group.children.filter((c): c is Mesh => (c as Mesh).isMesh && c.children.length === 0 && !Array.isArray((c as Mesh).material));
+  for (const m of meshes) {
+    m.updateMatrix();
+    const mat = m.material as Material;
+    let l = lists.get(mat);
+    if (!l) { l = { geos: [], cast: false, receive: false }; lists.set(mat, l); }
+    const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    l.geos.push(g.applyMatrix4(m.matrix));
+    l.cast ||= m.castShadow;
+    l.receive ||= m.receiveShadow;
+  }
+  for (const [mat, l] of lists) {
+    if (l.geos.length < 2) continue;
+    const merged = mergeGeometries(l.geos, false);
+    if (!merged) continue;
+    for (const m of meshes) if (m.material === mat) { group.remove(m); m.geometry.dispose(); }
+    const mesh = new Mesh(merged, mat);
+    mesh.castShadow = l.cast;
+    mesh.receiveShadow = l.receive;
+    group.add(mesh);
+    for (const g of l.geos) g.dispose();
+  }
+  return group;
 }

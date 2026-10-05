@@ -369,6 +369,8 @@ export function trampoline(b: Batch, x: number, y: number) {
     b.add(M.paint('#222', 0.6), cyl(0.06, 0.06, 5.5, 5), at(Math.cos(a) * 6.4, 5.4, Math.sin(a) * 6.4));
   }
   const net = new MeshStandardMaterial({ color: '#1d1d1d', transparent: true, opacity: 0.28, side: DoubleSide, roughness: 1, depthWrite: false });
+  // one colour at one opacity blends the same in any order, so one pass is enough
+  net.forceSinglePass = true;
   net.name = 'trampNet';
   b.add(net, cyl(6.4, 6.4, 5.4, 32, true), at(0, 5.4, 0), { castShadow: false });
 }

@@ -65,7 +65,7 @@ export const M = {
   siding: (hex: string) => textured(`siding${hex}`, sidingTex(texSize, NEUTRAL), 4, { roughness: 0.7, normal: 0.9, color: hex }),
   shingle: (hex: string) => textured(`shingle${hex}`, shingleTex(texSize, NEUTRAL), 5, { roughness: 0.95, normal: 1.2, color: lift(hex, 1.15) }),
   brick: (hex = '#96463a') => textured(`brick${hex}`, brickTex(texSize, rgb(hex)), 2.7, { roughness: 0.9, normal: 1 }),
-  concrete: (hex = '#cdc8c0') => textured(`concrete${hex}`, concreteTex(texSize, rgb(hex)), 7, { roughness: 0.92, normal: 0.6 }),
+  concrete: (hex = '#cdc8c0') => textured(`concrete${hex}`, concreteTex(texSize, NEUTRAL), 7, { roughness: 0.92, normal: 0.6, color: lift(hex, 255 / 240) }),
   asphalt: () => textured('asphalt', asphaltTex(texSize), 9, { roughness: 0.96, normal: 0.8 }),
   wood: (hex: string, planks = 4, tile: number | [number, number] = 2.5) =>
     textured(`wood${hex}${planks}${tile}`, woodTex(texSize, NEUTRAL, planks, true, planks + 2), tile, { roughness: 0.8, normal: 0.9, color: hex }),

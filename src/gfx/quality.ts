@@ -13,12 +13,16 @@ export interface Quality {
   leaves: number;
   texSize: number;
   splatSize: number;
+  /** soft (PCFSoft) shadow filtering; off = plain PCF, cheaper per pixel */
+  softShadows: boolean;
+  /** ground mesh subdivisions per side (the far hills need some) */
+  groundSeg: number;
 }
 
 const TIERS: Record<QualityName, Omit<Quality, 'name'>> = {
-  low: { pixelRatio: 1, antialias: false, shadowMap: 1024, grassBlades: 0, leaves: 700, texSize: 256, splatSize: 1024 },
-  medium: { pixelRatio: 1.5, antialias: true, shadowMap: 2048, grassBlades: 26000, leaves: 1400, texSize: 512, splatSize: 2048 },
-  high: { pixelRatio: 2, antialias: true, shadowMap: 4096, grassBlades: 70000, leaves: 2600, texSize: 1024, splatSize: 2048 },
+  low: { pixelRatio: 1, antialias: false, shadowMap: 1024, grassBlades: 0, leaves: 700, texSize: 256, splatSize: 1024, softShadows: false, groundSeg: 96 },
+  medium: { pixelRatio: 1.5, antialias: true, shadowMap: 2048, grassBlades: 26000, leaves: 1400, texSize: 512, splatSize: 2048, softShadows: true, groundSeg: 160 },
+  high: { pixelRatio: 2, antialias: true, shadowMap: 4096, grassBlades: 70000, leaves: 2600, texSize: 1024, splatSize: 2048, softShadows: true, groundSeg: 160 },
 };
 
 function autoTier(): QualityName {
