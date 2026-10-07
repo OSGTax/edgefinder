@@ -1,5 +1,6 @@
 import type { Vec2 } from '../engine/math';
 import type { Kid, Position, Special } from '../data/types';
+import type { SwingRead } from './batting';
 
 export type Difficulty = 'rookie' | 'pro' | 'allstar';
 
@@ -87,8 +88,9 @@ export interface PlayResult {
 export type MatchEvent =
   | { type: 'pitch'; pitcher: string; pitch: string; special: Special | null; mph: number }
   | { type: 'call'; call: 'ball' | 'strike' | 'foul' | 'swinging' }
-  | { type: 'contact'; batter: string; ev: number; la: number; spray: number; quality: number }
-  | { type: 'whiff'; batter: string }
+  | { type: 'contact'; batter: string; ev: number; la: number; spray: number; quality: number; read?: SwingRead }
+  | { type: 'whiff'; batter: string; read?: SwingRead }
+  | { type: 'foulTip'; batter: string; read: SwingRead }
   | { type: 'catch'; fielder: string; fly: boolean; hard: boolean }
   | { type: 'bobble'; fielder: string }
   | { type: 'throw'; fielder: string; base: number }
