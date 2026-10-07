@@ -6,6 +6,9 @@ The owner's words (October 2026):
 - "Gameplay needs to present as not AI generated."
 - "We need to spend some more time on faces as they look kind of scary right now."
 - On a computer it was "deathly slow"; on the owner's phone it ran fine.
+- "It should be a deep, deep quality overview revamp. We're looking for fun and cartoon
+  features. It needs to be comical but not too much going on in the screen, more
+  cartoonish pop-ups like boom, slap, bam — but not like that, just in that style."
 
 The phone in landscape is now the primary target: touch only, two thumbs, a screen
 roughly 844×390 CSS px (iPhone 13/14) to 915×412 (common Android). Tablets and computers
@@ -15,58 +18,68 @@ Read `CLAUDE.md` (developer map) and `GAME-PLAN.md` (owner's plan) before starti
 
 ---
 
-## 1. Art direction: "made by the kids of Maple Hollow"
+## 1. Art direction: a Saturday-morning cartoon
 
-The joke of the game is kids playing at being grown-ups. The presentation leans into
-it: **everything around the game looks like the kids made it themselves** out of
-what's in the garage — corrugated cardboard, poster board, masking tape, permanent
-marker, sidewalk chalk, felt pennants, stickers, bottle caps, index cards, a
-public-access TV station run out of somebody's basement. The 3D world is a warm,
-real-feeling late-summer afternoon. Together that gives the game a specific,
-authored identity instead of a generic app look.
+**Fun, cartoon, comical — with a clean screen.** This is the owner's direction and it
+outranks anything else in this brief.
 
-Concretely:
+- **Cartoon, not realistic.** Bold, clean shapes; bright color with simple shading; clean
+  ink outlines where they help (characters and all UI). Exaggerated, readable characters
+  with big expressive features. Squash and stretch on whatever moves: kids, the ball on
+  impact, the UI pop-ups.
+- **Not too much on the screen.** At any moment the player sees the game plus only what
+  they need right now. The persistent HUD is at most a small score/inning/count bug, the
+  controls for the current action, and pause. Everything else is transient: the batter's
+  name card slides in when they step up and gets out of the way; a caption is one short
+  line and leaves; no stat bars or paragraphs during play. When in doubt, leave it out.
+- **Comic-book pop-ups for the big moments** — the game's signature. Starburst or jagged
+  balloon shapes, bold slanted letters with a thick ink outline and an offset shadow,
+  halftone dots and speed lines, a punchy scale-in with overshoot and a little shake, gone
+  in about a second. The words are **our own, specific to the moment** (e.g. a crushed ball
+  "THWACK!", a whiff "WHIFF!", a diving grab "SNAG!", into the pool "SPLOOSH!", off the
+  fence "BONK!", strike three "SIT DOWN!", a home run "SEE YA!"), not the old-TV
+  "BAM / POW / ZAP" set. Used sparingly so they stay special: real moments only, never on
+  routine pitches, and never the same word twice in a row.
+- **Comical in the world.** Cartoon touches on the field: dust puffs and speed lines,
+  stars circling a kid who stumbles, a sweat drop on a pitcher in a jam, a "!" over a
+  fielder about to make the play, exaggerated takes and celebrations. Funny, never mean,
+  never noisy.
+- **The humor stays authored.** Kids playing at being grown-ups; Chet & Dottie's homemade
+  broadcast (*Channel 4½, Maple Hollow Public Access*) lives in the copy, not as clutter.
 
-- **Scoreboard** — a hand-painted cardboard sign with masking-tape labels and marker
-  numbers; the count as chalk tallies or bottle caps; bases as a little drawn diamond.
-- **Announcer captions** — Chet & Dottie's "broadcast" on *Channel 4½, Maple Hollow
-  Public Access*: a homemade lower-third (construction paper, a hand-cut logo,
-  slightly crooked), with their names, not bare text pills.
-- **Kid cards** — trading cards: photo (3D portrait), name in marker, persona on a
-  typed label, two or three stats that matter right now (a batter's Contact/Power, a
-  pitcher's pitches and Control). The full stat sheet lives on the card's back, not on
-  the HUD.
-- **Menus** — the kids' clubhouse: team pennants, a shoebox of trading cards for Meet
-  the Kids, a clipboard for settings, a chalkboard for How to Play.
-- **Big moments** ("HOME RUN!", "SPLASH DOUBLE!") — hand-lettered, as if painted on a
-  bedsheet banner or stamped, with movement that has weight.
+**Type.** Display lettering is *generated in code* in a bold comic style (slanted, thick
+outline, a little hand-drawn wobble): titles, team names, score numbers, pop-ups. No web
+fonts or font files. Body text uses a calm rounded system stack, sentence case, at least
+13 CSS px on phones.
 
-**Type.** Display text (titles, team names, scoreboard numbers, big popups) uses
-hand-made lettering *generated in code* (e.g. single-stroke glyph skeletons rendered
-with a marker/brush stroke and slight wobble). No web fonts or font files. Body
-text uses a calm rounded system stack, sentence case, at least 13 CSS px on phones.
+**Icons.** Drawn in code (SVG paths) in the same cartoon style: rounded, thick outline.
+**No emoji anywhere** in the UI (today: ⚾ ⚡ 📱 ↻ ▶ ◀ are used — replace them all).
 
-**Icons.** Drawn in code (SVG paths) in one consistent hand style. **No emoji
-anywhere** in the UI (today: ⚾ ⚡ 📱 ↻ ▶ ◀ are used — replace them all).
+**Palette.** Bright, sunny and cheerful but harmonious: grass greens, sky blue, sunshine
+yellow, tomato red, each team's colors, and a warm dark ink (not pure black) for outlines.
+No neon gradients, no glossy pills.
 
-**Palette.** Warm, slightly sun-faded summer: grass greens, cardboard tan, poster-board
-off-white, marker black, marker red and blue, highlighter yellow, masking-tape cream,
-plus each team's colors as accents. No neon gradients, no glossy pills.
+**3D look.** Characters get toon-style shading (a soft two- or three-tone ramp), a clean
+ink outline and simple saturated materials (the Faces helper owns kid materials; check the
+outline's cost with the Speed helper; the lite model may drop it). The world goes
+cartoon-friendly: simplified, saturated, soft shadows, no noisy realistic textures. The
+Speed & graphics helper decides how far toward toon to push, with side-by-side
+screenshots, so kids and yard sit together as one style.
 
 ### The "not AI-generated" checklist
 
 | Reads as generated / templated | Reads as made by people |
 | --- | --- |
-| Emoji as icons | Code-drawn icons in one hand style |
-| Gradient pill buttons, glossy circles | Surfaces from the kid-made world: cardboard, tape, felt, stickers; a little imperfect (1–2° tilt, torn edge, tape corner) |
-| One heavy system font for everything | Hand-lettered display type plus a calm body face, with clear hierarchy |
-| The same rounded panel everywhere | A few deliberate surfaces, each with a reason to exist |
+| Emoji as icons | Code-drawn icons in one cartoon style |
+| Gradient pill buttons, glossy circles | Bold cartoon shapes, ink outlines, flat color, a little hand-drawn wobble |
+| A busy screen: panels, bars and labels all at once | Only what's needed now; cards come and go; big moments get a pop-up, routine ones don't |
+| Clip-art "POW!" bursts | Our own words, drawn in our style, tied to the moment, never repeated back-to-back |
+| One heavy system font for everything | Comic display lettering plus a calm body face, with clear hierarchy |
 | Seven stat bars on every card | Two or three numbers that matter right now; the rest on demand |
 | Placeholder/dev copy ("Watching the kids play", "Demo build…") | In-world copy written for this game |
 | Repetition: same face, same line twice, same celebration | Per-kid variation; no-repeat logic; specific details |
-| Uniform timing, symmetric poses, everything at once | Hand-tuned timing, anticipation and follow-through, small asymmetries |
-| Everything explained by text | Shown in the world (the scoreboard flips, kids react); text short |
-| Same-looking faces with a color swap | Each kid designed as a character |
+| Uniform timing, symmetric poses, everything at once | Hand-tuned timing, anticipation and follow-through, squash and stretch |
+| Same-looking faces with a color swap | Each kid designed as a cartoon character |
 
 The originality rule still applies: inspired by 90s backyard baseball games, never
 their names, characters, art, music or trademarks, and no real MLB teams or players.
@@ -80,7 +93,8 @@ irises and lots of white, heavy half-lowered upper lids and a dark lid line, so 
 kid has the same flat suspicious stare; a long egg-shaped head with a big empty lower
 face; a thin little mouth sitting low; identical features on every kid.
 
-The target is appealing stylized cartoon kids that read at every size:
+The target is appealing **cartoon** kids with big, simple, expressive features that read
+at every size (the owner asked for "fun and cartoon features"):
 
 1. **Eyes** — big dark irises and pupils filling most of the eye opening, clear
    catchlights, upper lids high at rest (lids come down only for blinks and
@@ -91,7 +105,8 @@ The target is appealing stylized cartoon kids that read at every size:
    bigger forehead.
 3. **Mouth** — larger and readable: a soft smile with defined corners at rest, a hint
    of lower lip, closer to the nose; a real expression range (open laugh, determined
-   grit, surprised O, pout, yell).
+   grit, surprised O, pout, yell). Expressions are cartoon "takes": eyes pop wide in
+   surprise, squeeze shut in a laugh, brows do half the acting.
 4. **Brows** — thicker, expressive, a shape per kid.
 5. **Every kid a character** — a hand-picked face recipe per kid (eye shape, size and
    spacing, brow style, nose, mouth width, ears, freckles, gap tooth, cheeks) that fits
@@ -117,7 +132,8 @@ parent call these kids cute?
 - **Readability.** A compact HUD that works at 390 px tall; the ball always readable
   (size, trail, shadow, an off-screen marker for high flies); timing feedback on every
   swing (early / late / on time; contact quality).
-- **Feel.** Weighty contact (sound, a frame of hit-stop, camera kick, slow-mo on a crush);
+- **Feel.** Weighty contact (sound, a frame of hit-stop, camera kick, slow-mo on a crush)
+  and the comic pop-ups from §1 on the big moments;
   haptics where the platform allows; snappy pacing (skippable flyovers, short
   transitions); a 3-inning default on phones.
 - **Onboarding.** A first-game coach that teaches swing, pitch, throw and run in
@@ -157,16 +173,16 @@ keep it tiny, additive and clearly commented, and mention it in your report.
 | Helper | Branch | Owns |
 | --- | --- | --- |
 | **Faces & character appeal** | `ccr-92524618-3jffwa-m-faces` | `src/kid3d/{rig,geom,model,face,uniform,costume,items,outfits}.ts`, new `src/kid3d/face-recipes.ts`, `src/game/portraits.ts`, `src/world/grownups.ts`, `src/dev/gallery3d.ts`; in `kid3d/anim.ts` only the eye, lid, blink and expression code |
-| **Animation & personality** | `ccr-92524618-3jffwa-m-anim` | `src/kid3d/{anim,ik}.ts` (not the eye/lid code), new `src/kid3d/personality.ts`, the `Actor` class and `World.sync` animation logic in `src/game/world.ts` |
-| **Phone controls & game feel** | `ccr-92524618-3jffwa-m-controls` | `src/game/{screen,director,fx}.ts`, `src/ui/hud.css`, `src/sim/**` (feel, timing, difficulty; keep balance tests green), the aim overlays in `src/game/world.ts` |
-| **Look, menus & phone app** | `ccr-92524618-3jffwa-m-look` | `src/ui/{app,dom,settings}.ts`, `src/ui/{base,menus}.css`, new `src/ui/look/**` (lettering, icons, paper/tape/cardboard drawing), `index.html`, `vite.config.ts`, `public/`, `src/main.ts`, PWA files |
+| **Animation & personality** | `ccr-92524618-3jffwa-m-anim` | `src/kid3d/{anim,ik}.ts` (not the eye/lid code), new `src/kid3d/personality.ts`, new `src/game/emotes.ts` (stars, sweat drops, "!" over heads), the `Actor` class and `World.sync` animation logic in `src/game/world.ts` |
+| **Phone controls & game feel** | `ccr-92524618-3jffwa-m-controls` | `src/game/{screen,director,fx}.ts` (including the comic pop-up system and cartoon particles), `src/ui/hud.css`, `src/sim/**` (feel, timing, difficulty; keep balance tests green), the aim overlays in `src/game/world.ts` |
+| **Look, menus & phone app** | `ccr-92524618-3jffwa-m-look` | `src/ui/{app,dom,settings}.ts`, `src/ui/{base,menus}.css`, new `src/ui/look/**` (comic lettering, pop-up bursts, icons, cartoon components), `index.html`, `vite.config.ts`, `public/`, `src/main.ts`, PWA files |
 | **Speed & graphics** | `ccr-92524618-3jffwa-m-gfx` | `src/gfx/**`, `src/world/**` (not `grownups.ts`), `src/dev/view3d.ts`, the `World` constructor, renderer, `adapt()` and quality code in `src/game/world.ts` |
 | **Sound & voices** | `ccr-92524618-3jffwa-m-sound` | `src/audio/**`, `src/ui/commentary.ts`, audio and commentary tests |
 
 Shared contact points, agreed up front:
 
 - **Look → Controls.** The Look helper builds the visual kit (tokens in `base.css`,
-  lettering and icons in `src/ui/look/`, surface components) **first** and reports it
+  comic lettering, pop-up burst shapes and icons in `src/ui/look/`, components) **first** and reports it
   as an early milestone. The coordinator merges it into the base branch and tells the
   Controls helper, who then dresses the in-game HUD with it. Until then, Controls works on
   mechanics, layout and feel.

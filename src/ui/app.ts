@@ -8,7 +8,7 @@ import { buildField } from '../sim/field';
 import { Match, type MatchConfig } from '../sim/match';
 import { PITCHES } from '../sim/pitching';
 import type { Difficulty } from '../sim/types';
-import { qualitySetting, setQuality, type QualityName } from '../gfx/quality';
+import { gfxPrefs, qualitySetting, setGfxPrefs, setQuality, softwareTip, TIER_LABEL, type QualityName } from '../gfx/quality';
 import { World } from '../game/world';
 import { nextPaint, runPaced, type Step } from '../engine/steps';
 import { Director } from '../game/director';
@@ -64,10 +64,22 @@ class App {
       if (import.meta.env.DEV) console.debug(`[app] world built in ${Math.round(performance.now() - t0)} ms`);
       this.resize();
       loading.remove();
+      // Speed helper: the no-graphics-card tip and the lost-context note (small, in-page)
+      const tip = softwareTip();
+      if (tip) this.toast(tip, 12000);
+      this.world.onContextChange = (lost) => { if (lost) this.toast('The graphics took a quick nap. Waking them up…', 4000); };
       const hash = new URLSearchParams(location.hash.slice(1));
       if (import.meta.env.DEV && hash.has('play')) this.startGame(hash.get('play') === 'comets' ? TEAMS[1] : TEAMS[0], hash.has('cpu'));
       else this.title();
     }, 30));
+  }
+
+  /** A short note at the top of the screen that fades away. */
+  private toast(text: string, ms: number) {
+    const el = h('div', { class: 'toast', role: 'status', style: 'position:fixed;left:50%;top:calc(10px + env(safe-area-inset-top,0px));transform:translateX(-50%);max-width:min(92vw,560px);z-index:60;padding:8px 14px;border-radius:6px;background:rgba(30,26,20,.86);color:#fffbe8;font-size:14px;line-height:1.35;text-align:center;transition:opacity .4s' }, text);
+    el.addEventListener('click', () => el.remove());
+    this.root.appendChild(el);
+    setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 450); }, ms);
   }
 
   private resize() {
@@ -253,7 +265,9 @@ class App {
         toggle('Always show the strike zone', settings.showZone, (x) => { settings.showZone = x; }),
         h('div', { class: 'seg' }, h('span', { class: 'seg-label' }, 'Aim assist'), aim('auto', 'By difficulty'), aim('on', 'On'), aim('off', 'Off')),
         h('div', { class: 'seg' }, h('span', { class: 'seg-label' }, 'Graphics'), qBtn('auto', 'Auto'), qBtn('low', 'Fast'), qBtn('medium', 'Balanced'), qBtn('high', 'Beautiful')),
-        h('div', { class: 'tc-sub' }, `Changing graphics reloads the page. Right now: ${this.world.q.name}.`))));
+        h('div', { class: 'tc-sub' }, `Changing graphics reloads the page. Right now: ${TIER_LABEL[this.world.tier]}${q === 'auto' ? ' (picked for this device)' : ''}.`),
+        toggle('Battery saver (30 frames a second)', gfxPrefs().cap30, (x) => setGfxPrefs({ cap30: x })),
+        toggle('Speed readout (frames a second and graphics chip)', gfxPrefs().readout, (x) => setGfxPrefs({ readout: x })))));
   }
 }
 
