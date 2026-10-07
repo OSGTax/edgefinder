@@ -65,7 +65,7 @@ const I: Record<string, Part[]> = {
     { d: 'M11.6 4.4 L19.6 4.6 L19.4 18.4 L15.6 18.4', accent: true },
     { d: 'M7 10.4 L10.4 9.4 M8 13.8 L11.6 12.8', w: 1.4 },
   ],
-  /** a felt pennant (team pick) */
+  /** a pennant (team pick) */
   pennant: [
     { d: 'M4.2 2.8 L4.2 21.4', w: 2.4 },
     { d: 'M4.6 4.4 L20.6 9.6 L4.6 15 Z', fill: true, accent: true },
@@ -173,7 +173,7 @@ export function iconSVG(name: IconName, o: IconOpts = {}): string {
   const parts = I[name].map((p) => {
     const d = wobble(p.d, r, 0.22);
     const col = p.accent ? 'var(--ico-accent, currentColor)' : 'currentColor';
-    const w = n2((p.w ?? 2.1) * k);
+    const w = n2((p.w ?? 2.5) * k * (p.w ? 1.15 : 1));
     return p.fill
       ? `<path d="${d}" fill="${col}" stroke="${col}" stroke-width="${w}" stroke-linejoin="round"/>`
       : `<path d="${d}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;

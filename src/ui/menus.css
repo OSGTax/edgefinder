@@ -16,9 +16,9 @@
 /* ── screen header: back button, title on a strip of tape ──────────────── */
 .screen-head { display: flex; align-items: center; gap: 10px; }
 .screen-head .back { font-size: 26px; padding: 0.15em 0.45em; flex: none; }
-.head-tape { margin: 0 auto; padding: 0.35em 1.4em; font-size: 22px; gap: 0.4em; }
-.head-tape .lt { height: 26px; width: auto; }
-.head-tape .ico { font-size: 22px; }
+.head-title { margin: 0 auto; display: flex; align-items: center; gap: 10px; transform: rotate(-1.5deg); }
+.head-title .lt { height: 36px; width: auto; max-width: 70vw; }
+.head-ico { display: flex; font-size: 22px; background: var(--sunshine); border: var(--line) solid var(--marker); border-radius: 50%; padding: 7px; box-shadow: 2px 3px 0 var(--marker); --ico-accent: var(--tomato); }
 .head-spacer { width: 52px; flex: none; }
 
 /* ── title ──────────────────────────────────────────────────────────────── */
@@ -57,7 +57,7 @@
 
 /* ── team pick: pennants on a clothesline ─────────────────────────────────── */
 .clothesline { position: relative; display: flex; justify-content: center; align-items: flex-start; gap: clamp(12px, 4vw, 48px); padding-top: 10px; flex-wrap: wrap; }
-.clothesline::before { content: ''; position: absolute; left: -30px; right: -30px; top: -6px; height: 26px; border-bottom: 2px solid rgba(243, 240, 228, 0.7); border-radius: 0 0 50% 50% / 0 0 100% 100%; pointer-events: none; }
+.clothesline::before { content: ''; position: absolute; left: -30px; right: -30px; top: -6px; height: 26px; border-bottom: 3px solid var(--marker); border-radius: 0 0 50% 50% / 0 0 100% 100%; pointer-events: none; }
 .pennant-pick {
   position: relative; font: inherit; color: var(--poster); background: none; border: 0; padding: 6px 0 0; cursor: pointer;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
@@ -65,15 +65,15 @@
   transition: transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1), filter 0.2s, opacity 0.2s;
   transform-origin: 30px 8px;
 }
-.pennant-pick .pennant { width: 100%; height: auto; display: block; filter: drop-shadow(2px 4px 0 rgba(31, 26, 20, 0.45)); }
+.pennant-pick .pennant { width: 100%; height: auto; display: block; }
 .pennant-pick:not(.on) { opacity: 0.72; filter: saturate(0.65); transform: rotate(3deg); }
 .pennant-pick.on { transform: rotate(-1.5deg); }
 .pennant-pick:active { transform: rotate(-4deg); }
-.pin { position: absolute; left: 22px; top: -2px; width: 10px; height: 26px; background: #d8b78a; border: 1.5px solid #7a5530; border-radius: 3px; z-index: 2; }
+.pin { position: absolute; left: 21px; top: -4px; width: 12px; height: 28px; background: #f0c98e; border: 2.5px solid var(--marker); border-radius: 4px; z-index: 2; }
 .pennant-pick .sticker { position: absolute; right: 6%; top: 8%; font-size: var(--t-sm); color: var(--marker); }
-.pick-note { font-size: var(--t-xs); text-align: center; text-shadow: 0 1px 0 rgba(0, 0, 0, 0.5); max-width: 100%; }
+.pick-note { font-size: var(--t-xs); text-align: center; color: var(--marker); background: var(--poster); border: 2px solid var(--marker); border-radius: 8px; padding: 2px 8px; max-width: 100%; }
 .pick-kids { display: flex; gap: 3px; justify-content: center; }
-.pick-kids .portrait { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--poster); background: var(--poster-shade); object-fit: cover; }
+.pick-kids .portrait { width: 32px; height: 32px; border-radius: 50%; border: 2.5px solid var(--marker); background: var(--poster-shade); object-fit: cover; }
 .pick-foot { display: flex; align-items: center; justify-content: center; gap: 18px 26px; flex-wrap: wrap; margin-top: auto; }
 .pick-opts { padding: 8px 16px 10px; max-width: 100%; }
 .opt-row { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
@@ -84,19 +84,19 @@
 /* ── Meet the Kids: a shoebox of trading cards ────────────────────────────── */
 .shoebox {
   position: relative;
-  background-color: #b48a56; background-image: var(--tex-cardboard, none); background-blend-mode: multiply;
-  border: 10px solid var(--cardboard-dark); border-top-width: 6px; border-radius: 4px;
-  box-shadow: inset 0 10px 18px rgba(0, 0, 0, 0.35), 3px 6px 0 rgba(31, 26, 20, 0.45);
-  padding: 8px 12px 16px;
+  background: var(--cardboard);
+  border: var(--line) solid var(--marker); border-radius: 12px;
+  box-shadow: inset 0 0 0 9px var(--cardboard-dark), inset 0 0 0 12px var(--marker), 4px 5px 0 var(--marker);
+  padding: 16px 20px 22px;
 }
 .box-tabs { display: flex; gap: 8px; margin: -2px 0 8px; }
 .box-tab {
   font: inherit; font-weight: 800; font-size: var(--t-md); color: var(--marker);
   display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 16px 4px 8px; cursor: pointer;
-  background-color: var(--poster-shade); background-image: var(--tex-paper, none); background-blend-mode: multiply;
-  border: 2px solid var(--marker); border-bottom: 0; border-radius: 12px 14px 0 0; transform: translateY(4px);
+  background: var(--poster-shade);
+  border: var(--line) solid var(--marker); border-radius: 14px 16px 6px 6px; transform: translateY(3px);
 }
-.box-tab.on { background-color: var(--poster); transform: translateY(0); box-shadow: inset 0 4px 0 var(--team2); }
+.box-tab.on { background: var(--poster); transform: translateY(-2px) rotate(-1deg); box-shadow: 2px 3px 0 var(--marker), inset 0 5px 0 var(--team2); }
 .box-label { margin: 0 0 12px; font-size: var(--t-xs); }
 .box-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(124px, 13vw, 168px), 1fr)); gap: 16px 12px; }
 .card-btn { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: flex; justify-content: center; }
@@ -124,7 +124,7 @@ img.portrait:not([src]) { visibility: hidden; }
 .back-head { display: flex; justify-content: space-between; gap: 6px; align-items: flex-start; }
 .back-name { font-weight: 800; font-size: var(--t-md); line-height: 1.2; }
 .back-meta { font-size: 12px; }
-.back-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 14px; background: rgba(247, 240, 222, 0.75); padding: 6px 8px; }
+.back-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 14px; background: #fff; border: 2px solid var(--marker); border-radius: 8px; padding: 6px 8px; }
 .back-stat { display: flex; align-items: baseline; gap: 4px; font-size: var(--t-xs); }
 .back-stat i { flex: 1; border-bottom: 1.5px dotted rgba(38, 33, 28, 0.45); }
 .back-stat b { font-variant-numeric: tabular-nums; }
@@ -134,7 +134,7 @@ img.portrait:not([src]) { visibility: hidden; }
 .back-quips { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12.5px; }
 .back-quips b { width: 100%; font-size: var(--t-xs); }
 .back-snaps { display: flex; gap: 8px; justify-content: center; }
-.back-snaps .portrait { width: 64px; height: 64px; background: #fff; padding: 3px 3px 10px; box-shadow: 1px 2px 0 rgba(0, 0, 0, 0.3); object-fit: cover; }
+.back-snaps .portrait { width: 64px; height: 64px; background: #fff; padding: 3px 3px 10px; border: 2px solid var(--marker); box-shadow: 2px 2px 0 var(--marker); object-fit: cover; }
 .back-snaps .portrait:first-child { transform: rotate(-4deg); }
 .back-snaps .portrait:last-child { transform: rotate(3deg); }
 
@@ -163,8 +163,8 @@ img.portrait:not([src]) { visibility: hidden; }
 
 .check {
   width: 44px; height: 44px; flex: none; position: relative; cursor: pointer; color: var(--marker-red);
-  background: #fff; border: 2.5px solid var(--marker); border-radius: 5px 8px 4px 9px / 8px 4px 9px 5px;
-  box-shadow: 1px 2px 0 var(--marker); font-size: 34px; padding: 0;
+  background: #fff; border: var(--line) solid var(--marker); border-radius: 8px 11px 7px 12px / 11px 7px 12px 8px;
+  box-shadow: 2px 3px 0 var(--marker); font-size: 34px; padding: 0;
 }
 .check .ico { position: absolute; left: 5px; top: -4px; opacity: 0; transform: scale(0.6) rotate(-10deg); transition: opacity 0.12s, transform 0.18s cubic-bezier(0.3, 1.6, 0.5, 1); }
 .check.on .ico { opacity: 1; transform: none; }
@@ -190,8 +190,8 @@ img.portrait:not([src]) { visibility: hidden; }
 @media (max-height: 520px) {
   .screen { gap: 8px; }
   .screen-head .back { min-height: 44px; }
-  .head-tape { padding: 0.2em 1.2em; }
-  .head-tape .lt { height: 22px; }
+  .head-title .lt { height: 30px; }
+  .head-ico { font-size: 18px; padding: 5px; }
   .screen.title { gap: 8px 22px; }
   .logo-sign { padding: 12px 18px 10px; gap: 6px; }
   .title-menu { gap: 9px; }

@@ -1,25 +1,27 @@
 /* Shared foundation: design tokens, reset, buttons, panels, the loading screen.
    The kid-made surfaces (cardboard, tape, cards, pennants...) live in look/look.css. */
 :root {
-  /* palette: a sun-faded late-summer afternoon, and what's in the garage */
-  --grass: #6a9f45;
-  --grass-deep: #3f6f31;
-  --grass-light: #93bf62;
-  --cardboard: #c8a06a;
-  --cardboard-dark: #9c7546;
-  --poster: #f7f0de;          /* poster board, index cards */
-  --poster-shade: #e6dcc3;
-  --marker: #26211c;          /* permanent marker black */
-  --marker-red: #c8372d;
-  --marker-blue: #2f5ea8;
-  --marker-green: #2f7a3b;
-  --highlighter: #f4dc4e;
-  --tape: #ece0b6;            /* masking tape */
-  --chalk: #f3f0e4;
-  --board: #2e4a3c;           /* chalkboard */
-  --wood: #8a5a33;
-  --felt-shadow: rgba(38, 33, 28, 0.35);
-  --sky: #a8d4ec;
+  /* palette: a sunny Saturday-morning cartoon, outlined in warm ink */
+  --grass: #63b346;
+  --grass-deep: #3d8a34;
+  --grass-light: #9ad36a;
+  --sky: #7cc8f0;
+  --sunshine: #ffcf33;
+  --tomato: #f25c3c;
+  --cardboard: #e3ad62;       /* signs, the shoebox */
+  --cardboard-dark: #b9793a;
+  --poster: #fff6e0;          /* cream: cards, panels, plain buttons */
+  --poster-shade: #f3e1b9;
+  --marker: #2b1d14;          /* the warm ink: outlines, text, hard shadows */
+  --marker-red: var(--tomato);
+  --marker-blue: #2f7fd8;
+  --marker-green: #2f8a3b;
+  --highlighter: var(--sunshine);
+  --tape: #ffeeb5;
+  --chalk: #fdfbf2;
+  --board: #2f6a4f;           /* chalkboard */
+  --wood: #b0703c;
+  --line: 3px;                /* the ink outline */
 
   /* older names, kept so every stylesheet stays on one palette */
   --ink: var(--marker);
@@ -37,12 +39,12 @@
   --font: ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", "Nunito", "Varela Round", "Quicksand", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-typed: "American Typewriter", "Courier New", Courier, ui-monospace, monospace;
 
-  /* hard, offset shadows: things cut out and stuck down, not glowing */
-  --shadow: 2px 3px 0 var(--marker);
-  --shadow-soft: 2px 4px 0 rgba(38, 33, 28, 0.35);
-  /* hand-cut corners (deliberately uneven) */
-  --cut: 7px 12px 6px 14px / 12px 6px 13px 7px;
-  --cut2: 14px 6px 12px 8px / 7px 13px 6px 12px;
+  /* hard, offset cartoon shadows (never blurred glows) */
+  --shadow: 3px 4px 0 var(--marker);
+  --shadow-soft: 3px 4px 0 rgba(43, 29, 20, 0.35);
+  /* rounded, a little hand-drawn (deliberately uneven) */
+  --cut: 16px 13px 17px 12px / 13px 17px 12px 16px;
+  --cut2: 12px 17px 13px 16px / 17px 12px 16px 13px;
 
   /* safe areas */
   --safe-t: env(safe-area-inset-top, 0px);
@@ -80,18 +82,18 @@ img { -webkit-user-drag: none; }
   font: inherit; font-weight: 800; letter-spacing: 0.01em;
   display: inline-flex; align-items: center; justify-content: center; gap: 0.45em;
   min-height: 48px; min-width: 48px;
-  border: 2.5px solid var(--marker); border-radius: var(--cut);
-  background-color: var(--bg); background-image: var(--tex-paper, none); background-blend-mode: multiply;
+  border: var(--line) solid var(--marker); border-radius: var(--cut);
+  background: var(--bg);
   color: var(--marker);
   padding: 0.5em 1.1em; font-size: var(--t-lg);
   box-shadow: var(--shadow); cursor: pointer;
   transform: rotate(var(--tilt, 0deg));
-  transition: transform 0.08s ease-out, box-shadow 0.08s ease-out;
+  transition: transform 0.12s cubic-bezier(0.3, 1.8, 0.5, 1), box-shadow 0.08s ease-out;
   position: relative;
 }
 .btn:nth-of-type(2n) { border-radius: var(--cut2); }
 .btn:hover { transform: rotate(var(--tilt, 0deg)) translateY(-1px); }
-.btn:active { transform: rotate(var(--tilt, 0deg)) translate(1px, 2px); box-shadow: 0 1px 0 var(--marker); }
+.btn:active { transform: rotate(var(--tilt, 0deg)) translate(2px, 3px) scale(1.03, 0.94); box-shadow: 1px 1px 0 var(--marker); transition-duration: 0.05s; }
 .btn:focus-visible { outline: 3px dashed var(--marker-blue); outline-offset: 3px; }
 .btn.on { --bg: var(--poster); }
 .btn.on::after {
@@ -118,9 +120,9 @@ img { -webkit-user-drag: none; }
   padding: max(10px, var(--safe-t)) max(10px, var(--safe-r)) max(10px, var(--safe-b)) max(10px, var(--safe-l));
 }
 .panel {
-  background-color: var(--poster); background-image: var(--tex-paper, none); background-blend-mode: multiply;
-  border: 2.5px solid var(--marker); border-radius: var(--cut);
-  box-shadow: 3px 5px 0 var(--marker);
+  background: var(--poster);
+  border: var(--line) solid var(--marker); border-radius: var(--cut);
+  box-shadow: 4px 5px 0 var(--marker);
   padding: 16px 20px; display: flex; flex-direction: column; gap: 10px;
   min-width: min(280px, 92vw); max-width: 94vw; max-height: 92vh; max-height: 92dvh; overflow: auto;
   touch-action: pan-y;
@@ -131,7 +133,7 @@ img { -webkit-user-drag: none; }
 .linescore { border-collapse: collapse; font-weight: 800; margin: 0 auto; font-variant-numeric: tabular-nums; }
 .linescore th, .linescore td { border: 2px solid var(--marker); padding: 3px 7px; text-align: center; min-width: 24px; }
 .linescore .tot { background: var(--highlighter); }
-.star { display: flex; gap: 10px; align-items: center; background: var(--tape); border: 2px solid var(--marker); border-radius: var(--cut2); padding: 6px; }
+.star { display: flex; gap: 10px; align-items: center; background: var(--tape); border: var(--line) solid var(--marker); border-radius: var(--cut2); padding: 6px; }
 .star .portrait { border-radius: 4px; border: 2px solid var(--marker); background: #fff; }
 .quote { font-size: var(--t-xs); font-style: italic; margin-top: 2px; }
 .scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
@@ -139,10 +141,7 @@ img { -webkit-user-drag: none; }
 /* ── the loading screen: a sign taped up on the lawn, the baseline being chalked ── */
 .lawn {
   background-color: var(--grass);
-  background-image:
-    repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.06) 0 46px, rgba(0, 0, 0, 0.05) 46px 92px),
-    var(--tex-lawn, none);
-  background-blend-mode: normal, multiply;
+  background-image: repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.09) 0 46px, rgba(0, 0, 0, 0.04) 46px 92px);
 }
 .loading {
   position: absolute; inset: 0; z-index: 30;
@@ -157,20 +156,20 @@ img { -webkit-user-drag: none; }
 .loading-line::before { /* the faint line still to chalk */
   content: ''; position: absolute; left: 22px; right: 22px; top: 16px; border-top: 3px dashed rgba(243, 240, 228, 0.35);
 }
-.loading-line .chalked { position: absolute; left: 22px; top: 14px; height: 6px; width: 0; background: var(--chalk); border-radius: 3px; filter: url(#gsl-chalk); transition: width 0.3s ease-out; max-width: calc(100% - 44px); }
+.loading-line .chalked { position: absolute; left: 22px; top: 13px; height: 7px; width: 0; background: var(--chalk); border-radius: 4px; box-shadow: 0 0 0 2px var(--marker); transition: width 0.3s ease-out; max-width: calc(100% - 44px); }
 .loading-line .ico { position: absolute; top: 3px; font-size: 28px; }
 .loading-line .ico-plate { left: 0; color: var(--chalk); }
 .loading-line .ico-base { right: 0; color: var(--chalk); }
 .loading-line .rolling { position: absolute; top: 5px; font-size: 24px; color: var(--poster); --ico-accent: var(--marker-red); transition: left 0.3s ease-out; left: 14px; animation: roll 0.8s linear infinite; }
 @keyframes roll { to { transform: rotate(360deg); } }
-.loading-msg { background: var(--tape); padding: 6px 14px; font-size: var(--t-sm); transform: rotate(-1deg); box-shadow: var(--shadow-soft); max-width: 90vw; text-align: center; }
+.loading-msg { background: var(--poster); border: var(--line) solid var(--marker); border-radius: var(--cut2); padding: 6px 14px; font-size: var(--t-sm); transform: rotate(-1deg); box-shadow: var(--shadow); max-width: 90vw; text-align: center; }
 .loading-sub { color: var(--poster); font-size: var(--t-xs); text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4); text-align: center; max-width: 90vw; }
 
 /* a short note at the top of the screen */
 .toast {
   position: fixed; left: 50%; top: max(10px, var(--safe-t)); transform: translateX(-50%); z-index: 60;
   display: flex; align-items: center; gap: 8px; max-width: min(92vw, 560px);
-  padding: 8px 14px; background: var(--poster); color: var(--marker); border: 2.5px solid var(--marker); border-radius: var(--cut);
+  padding: 8px 14px; background: var(--poster); color: var(--marker); border: var(--line) solid var(--marker); border-radius: var(--cut);
   box-shadow: var(--shadow); font-size: var(--t-sm); line-height: 1.35; transition: opacity 0.4s;
 }
 .toast .ico { font-size: 20px; color: var(--marker-blue); }

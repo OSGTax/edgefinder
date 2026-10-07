@@ -1,6 +1,7 @@
 import { h } from '../dom';
 import { icon, type IconName } from './icons';
 import { ensureDefs, lettering, letteringParts, type LetterOpts } from './letters';
+import { comicPop } from './comic';
 import { hashStr, n2, rng, sym } from './rand';
 
 // The kid-made surfaces as small DOM helpers. Each returns a plain element with
@@ -67,15 +68,13 @@ export function tapeCorners(el: HTMLElement, seed = 'corners', which: ('tl' | 't
   return el;
 }
 
-/** A cardboard sign: corrugated tan, torn edges, a slight tilt. */
-export function sign(children: Kids, o: { seed?: string; tilt?: number; class?: string; edges?: string } = {}): HTMLDivElement {
+/** A sign: flat cardboard tan with an ink outline and a slight tilt. */
+export function sign(children: Kids, o: { seed?: string; tilt?: number; class?: string } = {}): HTMLDivElement {
   const seed = o.seed ?? 'sign';
-  const el = h('div', { class: `cardboard${o.class ? ` ${o.class}` : ''}`, style: `--tilt:${o.tilt ?? tiltFor(seed)}deg` }, ...children);
-  el.style.clipPath = tornClip(seed, o.edges ?? 'trbl', 3.5, 22);
-  return el;
+  return h('div', { class: `cardboard${o.class ? ` ${o.class}` : ''}`, style: `--tilt:${o.tilt ?? tiltFor(seed)}deg` }, ...children);
 }
 
-/** A sheet of poster board / an index card. */
+/** A card or sheet: cream, ink outline. */
 export function paper(children: Kids, o: { seed?: string; tilt?: number; class?: string; ruled?: boolean } = {}): HTMLDivElement {
   return h('div', { class: `paper${o.ruled ? ' ruled' : ''}${o.class ? ` ${o.class}` : ''}`, style: `--tilt:${o.tilt ?? tiltFor(o.seed ?? 'paper', 1)}deg` }, ...children);
 }
@@ -86,12 +85,12 @@ export function chalkboard(children: Kids, o: { class?: string } = {}): HTMLDivE
   return h('div', { class: `chalkboard${o.class ? ` ${o.class}` : ''}` }, h('div', { class: 'chalkboard-slate' }, ...children), h('i', { class: 'chalk-tray' }));
 }
 
-/** A clipboard: masonite board, a metal clip, a sheet of paper. */
+/** A clipboard: the board, a metal clip, a ruled sheet. */
 export function clipboard(children: Kids, o: { class?: string; title?: string } = {}): HTMLDivElement {
   return h('div', { class: `clipboard${o.class ? ` ${o.class}` : ''}` },
     h('i', { class: 'clip' }),
     h('div', { class: 'clipboard-sheet' },
-      o.title ? h('div', { class: 'sheet-title' }, lettering(o.title, { size: 22, seed: 'clip' })) : null,
+      o.title ? h('div', { class: 'sheet-title' }, lettering(o.title, { style: 'comic', size: 22, color: 'var(--sunshine)', seed: 'clip' })) : null,
       ...children));
 }
 
@@ -108,14 +107,14 @@ export function button(label: string, onClick: (e: Event) => void, o: { icon?: I
 }
 
 /**
- * A felt pennant for a team: a triangle of felt in the team colour, a
- * sleeve in the second colour, the name in poster lettering. Returned as an
- * inline SVG (scales to its box).
+ * A pennant for a team: a triangle in the team colour with a stitched edge, a
+ * sleeve in the second colour, the name in comic lettering, all outlined in
+ * ink. Returned as an inline SVG (scales to its box).
  */
 export function pennant(t: { id: string; name: string; street: string; colors: { primary: string; secondary: string; accent: string } }, o: { class?: string } = {}): SVGSVGElement {
   ensureDefs();
-  const name = letteringParts(t.name, { style: 'poster', color: t.colors.secondary, ink: '#1f1a14', seed: `pennant-${t.id}`, wobble: 0.8 });
-  const street = letteringParts(t.street, { style: 'marker', ink: t.colors.accent, seed: `street-${t.id}`, weight: 1.1 });
+  const name = letteringParts(t.name, { style: 'comic', color: t.colors.secondary, ink: '#2b1d14', seed: `pennant-${t.id}`, wobble: 0.8 });
+  const street = letteringParts(t.street, { style: 'marker', ink: t.colors.accent, seed: `street-${t.id}`, weight: 1.25 });
   // fit the name into the triangle's fat end
   const fit = (vb: number[], x: number, y: number, w: number, hgt: number) => {
     const s = Math.min(w / vb[2], hgt / vb[3]);
@@ -126,11 +125,12 @@ export function pennant(t: { id: string; name: string; street: string; colors: {
   const stitches = Array.from({ length: 12 }, (_, i) => `M${n2(32 + i * 21)} ${n2(8 + i * 3.9)} l9 ${n2(1.7)}`).join(' ') +
     ' ' + Array.from({ length: 12 }, (_, i) => `M${n2(32 + i * 21)} ${n2(112 - i * 3.9)} l9 -1.7`).join(' ');
   const svg = `<svg class="pennant${o.class ? ` ${o.class}` : ''}" xmlns="http://www.w3.org/2000/svg" viewBox="-4 -6 312 134" role="img" aria-label="${t.street} ${t.name}">
-<path d="M26 4 L300 ${n2(tip)} L26 116 Z" fill="${t.colors.primary}" filter="url(#gsl-felt)" stroke="rgba(0,0,0,.25)" stroke-width="1"/>
+<path d="M26 4 L300 ${n2(tip)} L26 116 Z" fill="#2b1d14" transform="translate(4 5)"/>
+<path d="M26 4 L300 ${n2(tip)} L26 116 Z" fill="${t.colors.primary}" stroke="#2b1d14" stroke-width="3.5" stroke-linejoin="round"/>
 <path d="${stitches}" stroke="${t.colors.accent}" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>
-<rect x="2" y="0" width="26" height="120" rx="3" fill="${t.colors.secondary}" filter="url(#gsl-felt)"/>
-<path d="M10 4 L10 116 M20 4 L20 116" stroke="rgba(0,0,0,.18)" stroke-width="1.2" stroke-dasharray="4 4"/>
-${fit(name.vb, 40, 26, 170, 54)}${name.body}</svg>
+<rect x="2" y="0" width="26" height="120" rx="4" fill="${t.colors.secondary}" stroke="#2b1d14" stroke-width="3.5"/>
+<path d="M15 8 L15 112" stroke="rgba(43,29,20,.35)" stroke-width="2" stroke-dasharray="5 5" stroke-linecap="round"/>
+${fit(name.vb, 38, 22, 180, 60)}${name.body}</svg>
 ${fit(street.vb, 46, 82, 120, 16)}${street.body}</svg>
 </svg>`;
   const tpl = document.createElement('template');
@@ -150,8 +150,8 @@ export function tradingCard(o: {
 }): HTMLDivElement {
   const seed = o.seed ?? o.name;
   const front = h('div', { class: 'tcard-face tcard-front' },
-    h('div', { class: 'tcard-photo' }, o.photo, o.number != null ? h('span', { class: 'tcard-num' }, lettering(String(o.number), { size: 14, style: 'poster', color: o.team.colors.secondary, seed })) : null, o.corner ?? null),
-    h('div', { class: 'tcard-name' }, lettering(o.name, { size: 17, seed, wobble: 0.9 })),
+    h('div', { class: 'tcard-photo' }, o.photo, o.number != null ? h('span', { class: 'tcard-num' }, lettering(String(o.number), { size: 14, style: 'comic', color: o.team.colors.secondary, seed })) : null, o.corner ?? null),
+    h('div', { class: 'tcard-name' }, lettering(o.name, { size: 17, style: 'comic', color: 'var(--poster)', seed, wobble: 0.9 })),
     o.persona ? h('div', { class: 'typed' }, o.persona) : null,
     o.stats?.length ? h('div', { class: 'tcard-stats' }, ...o.stats.map(([l, v]) => h('div', { class: 'tcard-stat' }, h('b', null, String(v)), h('span', null, l)))) : null);
   const card = h('div', {
@@ -166,8 +166,8 @@ export function flipCard(card: HTMLElement, back?: boolean) {
 }
 
 /**
- * The Channel 4½ (Maple Hollow Public Access) lower-third: a strip of
- * construction paper with the hand-cut station logo and who's talking.
+ * The Channel 4½ (Maple Hollow Public Access) lower-third: a bright caption
+ * strip with the station logo and who's talking. Keep the line short.
  */
 export function lowerThird(o: { who: string; role?: string; text: string | Node; tone?: 'chet' | 'dottie' | string }): HTMLDivElement {
   return h('div', { class: `lower-third${o.tone ? ` lt-${o.tone}` : ''}` },
@@ -177,25 +177,16 @@ export function lowerThird(o: { who: string; role?: string; text: string | Node;
       h('div', { class: 'lt-text' }, o.text)));
 }
 
-/** The station logo: a lopsided paper circle with a cut-out "4½". */
+/** The station logo: a lopsided blue blob with a hand-lettered "4½". */
 export function channelBug(): HTMLSpanElement {
   const el = h('span', { class: 'ch-bug', 'aria-label': 'Channel 4½' });
-  el.appendChild(lettering('4½', { style: 'poster', size: 15, color: '#fff7e0', seed: 'ch4' }));
+  el.appendChild(lettering('4½', { style: 'comic', size: 15, color: '#fff6e0', seed: 'ch4' }));
   return el;
 }
 
-/**
- * A big moment ("HOME RUN!") painted on a bedsheet banner that drops in with
- * weight and settles. Remove it yourself or let `ms` do it.
- */
+/** A big moment ("SEE YA!"): now a comic pop-up. Kept for older callers; use comicPop. */
 export function bigMoment(text: string, o: { color?: string; ink?: string; sub?: string; ms?: number; seed?: string } = {}): HTMLDivElement {
-  const el = h('div', { class: 'big-moment', role: 'status' },
-    h('div', { class: 'bm-sheet' },
-      lettering(text, { style: 'brush', size: 48, color: o.color ?? 'var(--marker-red)', ink: o.ink, seed: o.seed ?? text, weight: 1.15 }),
-      o.sub ? h('div', { class: 'bm-sub' }, o.sub) : null));
-  el.querySelector('.bm-sheet')!.setAttribute('style', `clip-path:${tornClip(`${text}|sheet`, 'lr', 5, 10)}`);
-  if (o.ms) setTimeout(() => el.remove(), o.ms);
-  return el;
+  return comicPop(text, { textColor: o.color, ink: o.ink, sub: o.sub, ms: o.ms ?? 1150, seed: o.seed });
 }
 
 /** The "turn your phone sideways" card (show it with CSS when portrait). */
@@ -204,18 +195,18 @@ export function rotateHint(text = 'Turn your phone sideways. The yard is wider t
 }
 
 /**
- * A round felt team patch with a stitched ring and the team's initial in
+ * A round team patch with a stitched ring and the team's initial in
  * poster lettering (for scoreboards, lists, the match intro).
  */
 export function teamPatch(t: { id: string; name: string; colors: { primary: string; secondary: string; accent: string } }, size = 28): SVGSVGElement {
   ensureDefs();
-  const L = letteringParts(t.name[0], { style: 'poster', color: t.colors.secondary, ink: '#1f1a14', seed: `patch-${t.id}`, wobble: 0.6 });
+  const L = letteringParts(t.name[0], { style: 'comic', color: t.colors.secondary, ink: '#2b1d14', seed: `patch-${t.id}`, wobble: 0.6 });
   const s = Math.min(26 / L.vb[2], 26 / L.vb[3]);
   const w = L.vb[2] * s, hh = L.vb[3] * s;
   const svg = `<svg class="patch" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="${size}" height="${size}" role="img" aria-label="${t.name}">
-<circle cx="24" cy="24.6" r="22" fill="rgba(31,26,20,.45)"/>
-<circle cx="24" cy="23.4" r="22" fill="${t.colors.primary}" filter="url(#gsl-felt)"/>
-<circle cx="24" cy="23.4" r="18.6" fill="none" stroke="${t.colors.secondary}" stroke-width="1.8" stroke-dasharray="3.2 2.4" stroke-linecap="round"/>
+<circle cx="25.5" cy="25.5" r="21" fill="#2b1d14"/>
+<circle cx="24" cy="23.6" r="21" fill="${t.colors.primary}" stroke="#2b1d14" stroke-width="3"/>
+<circle cx="24" cy="23.6" r="16.4" fill="none" stroke="${t.colors.secondary}" stroke-width="2" stroke-dasharray="3.2 2.6" stroke-linecap="round"/>
 <svg x="${n2(24 - w / 2)}" y="${n2(24 - hh / 2)}" width="${n2(w)}" height="${n2(hh)}" viewBox="${L.vb.map(n2).join(' ')}" overflow="visible">${L.body}</svg>
 </svg>`;
   const tpl = document.createElement('template');

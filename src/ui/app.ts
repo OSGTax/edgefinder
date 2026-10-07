@@ -70,7 +70,7 @@ class App {
     const chalked = h('i', { class: 'chalked' });
     const rolling = h('span', { class: 'rolling' }, icon('ball'));
     const loading = h('div', { class: 'loading lawn' },
-      sign([lettering('GRASS STAIN\nLEAGUE', { style: 'poster', size: 40, colors: ['var(--highlighter)', '#a6d672'], seed: 'logo' })], { seed: 'loading-sign', class: 'loading-sign' }),
+      sign([lettering('GRASS STAIN\nLEAGUE', { style: 'comic', size: 40, colors: ['var(--sunshine)', '#9ad36a'], seed: 'logo' })], { seed: 'loading-sign', class: 'loading-sign' }),
       h('div', { class: 'loading-line', 'aria-hidden': 'true' }, icon('plate', { class: 'ico-plate' }), chalked, rolling, icon('base', { class: 'ico-base' })),
       loadMsg,
       h('div', { class: 'loading-sub' }, 'Out back of the Mendozas\' house, eighteen very serious kids are getting ready.'));
@@ -156,7 +156,7 @@ class App {
   private head(title: string, back: () => void, ico?: IconName) {
     return h('div', { class: 'screen-head' },
       h('button', { class: 'btn small ghost back', 'aria-label': 'Back', onclick: tap('uiBack', back) }, icon('back')),
-      h('h1', { class: 'tape head-tape', style: '--tilt:-1.2deg' }, ico ? icon(ico) : null, lettering(title, { size: 22, seed: `head-${title}` })),
+      h('h1', { class: 'head-title' }, ico ? h('span', { class: 'head-ico' }, icon(ico)) : null, lettering(title, { style: 'comic', size: 24, color: 'var(--poster)', seed: `head-${title}` })),
       h('div', { class: 'head-spacer' }));
   }
 
@@ -177,7 +177,7 @@ class App {
     };
     nextLine();
     const logo = sign([
-      lettering('GRASS STAIN\nLEAGUE', { style: 'poster', size: 44, colors: ['var(--highlighter)', '#a6d672'], seed: 'logo' }),
+      lettering('GRASS STAIN\nLEAGUE', { style: 'comic', size: 44, colors: ['var(--sunshine)', '#9ad36a'], seed: 'logo' }),
       tape('Backyard baseball. Very serious kids.', { tilt: 1.5, seed: 'tagline' }),
     ], { seed: 'title-sign', class: 'logo-sign' });
     const notes = h('div', { class: 'title-notes' });

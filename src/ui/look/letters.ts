@@ -5,8 +5,9 @@ import { hashStr, n2, rng, sym } from './rand';
 // (y = 0 is the cap line, y = 10 the baseline). At render time each letter
 // gets its own small tilt, bounce off the baseline, size change and a wobble
 // on every point, seeded from the text so a word always looks the same.
-// The skeleton is then stroked in one of a few styles: marker, poster paint,
-// chalk or brush.
+// The skeleton is then stroked in one of a few styles: comic (fat, slanted,
+// ink outline and offset shadow, the display style), marker, poster, chalk or
+// brush.
 
 type Glyph = [width: number, path: string];
 
@@ -85,11 +86,12 @@ const GAP = 1.5;
 const SX = 1.12;
 const LINE = 13.2;
 
-export type LetterStyle = 'marker' | 'poster' | 'chalk' | 'brush';
+export type LetterStyle = 'comic' | 'marker' | 'poster' | 'chalk' | 'brush';
 
 export interface LetterOpts {
-  /** marker (default): one even stroke · poster: fat paint with an outline and a drop shadow ·
-   *  chalk: grainy sidewalk chalk · brush: two loose passes, like house paint on a bedsheet */
+  /** comic: fat slanted letters, thick ink outline, offset shadow (titles, pop-ups) ·
+   *  marker (default): one even stroke · poster: like comic but upright ·
+   *  chalk: grainy sidewalk chalk · brush: two loose passes, like house paint */
   style?: LetterStyle;
   /** stroke / paint colour (CSS colour, default the marker ink) */
   color?: string;
@@ -109,6 +111,8 @@ export interface LetterOpts {
   align?: 'left' | 'center' | 'right';
   /** extra seed so the same word can be drawn more than one way */
   seed?: string | number;
+  /** italic slant in degrees (comic: 11, others 0) */
+  slant?: number;
   /** whole-word tilt in degrees (default 0) */
   tilt?: number;
   /** extra CSS class(es) on the <svg> */
@@ -138,8 +142,9 @@ const segs = (d: string) => { let s = parsed.get(d); if (!s) { s = parse(d); par
 
 interface Placed { segs: Seg[]; word: number }
 
+
 function weightOf(style: LetterStyle) {
-  return style === 'poster' ? 2.5 : style === 'brush' ? 1.9 : style === 'chalk' ? 1.6 : 1.45;
+  return style === 'comic' ? 2.9 : style === 'poster' ? 2.5 : style === 'brush' ? 1.9 : style === 'chalk' ? 1.6 : 1.45;
 }
 
 /**
@@ -152,7 +157,7 @@ function layout(text: string, o: LetterOpts, pass: number) {
   const glyphR = rng(hashStr(`${text}|${o.seed ?? ''}|g`)); // shared by passes: brush passes differ only in wobble
   const lines = text.toUpperCase().normalize('NFD').split('\n');
   const style = o.style ?? 'marker';
-  const spacing = GAP + (style === 'poster' ? 1.3 : style === 'brush' ? 0.6 : 0) + (o.spacing ?? 0);
+  const spacing = GAP + (style === 'comic' ? 1.7 : style === 'poster' ? 1.3 : style === 'brush' ? 0.6 : 0) + (o.spacing ?? 0);
   const rows: { placed: Placed[]; w: number }[] = [];
   let word = 0;
   for (const line of lines) {
@@ -193,7 +198,8 @@ function layout(text: string, o: LetterOpts, pass: number) {
   const maxW = Math.max(1, ...rows.map((rw) => rw.w));
   const tilt = ((o.tilt ?? 0) * Math.PI) / 180;
   const tc = Math.cos(tilt), ts = Math.sin(tilt);
-  const lineH = LINE + (style === 'poster' ? 1.6 : 0);
+  const lineH = LINE + (style === 'comic' ? 2.4 : style === 'poster' ? 1.6 : 0);
+  const slant = Math.tan((((o.slant ?? (style === 'comic' ? 11 : 0)) * Math.PI) / 180));
   const totalH = (rows.length - 1) * lineH + 10;
   const byWord = new Map<number, string[]>();
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -206,7 +212,8 @@ function layout(text: string, o: LetterOpts, pass: number) {
         parts.push(sg.c);
         for (const p of sg.p) {
           const lx = p.x + off - maxW / 2, ly = p.y + oy - totalH / 2;
-          const X = lx * tc - ly * ts, Y = lx * ts + ly * tc;
+          const sx = lx - ly * slant;
+          const X = sx * tc - ly * ts, Y = sx * ts + ly * tc;
           if (X < minX) minX = X; if (X > maxX) maxX = X;
           if (Y < minY) minY = Y; if (Y > maxY) maxY = Y;
           parts.push(`${n2(X)} ${n2(Y)}`);
@@ -227,8 +234,8 @@ export function letteringParts(text: string, o: LetterOpts = {}): { vb: [number,
   const ink = o.ink ?? 'var(--marker, #23201c)';
   const colors = o.colors ?? [o.color ?? (style === 'chalk' ? 'var(--chalk, #f3f0e4)' : style === 'marker' ? ink : 'var(--highlighter, #f4d64e)')];
   const W = weightOf(style) * (o.weight ?? 1);
-  const outline = style === 'poster' ? 1.5 : style === 'brush' && o.ink ? 1.1 : 0;
-  const shadow = style === 'poster' ? 0.7 : 0;
+  const outline = style === 'comic' ? 1.75 : style === 'poster' ? 1.5 : style === 'brush' && o.ink ? 1.1 : 0;
+  const shadow = style === 'comic' ? 1.1 : style === 'poster' ? 0.7 : 0;
   const L = layout(text, o, 0);
   const pad = W / 2 + outline + shadow + 0.4;
   const { minX, minY, maxX, maxY } = L.box;
@@ -237,7 +244,7 @@ export function letteringParts(text: string, o: LetterOpts = {}): { vb: [number,
   const all = words.map(([, d]) => d.join(' ')).join(' ');
   const attrs = 'fill="none" stroke-linecap="round" stroke-linejoin="round"';
   let body = '';
-  if (shadow) body += `<path d="${all}" stroke="${ink}" stroke-width="${n2(W + outline * 2)}" transform="translate(${shadow * 0.6} ${shadow})" ${attrs}/>`;
+  if (shadow) body += `<path d="${all}" stroke="${ink}" stroke-width="${n2(W + outline * 2)}" transform="translate(${n2(shadow * 0.75)} ${shadow})" ${attrs}/>`;
   if (outline) body += `<path d="${all}" stroke="${ink}" stroke-width="${n2(W + outline * 2)}" ${attrs}/>`;
   if (style === 'brush') {
     const L2 = layout(text, o, 1);
@@ -282,7 +289,7 @@ export function letteringAspect(text: string, o: LetterOpts = {}): number {
 }
 
 let defsDone = false;
-/** Shared SVG filters (chalk grain, rough edges, felt), added to the page once. */
+/** Shared SVG filters (chalk grain, rough edges), added to the page once. */
 export function ensureDefs() {
   if (defsDone || typeof document === 'undefined') return;
   defsDone = true;
@@ -300,12 +307,6 @@ export function ensureDefs() {
 <filter id="gsl-rough" x="-5%" y="-5%" width="110%" height="110%">
   <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="3" seed="2" result="n"/>
   <feDisplacementMap in="SourceGraphic" in2="n" scale="5"/>
-</filter>
-<filter id="gsl-felt" x="-4%" y="-4%" width="108%" height="108%">
-  <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="3" seed="7" result="n"/>
-  <feColorMatrix in="n" type="matrix" values="0.33 0.33 0.33 0 0  0.33 0.33 0.33 0 0  0.33 0.33 0.33 0 0  0 0 0 0 1" result="g"/>
-  <feComposite in="SourceGraphic" in2="g" operator="arithmetic" k1="0.75" k2="0.55" k3="0" k4="0" result="t"/>
-  <feDisplacementMap in="t" in2="n" scale="2.2"/>
 </filter>
 </defs></svg>`;
   document.body.appendChild(holder);
