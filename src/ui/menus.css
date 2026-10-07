@@ -1,6 +1,6 @@
-/* Menus: the kids' clubhouse. Title over the attract game, team pick (pennants on a
-   clothesline), Meet the Kids (a shoebox of trading cards), How to Play (chalkboard),
-   Settings (clipboard). Phone landscape first; portrait and desktop adapt. */
+/* Menus, Saturday-morning cartoon style. Title over the attract game, team pick (pennants on a
+   clothesline), Meet the Kids (a box of trading cards), How to Play (a sky-blue panel),
+   Settings (a cream panel). Phone landscape first; portrait and desktop adapt. */
 
 .menus { position: fixed; inset: 0; z-index: 5; overflow-y: auto; overflow-x: hidden; touch-action: pan-y; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .menus.inner {
@@ -40,7 +40,7 @@
 .menu-pair .menu-item:last-child { --tilt: 1.2deg; }
 .title-notes:empty { display: none; }
 .title-notes { display: flex; justify-content: center; }
-.note, .note-btn { font: inherit; font-weight: 700; font-size: var(--t-xs); border: 0; color: var(--marker); display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; line-height: 1.25; text-align: left; cursor: pointer; }
+.note, .note-btn { font: inherit; font-weight: 700; font-size: var(--t-xs); color: var(--marker); display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; line-height: 1.25; text-align: left; cursor: pointer; }
 .note .ico, .note-btn .ico { font-size: 20px; }
 .note-x { background: none; border: 0; padding: 6px; margin: -6px -6px -6px 0; font-size: 16px; color: var(--marker); min-width: 36px; min-height: 36px; cursor: pointer; }
 .on-air { grid-area: air; justify-self: stretch; display: flex; justify-content: center; min-height: 52px; }
@@ -97,7 +97,7 @@
   border: var(--line) solid var(--marker); border-radius: 14px 16px 6px 6px; transform: translateY(3px);
 }
 .box-tab.on { background: var(--poster); transform: translateY(-2px) rotate(-1deg); box-shadow: 2px 3px 0 var(--marker), inset 0 5px 0 var(--team2); }
-.box-label { margin: 0 0 12px; font-size: var(--t-xs); }
+.box-label { margin: 0 0 14px; font-size: var(--t-xs); }
 .box-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(124px, 13vw, 168px), 1fr)); gap: 16px 12px; }
 .card-btn { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: flex; justify-content: center; }
 .card-btn .tcard { width: 100%; max-width: 170px; transition: transform 0.15s ease-out; }
@@ -138,17 +138,20 @@ img.portrait:not([src]) { visibility: hidden; }
 .back-snaps .portrait:first-child { transform: rotate(-4deg); }
 .back-snaps .portrait:last-child { transform: rotate(3deg); }
 
-/* ── How to Play: the chalkboard ─────────────────────────────────────────── */
-.how-screen .chalkboard { flex: 1; display: flex; flex-direction: column; }
-.how-screen .chalkboard-slate { flex: 1; }
+/* ── How to Play ─────────────────────────────────────────────────────────── */
+.how-board { flex: 1; margin-top: 4px; line-height: 1.45; }
+.how-board ul { margin: 0; padding-left: 1.2em; }
+.how-board li { margin: 4px 0; }
+.how-board b { color: var(--tomato); font-weight: 800; }
 .how-cols { columns: 250px 3; column-gap: 30px; font-size: var(--t-sm); }
 .how-sec { break-inside: avoid; margin-bottom: 10px; }
-.chalk-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; color: var(--chalk); font-size: 22px; }
-.chalk-head .lt { height: 20px; width: auto; }
+.how-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }
+.how-head .lt { height: 24px; width: auto; }
+.how-head .head-ico { font-size: 16px; padding: 5px; }
 
-/* ── Settings: the clipboard ─────────────────────────────────────────────── */
-.set-board { width: min(620px, 100%); margin: 6px auto 0; }
-.set-row { display: flex; align-items: center; justify-content: space-between; gap: 6px 14px; min-height: 56px; padding: 6px 0; border-bottom: 1.5px solid rgba(47, 94, 168, 0.18); flex-wrap: wrap; }
+/* ── Settings ────────────────────────────────────────────────────────────── */
+.set-board { width: min(620px, 100%); margin: 26px auto 0; }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 6px 14px; min-height: 56px; padding: 6px 0; border-bottom: 2px dashed rgba(43, 29, 20, 0.18); flex-wrap: wrap; }
 .set-row:last-child { border-bottom: 0; }
 .set-label { display: grid; grid-template-columns: 26px 1fr; align-items: center; column-gap: 8px; font-weight: 700; font-size: var(--t-md); }
 .set-label .ico { font-size: 22px; --ico-accent: var(--marker-red); }

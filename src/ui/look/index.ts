@@ -6,6 +6,6 @@ export { icon, iconSVG, ICON_NAMES, type IconName, type IconOpts } from './icons
 export { installTextures, scribbleLoop } from './textures';
 export { comicPop, comicBurstSVG, type PopOpts, type BurstShape } from './comic';
 export {
-  letters, tape, tapeCorners, sign, paper, chalkboard, clipboard, button, pennant, tradingCard, flipCard,
+  letters, label, panel, sign, paper, button, pennant, tradingCard, flipCard,
   lowerThird, channelBug, bigMoment, rotateHint, tear, tornClip, tiltFor, teamPatch,
 } from './surfaces';

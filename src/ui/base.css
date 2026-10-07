@@ -8,7 +8,7 @@
   --sky: #7cc8f0;
   --sunshine: #ffcf33;
   --tomato: #f25c3c;
-  --cardboard: #e3ad62;       /* signs, the shoebox */
+  --cardboard: #e3ad62;       /* the logo sign, the card box (alias kept for older code) */
   --cardboard-dark: #b9793a;
   --poster: #fff6e0;          /* cream: cards, panels, plain buttons */
   --poster-shade: #f3e1b9;
@@ -17,9 +17,10 @@
   --marker-blue: #2f7fd8;
   --marker-green: #2f8a3b;
   --highlighter: var(--sunshine);
-  --tape: #ffeeb5;
+  /* craft-era names, aliased to the cartoon palette so older code still reads well */
+  --tape: var(--poster);
   --chalk: #fdfbf2;
-  --board: #2f6a4f;           /* chalkboard */
+  --board: var(--grass-deep);
   --wood: #b0703c;
   --line: 3px;                /* the ink outline */
 
@@ -138,7 +139,7 @@ img { -webkit-user-drag: none; }
 .quote { font-size: var(--t-xs); font-style: italic; margin-top: 2px; }
 .scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
 
-/* ── the loading screen: a sign taped up on the lawn, the baseline being chalked ── */
+/* ── the loading screen: the logo on the lawn while the baseline is chalked ── */
 .lawn {
   background-color: var(--grass);
   background-image: repeating-linear-gradient(100deg, rgba(255, 255, 255, 0.09) 0 46px, rgba(0, 0, 0, 0.04) 46px 92px);

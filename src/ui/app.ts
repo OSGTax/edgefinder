@@ -19,14 +19,14 @@ import type { Expression } from '../kid3d/face';
 import { shell } from '../shell';
 import { clear, h } from './dom';
 import {
-  chalkboard, clipboard, flipCard, icon, lettering, lowerThird, paper, pennant, sign, tape, teamPatch, tradingCard, type IconName,
+  flipCard, icon, label, lettering, lowerThird, panel, paper, pennant, sign, teamPatch, tradingCard, type IconName,
 } from './look';
 import { saveSettings, settings } from './settings';
 
 // The app around the game: build the yard and the kids once, run a CPU game
 // behind the title screen, and hand the same world to each game the player
-// starts. The menus are the kids' clubhouse: a cardboard sign, felt pennants,
-// a shoebox of trading cards, a chalkboard and a clipboard.
+// starts. The menus are Saturday-morning cartoon: a lettered sign, pennants,
+// a box of trading cards, and clean cartoon panels for the rules and settings.
 
 export function startApp(root: HTMLElement) {
   new App(root);
@@ -152,7 +152,7 @@ class App {
     this.menus.scrollTop = 0;
   }
 
-  /** A screen's header: back button and the title on a strip of tape. */
+  /** A screen's header: back button and the title in comic lettering. */
   private head(title: string, back: () => void, ico?: IconName) {
     return h('div', { class: 'screen-head' },
       h('button', { class: 'btn small ghost back', 'aria-label': 'Back', onclick: tap('uiBack', back) }, icon('back')),
@@ -178,7 +178,7 @@ class App {
     nextLine();
     const logo = sign([
       lettering('GRASS STAIN\nLEAGUE', { style: 'comic', size: 44, colors: ['var(--sunshine)', '#9ad36a'], seed: 'logo' }),
-      tape('Backyard baseball. Very serious kids.', { tilt: 1.5, seed: 'tagline' }),
+      label('Backyard baseball. Very serious kids.', { tilt: 1.5, seed: 'tagline' }),
     ], { seed: 'title-sign', class: 'logo-sign' });
     const notes = h('div', { class: 'title-notes' });
     this.show(h('div', { class: 'screen title' },
@@ -195,19 +195,19 @@ class App {
     this.titleNotes(notes);
   }
 
-  /** Little notes taped under the title menu: install hints, a fresh version. */
+  /** Little notes under the title menu: install hints, a fresh version. */
   private titleNotes(el: HTMLElement) {
     clear(el);
     if (shell.updateWaiting) {
-      el.appendChild(h('button', { class: 'tape note-btn', onclick: () => location.reload() }, icon('replay'), 'Fresh chalk on the field. Tap to reload.'));
+      el.appendChild(h('button', { class: 'label note-btn', onclick: () => location.reload() }, icon('replay'), 'A fresh version is ready. Tap to reload.'));
       return;
     }
     const hint = shell.installHint();
     if (hint === 'ios') {
-      el.appendChild(h('div', { class: 'tape note' }, icon('share'), h('span', null, 'Play it like an app: tap Share, then “Add to Home Screen”.'),
+      el.appendChild(h('div', { class: 'label note' }, icon('share'), h('span', null, 'Play it like an app: tap Share, then “Add to Home Screen”.'),
         h('button', { class: 'note-x', 'aria-label': 'Hide', onclick: () => { shell.dismissInstall(); clear(el); } }, icon('close'))));
     } else if (hint === 'prompt') {
-      el.appendChild(h('button', { class: 'tape note-btn', onclick: () => shell.install().then(() => this.titleNotes(el)) }, icon('add'), 'Put it on your home screen'));
+      el.appendChild(h('button', { class: 'label note-btn', onclick: () => shell.install().then(() => this.titleNotes(el)) }, icon('add'), 'Put it on your home screen'));
     }
   }
 
@@ -304,7 +304,7 @@ class App {
       this.head('Meet the kids', () => this.title(), 'cards'),
       h('div', { class: 'shoebox', style: `--team:${t.colors.primary};--team2:${t.colors.secondary}` },
         h('div', { class: 'box-tabs' }, tab(TEAMS[0]), tab(TEAMS[1])),
-        h('div', { class: 'box-label tape', style: '--tilt:-1deg' }, `${t.street} ${t.name}. Nine kids. Hands off. (Tap one.)`),
+        label(`${t.street} ${t.name}. Nine kids. Tap one to meet them.`, { class: 'box-label', tilt: -1 }),
         h('div', { class: 'box-cards' }, ...t.roster.map((id) => {
           const k = kid(id);
           const c = this.card(k, 'box');
@@ -353,13 +353,13 @@ class App {
 
   private howTo() {
     const sec = (title: string, ico: IconName, items: (string | Node)[][]) => h('section', { class: 'how-sec' },
-      h('h3', { class: 'chalk-head' }, icon(ico), lettering(title, { style: 'chalk', size: 17, seed: `how-${title}` })),
+      h('h3', { class: 'how-head' }, h('span', { class: 'head-ico' }, icon(ico)), lettering(title, { style: 'comic', size: 17, color: 'var(--sunshine)', seed: `how-${title}` })),
       h('ul', null, ...items.map((c) => h('li', null, ...c))));
     const b = (s: string) => h('b', null, s);
     const rules = yard('poolparty').rules;
     this.show(h('div', { class: 'screen how-screen' },
       this.head('How to play', () => this.title(), 'whistle'),
-      chalkboard([
+      panel([
         h('div', { class: 'how-cols' },
           sec('BATTING', 'bat', [
             ['Drag to put the yellow circle where the pitch is headed. On Rookie it helps you aim.'],
@@ -381,7 +381,7 @@ class App {
           sec('ON A COMPUTER', 'info', [
             ['Mouse aims. Click or ', b('Space'), ' swings. ', b('P'), ' power, ', b('B'), ' bunt, ', b('S'), ' special.'],
             [b('1 2 3'), ' pick a pitch. ', b('1 2 3 H'), ' throw to a base. ', b('R'), ' run, ', b('F'), ' back.'],
-          ]))]),
+          ]))], { tone: 'sky', class: 'how-board' }),
     ), 'inner');
   }
 
@@ -402,7 +402,7 @@ class App {
     const q = qualitySetting();
     this.show(h('div', { class: 'screen set-screen' },
       this.head('Settings', () => this.title(), 'clipboard'),
-      clipboard([
+      panel([
         row('sound', 'Sound effects', slider(settings.sfx, (x) => { settings.sfx = x; audio.setSfxVolume(x); }, 'Sound effects volume')),
         row('music', 'Music', slider(settings.music, (x) => { settings.music = x; audio.setMusicVolume(x); }, 'Music volume')),
         row('mic', 'Chet & Dottie talk out loud', check(settings.voice, (x) => { settings.voice = x; }, 'Announcer voices'), 'Uses your device\'s voice'),

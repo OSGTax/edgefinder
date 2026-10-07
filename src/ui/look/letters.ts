@@ -111,6 +111,8 @@ export interface LetterOpts {
   align?: 'left' | 'center' | 'right';
   /** extra seed so the same word can be drawn more than one way */
   seed?: string | number;
+  /** a thin light streak on each stroke (comic: on by default) */
+  highlight?: boolean;
   /** italic slant in degrees (comic: 11, others 0) */
   slant?: number;
   /** whole-word tilt in degrees (default 0) */
@@ -253,6 +255,7 @@ export function letteringParts(text: string, o: LetterOpts = {}): { vb: [number,
   } else {
     const filter = style === 'chalk' ? ' filter="url(#gsl-chalk)"' : '';
     for (const [w, d] of words) body += `<path d="${d.join(' ')}" stroke="${colorOf(w)}" stroke-width="${n2(W)}"${filter} ${attrs}/>`;
+    if (o.highlight ?? style === 'comic') body += `<path d="${all}" stroke="#fff" stroke-opacity=".45" stroke-width="${n2(W * 0.22)}" transform="translate(${n2(-W * 0.2)} ${n2(-W * 0.2)})" ${attrs}/>`;
   }
   return { vb: [minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2], body };
 }

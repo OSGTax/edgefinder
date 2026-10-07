@@ -1,7 +1,7 @@
 import { TEAMS } from '../../data/teams';
 import { h } from '../dom';
 import {
-  comicPop, button, chalkboard, clipboard, ICON_NAMES, icon, lettering, lowerThird, paper, pennant, rotateHint, sign, tape, tapeCorners, tradingCard,
+  comicPop, button, ICON_NAMES, icon, label, lettering, lowerThird, panel, paper, pennant, rotateHint, sign, tradingCard,
 } from '.';
 
 // Dev-only: every piece of the kit on one page (#look). Not shipped.
@@ -30,12 +30,12 @@ export function specimen(root: HTMLElement) {
       paper([lettering(abc, { size: 18, style: 'comic', color: 'var(--tomato)' })], { seed: 'b' }),
     ),
     row(
-      chalkboard([lettering(abc, { size: 16, style: 'chalk' })]),
+      panel([lettering(abc, { size: 16, style: 'comic', color: 'var(--sunshine)' })], { tone: 'sky', title: 'PANEL' }),
       paper([lettering('SPLASH\nDOUBLE!', { size: 30, style: 'brush', color: 'var(--marker-blue)' }), lettering('Calderón · Peña', { size: 20 })], { seed: 'c' }),
     ),
     paper([row(...ICON_NAMES.map((n) => h('span', { title: n, style: 'font-size:34px;display:inline-flex;flex-direction:column;align-items:center;--ico-accent:var(--marker-red)' }, icon(n), h('small', { style: 'font-size:10px' }, n))))], { seed: 'icons' }),
     row(
-      tape('Meet the kids'), tape('Sound', { tone: 'blue' }), tape('Pitching', { tone: 'red' }),
+      label('Meet the kids'), label('Sound', { tone: 'sky' }), label('Pitching', { tone: 'sun' }),
       button('Play ball!', () => {}, { icon: 'ball', kind: 'go', size: 'big' }),
       button('Settings', () => {}, { icon: 'clipboard' }),
       h('button', { class: 'btn small on' }, 'Pro'),
@@ -49,10 +49,10 @@ export function specimen(root: HTMLElement) {
     row(
       tradingCard({ photo: photo(mud.colors.secondary), name: 'Mudpie', persona: 'The Retired Plumber', number: 7, team: mud, stats: [['Power', 10], ['Contact', 6]] }),
       tradingCard({ photo: photo(com.colors.secondary), name: 'Pepper', persona: 'The Weather Lady', number: 12, team: com, stats: [['Pitching', 9], ['Control', 8], ['Speed', 5]] }),
-      tapeCorners(paper([h('p', null, 'An index card with tape corners.')], { seed: 'tc' }), 'tc'),
+      paper([h('p', null, 'A plain card.')], { seed: 'tc' }),
     ),
     row(
-      clipboard([h('p', null, 'Sound effects ———'), h('p', null, 'Music ———')], { title: 'SETTINGS' }),
+      panel([h('p', null, 'Sound effects'), h('p', null, 'Music')], { title: 'SETTINGS' }),
       lowerThird({ who: 'Chet Valentine', role: 'play-by-play', text: 'And that ball is in the POOL, folks. Mr. Mendoza is reaching for the skimmer.', tone: 'chet' }),
       lowerThird({ who: 'Dottie Fairweather', role: 'color', text: 'Back in my tee-ball days we called that a splashdown.', tone: 'dottie' }),
     ),

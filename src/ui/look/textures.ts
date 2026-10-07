@@ -1,18 +1,9 @@
 import { n2, rng, sym } from './rand';
 
-// A few drawings painted in code at startup and handed to CSS as custom
-// properties on :root: the chalkboard's smudges (`--tex-chalkdust`), the marker
-// loop that circles a chosen option (`--scribble`) and a wavy underline. The
-// cartoon look is otherwise flat colour; without these, surfaces still work.
-
-function tile(size: number, paint: (g: CanvasRenderingContext2D, r: () => number) => void, seed: number): string {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  const g = c.getContext('2d');
-  if (!g) return 'none';
-  paint(g, rng(seed));
-  return `url(${c.toDataURL('image/png')})`;
-}
+// A few drawings made in code at startup and handed to CSS as custom
+// properties on :root: the marker loop that circles a chosen option
+// (`--scribble`) and a wavy underline. The cartoon look is otherwise flat
+// colour; without these, everything still works.
 
 /** A loose hand-drawn marker loop (for circling the chosen option), as an SVG data URL. */
 export function scribbleLoop(seed: number, color = '#e0452c'): string {
@@ -46,25 +37,6 @@ export function installTextures() {
   if (installed || typeof document === 'undefined') return;
   installed = true;
   const vars: Record<string, string> = {
-    // chalkboard: white smudges and old half-erased strokes on transparent
-    '--tex-chalkdust': tile(256, (g, r) => {
-      for (let i = 0; i < 14; i++) {
-        const x = r() * 256, y = r() * 256, rad = 20 + r() * 60;
-        const gr = g.createRadialGradient(x, y, 0, x, y, rad);
-        gr.addColorStop(0, `rgba(255,255,255,${0.035 + r() * 0.04})`); gr.addColorStop(1, 'rgba(255,255,255,0)');
-        g.fillStyle = gr; g.fillRect(x - rad, y - rad, rad * 2, rad * 2);
-      }
-      g.lineCap = 'round';
-      for (let i = 0; i < 9; i++) {
-        g.strokeStyle = `rgba(255,255,255,${0.02 + r() * 0.03})`;
-        g.lineWidth = 6 + r() * 14;
-        g.beginPath();
-        const x = r() * 256, y = r() * 256;
-        g.moveTo(x, y);
-        g.bezierCurveTo(x + sym(r) * 80, y + sym(r) * 30, x + sym(r) * 80, y + sym(r) * 30, x + sym(r) * 120, y + sym(r) * 20);
-        g.stroke();
-      }
-    }, 44),
     '--scribble': scribbleLoop(7),
     '--scribble-blue': scribbleLoop(8, '#2f5ea8'),
     '--underline': underline(3, '#e0452c'),

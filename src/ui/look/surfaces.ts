@@ -6,7 +6,7 @@ import { hashStr, n2, rng, sym } from './rand';
 
 // The kid-made surfaces as small DOM helpers. Each returns a plain element with
 // the matching CSS class from `look.css`, so a screen can also write the
-// markup by hand. Imperfection (tilt, torn edges, where the tape lands) is
+// markup by hand. Imperfection (tilt, wobble) is
 // seeded from the content so it stays put between redraws.
 
 type Kids = (Node | string | null | undefined | false)[];
@@ -49,23 +49,20 @@ export function letters(text: string, o: LetterOpts = {}): HTMLSpanElement {
   return s;
 }
 
-/** A piece of masking tape with a word or two in marker on it. */
-export function tape(content: string | Node, o: { tilt?: number; tone?: 'cream' | 'blue' | 'red'; seed?: string } = {}): HTMLSpanElement {
-  const seed = o.seed ?? (typeof content === 'string' ? content : 'tape');
-  const el = h('span', { class: `tape${o.tone && o.tone !== 'cream' ? ` tape-${o.tone}` : ''}`, style: `--tilt:${o.tilt ?? tiltFor(seed, 2.4)}deg` }, content);
-  el.style.clipPath = tornClip(`${seed}|tape`, 'lr', 3, 8);
-  return el;
+/** A small flat label with an ink outline (a tag, a note, a caption). */
+export function label(content: string | Node | (string | Node)[], o: { tone?: 'cream' | 'sun' | 'sky' | 'tomato'; tilt?: number; seed?: string; class?: string } = {}): HTMLSpanElement {
+  const seed = o.seed ?? (typeof content === 'string' ? content : 'label');
+  return h('span', { class: `label${o.tone && o.tone !== 'cream' ? ` label-${o.tone}` : ''}${o.class ? ` ${o.class}` : ''}`, style: `--tilt:${o.tilt ?? tiltFor(seed, 1.6)}deg` }, ...(Array.isArray(content) ? content : [content]));
 }
 
-/** Two strips of tape holding something to the wall (decoration, added to `el`). */
-export function tapeCorners(el: HTMLElement, seed = 'corners', which: ('tl' | 'tr' | 'bl' | 'br')[] = ['tl', 'tr']): HTMLElement {
-  const r = rng(hashStr(seed));
-  for (const c of which) {
-    const t = h('i', { class: `tape-bit ${c}`, style: `--tilt:${n2((c === 'tl' || c === 'br' ? -38 : 38) + sym(r) * 8)}deg;--nudge:${n2(sym(r) * 6)}px` });
-    t.style.clipPath = tornClip(`${seed}|${c}`, 'lr', 2.5, 6);
-    el.appendChild(t);
-  }
-  return el;
+/**
+ * A clean cartoon panel: flat colour, ink outline, hard offset shadow, and an
+ * optional title in comic lettering on a tab at the top.
+ */
+export function panel(children: Kids, o: { title?: string; tone?: 'cream' | 'sun' | 'sky' | 'grass'; class?: string; tilt?: number } = {}): HTMLDivElement {
+  return h('div', { class: `cpanel${o.tone && o.tone !== 'cream' ? ` cpanel-${o.tone}` : ''}${o.class ? ` ${o.class}` : ''}`, style: `--tilt:${o.tilt ?? 0}deg` },
+    o.title ? h('div', { class: 'cpanel-title' }, lettering(o.title, { style: 'comic', size: 20, color: 'var(--sunshine)', seed: `panel-${o.title}` })) : null,
+    ...children);
 }
 
 /** A sign: flat cardboard tan with an ink outline and a slight tilt. */
@@ -79,29 +76,14 @@ export function paper(children: Kids, o: { seed?: string; tilt?: number; class?:
   return h('div', { class: `paper${o.ruled ? ' ruled' : ''}${o.class ? ` ${o.class}` : ''}`, style: `--tilt:${o.tilt ?? tiltFor(o.seed ?? 'paper', 1)}deg` }, ...children);
 }
 
-/** A chalkboard in a wooden frame. */
-export function chalkboard(children: Kids, o: { class?: string } = {}): HTMLDivElement {
-  ensureDefs();
-  return h('div', { class: `chalkboard${o.class ? ` ${o.class}` : ''}` }, h('div', { class: 'chalkboard-slate' }, ...children), h('i', { class: 'chalk-tray' }));
-}
-
-/** A clipboard: the board, a metal clip, a ruled sheet. */
-export function clipboard(children: Kids, o: { class?: string; title?: string } = {}): HTMLDivElement {
-  return h('div', { class: `clipboard${o.class ? ` ${o.class}` : ''}` },
-    h('i', { class: 'clip' }),
-    h('div', { class: 'clipboard-sheet' },
-      o.title ? h('div', { class: 'sheet-title' }, lettering(o.title, { style: 'comic', size: 22, color: 'var(--sunshine)', seed: 'clip' })) : null,
-      ...children));
-}
-
 /** A button dressed in the kit: icon + label. `kind` picks the surface. */
-export function button(label: string, onClick: (e: Event) => void, o: { icon?: IconName; kind?: 'go' | 'plain' | 'tape' | 'chalk'; size?: 'big' | 'small'; lettered?: boolean; class?: string; seed?: string } = {}): HTMLButtonElement {
+export function button(label: string, onClick: (e: Event) => void, o: { icon?: IconName; kind?: 'go' | 'plain' | 'ghost'; size?: 'big' | 'small'; lettered?: boolean; class?: string; seed?: string } = {}): HTMLButtonElement {
   const kind = o.kind ?? 'plain';
-  const cls = ['btn', kind === 'go' ? 'go' : kind === 'tape' ? 'btn-tape' : kind === 'chalk' ? 'btn-chalk' : '', o.size ?? '', o.class ?? ''].filter(Boolean).join(' ');
+  const cls = ['btn', kind === 'go' ? 'go' : kind === 'ghost' ? 'ghost' : '', o.size ?? '', o.class ?? ''].filter(Boolean).join(' ');
   const seed = o.seed ?? label;
   const b = h('button', { class: cls, type: 'button', style: `--tilt:${tiltFor(seed, 1.2)}deg`, 'aria-label': label, onclick: onClick });
   if (o.icon) b.appendChild(icon(o.icon));
-  if (o.lettered) b.appendChild(lettering(label, { size: o.size === 'big' ? 22 : 15, seed, style: kind === 'chalk' ? 'chalk' : 'marker' }));
+  if (o.lettered) b.appendChild(lettering(label, { size: o.size === 'big' ? 22 : 15, seed, style: 'comic', color: kind === 'go' ? 'var(--sunshine)' : 'var(--poster)' }));
   else b.appendChild(h('span', null, label));
   return b;
 }

@@ -9,13 +9,19 @@ import { hashStr, n2, rng, sym } from './rand';
 // scales in with an overshoot, shakes a little and is gone in about a second.
 //
 // Which word, when, and the no-repeat rule belong to the game screen; this
-// file only draws.
+// file draws (and offers a default pop animation, `animate: false` to skip it).
 
 export type BurstShape = 'star' | 'jagged' | 'cloud';
 
 export interface PopOpts {
   /** burst outline: star (default), jagged blast, or puffy cloud balloon */
   shape?: BurstShape;
+  /** same as `shape` */
+  burst?: BurstShape;
+  /** shorthand for [color, color2, textColor] */
+  colors?: [string, string?, string?];
+  /** play the built-in pop animation (default true); false gives a still element to animate yourself */
+  animate?: boolean;
   /** outer fill (default sunshine yellow) */
   color?: string;
   /** inner burst fill (default a paler yellow); 'none' for a single layer */
@@ -84,7 +90,8 @@ const toD = (p: Pt[] | string, s = 1) => typeof p === 'string'
   : `M${p.map((q) => `${n2(q.x * s)} ${n2(q.y * s)}`).join(' L')} Z`;
 
 /** The burst as an SVG string (no animation). */
-export function comicBurstSVG(text: string, o: PopOpts = {}): string {
+export function comicBurstSVG(text: string, opts: PopOpts = {}): string {
+  const o: PopOpts = { ...opts, shape: opts.shape ?? opts.burst, color: opts.color ?? opts.colors?.[0], color2: opts.color2 ?? opts.colors?.[1], textColor: opts.textColor ?? opts.colors?.[2] };
   const id = `gslpop${++uid}`;
   const shape = o.shape ?? 'star';
   const r = rng(hashStr(`${o.seed ?? text}|${shape}`));
@@ -131,10 +138,11 @@ ${c2 !== 'none' ? `<path d="${toD(shapeD, 0.8)}" fill="${c2}"/>` : ''}
  */
 export function comicPop(text: string, o: PopOpts = {}): HTMLDivElement {
   const tilt = o.tilt ?? Math.round(sym(rng(hashStr(`${text}|tilt`))) * 8);
-  const el = h('div', { class: 'comic-pop', role: 'status', style: `--tilt:${tilt}deg;width:${o.width ?? 280}px` });
+  const still = o.animate === false;
+  const el = h('div', { class: `comic-pop${still ? ' still' : ''}`, role: 'status', style: `--tilt:${tilt}deg;width:${o.width ?? 280}px` });
   el.innerHTML = comicBurstSVG(text, o);
   if (o.sub) el.appendChild(h('div', { class: 'comic-sub' }, o.sub));
-  const ms = o.ms ?? 1150;
+  const ms = o.ms ?? (still ? 0 : 1150);
   if (ms > 0) setTimeout(() => el.remove(), ms);
   return el;
 }

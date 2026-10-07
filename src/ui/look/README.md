@@ -8,7 +8,7 @@ chalkboard, a clipboard, Channel 4½) is drawn as cartoon objects. All of it is
 drawn in code: no fonts, images or emoji.
 
 ```ts
-import { lettering, icon, comicPop, sign, tradingCard, lowerThird, teamPatch } from '../ui/look';
+import { lettering, icon, comicPop, panel, label, tradingCard, lowerThird, teamPatch } from '../ui/look';
 ```
 
 `main.ts` calls `installTextures()` and `ensureDefs()` once at startup; every
@@ -24,8 +24,8 @@ helper also works without them.
 | `--marker-blue`, `--marker-green` | accents (Channel 4½ logo, links) |
 | `--marker` (also `--ink`) | the warm ink: outlines, text, hard shadows (never pure black) |
 | `--poster`, `--poster-shade` | cream: cards, panels, plain buttons |
-| `--cardboard`, `--cardboard-dark`, `--wood` | signs, the shoebox, the clipboard and chalkboard frame |
-| `--tape`, `--chalk`, `--board` | tape labels, chalk text, chalkboard |
+| `--cardboard`, `--cardboard-dark` | the logo sign and the card box |
+| `--tape`, `--chalk`, `--board` | craft-era names kept as aliases (cream, off-white, deep green); don't use in new code |
 | `--line` | outline width (3 px) |
 | `--s1`…`--s6` | spacing 4/8/12/16/24/32 px |
 | `--t-xs`…`--t-xl` | body type 13/14/16/19/24 px (never under 13 on a phone) |
@@ -33,7 +33,7 @@ helper also works without them.
 | `--shadow`, `--shadow-soft` | hard offset shadows (never blurred glows) |
 | `--cut`, `--cut2` | rounded, slightly uneven corners |
 | `--safe-t/r/b/l` | safe-area insets |
-| `--tex-chalkdust`, `--scribble`, `--scribble-blue`, `--underline` | chalk smudges; a marker loop around the chosen option; a wavy underline (from `textures.ts`) |
+| `--scribble`, `--scribble-blue`, `--underline` | a marker loop around the chosen option; a wavy underline (from `textures.ts`) |
 
 Team colours come in as `--team`, `--team2`, `--team3` (primary, secondary, accent).
 
@@ -50,7 +50,8 @@ letteringParts(text, opts) // { vb, body } to nest inside a bigger SVG
 
 - `style`: `comic` (fat slanted letters, thick ink outline, offset shadow: titles, team
   names, score numbers, pop-ups) · `marker` (default, one even stroke: small labels) ·
-  `poster` (comic, upright) · `chalk` (on the chalkboard) · `brush` (two loose passes).
+  `poster` (comic, upright) · `chalk` (grainy) · `brush` (two loose passes).
+- `highlight` (comic: on by default) adds a light streak on each stroke.
 - `size` is the cap height in CSS px; the `<svg>` gets matching `width`/`height`.
   To fit a box instead, CSS `width: 100%; height: auto` (it has a viewBox).
 - `color` or `colors` (cycled per word), `ink` (outline), `wobble` (0–2), `weight`,
@@ -99,6 +100,8 @@ layer.appendChild(comicPop('SPLOOSH!', { shape: 'cloud', color: '#7cc8f0', color
 ```
 
 - `shape`: `star` (default) · `jagged` (a blast) · `cloud` (a puffy balloon).
+- `burst` (same as `shape`), `colors: [outer, inner, text]` as shorthand, `animate: false` for a
+  still element you animate yourself.
 - `color` (outer), `color2` (inner burst, `'none'` for one layer), `textColor`, `ink`,
   `width` (px, default 280), `tilt`, `lines`, `dots`, `sub` (a small caption under it),
   `ms` (auto-remove; default 1150, 0 keeps it), `seed`.
@@ -118,21 +121,18 @@ Each helper returns a plain element; the CSS class works on hand-written markup 
 | Helper | Class | What it is | Use it for |
 | --- | --- | --- | --- |
 | `sign(children, {seed, tilt})` | `.cardboard` | a flat cardboard sign, ink outline, slight tilt | the logo, big notices |
+| `panel(children, {title, tone})` | `.cpanel` (`-sun`, `-sky`, `-grass`) | a flat panel, ink outline, hard shadow, optional comic title tab | How to Play, Settings, pause and end-of-game panels |
+| `label(text, {tone})` | `.label` | a small flat tag with an outline | captions, notes, tags |
 | `paper(children, {ruled})` | `.paper` (`.ruled`) | a cream card with an ink outline | notes, option cards |
-| `tape(text, {tone})` | `.tape` | masking tape with marker on it | labels, small tags, tabs |
-| `tapeCorners(el)` | `.tape-bit` | two bits of tape holding a thing up | anything "stuck to the wall" |
 | `button(label, onClick, {icon, kind, size, lettered})` | `.btn` (`.go`, `.ghost`, `.small`, `.big`, `.on`) | chunky flat button, ink outline, hard shadow, squashes when pressed; `.on` is circled in marker | every button |
 | `.choices` / `.choice` | | plain words, the chosen one circled in red marker | segmented options |
 | `pennant(team)` | `.pennant` | a pennant: team colour, sleeve, stitched edge, comic name | team pick |
 | `teamPatch(team, size)` | `.patch` | round patch with a stitched ring and the initial | scoreboard, lists |
 | `tradingCard({photo, name, persona, number, team, stats, back})` | `.tcard` | a trading card; `.flipped` (or `flipCard`) shows the back | kid cards: HUD at-bat card, Meet the Kids |
-| `chalkboard(children)` | `.chalkboard` | slate in a wooden frame, chalk tray | How to Play, the coach |
-| `clipboard(children, {title})` | `.clipboard` | board, metal clip, ruled sheet | Settings, pause menu, box score |
 | `lowerThird({who, role, text, tone})` | `.lower-third` | Channel 4½ caption strip with the "4½" blob logo; one short line | Chet & Dottie (`tone: 'chet' \| 'dottie'`) |
 | `channelBug()` | `.ch-bug` | the station logo alone | corner bug, replays |
 | `bigMoment(text, {color, sub, ms})` | `.comic-pop` | old name for `comicPop` | |
 | `rotateHint(text?)` | `.rotate-card` | paper card, phone icon tipping sideways | portrait warning |
-| `tear(el, seed)` / `tornClip(...)` | | a notched/torn edge as a `clip-path` (cuts outlines, so only for unoutlined bits like tape) | tape |
 
 ## Rules of thumb
 
