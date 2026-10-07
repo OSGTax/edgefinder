@@ -23,6 +23,7 @@ import { KidModel } from '../kid3d/model';
 import { Animator, type AnimInput, type Mode } from '../kid3d/anim';
 import { makeBall, makeBat, makeGlove, makeProp } from '../kid3d/items';
 import { Effects } from './fx';
+import { Emotes } from './emotes';
 import type { Steps } from '../engine/steps';
 import { hawaiianShirt } from '../kid3d/outfits';
 import { GROWNUP_SCALE, MR_MENDOZA } from '../world/grownups';
@@ -472,6 +473,11 @@ export class World {
   private _net = new Vector3();
   private _grip = new Vector3();
   private _hold = new Vector3();
+  private emotes: Emotes | null = null;
+  private jamKey = -1;
+  private bangPlay: LivePlay | null = null;
+  private notesMo = -1;
+  private humT = 20;
 
   /** A reusable Want for this kid this frame. */
   private put(id: string, x: number, y: number, facing: number | null, mode: Mode, t: number, exact: boolean): Want {
@@ -734,6 +740,7 @@ export class World {
       a.apply(w, dt, ballPos, batSideL);
       a.ballInHand.visible = false;
     }
+    this.cartoonSymbols(m, play, dt);
     // the batter drops the bat on contact; it tumbles into the dirt and stays until the next batter
     const batter = this.actors.get(m.batter.id);
     if (batter?.anim.batActive) {
@@ -792,6 +799,50 @@ export class World {
     if (this.smokeT <= 0) { this.fx.smoke(this.stadium.grillTop); this.smokeT = 0.18; }
     this.fx.update(dt);
     this.stadium.update(this.time, dt);
+  }
+
+  /** Stars, sweat drops, "!" and notes over heads, at real moments only. */
+  private cartoonSymbols(m: Match, play: LivePlay | null, dt: number) {
+    if (!this.emotes) this.emotes = new Emotes(this.scene);
+    const em = this.emotes;
+    const head = (id: string) => this.actors.get(id)?.model.bones.head;
+    if (play && m.phase === 'live') {
+      for (const fl of play.fielders) {
+        // a bobble: seeing stars
+        if (fl.anim === 'stumble' && fl.animT < 0.1) { const h = head(fl.kid.id); if (h) em.show('stars', h, 1.8); }
+      }
+      // a high fly: "!" over the kid going to get it (once a play)
+      if (this.bangPlay !== play && play.mode === 'batted' && play.ball.p.z > 14 && play.ball.v.z < 0) {
+        let best: (typeof play.fielders)[number] | null = null, bd = 1e9;
+        for (const fl of play.fielders) {
+          if (fl.task !== 'chase') continue;
+          const d = Math.hypot(fl.target.x - play.ball.p.x, fl.target.y - play.ball.p.y);
+          if (d < bd) { bd = d; best = fl; }
+        }
+        if (best) { this.bangPlay = play; const h = head(best.kid.id); if (h) em.show('bang', h, 0.9); }
+      }
+    }
+    // the pitcher in a jam: bases loaded, or three balls
+    if (m.phase === 'prePitch' && m.phaseT > 0.2) {
+      const loaded = m.bases.every((b) => !!b);
+      const key = loaded || (m.balls === 3 && m.strikes < 2) ? m.inning * 1000 + m.batterIdx[m.battingSide] * 10 + m.balls : -1;
+      if (key >= 0 && key !== this.jamKey) { this.jamKey = key; const h = head(m.pitcher.id); if (h) em.show('sweat', h, 1.8); }
+    }
+    // a happy bench hums along (one kid, once a celebration)
+    if ((this.mo.kind === 'hr' || this.mo.kind === 'run' || this.mo.kind === 'over') && this.notesMo !== this.mo.t && this.time - this.mo.t > 1.6) {
+      this.notesMo = this.mo.t;
+      const side = this.mo.side;
+      const id = m.side(side).lineup.order.find((k) => !this.wants.get(k)?.exact && this.wants.get(k)?.mode === 'cheer');
+      const h = id && head(id);
+      if (h) em.show('notes', h, 2.2);
+    }
+    // Mr. Mendoza hums at the grill now and then
+    this.humT -= dt;
+    if (this.humT <= 0) {
+      this.humT = 25 + Math.random() * 20;
+      if (this.mz.state === 'grill') em.show('notes', this.mendoza.model.bones.head, 2.5, GROWNUP_SCALE);
+    }
+    em.update(dt);
   }
 
   // ───────────────────────────────────────────────────────────── Mr. Mendoza

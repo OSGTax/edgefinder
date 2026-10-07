@@ -338,7 +338,7 @@ export class Animator {
         break;
       }
       case 'catch': CATCH.sample(t, o); rate = 20; expr = 'focus'; break;
-      case 'throw': THROW.sample(t, o); rate = 32; expr = 'focus'; break;
+      case 'throw': THROW.sample(t, o); rate = 32; expr = 'focus'; this.sqWant = t < 0.2 ? -0.07 : t < 0.32 ? 0.09 : 0; break;
       case 'dive': this.dive.sample(t, o); rate = 24; expr = t < 1 ? 'yell' : 'oops'; break;
       case 'jump': JUMP.sample(t, o); rate = 22; expr = 'yell'; break;
       case 'stumble': STUMBLE.sample(t, o); rate = 20; expr = 'oops'; break;
@@ -371,9 +371,15 @@ export class Animator {
         break;
       }
       case 'bat': this.stance(o, P); rate = 10; expr = 'focus'; this.batActive = true; break;
-      case 'swing': (inp.power ? SWING_POWER : SWING).sample(t, o); rate = 45; expr = t < 0.3 ? 'yell' : 'focus'; this.batActive = true; break;
+      case 'swing': (inp.power ? SWING_POWER : SWING).sample(t, o); this.sqWant = t < 0.12 ? -0.06 : t < 0.35 ? 0.07 : 0; rate = 45; expr = t < 0.3 ? 'yell' : 'focus'; this.batActive = true; break;
       case 'bunt': copyPose(o, BUNT); rate = 16; expr = 'focus'; this.batActive = true; break;
-      case 'windup': WINDUP.sample(t / (inp.windup ?? 0.8), o); rate = 40; expr = 'focus'; break;
+      case 'windup': {
+        const u = t / (inp.windup ?? 0.8);
+        WINDUP.sample(u, o); rate = 40; expr = 'focus';
+        // tall on the leg lift, coiled into the stride, long at release
+        this.sqWant = u < 0.3 ? 0 : u < 0.55 ? 0.06 : u < 0.85 ? -0.07 : 0.1;
+        break;
+      }
       case 'follow': FOLLOW.sample(t, o); rate = 30; expr = 'focus'; break;
       default: copyPose(o, STAND);
     }
@@ -406,6 +412,7 @@ export class Animator {
     _hp.set(pose[HX] * s, pose[HY] * (abs ? 1 : s) + (inp.lift ?? 0), pose[HZ] * s);
     this.hipOff.lerp(_hp, Math.min(1, a * 1.2));
     k.bones.hips.position.copy(k.p.joints.hips).add(this.hipOff);
+    this.squashStretch(dt, inp.lift ?? 0);
 
     // breathing (faster and deeper after running)
     const br = Math.sin(this.time * 2.1 + this.seed) * 0.025;
@@ -432,6 +439,40 @@ export class Animator {
     this.blink(dt, this.expression ?? this.gestureExpr ?? expr);
     const want = this.expression ?? this.gestureExpr ?? expr;
     if (want !== k.expression) k.setExpression(want);
+  }
+
+  // ───────────────────────────────────────────────── squash and stretch
+
+  private hy = 0; private hv = 0; private sq = 0; private sqv = 0;
+  /** extra squash (−) / stretch (+) a mode asks for this frame, eased in */
+  private sqWant = 0;
+
+  /**
+   * Cartoon squash and stretch from the kid's own vertical motion: stretch
+   * going up fast, a springy squash when a fall stops (landings, belly flops,
+   * the bottom of a hop). Volume is kept (wider when squashed), and the hips
+   * drop so the feet stay on the grass.
+   */
+  private squashStretch(dt: number, lift: number) {
+    if (dt <= 0) return;
+    const k = this.kid;
+    const y = this.hipOff.y + lift;
+    const v = (y - this.hy) / dt;
+    this.hy = y;
+    // a fall that stops suddenly kicks the spring
+    const impact = Math.max(0, this.hv - v);
+    this.hv = v;
+    this.sqv += -impact * 0.05;
+    // damped spring back to rest (plus whatever the mode wants)
+    this.sqv += (-(this.sq - this.sqWant) * 260 - this.sqv * 16) * dt;
+    this.sq += this.sqv * dt;
+    this.sq = clamp(this.sq, -0.22, 0.22);
+    const e = clamp(this.sq + clamp(v * 0.025, -0.06, 0.1), -0.25, 0.25);
+    const sy = 1 + e, sx = 1 / Math.sqrt(sy);
+    k.bones.hips.scale.set(sx, sy, sx);
+    // keep the feet planted: the legs shrink with the scale
+    k.bones.hips.position.y -= (1 - sy) * k.p.joints.hips.y * 0.95;
+    this.sqWant = 0;
   }
 
   // ───────────────────────────────────────────────── cycles
