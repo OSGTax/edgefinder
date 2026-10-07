@@ -143,6 +143,8 @@ img.portrait:not([src]) { visibility: hidden; }
 .how-board ul { margin: 0; padding-left: 1.2em; }
 .how-board li { margin: 4px 0; }
 .how-board b { color: var(--tomato); font-weight: 800; }
+.how-foot { display: flex; justify-content: center; margin-top: 10px; }
+.title-notes .note { max-width: min(420px, 90vw); }
 .how-cols { columns: 250px 3; column-gap: 30px; font-size: var(--t-sm); }
 .how-sec { break-inside: avoid; margin-bottom: 10px; }
 .how-head { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }

@@ -5,9 +5,9 @@
  * further ahead, and after a long stall it skips forward instead of firing a
  * burst of stale notes.
  */
-import { getBus, onBus, pageHidden, reportError, type Bus } from './context';
+import { getBus, onBus, onBusLost, pageHidden, reportError, type Bus } from './context';
 import { Patch, rand } from './dsp';
-import { INSTRUMENTS } from './instruments';
+import { INSTRUMENTS, PERCUSSION } from './instruments';
 import type { Song } from './notation';
 import { SONGS } from './tracks';
 import type { MusicTrack } from './types';
@@ -22,9 +22,11 @@ class Player {
   private next = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
+  /** Called once a one-shot song has played its last note. */
+  onFinish: (() => void) | null = null;
 
   constructor(
-    private readonly bus: Bus,
+    readonly bus: Bus,
     private readonly song: Song,
     private readonly onEnd: () => void,
   ) {
@@ -61,12 +63,25 @@ class Player {
     this.onEnd();
   }
 
+  /** The bus is gone (rebuilt after an interruption): stop without touching it. */
+  kill(): void {
+    this.stopped = true;
+    clearInterval(this.timer);
+    try {
+      this.out.disconnect();
+    } catch {
+      /* already gone */
+    }
+  }
+
   private finish(): void {
     if (this.stopped) return;
     this.stopped = true;
     clearInterval(this.timer);
-    const tail = this.next - this.bus.ctx.currentTime + 2;
-    setTimeout(() => this.release(), tail * 1000);
+    const tail = this.next - this.bus.ctx.currentTime;
+    setTimeout(() => this.release(), (tail + 2) * 1000);
+    // a one-shot that hands back to the loop (the between-innings jingle) does it as it ends
+    if (this.song.then) setTimeout(() => this.onFinish?.(), Math.max(0, tail - 0.15) * 1000);
   }
 
   private tick(): void {
@@ -104,8 +119,10 @@ class Player {
       for (const ev of evs) {
         const p = new Patch(this.bus);
         try {
-          const vel = ev.vel * part.gain * rand(0.92, 1.05); // a touch of human
-          INSTRUMENTS[part.inst](p, this.out, at, ev.midis, ev.len * song.stepDur * 0.92, vel);
+          // a touch of human: kids don't play like a sequencer
+          const vel = ev.vel * part.gain * rand(0.9, 1.05);
+          const late = PERCUSSION.has(part.inst) ? rand(0, 0.004) : rand(0, 0.012) * song.feel;
+          INSTRUMENTS[part.inst](p, this.out, at + late, ev.midis, ev.len * song.stepDur * 0.92, vel);
         } finally {
           p.seal();
         }
@@ -121,7 +138,9 @@ let wanted: MusicTrack | null = null;
 export function playMusic(name: MusicTrack): void {
   const song = (SONGS as Partial<Record<string, Song>>)[name];
   if (!song) return;
-  wanted = song.loop ? name : null;
+  // a one-shot that hands back keeps the loop we were in; other one-shots end the music
+  if (song.loop) wanted = name;
+  else if (!song.then) wanted = null;
   const bus = getBus();
   if (!bus || current?.name === name) return;
 
@@ -130,9 +149,20 @@ export function playMusic(name: MusicTrack): void {
   const player: Player = new Player(bus, song, () => {
     if (current?.player === player) current = null;
   });
+  if (song.then) {
+    player.onFinish = () => {
+      if (current?.player !== player) return;
+      const back = wanted;
+      current = null;
+      if (back) playMusic(back);
+    };
+  }
   current = { name, player };
   player.start(song.loop ? (prev ? 0.8 : 0.3) : 0.01);
 }
+
+/** The track playing now (for tests and the dev sound board). */
+export const nowPlaying = (): MusicTrack | null => current?.name ?? null;
 
 export function stopMusic(): void {
   wanted = null;
@@ -142,4 +172,11 @@ export function stopMusic(): void {
 
 onBus(() => {
   if (wanted) playMusic(wanted);
+});
+
+onBusLost((old) => {
+  if (current?.player.bus === old) {
+    current.player.kill();
+    current = null;
+  }
 });

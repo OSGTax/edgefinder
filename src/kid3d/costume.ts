@@ -460,9 +460,9 @@ export function addCostume(L: Lists, p: Proportions, kid: Kid) {
     // a bushy brush of overlapping tufts that droops at the ends
     for (let i = 0; i < 6; i++) {
       const t = i / 5 * 2 - 1;
-      const at = onFace(t * 0.38, -0.41 - t * t * 0.16, 0.03);
+      const at = onFace(t * 0.38, -0.37 - t * t * 0.14, 0.03);
       const g = lumpy(sphere(R * (0.19 - Math.abs(t) * 0.05), 12, 8), 0.07, 26, i);
-      head('hair', g, null, new Matrix4().compose(at, new Quaternion().setFromEuler(new Euler(0.3, t * 0.5, -t * 0.7)), new Vector3(1.3, 0.72, 0.62)));
+      head('hair', g, null, new Matrix4().compose(at, new Quaternion().setFromEuler(new Euler(0.3, t * 0.5, -t * 0.7)), new Vector3(1.3, 0.6, 0.6)));
     }
   } else if (look.face === 'handlebar') {
     for (const sx of [-1, 1]) {

@@ -152,7 +152,7 @@ img { -webkit-user-drag: none; }
 }
 .loading.done { opacity: 0; pointer-events: none; }
 .loading-sign { padding: clamp(10px, 3vh, 22px) clamp(18px, 5vw, 40px); display: flex; flex-direction: column; align-items: center; }
-.loading-sign .lt { width: min(64vw, 380px, 52vh); height: auto; }
+.loading-sign .lt { width: min(70vw, 420px, 72vh); height: auto; }
 .loading-line { position: relative; width: min(78vw, 420px); height: 34px; }
 .loading-line::before { /* the faint line still to chalk */
   content: ''; position: absolute; left: 22px; right: 22px; top: 16px; border-top: 3px dashed rgba(243, 240, 228, 0.35);
@@ -161,14 +161,14 @@ img { -webkit-user-drag: none; }
 .loading-line .ico { position: absolute; top: 3px; font-size: 28px; }
 .loading-line .ico-plate { left: 0; color: var(--chalk); }
 .loading-line .ico-base { right: 0; color: var(--chalk); }
-.loading-line .rolling { position: absolute; top: 5px; font-size: 24px; color: var(--poster); --ico-accent: var(--marker-red); transition: left 0.3s ease-out; left: 14px; animation: roll 0.8s linear infinite; }
+.loading-line .rolling { position: absolute; top: 3px; font-size: 28px; color: var(--poster); --ico-accent: var(--marker-red); transition: left 0.3s ease-out; left: 14px; animation: roll 0.8s linear infinite; }
 @keyframes roll { to { transform: rotate(360deg); } }
 .loading-msg { background: var(--poster); border: var(--line) solid var(--marker); border-radius: var(--cut2); padding: 6px 14px; font-size: var(--t-sm); transform: rotate(-1deg); box-shadow: var(--shadow); max-width: 90vw; text-align: center; }
 .loading-sub { color: var(--poster); font-size: var(--t-xs); text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4); text-align: center; max-width: 90vw; }
 
 /* a short note at the top of the screen */
 .toast {
-  position: fixed; left: 50%; top: max(10px, var(--safe-t)); transform: translateX(-50%); z-index: 60;
+  position: fixed; left: 50%; bottom: max(12px, var(--safe-b)); transform: translateX(-50%); z-index: 60;
   display: flex; align-items: center; gap: 8px; max-width: min(92vw, 560px);
   padding: 8px 14px; background: var(--poster); color: var(--marker); border: var(--line) solid var(--marker); border-radius: var(--cut);
   box-shadow: var(--shadow); font-size: var(--t-sm); line-height: 1.35; transition: opacity 0.4s;

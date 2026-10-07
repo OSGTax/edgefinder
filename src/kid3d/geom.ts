@@ -166,6 +166,8 @@ export function paintFn(g: BufferGeometry, fn: (p: Vector3) => Color): BufferGeo
 /** Collects skinned parts for one material and merges them. */
 export class PartList {
   parts: BufferGeometry[] = [];
+  /** parts added while this is set stay out of the ink outline (small or thin costume pieces) */
+  noInk = false;
   add(g: BufferGeometry, m?: Matrix4): BufferGeometry {
     let out = g.index ? g.toNonIndexed() : g;
     if (out === g) out = g.clone();
@@ -174,8 +176,17 @@ export class PartList {
       if (!['position', 'normal', 'uv', 'color', 'skinIndex', 'skinWeight'].includes(name)) out.deleteAttribute(name);
     }
     if (!out.attributes.uv) out.setAttribute('uv', new Float32BufferAttribute(new Float32Array(out.attributes.position.count * 2), 2));
+    if (this.noInk) out.userData.noInk = true;
     this.parts.push(out);
     return out;
+  }
+  /** Shapes for the ink outline (position, normal and skinning only), before merge() consumes the parts. */
+  inkParts(): BufferGeometry[] {
+    return this.parts.filter((p) => !p.userData.noInk).map((p) => {
+      const g = new BufferGeometry();
+      for (const a of ['position', 'normal', 'skinIndex', 'skinWeight']) g.setAttribute(a, p.getAttribute(a).clone());
+      return g;
+    });
   }
   merge(withColor: boolean): BufferGeometry | null {
     if (!this.parts.length) return null;

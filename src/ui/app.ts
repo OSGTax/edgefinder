@@ -13,7 +13,7 @@ import { World } from '../game/world';
 import { nextPaint, runPaced, type Step } from '../engine/steps';
 import { Director } from '../game/director';
 import { PortraitStudio } from '../game/portraits';
-import { GameScreen } from '../game/screen';
+import { GameScreen, replayCoach } from '../game/screen';
 import { jerseyNumber } from '../kid3d/uniform';
 import type { Expression } from '../kid3d/face';
 import { shell } from '../shell';
@@ -63,6 +63,8 @@ class App {
   private boxTeam: Team = TEAMS[0];
   private airTimer = 0;
   private airIdx = Math.floor(Math.random() * ON_AIR.length);
+  /** a one-time hint about this device (no graphics card), shown under the title menu */
+  private tip: string | null = null;
 
   constructor(private root: HTMLElement) {
     root.appendChild(this.canvas);
@@ -79,6 +81,7 @@ class App {
     window.addEventListener('resize', () => this.resize());
     audio.setSfxVolume(settings.sfx);
     audio.setMusicVolume(settings.music);
+    audio.setVoiceVolume(settings.voices);
     const unlock = () => audio.unlock();
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
@@ -90,6 +93,7 @@ class App {
         chalked.style.width = `calc((100% - 44px) * ${s.done.toFixed(3)})`;
         rolling.style.left = `calc(10px + (100% - 44px) * ${s.done.toFixed(3)})`;
       };
+      if (import.meta.env.DEV && location.hash.includes('loadhold')) { show({ done: 0.45, msg: 'Inflating the pool flamingo' }); (window as unknown as { __menus: boolean }).__menus = true; return; }
       this.world = new World(this.canvas, buildField(yard('poolparty')), [TEAMS[0], TEAMS[1]]);
       await runPaced(this.world.build(), show);
       show({ done: 0.97, msg: 'Chalking the baselines' });
@@ -102,7 +106,7 @@ class App {
       setTimeout(() => loading.remove(), 400);
       // no graphics card: a one-line tip; a lost graphics context: a short note while it recovers
       const tip = softwareTip();
-      if (tip) this.toast(tip, 12000);
+      if (tip) this.tip = tip;
       this.world.onContextChange = (lost) => { if (lost) this.toast('The graphics took a quick nap. Waking them up…', 4000); };
       const hash = new URLSearchParams(location.hash.slice(1));
       if (import.meta.env.DEV && hash.has('play')) this.startGame(hash.get('play') === 'comets' ? TEAMS[1] : TEAMS[0], hash.has('cpu'));
@@ -112,7 +116,7 @@ class App {
     }, 30));
   }
 
-  /** A short note at the top of the screen that fades away (tap to dismiss). */
+  /** A short note at the bottom of the screen that fades away (tap to dismiss); clear of the game's banners. */
   private toast(text: string, ms: number) {
     const el = h('div', { class: 'toast', role: 'status', onclick: () => el.remove() }, icon('info'), h('span', null, text));
     this.root.appendChild(el);
@@ -202,6 +206,11 @@ class App {
       el.appendChild(h('button', { class: 'label note-btn', onclick: () => location.reload() }, icon('replay'), 'A fresh version is ready. Tap to reload.'));
       return;
     }
+    if (this.tip) {
+      el.appendChild(h('div', { class: 'label note' }, icon('info'), h('span', null, this.tip),
+        h('button', { class: 'note-x', 'aria-label': 'Hide', onclick: () => { this.tip = null; this.titleNotes(el); } }, icon('close'))));
+      return;
+    }
     const hint = shell.installHint();
     if (hint === 'ios') {
       el.appendChild(h('div', { class: 'label note' }, icon('share'), h('span', null, 'Play it like an app: tap Share, then “Add to Home Screen”.'),
@@ -268,7 +277,7 @@ class App {
       onExit: (_m, again) => {
         this.game = null;
         if (again) this.startGame(you);
-        else { shell.leaveGame(); this.title(); }
+        else this.title();
       },
     });
   }
@@ -362,26 +371,32 @@ class App {
       panel([
         h('div', { class: 'how-cols' },
           sec('BATTING', 'bat', [
-            ['Drag to put the yellow circle where the pitch is headed. On Rookie it helps you aim.'],
-            ['Tap ', b('SWING'), ' as the ball gets to the plate. Early pulls it, late pushes it the other way.'],
-            [b('POWER'), ' hits it farther with a smaller sweet spot. ', b('BUNT'), ' squares around.'],
+            ['Tap ', b('SWING'), ', or anywhere on the right side, just as the ball gets to the plate. Early pulls it, late pushes it the other way.'],
+            ['On Rookie the circle aims itself. Drag on the left side to steer it.'],
+            [b('Power'), ' hits it farther with a smaller sweet spot. ', b('Bunt'), ' squares around.'],
             ['Fill the hype meter and your kid\'s special move lights up.'],
           ]),
           sec('PITCHING', 'ball', [
-            ['Pick a pitch, tap the zone where you want it, then ', b('THROW'), '.'],
-            ['Good arms hit their spots and last longer. Tired arms get a rest on their own.'],
+            ['Pick a pitch on the left. Drag anywhere to move the mitt.'],
+            ['Tap ', b('THROW'), ' to start the meter, then tap again when the needle is in the green.'],
           ]),
           sec('FIELDING', 'glove', [
-            ['Your kids chase the ball by themselves. Tap a base to say where the throw goes.'],
+            ['Your kids chase the ball by themselves. Tap a base to throw there, or wait and your kid picks.'],
           ]),
           sec('RUNNING', 'forward', [
-            ['Runners make their own calls. ', b('RUN!'), ' sends them, ', b('BACK!'), ' calls them back.'],
+            ['Runners go on their own. ', b('GO!'), ' sends everybody, ', b('BACK'), ' sends them back.'],
           ]),
           sec('THE YARD', 'home', rules.map((r) => [r])),
           sec('ON A COMPUTER', 'info', [
             ['Mouse aims. Click or ', b('Space'), ' swings. ', b('P'), ' power, ', b('B'), ' bunt, ', b('S'), ' special.'],
-            [b('1 2 3'), ' pick a pitch. ', b('1 2 3 H'), ' throw to a base. ', b('R'), ' run, ', b('F'), ' back.'],
-          ]))], { tone: 'sky', class: 'how-board' }),
+            [b('1 2 3'), ' pick a pitch; ', b('Space'), ' or two clicks throw. ', b('1 2 3 H'), ' throw to a base. ', b('R'), ' run, ', b('F'), ' back.'],
+          ])),
+        h('div', { class: 'how-foot' },
+          h('button', { class: 'btn', onclick: (e: Event) => {
+            replayCoach(); audio.play('uiSelect');
+            const btn = e.currentTarget as HTMLButtonElement;
+            btn.disabled = true; btn.lastElementChild!.textContent = 'Coach is back for your next game';
+          } }, icon('whistle'), h('span', null, 'Replay the coach')))], { tone: 'sky', class: 'how-board' }),
     ), 'inner');
   }
 
@@ -405,9 +420,10 @@ class App {
       panel([
         row('sound', 'Sound effects', slider(settings.sfx, (x) => { settings.sfx = x; audio.setSfxVolume(x); }, 'Sound effects volume')),
         row('music', 'Music', slider(settings.music, (x) => { settings.music = x; audio.setMusicVolume(x); }, 'Music volume')),
-        row('mic', 'Chet & Dottie talk out loud', check(settings.voice, (x) => { settings.voice = x; }, 'Announcer voices'), 'Uses your device\'s voice'),
+        row('mic', 'Voices', slider(settings.voices, (x) => { settings.voices = x; audio.setVoiceVolume(x); }, 'Voices volume'), 'The kids and the announcers'),
         row('plate', 'Always show the strike zone', check(settings.showZone, (x) => { settings.showZone = x; }, 'Always show the strike zone')),
         row('tap', 'Aim help', choices<'auto' | 'on' | 'off'>(settings.aimAssist, [['auto', 'By difficulty'], ['on', 'On'], ['off', 'Off']], (v) => { settings.aimAssist = v; saveSettings(); this.settingsScreen(); })),
+        row('tap', 'Buzz on big plays', check(settings.haptics, (x) => { settings.haptics = x; }, 'Buzz on big plays'), 'Phones that can vibrate'),
         row('fullscreen', 'Full screen on phones', check(settings.fullscreen, (x) => { settings.fullscreen = x; }, 'Full screen on phones')),
         row('brush', 'Graphics', choices<QualityName | 'auto'>(q, [['auto', 'Auto'], ['low', 'Fast'], ['medium', 'Balanced'], ['high', 'Beautiful']], (v) => { setQuality(v); location.reload(); }),
           `Changing this reloads the game. Right now: ${TIER_LABEL[this.world.tier]}${q === 'auto' ? ', picked for this device' : ''}.`),

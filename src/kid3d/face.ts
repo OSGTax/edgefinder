@@ -13,9 +13,10 @@ import type { BrowStyle, FaceRecipe } from './face-recipes';
 // both ways on the head, so circles stay circles once the patch is wrapped on.
 
 export const FACE_PATCH = { phi: (70 * Math.PI) / 180, thetaLo: (-60 * Math.PI) / 180, thetaHi: (40 * Math.PI) / 180 };
-export const EXPRESSIONS = ['neutral', 'happy', 'focus', 'surprised', 'sad', 'yell', 'smug', 'oops'] as const;
+// 'laugh' is the cartoon take: eyes squeezed shut into arcs (3D, see KidModel), mouth wide open
+export const EXPRESSIONS = ['neutral', 'happy', 'focus', 'surprised', 'sad', 'yell', 'smug', 'oops', 'laugh'] as const;
 export type Expression = (typeof EXPRESSIONS)[number];
-export const ATLAS_COLS = 4, ATLAS_ROWS = 2;
+export const ATLAS_COLS = 4, ATLAS_ROWS = 3;
 
 /** Texture coords (0..1, y up) of a point on the head at yaw/pitch angles (radians). */
 export function faceUV(phi: number, theta: number): [number, number] {
@@ -75,6 +76,7 @@ const BROW_POSE: Record<Expression, { lift: number; tilt: number; arch: number }
   yell: { lift: -1.2, tilt: 4.2, arch: -0.5 },
   smug: { lift: 0.3, tilt: 0.9, arch: 0.2 },
   oops: { lift: 2.6, tilt: -3.4, arch: 0.4 },
+  laugh: { lift: 2.4, tilt: -1.4, arch: 1.4 },
 };
 
 /** Brow designs: arch height, built-in tilt, width at the inner/outer end (deg), length, extra touches. */
@@ -106,7 +108,7 @@ function paintFace(ctx: Ctx, spec: FaceSpec, e: Expression) {
   ctx.lineJoin = 'round';
 
   // ── cheeks: soft rosy patches under the outer half of each eye
-  const blushK = (e === 'happy' || e === 'yell' || e === 'oops' ? 1.5 : 1) * (r.mouth === 'grin' && e === 'neutral' ? 1.25 : 1);
+  const blushK = (e === 'laugh' ? 1.9 : e === 'happy' || e === 'yell' || e === 'oops' ? 1.5 : 1) * (r.mouth === 'grin' && e === 'neutral' ? 1.25 : 1);
   const blushA = Math.min(0.6, (0.12 + 0.3 * r.cheeks) * blushK);
   for (const sx of [-1, 1]) {
     const cx = sx * (ex + ew * 0.55), cy = ey - eh - 6.5 + (e === 'happy' || r.mouth === 'grin' ? 1 : 0);
@@ -338,6 +340,7 @@ function paintMouth(ctx: Ctx, spec: FaceSpec, e: Expression, W: number, skin: st
   switch (e) {
     case 'neutral': rest(); break;
     case 'happy': open(W * 1.18, -2.2, 8.6, 2.6, { teeth: 2.2, tongue: 1, tucks: true }); break;
+    case 'laugh': open(W * 1.3, -2.8, 10.5, 3.2, { teeth: 2.4, tongue: 1.1, tucks: true }); break;
     case 'focus':
       // determined: lips pressed, pulled a little to one side
       smile(W * 0.45, -0.3, { tucks: true, lip: 0.45, liftR: 0.6, width: 1.45 });

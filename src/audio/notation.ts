@@ -37,6 +37,10 @@ export interface Song {
   /** Fraction of a step to delay off-beat 8ths by. */
   swing: number;
   loop: boolean;
+  /** One-shots only: hand back to the loop that was playing when this ends. */
+  then: boolean;
+  /** 0..1: how loosely the melodic parts are played (0 = on the grid). */
+  feel: number;
   length: number;
   parts: Part[];
 }
@@ -138,25 +142,71 @@ export function bassLine(
   return { len: step, evs };
 }
 
-/** Chord stabs voiced inside the octave F3..E4, struck wherever `rhythm` has an x (rhythm = one slot). */
-export function comp(chords: string, rhythm: string, len = 2): Seq {
+/** A chord voiced inside the octave starting at `low` (default F3). */
+function voice(c: Chord, low: number): number[] {
+  return c.intervals.map((iv) => low + ((c.pc + iv - (low % 12) + 24) % 12)).sort((a, b) => a - b);
+}
+
+/**
+ * Chord stabs voiced inside the octave from `low` (default F3..E4), struck
+ * wherever `rhythm` has an x (X = accent, o = ghost; rhythm = one slot).
+ */
+export function comp(chords: string, rhythm: string, len = 2, low = 53): Seq {
   const evs: Ev[] = [];
   let step = 0;
   for (const c of progression(chords)) {
-    const voicing = c.intervals.map((iv) => 53 + ((c.pc + iv - 5 + 24) % 12)).sort((a, b) => a - b);
+    const voicing = voice(c, low);
     for (let i = 0; i < rhythm.length; i++) {
-      if (rhythm[i] === 'x') evs.push({ step: step + i, midis: voicing, len, vel: 1 });
+      const vel = HIT[rhythm[i]] ?? 0;
+      if (vel > 0) evs.push({ step: step + i, midis: voicing, len, vel: rhythm[i] === 'x' ? 1 : vel });
     }
     step += rhythm.length;
   }
   return { len: step, evs };
 }
 
+/**
+ * Picked arpeggios: `pattern` is one slot long; digits pick chord tones from
+ * the bottom of the voicing (4+ wrap up an octave), '.' rests.
+ */
+export function arp(chords: string, pattern: string, len = 2, low = 60): Seq {
+  const evs: Ev[] = [];
+  let step = 0;
+  for (const c of progression(chords)) {
+    const v = voice(c, low);
+    for (let i = 0; i < pattern.length; i++) {
+      const d = pattern[i];
+      if (d === '.') continue;
+      const k = Number(d);
+      if (!Number.isInteger(k)) throw new Error(`audio: bad arp cell "${d}"`);
+      evs.push({ step: step + i, midis: [v[k % v.length] + 12 * Math.floor(k / v.length)], len, vel: 1 });
+    }
+    step += pattern.length;
+  }
+  return { len: step, evs };
+}
+
+/** Lay sequences end to end (sections of a tune). */
+export function chain(...seqs: Seq[]): Seq {
+  const evs: Ev[] = [];
+  let step = 0;
+  for (const s of seqs) {
+    for (const e of s.evs) evs.push({ ...e, step: e.step + step });
+    step += s.len;
+  }
+  return { len: step, evs };
+}
+
+/** n bars of silence. */
+export const rest = (bars: number): Seq => ({ len: bars * 16, evs: [] });
+
 export interface SongSpec {
   bpm: number;
   level?: number;
   swing?: number;
   loop: boolean;
+  then?: boolean;
+  feel?: number;
   parts: Array<[Inst, number, Seq]>;
 }
 
@@ -171,6 +221,8 @@ export function song(spec: SongSpec): Song {
     level: spec.level ?? 1,
     swing: spec.swing ?? 0,
     loop: spec.loop,
+    then: !spec.loop && !!spec.then,
+    feel: spec.feel ?? 0.5,
     length: Math.max(...parts.map((p) => p.len)),
     parts,
   };
