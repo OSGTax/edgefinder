@@ -233,6 +233,34 @@ export class Patch {
     return g;
   }
 
+  /** A delay line (echoes, the house slap-back). */
+  delay(seconds: number, max = 1): DelayNode {
+    const d = this.own(this.ctx.createDelay(max));
+    d.delayTime.value = seconds;
+    return d;
+  }
+
+  /** Play a baked buffer from t0 (optionally looping until t1). */
+  play(buf: AudioBuffer, t0: number, rate = 1, loop = false, t1?: number, offset = 0): AudioBufferSourceNode {
+    const s = this.own(this.ctx.createBufferSource());
+    s.buffer = buf;
+    s.loop = loop;
+    s.playbackRate.value = rate;
+    s.start(t0, offset);
+    this.track(s, t1 ?? (loop ? undefined : t0 + (buf.duration - offset) / rate + 0.01));
+    return s;
+  }
+
+  /** Oscillator with a custom harmonic recipe (see wave()). */
+  custom(real: readonly number[], imag: readonly number[], freq: number, t0: number, t1?: number): OscillatorNode {
+    const o = this.own(this.ctx.createOscillator());
+    o.setPeriodicWave(wave(this.ctx, real, imag));
+    o.frequency.value = freq;
+    o.start(t0);
+    this.track(o, t1);
+    return o;
+  }
+
   /** Pitched voice: oscillator → envelope → out. */
   tone(out: AudioNode, o: ToneOpts): OscillatorNode {
     const g = this.gain(0);
@@ -295,4 +323,26 @@ export class Patch {
     };
     if (t1 !== undefined) src.stop(t1);
   }
+}
+
+const waves = new WeakMap<BaseAudioContext, Map<string, PeriodicWave>>();
+/** A PeriodicWave from harmonic amplitudes, built once per context. */
+export function wave(ctx: BaseAudioContext, real: readonly number[], imag: readonly number[]): PeriodicWave {
+  let m = waves.get(ctx);
+  if (!m) waves.set(ctx, (m = new Map()));
+  const key = `${real.join(',')}|${imag.join(',')}`;
+  let w = m.get(key);
+  if (!w) {
+    w = ctx.createPeriodicWave(Float32Array.from(real), Float32Array.from(imag));
+    m.set(key, w);
+  }
+  return w;
+}
+
+/** Harmonic amplitudes 1..n falling off as 1/h^tilt (sine terms), for wave(). */
+export function harmonics(n: number, tilt: number, shape?: (h: number) => number): [number[], number[]] {
+  const real = new Array<number>(n + 1).fill(0);
+  const imag = new Array<number>(n + 1).fill(0);
+  for (let h = 1; h <= n; h++) imag[h] = (shape ? shape(h) : 1) / Math.pow(h, tilt);
+  return [real, imag];
 }

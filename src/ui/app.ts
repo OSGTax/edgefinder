@@ -79,6 +79,7 @@ class App {
     window.addEventListener('resize', () => this.resize());
     audio.setSfxVolume(settings.sfx);
     audio.setMusicVolume(settings.music);
+    audio.setVoiceVolume(settings.voices);
     const unlock = () => audio.unlock();
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
@@ -405,7 +406,7 @@ class App {
       panel([
         row('sound', 'Sound effects', slider(settings.sfx, (x) => { settings.sfx = x; audio.setSfxVolume(x); }, 'Sound effects volume')),
         row('music', 'Music', slider(settings.music, (x) => { settings.music = x; audio.setMusicVolume(x); }, 'Music volume')),
-        row('mic', 'Chet & Dottie talk out loud', check(settings.voice, (x) => { settings.voice = x; }, 'Announcer voices'), 'Uses your device\'s voice'),
+        row('mic', 'Voices', slider(settings.voices, (x) => { settings.voices = x; audio.setVoiceVolume(x); }, 'Voices volume'), 'The kids and the announcers'),
         row('plate', 'Always show the strike zone', check(settings.showZone, (x) => { settings.showZone = x; }, 'Always show the strike zone')),
         row('tap', 'Aim help', choices<'auto' | 'on' | 'off'>(settings.aimAssist, [['auto', 'By difficulty'], ['on', 'On'], ['off', 'Off']], (v) => { settings.aimAssist = v; saveSettings(); this.settingsScreen(); })),
         row('fullscreen', 'Full screen on phones', check(settings.fullscreen, (x) => { settings.fullscreen = x; }, 'Full screen on phones')),
