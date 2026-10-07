@@ -80,7 +80,7 @@ const game = song({
 // hands back to the game music.
 const inning = song({
   bpm: 120,
-  level: 0.6,
+  level: 0.85,
   feel: 1,
   loop: false,
   then: true,

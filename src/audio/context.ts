@@ -36,10 +36,10 @@ type AudioContextCtor = new (options?: AudioContextOptions) => AudioContext;
 const settings = { sfx: 0.8, music: 0.45, voice: 0.8, muted: false };
 /**
  * Output level after the compressor, offsetting its automatic make-up gain (~+5.6 dB here)
- * and leaving the loudest transients (a crushed bat crack at full volume) just under the
- * safety limiter.
+ * and leaving the loudest transients (a crushed bat crack at full volume) at or just under
+ * the safety limiter. Measured in Chromium at full volume: effects peak around 0.6.
  */
-const OUTPUT = 0.52;
+const OUTPUT = 0.62;
 let bus: Bus | null = null;
 const busListeners: Array<(b: Bus) => void> = [];
 const lostListeners: Array<(b: Bus) => void> = [];
