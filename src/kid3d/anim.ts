@@ -419,6 +419,11 @@ export class Animator {
     k.bones.chest.quaternion.multiply(_q.setFromEuler(_e.set(br, 0, 0)));
     k.group.updateMatrixWorld(true);
 
+    // feet: planted on the grass while walking and running (no skating)
+    const gaitMode = inp.mode === 'run' || inp.mode === 'trot' || inp.mode === 'walk' || inp.mode === 'homer' || inp.mode === 'mope';
+    this.footW = clamp(this.footW + (gaitMode ? dt : -dt) * 6, 0, 1);
+    if (this.footW > 0) this.plantFeet(v);
+
     // head + eyes track the look target
     if (inp.lookAt && this.lookMul > 0) this.look(inp.lookAt, inp.mode);
 
@@ -481,12 +486,52 @@ export class Animator {
     const G = this.persona.gait;
     // cadence rises with speed; the stride is whatever keeps the planted foot
     // moving backward exactly as fast as the ground goes by
-    const f = (run ? 1.45 + v * 0.045 : 1.3 + v * 0.05) * G.cadence;
+    let f = (run ? 1.45 + v * 0.045 : 1.3 + v * 0.05) * G.cadence;
+    // short cartoon legs take quick steps: the planted stretch must fit under the hips
+    const runK = smooth((v - 7) / 6);
+    const duty = lerp(0.6, 0.27, runK);
+    f = Math.max(f, (v * duty) / (this.kid.p.hipY * 0.95));
+    this.duty = duty;
     this.runPh += TAU * f * dt;
     if (this.runPh > TAU * 1000) this.runPh -= TAU * 1000;
     this.cadence = f;
   }
   private cadence = 2;
+  private duty = 0.6;
+  private footW = 0;
+
+  /**
+   * Foot IK for walking and running. Each foot follows an exact path in the
+   * kid's frame: on the ground it slides back at precisely the ground speed
+   * (so in the world it stays put), then swings forward through the air.
+   * Phase matches the FK cycle (left heel strike when the left thigh is most forward).
+   */
+  private plantFeet(v: number) {
+    const k = this.kid, p = k.p, s = p.s;
+    const f = this.cadence, D = this.duty;
+    const runK = smooth((v - 7) / 6);
+    const Ls = (v * D) / f; // ground covered while one foot is down
+    const lift = (0.22 + 0.45 * runK) * s * clamp(v / 6, 0.3, 1);
+    const legLen = (p.hipY - p.ankleY) * 0.99;
+    // drop the hips if the legs can't reach the ends of the stride
+    k.bones.hips.updateMatrixWorld(true);
+    const hipH = k.group.worldToLocal(k.bones.hips.getWorldPosition(_a)).y - (p.joints.hips.y - p.hipY) - p.ankleY;
+    const need = Math.sqrt(Math.max(0, legLen * legLen - (Ls / 2) ** 2));
+    if (hipH > need) { k.bones.hips.position.y -= (hipH - need) * this.footW; k.bones.hips.updateMatrixWorld(true); }
+    for (let side = 0; side < 2; side++) {
+      const L = side === 0;
+      let u = ((this.runPh - Math.PI / 2) / TAU + (L ? 0 : 0.5)) % 1;
+      if (u < 0) u += 1;
+      let z: number, y: number;
+      if (u < D) { z = Ls / 2 - (u / D) * Ls; y = p.ankleY; }
+      else { const w = (u - D) / (1 - D); z = -Ls / 2 + smooth(w) * Ls; y = p.ankleY + lift * Math.sin(Math.PI * w); }
+      const x = (L ? 1 : -1) * p.hipX;
+      k.group.localToWorld(_b.set(x, y, z));
+      k.group.localToWorld(_pole.set(x * 1.2, p.kneeY, z + 3));
+      const th = L ? k.bones.thighL : k.bones.thighR, sh = L ? k.bones.shinL : k.bones.shinR, ft = L ? k.bones.footL : k.bones.footR;
+      twoBoneIK(th, sh, ft, _b, _pole, this.footW);
+    }
+  }
 
   /** Run / trot / walk, matched to ground speed v (ft/s). */
   private gait(o: Pose, v: number, easy: boolean) {
