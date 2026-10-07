@@ -1,6 +1,6 @@
 import {
-  BufferAttribute, CanvasTexture, Color, DynamicDrawUsage, InstancedMesh, LinearFilter, Matrix4, Mesh, MeshLambertMaterial, MeshStandardMaterial,
-  NoColorSpace, Object3D, PlaneGeometry, BufferGeometry, Vector2, type IUniform,
+  BufferAttribute, CanvasTexture, InstancedBufferAttribute, Color, DynamicDrawUsage, InstancedMesh, LinearFilter, Mesh, MeshLambertMaterial, MeshStandardMaterial,
+  NoColorSpace, PlaneGeometry, BufferGeometry, Vector2, type IUniform,
 } from 'three';
 import { pointInPoly } from '../engine/math';
 import type { Field } from '../sim/field';
@@ -38,9 +38,15 @@ export class Ground {
   grass: InstancedMesh | null = null;
 
   constructor(readonly field: Field, readonly q: Quality, readonly o: GroundOptions = {}) {
+    let t = performance.now();
+    const lap = (l: string) => { if (import.meta.env?.DEV) console.debug(`[stadium] ground.${l} ${Math.round(performance.now() - t)} ms`); t = performance.now(); };
     this.splat = this.paintSplat();
+    lap('splat');
     this.mesh = this.buildMesh();
+    lap('mesh');
     if (q.grassBlades > 0) this.grass = this.buildBlades(q.grassBlades);
+    lap('blades');
+    this.splatData = null; // only needed to place the blades (up to 16 MB)
   }
 
   // ─────────────────────────────────────────────────────── splat map
@@ -154,7 +160,8 @@ export class Ground {
     const [qx, qy] = this.toPx(x, y, size);
     const ix = Math.max(0, Math.min(size - 1, Math.floor(qx)));
     const iy = Math.max(0, Math.min(size - 1, Math.floor(qy)));
-    const d = this.splatData!;
+    const d = this.splatData;
+    if (!d) return [0, 0, 0.5, 1];
     const i = (iy * size + ix) * 4;
     return [d[i] / 255, d[i + 1] / 255, d[i + 2] / 255, d[i + 3] / 255];
   }
@@ -181,7 +188,7 @@ export class Ground {
     splatTex.flipY = true;
     splatTex.minFilter = LinearFilter;
     splatTex.generateMipmaps = false;
-    const mat = new MeshStandardMaterial({ map: gt.map, normalMap: gt.normal, roughness: 0.93, metalness: 0, normalScale: new Vector2(0.8, 0.8) });
+    const mat = new MeshStandardMaterial({ map: gt.map, normalMap: gt.normal, roughness: 0.93, metalness: 0, normalScale: new Vector2(0.35, 0.35) });
     Object.assign(this.uniforms, {
       uSplat: { value: splatTex },
       uSplatRect: { value: new Vector2(SPLAT.minX, SPLAT.minY) },
@@ -210,12 +217,21 @@ vec4 gSplat;`)
 gSplat = splatAt();
 if (gSplat.a < 0.5) discard;
 vec4 grassC = texture2D(map, vMapUv);
+// cartoon lawn: mostly one clean saturated green, the painted texture only as a soft hint
+grassC.rgb = mix(vec3(0.20, 0.42, 0.11), grassC.rgb, 0.35);
 // large-scale color variation so the lawn never looks tiled
 float big = sin(vWPos.x * 0.031 + sin(vWPos.z * 0.023) * 2.0) * 0.5 + 0.5;
 grassC.rgb *= mix(0.9, 1.08, big);
-grassC.rgb *= mix(0.86, 1.14, gSplat.b);
+grassC.rgb *= mix(0.84, 1.16, gSplat.b);
+// sunny and a touch warm, with sun-dried straw patches out on the hills
+grassC.rgb *= vec3(1.03, 1.0, 0.88);
+float farA = smoothstep(140.0, 700.0, length(vWPos.xz + vec2(0.0, 60.0)));
+float dryN = sin(vWPos.x * 0.011 + sin(vWPos.z * 0.017) * 1.7) * sin(vWPos.z * 0.009 - vWPos.x * 0.004) * 0.5 + 0.5;
+float dry = farA * smoothstep(0.35, 0.8, dryN) * 0.55 + farA * clamp(vWPos.y / 90.0, 0.0, 0.3);
+grassC.rgb = mix(grassC.rgb, grassC.rgb * vec3(1.45, 1.25, 0.7) + vec3(0.03, 0.02, 0.0), dry);
 vec4 dirtC = texture2D(uDirt, vMapUv * 1.6);
 dirtC.rgb *= uDirtTint / vec3(0.485, 0.254, 0.102);
+dirtC.rgb = mix(uDirtTint * 1.05, dirtC.rgb, 0.4);
 float dirtAmt = smoothstep(0.08, 0.75, gSplat.r);
 vec4 baseC = mix(grassC, dirtC, dirtAmt);
 baseC.rgb = mix(baseC.rgb, vec3(0.93, 0.93, 0.9), smoothstep(0.25, 0.8, gSplat.g));
@@ -265,30 +281,34 @@ transformed.z += sway * position.y * position.y * 0.1;`);
     const mesh = new InstancedMesh(g, mat, count);
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     const rnd = mulberry(99);
-    const m = new Matrix4();
-    const o = new Object3D();
     const col = new Color();
     const fencePoly = this.field.fence.map((s) => s.a);
+    // write instance matrices straight into the buffer (rotation Y·X·Z tilt, then scale): no Object3D per blade
+    const arr = mesh.instanceMatrix.array as Float32Array;
+    const colors = new Float32Array(count * 3);
     let n = 0, guard = 0;
     while (n < count && guard++ < count * 8) {
       // denser near home plate where the batting camera looks
       const r = Math.pow(rnd(), 0.55) * 150;
       const a = (rnd() * 2 - 1) * Math.PI * 0.62;
       const x = Math.sin(a) * r, y = Math.cos(a) * r - 6;
-      if (!pointInPoly(x, y, fencePoly)) continue;
       const [dirt, chalk, , alpha] = this.sample(x, y);
       if (dirt > 0.12 || chalk > 0.2 || alpha < 0.5) continue;
-      o.position.set(x, 0, -y);
-      o.rotation.set((rnd() - 0.5) * 0.5, rnd() * Math.PI * 2, (rnd() - 0.5) * 0.5);
-      const s = 0.16 + rnd() * 0.22;
-      o.scale.set(0.8 + rnd() * 0.6, s, 1);
-      o.updateMatrix();
-      m.copy(o.matrix);
-      mesh.setMatrixAt(n, m);
-      col.setHSL(0.27 + rnd() * 0.04, 0.5 + rnd() * 0.15, 0.16 + rnd() * 0.1);
-      mesh.setColorAt(n, col);
+      if (!pointInPoly(x, y, fencePoly)) continue;
+      const rx = (rnd() - 0.5) * 0.5, ry = rnd() * Math.PI * 2, rz = (rnd() - 0.5) * 0.5;
+      const sy = 0.16 + rnd() * 0.22, sx = 0.8 + rnd() * 0.6;
+      // Euler XYZ rotation matrix (same as Object3D's default order)
+      const cx = Math.cos(rx), snx = Math.sin(rx), cy = Math.cos(ry), sny = Math.sin(ry), cz = Math.cos(rz), snz = Math.sin(rz);
+      const o = n * 16;
+      arr[o] = cy * cz * sx; arr[o + 1] = (cx * snz + snx * sny * cz) * sx; arr[o + 2] = (snx * snz - cx * sny * cz) * sx; arr[o + 3] = 0;
+      arr[o + 4] = -cy * snz * sy; arr[o + 5] = (cx * cz - snx * sny * snz) * sy; arr[o + 6] = (snx * cz + cx * sny * snz) * sy; arr[o + 7] = 0;
+      arr[o + 8] = sny; arr[o + 9] = -snx * cy; arr[o + 10] = cx * cy; arr[o + 11] = 0;
+      arr[o + 12] = x; arr[o + 13] = 0; arr[o + 14] = -y; arr[o + 15] = 1;
+      col.setHSL(0.24 + rnd() * 0.05, 0.48 + rnd() * 0.15, 0.17 + rnd() * 0.1);
+      colors[n * 3] = col.r; colors[n * 3 + 1] = col.g; colors[n * 3 + 2] = col.b;
       n++;
     }
+    mesh.instanceColor = new InstancedBufferAttribute(colors, 3);
     mesh.count = n;
     mesh.receiveShadow = true;
     mesh.castShadow = false;

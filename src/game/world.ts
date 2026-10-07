@@ -1,5 +1,5 @@
 import {
-  BufferGeometry, DoubleSide, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Mesh, MeshBasicMaterial,
+  BufferGeometry, DoubleSide, Frustum, Matrix4, Sphere, type Object3D, Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Mesh, MeshBasicMaterial,
   PerspectiveCamera, PlaneGeometry, RingGeometry, Scene, Vector3, type WebGLRenderer,
 } from 'three';
 import type { Kid, Team } from '../data/types';
@@ -7,7 +7,7 @@ import { kid as kidById } from '../data/kids';
 import { createRenderer } from '../gfx/renderer';
 import { mergeByMaterial } from '../gfx/build';
 import {
-  autoCeiling, deviceInfo, forcedTier, getQuality, gfxPrefs, onGfxPrefs, pixelRatioFor, qualitySetting, rememberTier, TIER_LABEL, TIER_ORDER,
+  autoCeiling, deviceInfo, forcedTier, forDevice, tierSpec, getQuality, gfxPrefs, onGfxPrefs, pixelRatioFor, qualitySetting, rememberTier, TIER_LABEL, TIER_ORDER,
   TIERS, type Quality, type QualityName,
 } from '../gfx/quality';
 import { TierGovernor } from '../gfx/governor';
@@ -300,8 +300,9 @@ export class World {
    */
   setTier(t: QualityName) {
     this.tier = t;
-    const spec = TIERS[t];
+    const spec = forDevice(tierSpec(t));
     this.stadium.env?.setShadowMapSize(spec.shadowMap);
+    this.stadium.setFarShadows(t !== 'low');
     const grass = this.stadium.ground?.grass;
     if (grass) {
       const built = grass.userData.built as number ?? grass.count;
@@ -327,11 +328,16 @@ export class World {
 
   /**
    * Real shadows for the kids nearest the camera (as many as the tier
-   * allows), soft contact shadows for the rest; far kids use the lite model.
+   * allows), soft contact shadows for the rest; far kids use the lite model;
+   * kids well outside the view aren't drawn at all (skinned meshes skip
+   * three's own culling).
    */
   private budgetKids() {
     const spec = TIERS[this.tier];
     const cam = this.camera.position;
+    this.camera.updateMatrixWorld();
+    this.projView.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.projView);
     const list = this.kidOrder;
     for (const a of list) a.dist = a.actor.model.group.position.distanceToSquared(cam);
     list.sort(byDist);
@@ -340,24 +346,48 @@ export class World {
     for (let i = 0; i < list.length; i++) {
       const k = list[i];
       const m = k.actor.model;
-      const visible = m.group.visible;
+      const sc = m.group.scale.x;
       const real = i < spec.kidShadows && k.dist < 160 * 160;
-      if (k.shadow !== real) {
-        k.shadow = real;
-        for (let j = 0; j < m.meshes.length; j++) m.meshes[j].castShadow = real && k.casts[j];
-      }
-      if (!real && visible) this.contact.add(m.group.position, 2.4 * m.p.s * m.group.scale.x);
       // the lite model (Faces helper: KidModel.setDetail), when it exists
       const detail = k.dist > lite2 ? 'lite' : 'full';
       if (detail !== k.detail) {
         k.detail = detail;
         (m as unknown as { setDetail?: (d: 'lite' | 'full') => void }).setDetail?.(detail);
+        k.shadow = null; // meshes may have changed: re-apply
       }
+      if (k.shadow !== real) {
+        k.shadow = real;
+        const apply = (o: Object3D) => {
+          if (!(o as Mesh).isMesh) return;
+          if (o.userData.cast0 === undefined) o.userData.cast0 = o.castShadow;
+          o.castShadow = real && o.userData.cast0;
+        };
+        m.group.traverse(apply);
+        k.actor.bat.traverse(apply);
+      }
+      // a shadow caster may sit just outside the view and still throw its shadow in
+      this.sphere.center.copy(m.group.position);
+      this.sphere.center.y += 2.5 * sc;
+      this.sphere.radius = (real ? 14 : 4.5) * sc;
+      const inView = this.frustum.intersectsSphere(this.sphere);
+      m.group.visible = inView;
+      if (!inView) this.hidden.push(m.group);
+      if (!real && inView) this.contact.add(m.group.position, 2.4 * m.p.s * sc);
     }
     this.contact.end();
   }
 
-  private kidOrder: { actor: Actor; dist: number; shadow: boolean; detail: string; casts: boolean[] }[] = [];
+  /** put culled kids back after the frame (the portrait studio borrows models between frames) */
+  private unhideKids() {
+    for (const g of this.hidden) g.visible = true;
+    this.hidden.length = 0;
+  }
+
+  private kidOrder: { actor: Actor; dist: number; shadow: boolean | null; detail: string }[] = [];
+  private frustum = new Frustum();
+  private projView = new Matrix4();
+  private sphere = new Sphere();
+  private hidden: Object3D[] = [];
 
   /** where a kid's throwing hand is, in three space */
   handOf(id: string): Vector3 | null {
@@ -631,11 +661,12 @@ export class World {
     this.lastRender = now;
     if (this.kidOrder.length !== this.actors.size + 1 && this.mendoza) {
       this.kidOrder = [...this.actors.values(), this.mendoza].map((actor) => ({
-        actor, dist: 0, shadow: true, detail: 'full', casts: actor.model.meshes.map((m) => m.castShadow),
+        actor, dist: 0, shadow: null, detail: 'full',
       }));
     }
     this.budgetKids();
     this.renderer.render(this.scene, this.camera);
+    this.unhideKids();
   }
 
   // ───────────────────────────────────────────────────── lost context
