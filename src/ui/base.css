@@ -165,3 +165,13 @@ img { -webkit-user-drag: none; }
 @keyframes roll { to { transform: rotate(360deg); } }
 .loading-msg { background: var(--tape); padding: 6px 14px; font-size: var(--t-sm); transform: rotate(-1deg); box-shadow: var(--shadow-soft); max-width: 90vw; text-align: center; }
 .loading-sub { color: var(--poster); font-size: var(--t-xs); text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4); text-align: center; max-width: 90vw; }
+
+/* a short note at the top of the screen */
+.toast {
+  position: fixed; left: 50%; top: max(10px, var(--safe-t)); transform: translateX(-50%); z-index: 60;
+  display: flex; align-items: center; gap: 8px; max-width: min(92vw, 560px);
+  padding: 8px 14px; background: var(--poster); color: var(--marker); border: 2.5px solid var(--marker); border-radius: var(--cut);
+  box-shadow: var(--shadow); font-size: var(--t-sm); line-height: 1.35; transition: opacity 0.4s;
+}
+.toast .ico { font-size: 20px; color: var(--marker-blue); }
+.toast.gone { opacity: 0; }

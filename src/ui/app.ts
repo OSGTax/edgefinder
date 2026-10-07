@@ -8,7 +8,7 @@ import { buildField } from '../sim/field';
 import { Match, type MatchConfig } from '../sim/match';
 import { PITCHES } from '../sim/pitching';
 import type { Difficulty } from '../sim/types';
-import { qualitySetting, setQuality, type QualityName } from '../gfx/quality';
+import { gfxPrefs, qualitySetting, setGfxPrefs, setQuality, softwareTip, TIER_LABEL, type QualityName } from '../gfx/quality';
 import { World } from '../game/world';
 import { nextPaint, runPaced, type Step } from '../engine/steps';
 import { Director } from '../game/director';
@@ -100,12 +100,23 @@ class App {
       this.resize();
       loading.classList.add('done');
       setTimeout(() => loading.remove(), 400);
+      // no graphics card: a one-line tip; a lost graphics context: a short note while it recovers
+      const tip = softwareTip();
+      if (tip) this.toast(tip, 12000);
+      this.world.onContextChange = (lost) => { if (lost) this.toast('The graphics took a quick nap. Waking them up…', 4000); };
       const hash = new URLSearchParams(location.hash.slice(1));
       if (import.meta.env.DEV && hash.has('play')) this.startGame(hash.get('play') === 'comets' ? TEAMS[1] : TEAMS[0], hash.has('cpu'));
       else if (import.meta.env.DEV && hash.has('menu')) this.devMenu(hash.get('menu')!, hash);
       else this.title();
       (window as unknown as { __menus: boolean }).__menus = true;
     }, 30));
+  }
+
+  /** A short note at the top of the screen that fades away (tap to dismiss). */
+  private toast(text: string, ms: number) {
+    const el = h('div', { class: 'toast', role: 'status', onclick: () => el.remove() }, icon('info'), h('span', null, text));
+    this.root.appendChild(el);
+    setTimeout(() => { el.classList.add('gone'); setTimeout(() => el.remove(), 450); }, ms);
   }
 
   private resize() {
@@ -399,7 +410,9 @@ class App {
         row('tap', 'Aim help', choices<'auto' | 'on' | 'off'>(settings.aimAssist, [['auto', 'By difficulty'], ['on', 'On'], ['off', 'Off']], (v) => { settings.aimAssist = v; saveSettings(); this.settingsScreen(); })),
         row('fullscreen', 'Full screen on phones', check(settings.fullscreen, (x) => { settings.fullscreen = x; }, 'Full screen on phones')),
         row('brush', 'Graphics', choices<QualityName | 'auto'>(q, [['auto', 'Auto'], ['low', 'Fast'], ['medium', 'Balanced'], ['high', 'Beautiful']], (v) => { setQuality(v); location.reload(); }),
-          `Changing this reloads the game. Right now: ${({ low: 'Fast', medium: 'Balanced', high: 'Beautiful' } as Record<string, string>)[this.world.q.name] ?? this.world.q.name}.`),
+          `Changing this reloads the game. Right now: ${TIER_LABEL[this.world.tier]}${q === 'auto' ? ', picked for this device' : ''}.`),
+        row('gauge', 'Battery saver', check(gfxPrefs().cap30, (x) => setGfxPrefs({ cap30: x }), 'Battery saver'), '30 frames a second, cooler phone'),
+        row('info', 'Speed readout', check(gfxPrefs().readout, (x) => setGfxPrefs({ readout: x }), 'Speed readout'), 'Frames a second and the graphics chip, in a corner'),
       ], { title: 'STUFF YOU CAN CHANGE', class: 'set-board' }),
     ), 'inner');
   }
