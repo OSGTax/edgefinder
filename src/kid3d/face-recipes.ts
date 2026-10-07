@@ -59,6 +59,8 @@ export interface FaceRecipe {
   braces?: boolean;
   /** a little beauty mark (Ines) */
   mole?: boolean;
+  /** extra brow height in face degrees (to clear big glasses) */
+  browLift?: number;
 }
 
 const BROWN = '#4a2c17', DARK = '#2a1a10', HAZEL = '#5b4a22', BLUE = '#2f5a86', GREEN = '#36643a', AMBER = '#6a4416', GREY = '#4b5a66';
@@ -106,7 +108,7 @@ export const FACE_RECIPES: Record<string, FaceRecipe> = {
 
   // ── grown-ups
   // Mr. Mendoza at the grill: crinkly sleepy-happy eyes, bushy brows, a big grin under the mustache.
-  mrMendoza: { eye: 'sleepy', eyeSize: 0.88, eyeGap: 1.05, iris: DARK, lashes: 0, brow: 'bushy', browThick: 1.5, nose: 'broad', mouth: 'toothy', mouthWidth: 1.15, ears: 1.1, freckles: 0, cheeks: 0.35 },
+  mrMendoza: { eye: 'sleepy', eyeSize: 0.88, eyeGap: 1.05, iris: DARK, lashes: 0, brow: 'bushy', browThick: 1.5, nose: 'broad', mouth: 'toothy', mouthWidth: 1.15, ears: 1.1, freckles: 0, cheeks: 0.35, browLift: 4 },
 };
 
 const FALLBACK: FaceRecipe = {

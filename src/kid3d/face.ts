@@ -63,7 +63,7 @@ type Pt = [number, number];
 const INK = '#3a2117';
 const MOUTH_IN = '#6a2622';
 const TONGUE = '#e46f78';
-const TEETH = '#fffaf1';
+const TEETH = '#fff4e2';
 
 /** Per-expression brow pose: lift (deg), tilt (+ = inner ends down, cross), extra arch. */
 const BROW_POSE: Record<Expression, { lift: number; tilt: number; arch: number }> = {
@@ -157,7 +157,7 @@ function paintFace(ctx: Ctx, spec: FaceSpec, e: Expression) {
       const count = r.lashes === 2 ? 3 : 1;
       for (let k = 0; k < count; k++) {
         const a = (0.1 + k * 0.12) * Math.PI;           // angle on the eye outline from the outer corner up
-        const ax = sx * (ex + Math.cos(a) * ew * 0.98), ay = ey + Math.sin(a) * eh * 0.98;
+        const ax = sx * (ex + Math.cos(a) * ew * 1.12), ay = ey + Math.sin(a) * eh * 1.1;
         const len = r.lashes === 2 ? 1.6 - k * 0.3 : 1.6;
         ctx.lineWidth = 0.65;
         ctx.beginPath(); ctx.moveTo(ax, ay);
@@ -173,7 +173,7 @@ function paintFace(ctx: Ctx, spec: FaceSpec, e: Expression) {
   for (const sx of [-1, 1]) {
     let lift = bp.lift + bs.lift, tilt = bp.tilt + bs.tilt, arch = Math.max(-0.5, bs.arch + bp.arch);
     if (e === 'smug') { if (sx === 1) { lift += 2.4; arch += 0.8; tilt -= 1.5; } else { lift -= 0.6; } }
-    const base = ey + eh + 3.6 + lift;
+    const base = ey + eh + 3.6 + lift + (r.browLift ?? 0);
     const half = ew * 1.05 * bs.len;
     const ix = sx * (ex - half * 0.92), ox = sx * (ex + half * 1.08);
     const iy = base - tilt * 0.65, oy = base + tilt * 0.35 - (r.brow === 'arched' ? 0.6 : 0);

@@ -22,11 +22,15 @@ export class PortraitStudio {
   constructor(private renderer: WebGLRenderer, env: Scene['environment']) {
     this.scene.environment = env;
     this.scene.environmentIntensity = 0.7;
-    const key = new DirectionalLight('#fff4e6', 2.6);
-    key.position.set(2.5, 4, 5);
-    const rim = new DirectionalLight('#cfe6ff', 1.6);
-    rim.position.set(-4, 3, -3);
-    this.scene.add(key, rim, new HemisphereLight('#dff0ff', '#6d8a4a', 0.8));
+    // a warm, soft studio: key light up and to the right, a gentle fill from the left so the
+    // far cheek never goes grey, a cool rim behind to lift the head off the background
+    const key = new DirectionalLight('#fff1e0', 2.0);
+    key.position.set(2.5, 3.5, 5);
+    const fill = new DirectionalLight('#ffe6d6', 0.7);
+    fill.position.set(-4, 1, 4);
+    const rim = new DirectionalLight('#d6ebff', 1.8);
+    rim.position.set(-3, 4, -4);
+    this.scene.add(key, fill, rim, new HemisphereLight('#eef6ff', '#a08c6a', 0.9));
   }
 
   /** Fill an <img> with a portrait (now if cached, otherwise in a frame or two). */
@@ -80,8 +84,12 @@ export class PortraitStudio {
     this.scene.add(g);
     g.updateMatrixWorld(true);
     const hc = headCentre(model.p);
-    const target = new Vector3(hc.x, hc.y - model.p.headR * 0.45, hc.z);
-    this.cam.position.set(target.x + 0.9, target.y + 0.35, target.z + 4.6);
+    // head and a bit of the shoulders: the face fills most of the frame
+    const sc = g.scale.x;
+    const R = model.p.headR * sc;
+    const target = new Vector3(hc.x, hc.y, hc.z).multiplyScalar(sc).setY(hc.y * sc - R * 0.22);
+    const dist = R * 6.4;
+    this.cam.position.set(target.x + dist * 0.18, target.y + dist * 0.06, target.z + dist);
     this.cam.lookAt(target);
     this.cam.aspect = 1;
     this.cam.updateProjectionMatrix();

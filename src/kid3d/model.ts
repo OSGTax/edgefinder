@@ -1,11 +1,11 @@
 import {
-  Bone, CanvasTexture, Color, DoubleSide, TorusGeometry, Group, SRGBColorSpace, Matrix4, MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, SphereGeometry,
+  Bone, CanvasTexture, Color, DoubleSide, Group, SphereGeometry, SRGBColorSpace, Matrix4, MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, 
   Vector2, Vector3, type BufferGeometry, type Material, type Skeleton, type Texture,
 } from 'three';
 import type { Kid, Team } from '../data/types';
 import { HAIR, SKIN } from '../data/palette';
 import { fabricNormal } from '../gfx/textures';
-import { alongMatrix, blended, limb, limbRings, loft, paint, paintFn, PartList, ramp, rigid, type Ring } from './geom';
+import { alongMatrix, blended, isLite, limb, limbRings, loft, paint, paintFn, PartList, ramp, rigid, sphere, torus, withDetail, type Ring } from './geom';
 import { B, HEAD_SHAPE, makeSkeleton, proportions, type BoneName, type Proportions } from './rig';
 import { ATLAS_COLS, ATLAS_ROWS, EXPRESSIONS, FACE_PATCH, paintFaceAtlas, type Expression } from './face';
 import { EYE_SHAPES, faceRecipe, type FaceRecipe } from './face-recipes';
@@ -44,7 +44,11 @@ export class KidModel {
   readonly bones: Record<BoneName, Bone>;
   readonly skeleton: Skeleton;
   readonly p: Proportions;
-  readonly meshes: SkinnedMesh[] = [];
+  /** the full-detail meshes (see setDetail for the lite set) */
+  readonly meshes: SkinnedMesh[];
+  private liteMeshes: SkinnedMesh[] | null = null;
+  private detailLevel: 'full' | 'lite' = 'full';
+  private mats: Record<keyof Lists, Material>;
   readonly faceMat: MeshStandardMaterial;
   /** attach points for held things (follow the hands) */
   readonly gripL = new Object3D();
@@ -64,15 +68,6 @@ export class KidModel {
     this.skeleton = skeleton;
     this.bones = Object.fromEntries(bones.map((b) => [b.name, b])) as Record<BoneName, Bone>;
     this.colors = { ...uniformColors(team), ...o.outfit?.colors };
-    const L: Lists = {
-      skin: new PartList(), cloth: new PartList(), jersey: new PartList(), hair: new PartList(),
-      eyes: new PartList(), face: new PartList(), shiny: new PartList(),
-    };
-    buildBody(L, this.p, kid, this.colors, this.recipe);
-    addHair(L, this.p, kid);
-    addHat(L, this.p, kid, team, this.colors);
-    addCostume(L, this.p, kid);
-
     const skinHex = SKIN[kid.look.skin] ?? SKIN[1];
     const skinMat = sharedMat(`kidSkin${skinHex}`, () => skinMaterial(skinHex));
     const hairMat = sharedMat(`kidHair${kid.look.hairColor}`, () => new MeshStandardMaterial({ color: HAIR[kid.look.hairColor] ?? HAIR[0], roughness: 0.5 }));
@@ -91,31 +86,10 @@ export class KidModel {
       map: faceTex, transparent: true, depthWrite: false, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
     });
     this.faceMat.name = `face-${kid.id}`;
+    this.mats = { skin: skinMat, cloth: clothMaterial(), jersey: jerseyMat, hair: hairMat, eyes: eyeMat, shiny: shinyMat, face: this.faceMat };
 
-    const add = (list: PartList, mat: Material, color: boolean, shadow = true, order = 0) => {
-      const g = list.merge(color);
-      if (!g) return;
-      const m = new SkinnedMesh(g, mat);
-      m.castShadow = shadow;
-      m.receiveShadow = true;
-      m.frustumCulled = false;
-      m.renderOrder = order;
-      this.meshes.push(m);
-    };
-    add(L.skin, skinMat, false);
-    add(L.cloth, clothMaterial(), true);
-    add(L.jersey, jerseyMat, false);
-    add(L.hair, hairMat, false);
-    // eyes don't take shadows: a cap brim or the lid must never black them out
-    add(L.eyes, eyeMat, false, false);
-    this.meshes[this.meshes.length - 1].receiveShadow = false;
-    add(L.shiny, shinyMat, true);
-    add(L.face, this.faceMat, false, false, 1);
     this.group.add(bones[0]);
-    for (const m of this.meshes) {
-      this.group.add(m);
-      m.bind(skeleton, new Matrix4());
-    }
+    this.meshes = this.buildMeshes(FULL);
     // grips: palm centres, holding things along the hand's local axes
     const hl = this.p.joints.handL, hr = this.p.joints.handR;
     this.gripL.position.set(0.02, -0.13 * this.p.s, 0.03);
@@ -154,8 +128,67 @@ export class KidModel {
     this.bones.lidR.rotation.set(a, 0, 0);
   }
 
+  /**
+   * Switch between the full model and a lite one with about a third of the triangles (same
+   * skeleton, materials and face; it looks the same from 60+ ft). The lite meshes are built
+   * the first time they're asked for — call setDetail('lite') during loading to pay for it early.
+   */
+  setDetail(d: 'full' | 'lite') {
+    if (d === this.detailLevel) return;
+    if (d === 'lite' && !this.liteMeshes) this.liteMeshes = this.buildMeshes(LITE);
+    this.detailLevel = d;
+    for (const m of this.meshes) m.visible = d === 'full';
+    for (const m of this.liteMeshes ?? []) m.visible = d === 'lite';
+  }
+
+  get detail() { return this.detailLevel; }
+
+  /** The meshes currently drawn (full or lite). */
+  get activeMeshes(): readonly SkinnedMesh[] { return this.detailLevel === 'lite' ? this.liteMeshes! : this.meshes; }
+
+  /** Build every part at a detail level and bind it to the shared skeleton. */
+  private buildMeshes(detail: number): SkinnedMesh[] {
+    const kid = this.kid;
+    const L: Lists = {
+      skin: new PartList(), cloth: new PartList(), jersey: new PartList(), hair: new PartList(),
+      eyes: new PartList(), face: new PartList(), shiny: new PartList(),
+    };
+    withDetail(detail, () => {
+      buildBody(L, this.p, kid, this.colors, this.recipe);
+      addHair(L, this.p, kid);
+      addHat(L, this.p, kid, this.team, this.colors);
+      addCostume(L, this.p, kid);
+    });
+    const out: SkinnedMesh[] = [];
+    const add = (key: keyof Lists, color: boolean, shadow = true, order = 0) => {
+      const g = L[key].merge(color);
+      if (!g) return;
+      const m = new SkinnedMesh(g, this.mats[key]);
+      m.castShadow = shadow;
+      m.receiveShadow = true;
+      m.frustumCulled = false;
+      m.renderOrder = order;
+      out.push(m);
+      return m;
+    };
+    add('skin', false);
+    add('cloth', true);
+    add('jersey', false);
+    add('hair', false);
+    // eyes don't take shadows: a cap brim or the lid must never black them out
+    const eyes = add('eyes', false, false);
+    if (eyes) eyes.receiveShadow = false;
+    add('shiny', true);
+    add('face', false, false, 1);
+    for (const m of out) {
+      this.group.add(m);
+      m.bind(this.skeleton, new Matrix4());
+    }
+    return out;
+  }
+
   dispose() {
-    for (const m of this.meshes) m.geometry.dispose();
+    for (const m of [...this.meshes, ...(this.liteMeshes ?? [])]) m.geometry.dispose();
     (this.faceMat.map)?.dispose();
     this.faceMat.dispose();
   }
@@ -173,7 +206,9 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
   const shape = HEAD_SHAPE[look.head] ?? HEAD_SHAPE.round;
   const R = p.headR;
   const hc = headCentre(p);
-  const head = new SphereGeometry(R, 34, 24);
+  // the skull and face patch keep a fixed resolution on the full model (close-ups); lite halves it
+  const hd = isLite() ? 0.55 : 1;
+  const head = new SphereGeometry(R, Math.round(34 * hd), Math.round(24 * hd));
   {
     const pos = head.attributes.position;
     const v = new Vector3();
@@ -185,7 +220,7 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
   }
   L.skin.add(rigid(head, B.head), new Matrix4().makeTranslation(hc.x, hc.y, hc.z));
   for (const sx of [-1, 1]) {
-    const ear = new SphereGeometry(R * 0.2 * fr.ears, 14, 10);
+    const ear = sphere(R * 0.2 * fr.ears, 14, 10);
     ear.scale(0.5, 1, 0.78);
     // a little inner fold so ears read as ears
     const pos = ear.attributes.position;
@@ -195,7 +230,7 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
   }
   {
     const n = NOSES[fr.nose];
-    const nose = new SphereGeometry(R * n.r, 16, 12);
+    const nose = sphere(R * n.r, 16, 12);
     nose.scale(n.sx, n.sy, n.sz);
     if (n.tilt) nose.rotateX(n.tilt);
     const ny = R * NOSE_Y;
@@ -210,7 +245,7 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
     const e = j[side === 'L' ? 'eyeL' : 'eyeR'];
     // the sphere's pole looks forward, so the iris and pupil are perfectly round bands of the texture;
     // height == depth so the lid (which rotates about x) hugs the eyeball whatever its angle
-    const eye = new SphereGeometry(p.eyeR, 24, 16);
+    const eye = sphere(p.eyeR, 24, 16);
     eye.rotateX(Math.PI / 2);
     eye.scale(es.w, es.h, es.h);
     // almond eyes lift a touch at the outer corner
@@ -222,15 +257,15 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
     L.eyes.add(rigid(eye, bi), new Matrix4().makeTranslation(e.x, e.y, e.z));
     // upper lid: a skin-coloured shell just outside the eyeball; the lid bone rotates it closed
     const lidR = p.eyeR * 1.08, lidT = Math.PI * 0.5;
-    const lid = new SphereGeometry(lidR, 18, 7, 0, Math.PI * 2, 0, lidT);
+    const lid = sphere(lidR, 18, 7, 0, Math.PI * 2, 0, lidT);
     lid.scale(es.w * 1.04, es.h, es.h);
     const lidBone = side === 'L' ? B.lidL : B.lidR;
     L.skin.add(rigid(lid, lidBone), new Matrix4().makeTranslation(e.x, e.y, e.z));
     // lash line on the lid's front edge: hidden in the head while the eye is open, a soft dark
-    // line when it blinks
-    {
+    // line when it blinks (too small to see on the lite model)
+    if (!isLite()) {
       const arc = Math.PI * 1.1;
-      const lash = new TorusGeometry(1, 0.05, 4, 14, arc);
+      const lash = torus(1, 0.05, 4, 14, arc);
       lash.rotateZ(Math.PI * 1.5 - arc / 2);
       lash.rotateX(-Math.PI / 2);
       lash.scale(lidR * es.w * 1.04, lidR * 0.5, lidR * es.h);
@@ -241,7 +276,7 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
   // ── face decal: a thin patch over the front of the head for brows, mouth, cheeks
   {
     const segU = 28, segV = 20;
-    const patch = new SphereGeometry(R * 1.006, segU, segV, Math.PI / 2 - FACE_PATCH.phi, FACE_PATCH.phi * 2, Math.PI / 2 - FACE_PATCH.thetaHi, FACE_PATCH.thetaHi - FACE_PATCH.thetaLo);
+    const patch = new SphereGeometry(R * 1.006, Math.round(segU * hd), Math.round(segV * hd), Math.PI / 2 - FACE_PATCH.phi, FACE_PATCH.phi * 2, Math.PI / 2 - FACE_PATCH.thetaHi, FACE_PATCH.thetaHi - FACE_PATCH.thetaLo);
     // SphereGeometry measures phi from -x going around; rebuild UVs from angles so u runs viewer-left → right
     const pos = patch.attributes.position, uv = patch.attributes.uv;
     const v = new Vector3();
@@ -330,9 +365,11 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
   L.cloth.add(paint(rigid(pelvis, B.hips), pants));
   const belt = loft([{ y: p.waistY - 0.06 * s, rx: 0.462 * wf * s, rz: 0.325 * wf * s + bellyZ * 0.6, cz: bellyZ * 0.38 }, { y: p.waistY + 0.04 * s, rx: 0.462 * wf * s, rz: 0.327 * wf * s + bellyZ * 0.6, cz: bellyZ * 0.4 }], 32);
   L.cloth.add(paint(blended(belt, () => [B.hips, 0.5, B.spine, 0.5]), '#2b2420'));
-  const buckle = new SphereGeometry(0.06 * s, 10, 8);
+  if (!isLite()) {
+  const buckle = sphere(0.06 * s, 10, 8);
   buckle.scale(1.3, 1, 0.4);
   L.shiny.add(paint(rigid(buckle, B.hips), '#d8c27a'), new Matrix4().makeTranslation(0, p.waistY - 0.01 * s, 0.33 * wf * s + bellyZ));
+  }
   const rnd = seeded(kid.id);
   for (const side of [1, -1] as const) {
     const S = side === 1 ? 'L' : 'R';
@@ -352,10 +389,10 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
     paintFn(leg, (q) => (kneeStain && Math.abs(q.y - knee.y) < tl * 0.18 && q.z > lz(q.y) ? pants.clone().lerp(stain, 0.55) : pants));
     L.cloth.add(blended(leg, (q) => { const w = ramp(q.y, knee.y - 0.1 * s, knee.y + 0.1 * s); return [shinBone, 1 - w, thighBone, w]; }));
     // a knee filler (hidden inside the leg until the knee bends)
-    L.cloth.add(paint(rigid(new SphereGeometry(legR * 0.98, 12, 8), shinBone), pants), new Matrix4().makeTranslation(knee.x, knee.y, knee.z));
+    L.cloth.add(paint(rigid(sphere(legR * 0.98, 12, 8), shinBone), pants), new Matrix4().makeTranslation(knee.x, knee.y, knee.z));
     const sock = limb(sl * 0.98, p.legR * 0.86, p.legR * 0.7, 14);
     L.cloth.add(paint(rigid(sock, shinBone), col.socks), alongMatrix(knee, ank));
-    for (const [t0, t1] of [[0.6, 0.66], [0.7, 0.74]]) {
+    if (!isLite()) for (const [t0, t1] of [[0.6, 0.66], [0.7, 0.74]]) {
       const r0 = p.legR * (0.86 + (0.7 - 0.86) * t0) + 0.006, r1 = p.legR * (0.86 + (0.7 - 0.86) * t1) + 0.006;
       const band = loft([{ y: -sl * t1, rx: r1, rz: r1 }, { y: -sl * t0, rx: r0, rz: r0 }], 14);
       L.cloth.add(paint(rigid(band, shinBone), col.sockStripe), alongMatrix(knee, ank));
@@ -363,6 +400,11 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
     addShoe(L, p, ank, footBone, kid);
   }
 }
+
+/** Detail factor for the lite model (segment counts scale by it). */
+const LITE = 0.5;
+/** The full model is a touch under 1 so it fits the triangle budget; the head keeps its own resolution. */
+const FULL = 0.85;
 
 /** Heights on the head (fractions of the head radius, before shaping) of the nose and mouth. */
 const NOSE_Y = -0.27, MOUTH_Y = -0.48;
@@ -420,7 +462,7 @@ function faceSpec(p: Proportions, kid: Kid, fr: FaceRecipe) {
 /** Lid angles (radians about the eye's x axis): negative opens, LID_SHUT closes. */
 const LID_SHUT = 0.95;
 const LID_BY_EXPR: Record<Expression, number> = {
-  neutral: 0, happy: 0.16, focus: 0.3, surprised: -0.2, sad: 0.24, yell: 0.18, smug: 0.42, oops: -0.06,
+  neutral: 0, happy: 0.12, focus: 0.2, surprised: -0.2, sad: 0.2, yell: 0.14, smug: 0.26, oops: -0.06,
 };
 function lidOpening(fr: FaceRecipe, e: Expression): number {
   const open = EYE_SHAPES[fr.eye].lidOpen;
@@ -432,8 +474,10 @@ function lidOpening(fr: FaceRecipe, e: Expression): number {
  * dead-dark under a cap brim, with a soft rim of sky light around the edges.
  */
 function skinMaterial(hex: string): MeshStandardMaterial {
-  const m = new MeshStandardMaterial({ color: hex, roughness: 0.62 });
+  // a touch warmer than the palette swatch, most of all for the palest skin
   const base = new Color(hex);
+  base.lerp(new Color('#e39a76'), 0.06 + 0.1 * Math.max(0, base.getHSL({ h: 0, s: 0, l: 0 }).l - 0.75) / 0.2);
+  const m = new MeshStandardMaterial({ color: base, roughness: 0.62 });
   m.emissive = base.clone().multiply(new Color('#ff9d7a')).multiplyScalar(0.11);
   m.onBeforeCompile = (sh) => {
     sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
@@ -453,18 +497,20 @@ function addHand(L: Lists, p: Proportions, wr: Vector3, el: Vector3, side: 1 | -
   const dir = wr.clone().sub(el).normalize();
   const m = alongMatrix(wr, wr.clone().add(dir));
   // palm: a squashed ball, flat side toward the body; four short fingers curling in; thumb in front
-  const palm = new SphereGeometry(0.14 * s, 14, 10);
-  palm.scale(0.72, 1.0, 1.05);
+  // chunky cartoon hands: a round palm and short, thick fingers
+  const palm = sphere(0.155 * s, 14, 10);
+  palm.scale(0.74, 1.0, 1.08);
   L.skin.add(rigid(palm, bone), m.clone().multiply(new Matrix4().makeTranslation(0, -0.1 * s, 0.01)));
-  for (let k = 0; k < 4; k++) {
-    const fl = (0.13 - Math.abs(k - 1.2) * 0.012) * s;
-    const finger = loft(limbRings(fl, 0.036 * s, 0.032 * s, 2), 7);
+  // (the lite model wears mittens: palm and thumb only)
+  if (!isLite()) for (let k = 0; k < 4; k++) {
+    const fl = (0.115 - Math.abs(k - 1.2) * 0.012) * s;
+    const finger = loft(limbRings(fl, 0.046 * s, 0.041 * s, 2), 7);
     L.skin.add(rigid(finger, bone), m.clone()
       .multiply(new Matrix4().makeTranslation(0, -0.2 * s, (0.075 - k * 0.048) * s))
       .multiply(new Matrix4().makeRotationZ(-side * 0.5))
       .multiply(new Matrix4().makeRotationX((k - 1.5) * 0.06)));
   }
-  const thumb = limb(0.11 * s, 0.05 * s, 0.042 * s, 8);
+  const thumb = limb(0.1 * s, 0.056 * s, 0.048 * s, 8);
   L.skin.add(rigid(thumb, bone), m.clone().multiply(new Matrix4().makeTranslation(side * -0.03 * s, -0.08 * s, 0.09 * s)).multiply(new Matrix4().makeRotationX(0.9)).multiply(new Matrix4().makeRotationZ(side * 0.4)));
 }
 
@@ -476,7 +522,7 @@ function addShoe(L: Lists, p: Proportions, ank: Vector3, bone: number, kid: Kid)
   // a sneaker: flat sole, rounded toe box lower than the heel, a little wider at the toes
   const FLAT = -0.3;
   const top = (z: number) => (z > 0.05 ? 1 - (z - 0.05) * 0.95 : 1);
-  const shoe = new SphereGeometry(0.5, 18, 10);
+  const shoe = sphere(0.5, 18, 10);
   const pos = shoe.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = Math.max(pos.getY(i), FLAT), z = pos.getZ(i);
@@ -490,10 +536,10 @@ function addShoe(L: Lists, p: Proportions, ank: Vector3, bone: number, kid: Kid)
   const at = new Vector3(ank.x, 0.012, ank.z + len * 0.22);
   L.cloth.add(rigid(shoe, bone), new Matrix4().makeTranslation(at.x, at.y, at.z));
   // laces across the top of the instep
-  for (let k = 0; k < 3; k++) {
+  if (!isLite()) for (let k = 0; k < 3; k++) {
     const zn = 0.02 + k * 0.08;
     const y = (Math.sqrt(0.25 - zn * zn) - FLAT) * (hgt / (0.5 - FLAT)) * top(zn) + 0.004;
-    const lace = limb(w * 0.42, 0.014 * s, 0.014 * s, 5);
+    const lace = loft([{ y: -w * 0.42, rx: 0.014 * s, rz: 0.014 * s }, { y: 0, rx: 0.014 * s, rz: 0.014 * s }], 4);
     L.cloth.add(paint(rigid(lace, bone), '#ffffff'), new Matrix4().makeTranslation(at.x - w * 0.21, at.y + y, at.z + zn * len).multiply(new Matrix4().makeRotationZ(Math.PI / 2)));
   }
 }

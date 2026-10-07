@@ -11,6 +11,8 @@ import { EXPRESSIONS } from '../kid3d/face';
 import { Animator, type Mode } from '../kid3d/anim';
 import { makeBat, makeGlove, makeBall } from '../kid3d/items';
 import { Clock, Vector3, type Mesh as MeshT, type Group as GroupT } from 'three';
+import { PortraitStudio } from '../game/portraits';
+import type { Expression } from '../kid3d/face';
 
 /** Dev-only: every kid in a lineup, for checking the character art. */
 export function devGallery(root: HTMLElement, opts: URLSearchParams) {
@@ -51,6 +53,8 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
       const gc = i % 6, gr = Math.floor(i / 6);
       m.group.position.set((gc - 2.5) * 2.4, 20 - gr * 3.3 - (m.p.joints.head.y + m.p.headR * 0.92), gr * 3);
     }
+    // &lite: the far-away detail level
+    if (opts.has('lite')) m.setDetail('lite');
     if (opts.has('back')) m.group.rotation.y = Math.PI;
     if (opts.has('yaw')) m.group.rotation.y = Number(opts.get('yaw'));
     if (expr) m.setExpression(expr as (typeof EXPRESSIONS)[number]);
@@ -107,6 +111,24 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
       anims.push({ a, mode, bat, glove, t0: Number(opts.get('t') ?? 0) });
     });
   }
+  // &portraits: every kid's menu portrait (152 px) and HUD portrait (112 px shown at 56), as the game makes them
+  let studio: PortraitStudio | null = null;
+  if (opts.has('portraits')) {
+    studio = new PortraitStudio(r, scene.environment);
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;display:flex;flex-wrap:wrap;gap:8px;padding:8px;background:#efe6d2;z-index:5;align-content:flex-start';
+    root.appendChild(wrap);
+    const pe = (opts.get('pexpr') ?? 'happy') as Expression;
+    for (const m of models) {
+      const team = TEAMS.find((t) => t.roster.includes(m.kid.id)) ?? TEAMS[1];
+      const big = document.createElement('img'), small = document.createElement('img');
+      big.width = big.height = 76; small.width = small.height = 28;
+      big.style.borderRadius = small.style.borderRadius = '8px';
+      studio.into(big, m, team, pe, 152);
+      studio.into(small, m, team, pe, 56);
+      wrap.append(big, small);
+    }
+  }
   const clock = new Clock();
   let T = 0;
   const loop = () => {
@@ -125,8 +147,9 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
         an.bat.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), an.a.batDir);
       }
     }
+    studio?.update();
     r.render(scene, cam);
-    (window as unknown as { __ready: boolean }).__ready = true;
+    (window as unknown as { __ready: boolean }).__ready = !studio || !!(window as unknown as { __shots?: boolean }).__shots || [...document.images].every((im) => im.src);
     requestAnimationFrame(loop);
   };
   loop();
