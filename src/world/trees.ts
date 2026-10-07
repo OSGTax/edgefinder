@@ -178,8 +178,14 @@ export function buildTrees(specs: TreeSpec[], q: Quality): Trees {
   return { group, leaves };
 }
 
+export interface FarTreeSpot {
+  x: number; z: number; s: number; kind?: 'round' | 'pine';
+  /** canopy hue (0..1) and lightness; random when left out */
+  hue?: number; light?: number;
+}
+
 /** Distant trees: lumpy vertex-coloured blobs merged into a single cheap mesh. */
-export function buildFarTrees(spots: { x: number; z: number; s: number; kind?: 'round' | 'pine' }[], seed = 1): Mesh {
+export function buildFarTrees(spots: FarTreeSpot[], seed = 1): Mesh {
   const rnd = mulberry(seed);
   const noise = new Noise2(seed + 3);
   const b = new Batch();
@@ -193,7 +199,7 @@ export function buildFarTrees(spots: { x: number; z: number; s: number; kind?: '
   unit.dispose();
   const col = new Color();
   for (const t of spots) {
-    const hue = 0.23 + rnd() * 0.07, light = 0.27 + rnd() * 0.1;
+    const hue = t.hue ?? 0.23 + rnd() * 0.07, light = t.light ?? 0.27 + rnd() * 0.1;
     const gy = terrainHeight(t.x, t.z) - 1;
     if (t.kind === 'pine') {
       const h = 40 * t.s;

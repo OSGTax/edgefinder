@@ -71,6 +71,7 @@ describe('device detection', () => {
   it('shortens GPU names for the readout', () => {
     expect(shortGpuName('ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504) Direct3D11 vs_5_0 ps_5_0, D3D11)')).toBe('NVIDIA GeForce RTX 3060');
     expect(shortGpuName('Apple GPU')).toBe('Apple GPU');
+    expect(shortGpuName('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)')).toBe('SwiftShader Device (Subzero)');
   });
 
   it('starts computers on Balanced and software renderers on Fast', () => {

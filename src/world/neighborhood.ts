@@ -7,7 +7,7 @@ import { mulberry } from '../gfx/noise';
 import { W } from '../gfx/units';
 import { addWindow, type HouseStyle } from './house';
 import { car, shed, swingSet, trampoline } from './props';
-import { buildFarTrees, type TreeSpec } from './trees';
+import { buildFarTrees, type FarTreeSpot, type TreeSpec } from './trees';
 
 // The neighbourhood around the Mendozas' yard: the houses next door, the
 // street out front with parked cars, telephone poles, a ring of trees and a
@@ -216,14 +216,33 @@ export function buildNeighborhood(): Neighborhood {
 
   // ── a ring of far trees on the hills (one cheap mesh)
   const rnd = mulberry(2024);
-  const spots: { x: number; z: number; s: number; kind?: 'round' | 'pine' }[] = [];
-  for (let i = 0; i < 260; i++) {
-    const a = rnd() * Math.PI * 2;
-    const r = 380 + Math.pow(rnd(), 0.7) * 900;
-    const x = Math.sin(a) * r, z = -Math.cos(a) * r - 60;
-    // keep the street corridor a bit clearer
-    if (Math.abs(z - 100) < 30 && r < 500) continue;
-    spots.push({ x, z, s: 0.9 + rnd() * 0.7, kind: rnd() > 0.78 ? 'pine' : 'round' });
+  const spots: FarTreeSpot[] = [];
+  // woods grow in groves and along old field edges, not sprinkled evenly: clumps of
+  // touching canopies with open meadow between, each grove its own shade of green
+  const groves = 26;
+  for (let g = 0; g < groves; g++) {
+    const a = (g / groves) * Math.PI * 2 + (rnd() - 0.5) * 0.35;
+    const r = 420 + Math.pow(rnd(), 0.8) * 760;
+    const cx = Math.sin(a) * r, cz = -Math.cos(a) * r - 60;
+    if (Math.abs(cz - 100) < 40 && r < 520) continue; // keep the street corridor clear
+    const pines = rnd() < 0.25;
+    const hue = pines ? 0.3 : 0.21 + rnd() * 0.09;
+    const light = 0.24 + rnd() * 0.1;
+    // a grove is an ellipse stretched along the hillside
+    const n = 5 + Math.floor(rnd() * 11), len = 50 + rnd() * 110, wid = 25 + rnd() * 30, rot = a + Math.PI / 2 + (rnd() - 0.5) * 0.6;
+    for (let i = 0; i < n; i++) {
+      const u = (rnd() * 2 - 1) * len, v = (rnd() * 2 - 1) * wid * Math.sqrt(1 - (u / len) ** 2);
+      spots.push({
+        x: cx + Math.cos(rot) * u - Math.sin(rot) * v, z: cz + Math.sin(rot) * u + Math.cos(rot) * v,
+        s: 0.85 + rnd() * 0.7 + (1 - Math.abs(u) / len) * 0.25, kind: pines || rnd() > 0.9 ? 'pine' : 'round',
+        hue: hue + (rnd() - 0.5) * 0.025, light: light + (rnd() - 0.5) * 0.05,
+      });
+    }
+  }
+  // a few lone field trees out in the meadows
+  for (let i = 0; i < 18; i++) {
+    const a = rnd() * Math.PI * 2, r = 400 + rnd() * 700;
+    spots.push({ x: Math.sin(a) * r, z: -Math.cos(a) * r - 60, s: 1.1 + rnd() * 0.5, kind: 'round' });
   }
   const far = buildFarTrees(spots);
   // sit the far trees on the hills
