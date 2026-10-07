@@ -793,7 +793,8 @@ export class GameScreen {
     const ruler = timing === null || Math.abs(timing) > 5 ? null : h('div', { class: 'sr-ruler' },
       h('span', { class: 'sr-lbl' }, 'early'), h('i', { class: 'sr-win' }),
       h('b', { class: 'sr-tick', style: `left:${50 + clamp(timing, -1.6, 1.6) * 28}%` }), h('span', { class: 'sr-lbl r' }, 'late'));
-    this.readEl.append(h('div', { class: 'sr-word' }, word), h('div', { class: 'sr-sub' }, sub));
+    const ink = tone === 'good' ? 'var(--marker-green)' : tone === 'bad' ? 'var(--tomato)' : 'var(--sunshine)';
+    this.readEl.append(h('div', { class: 'sr-word' }, lettering(word, { style: 'comic', size: 19, color: ink, seed: `read-${word}` })), h('div', { class: 'sr-sub' }, sub));
     if (ruler) this.readEl.append(ruler);
     this.readT = 1.9;
   }
@@ -1091,7 +1092,7 @@ export class GameScreen {
     clear(this.coachEl);
     this.coachEl.className = `coach at-${tip}`;
     this.coachEl.append(
-      h('div', { class: 'coach-title' }, t.title),
+      h('div', { class: 'coach-title' }, lettering(t.title, { style: 'comic', size: 18, color: 'var(--sky)', seed: `coach-${tip}` })),
       ...body.map((b) => h('p', null, b)),
       h('button', { class: 'btn ctl', onpointerdown: (e: Event) => { e.preventDefault(); e.stopPropagation(); this.dismissCoach(); } }, 'Got it'));
   }

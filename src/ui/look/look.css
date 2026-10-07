@@ -67,7 +67,7 @@
 .tcard-num { position: absolute; left: 3px; top: 2px; }
 .tcard-name { display: flex; justify-content: center; margin-top: 1px; }
 .tcard-name .lt { max-width: 100%; height: auto; max-height: 24px; }
-.tcard-front .typed { font-size: 10.5px; text-align: center; background: var(--poster); color: var(--marker); border: 2px solid var(--marker); border-radius: 4px; padding: 0 5px; align-self: center; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard-front .typed { font-size: 10.5px; line-height: 1.15; text-align: center; background: var(--poster); color: var(--marker); border: 2px solid var(--marker); border-radius: 4px; padding: 0 5px; align-self: center; max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .tcard-stats { display: flex; justify-content: space-around; gap: 2px; background: var(--poster); border: 2px solid var(--marker); border-radius: 6px; padding: 1px 0 2px; }
 .tcard-stat { display: flex; flex-direction: column; align-items: center; line-height: 1; }
 .tcard-stat b { font-size: 16px; font-variant-numeric: tabular-nums; }

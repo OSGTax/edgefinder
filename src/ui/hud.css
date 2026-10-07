@@ -226,3 +226,6 @@ img.portrait { display: block; object-fit: cover; }
   .cards { top: calc(var(--pad-t) + 84px); }
   .pause-panel, .final-panel { flex-direction: column; }
 }
+/* comic-lettered swing read and coach titles */
+.sr-word .lt { display: block; margin: 0 auto; max-width: 100%; height: auto; max-height: 30px; }
+.coach-title .lt { display: block; max-width: 100%; height: auto; max-height: 28px; }
