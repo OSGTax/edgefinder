@@ -47,7 +47,10 @@ export interface Proportions {
   footLen: number;
 }
 
-export function proportions(look: KidLook): Proportions {
+/** Per-kid eye placement from the face recipe (see face-recipes.ts). */
+export interface EyeFit { eyeSize?: number; eyeGap?: number }
+
+export function proportions(look: KidLook, fit: EyeFit = {}): Proportions {
   const H = kidHeightFt(look.height);
   // big cartoon heads: solve the body scale so the top of the head lands at H
   const s0 = (H - 1.42) / 3.45;
@@ -59,15 +62,17 @@ export function proportions(look: KidLook): Proportions {
   const ankleY = 0.24 * s, kneeY = 1.12 * s, hipY = 2.0 * s;
   const waistY = 2.36 * s, chestY = 2.86 * s, shoulderY = 3.2 * s, neckY = 3.33 * s;
   const headBase = neckY + 0.12 * s;
-  const shoulderX = 0.5 * wf + 0.06, hipX = 0.27 * wf;
+  const shoulderX = 0.47 * wf + 0.06, hipX = 0.27 * wf;
   const upperArm = 0.62 * s, foreArm = 0.56 * s;
-  const eyeR = 0.165 * hs;
+  // big friendly eyes, set a little below the middle of the head and fairly close together
+  const eyeR = 0.18 * hs * (fit.eyeSize ?? 1);
   const headC = headBase + headR * 0.92;
   // eyes sit on the actual head surface (whatever its shape), about half proud of it
   const [sx, sy, sz] = HEAD_SHAPE[look.head] ?? HEAD_SHAPE.round;
-  const ex = headR * 0.35 * Math.max(1, sx * 0.95), ey = headR * 0.05;
+  const ex = headR * 0.33 * Math.max(1, sx * 0.95) * (fit.eyeGap ?? 1) + (eyeR - 0.18 * hs) * 0.6, ey = -headR * 0.07;
   const surf = 0.04 + headR * sz * Math.sqrt(Math.max(0, 1 - (ex / (headR * sx)) ** 2 - (ey / (headR * sy)) ** 2));
-  const eyeZ = surf - eyeR * 0.42;
+  // sunk in so only the front of the eyeball shows (no bug eyes)
+  const eyeZ = surf - eyeR * 0.64;
   const j: Record<BoneName, Vector3> = {
     root: new Vector3(0, 0, 0),
     hips: new Vector3(0, hipY + 0.05 * s, 0),
