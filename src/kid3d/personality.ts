@@ -184,7 +184,7 @@ const PERSONAS: Record<string, Personality> = {
       [0, { armL: [-0.3, 0, 2.2], armR: [-0.3, 0, -2.2], foreL: [0, 0, 1.2], foreR: [0, 0, -1.2], spine: [0, 0, 0] }],
       [0.8, { armL: [-0.2, 0, 2.6], armR: [-0.2, 0, -2.6], foreL: [0, 0, 0.6], foreR: [0, 0, -0.6], spine: [-0.08, 0, 0], hipY: 0.05 }],
       [1.6, { armL: [-0.3, 0, 2.2], armR: [-0.3, 0, -2.2], foreL: [0, 0, 1.2], foreR: [0, 0, -1.2], spine: [0, 0, 0], hipY: 0 }],
-    ], { expr: 'happy' }),
+    ], { expr: 'laugh' }),
     strikeout: G('oh my back', 2.0, [
       [0, { spine: [0, 0, 0] }],
       [0.5, { spine: [0.35, 0, 0.1], head: [0.1, 0, 0], hipY: -0.1, thighL: [-0.2, 0, 0.05], shinL: [0.3, 0, 0] }, 'out'],
@@ -323,7 +323,7 @@ const PERSONAS: Record<string, Personality> = {
       [0.4, { armL: [0, 0, 0.5], armR: [0, 0, -0.5], ...HOP_DOWN }, 'in'],
       [0.6, { armL: [0, 0, 1.4], armR: [0, 0, -1.4], ...LEGS }],
       [0.8, { armL: [0, 0, 0.5], armR: [0, 0, -0.5], ...HOP_DOWN }],
-    ], { expr: 'yell' }),
+    ], { expr: 'laugh' }),
     strikeout: G('shrinking', 1.6, [
       [0, { spine: [0, 0, 0] }],
       [0.6, { ...SLUMP, armL: [-0.4, 0.4, 0.1], armR: [-0.4, -0.4, -0.1], foreL: [-1.2, -0.4, 0], foreR: [-1.2, 0.4, 0], hipY: -0.05 }, 'out'],
@@ -485,7 +485,7 @@ const PERSONAS: Record<string, Personality> = {
         [1.7, { armR: [-1.6, 0, -0.3], foreR: [-0.05, 0, 0], armL: [-0.3, 0, 0.3] }, 'out'],
         [2.2, { armR: [-1.6, 0, -0.3], foreR: [-0.05, 0, 0] }],
         [2.6, { hips: [0, 0, 0], spine: [0, 0, 0], head: [0, 0, 0], armR: [0.05, 0, -0.12], foreR: [-0.2, 0, 0], armL: [0.05, 0, 0.12], foreL: [-0.2, 0, 0] }],
-      ], { expr: 'yell', look: 0 }),
+      ], { expr: 'laugh', look: 0 }),
       G('thumbs to camera', 1.6, [
         [0, { armL: [0.05, 0, 0.12], armR: [0.05, 0, -0.12], foreL: [-0.2, 0, 0], foreR: [-0.2, 0, 0], head: [0, 0, 0] }],
         [0.35, { armL: [-0.6, -0.3, 0.3], armR: [-0.6, 0.3, -0.3], foreL: [-1.6, 0, 0], foreR: [-1.6, 0, 0], head: [-0.1, 0.4, 0.1], hips: [0, 0.4, 0] }, 'out'],
@@ -579,7 +579,7 @@ const PERSONAS: Record<string, Personality> = {
       [0.4, { foreL: [0, 0, 0.5], foreR: [0, 0, -0.5], ...HOP_DOWN }, 'in'],
       [0.6, { foreL: [0, 0, -0.3], foreR: [0, 0, 0.3], ...LEGS }],
       [0.8, { foreL: [0, 0, 0.5], foreR: [0, 0, -0.5], ...HOP_DOWN }],
-    ], { expr: 'yell' }),
+    ], { expr: 'laugh' }),
     strikeout: G('brave face', 2.0, [[0, { head: [0, 0, 0] }], [0.5, { head: [0.3, 0, 0], spine: [0.1, 0, 0] }], [1.2, { head: [-0.1, 0.2, 0.1], spine: [-0.05, 0, 0] }], [2.0, { head: [-0.1, 0.25, 0.12] }]],
       { prop: true, hands: [{ side: 'R', at: 'mouth', from: 1.0, off: [0, -0.05, 0.08], aim: 'cup' }], expr: 'oops', look: 0 }),
     catchJoy: G('thumbs up', 1.2, [[0, { armR: [0, 0, -0.1] }], [0.3, { armR: [-0.7, 0.3, -0.3], foreR: [-1.6, 0, 0], head: [-0.1, 0, 0.1] }, 'out'], [1.2, { armR: [-0.7, 0.3, -0.3], foreR: [-1.7, 0, 0] }]], { expr: 'happy' }),
@@ -603,7 +603,7 @@ const PERSONAS: Record<string, Personality> = {
       [0.3, { armR: [-0.7, 0.3, -0.3], foreR: [-1.7, 0, 0], armL: [-0.7, -0.3, 0.3], foreL: [-1.7, 0, 0], ...HOP_UP, hipY: 0.15 }, 'out'],
       [0.6, { ...LEGS }, 'in'],
       [1.6, { armR: [-0.7, 0.3, -0.3], foreR: [-1.6, 0, 0], armL: [-0.7, -0.3, 0.3], foreL: [-1.6, 0, 0] }],
-    ], { expr: 'happy' }),
+    ], { expr: 'laugh' }),
     strikeout: G('act of nature', 1.8, [
       [0, { armL: [0.05, 0, 0.12], armR: [0.05, 0, -0.12] }],
       [0.5, { armL: [-0.6, 0, 0.7], armR: [-0.6, 0, -0.7], foreL: [-0.9, -0.8, 0], foreR: [-0.9, 0.8, 0], head: [0.1, 0, 0.25], shoulderL: [0, 0, 0.2], shoulderR: [0, 0, -0.2] }, 'out'],
@@ -813,7 +813,7 @@ const PERSONAS: Record<string, Personality> = {
       [0.5, { armL: [-0.95, 0, 0.4], armR: [-0.95, 0, -0.4], head: [0.1, 0, 0] }],
       [0.75, { armL: [-0.95, 0, 0.2], armR: [-0.95, 0, -0.2], head: [0.05, 0, 0] }, 'in'],
       [1.0, { armL: [-0.95, 0, 0.4], armR: [-0.95, 0, -0.4], head: [0.1, 0, 0] }],
-    ], { expr: 'happy' }),
+    ], { expr: 'laugh' }),
     strikeout: G('move along', 1.8, [[0, { head: [0, 0, 0] }], [0.5, { head: [0.2, 0, 0], shoulderL: [0, 0, 0.15], shoulderR: [0, 0, -0.15] }, 'out'], [1.0, { head: [0.1, 0, 0], shoulderL: [0, 0, 0], shoulderR: [0, 0, 0] }], [1.8, { head: [0.1, 0.3, 0] }]],
       { hands: [{ side: 'B', at: 'hip', from: 0.8, off: [-0.1, -0.1, 0.15] }], expr: 'neutral', look: 0 }),
     catchJoy: G('thumbs up', 1.3, [[0, { armR: [0, 0, -0.1] }], [0.35, { armR: [-0.7, 0.3, -0.3], foreR: [-1.6, 0, 0], head: [0.15, 0, 0] }, 'out'], [1.3, { armR: [-0.7, 0.3, -0.3], foreR: [-1.7, 0, 0], head: [0, 0, 0] }]], { expr: 'happy' }),

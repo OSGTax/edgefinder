@@ -24,6 +24,7 @@ import { Animator, type AnimInput, type Mode } from '../kid3d/anim';
 import { makeBall, makeBat, makeGlove, makeProp } from '../kid3d/items';
 import { Effects } from './fx';
 import { Emotes } from './emotes';
+import { audio } from '../audio';
 import type { Steps } from '../engine/steps';
 import { hawaiianShirt } from '../kid3d/outfits';
 import { GROWNUP_SCALE, MR_MENDOZA } from '../world/grownups';
@@ -855,7 +856,7 @@ export class World {
     if (play && m.phase === 'live') {
       for (const fl of play.fielders) {
         // a bobble: seeing stars
-        if (fl.anim === 'stumble' && fl.animT < 0.1) { const h = head(fl.kid.id); if (h) em.show('stars', h, 1.8); }
+        if (fl.anim === 'stumble' && fl.animT < 0.1) { const h = head(fl.kid.id); if (h && !em.has(h)) { em.show('stars', h, 1.8); audio.play('dizzy'); } }
       }
       // a high fly: "!" over the kid going to get it (once a play)
       if (this.bangPlay !== play && play.mode === 'batted' && play.ball.p.z > 14 && play.ball.v.z < 0) {
