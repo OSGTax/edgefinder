@@ -85,8 +85,9 @@ src/
             cycles, IK, look-at, blinks, squash & stretch), pose.ts (allocation-free keyframe
             tracks), personality.ts (per-kid stance, gait, idles, fidgets, celebrations), ik.ts
   game/     world.ts (World: stadium + 18 Actors + ball + overlays; sync(match) maps sim
-            state to kids, moments → bench reactions; budgetKids: shadows, culling, lite
-            models), director.ts (camera shots, phone framing), screen.ts (GameScreen: thumb
+            state to kids; detects moments (World.mo: HR, splash, out, K, run, game over) for
+            bench/fielder reactions; syncMendoza (grill, watching, the pool skimmer trip);
+            budgetKids: shadows, culling, lite models), director.ts (camera shots, phone framing), screen.ts (GameScreen: thumb
             controls, pitch meter, swing reads, coach, HUD from the look kit, events →
             pop-ups/fx/commentary), comic.ts (pop-up moments, words, no-repeat), emotes.ts
             (stars, sweat drops, "!" over heads), fx.ts (cartoon particles, ball trail),
