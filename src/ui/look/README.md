@@ -3,8 +3,8 @@
 Fun, comical and clean. Bold flat colour, a warm ink outline on everything
 (`--line`, 3 px), hard offset shadows, a little hand-drawn wobble, squash and
 stretch on whatever moves. The screen stays uncluttered: the game plus only what
-the player needs right now. The kids' world (pennants, trading cards, a
-chalkboard, a clipboard, Channel 4½) is drawn as cartoon objects. All of it is
+the player needs right now. The kids' world (pennants, trading cards,
+Channel 4½) is drawn as cartoon objects. All of it is
 drawn in code: no fonts, images or emoji.
 
 ```ts
