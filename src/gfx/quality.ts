@@ -77,6 +77,9 @@ export function shortGpuName(name: string): string {
   if (angle) {
     const parts = angle[1].split(', ');
     s = parts.length >= 2 ? parts[1] : parts[0];
+    // "Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x...))": the device is in the brackets
+    const api = /^(?:Vulkan|OpenGL|Metal)[^(]*\((.*)\)$/.exec(s);
+    if (api) s = api[1];
   }
   s = s.replace(/\s*\(0x[0-9a-f]+\)/gi, '').replace(/\s*(Direct3D|OpenGL|Vulkan|Metal)\S*.*$/i, '').replace(/\s+/g, ' ').trim();
   return s || name;
@@ -175,7 +178,17 @@ export function tierSpec(name: QualityName): Quality {
 
 export function getQuality(): Quality {
   const chosen = forcedTier() ?? qualitySetting();
-  return tierSpec(chosen === 'auto' ? autoTier() : chosen);
+  return forDevice(tierSpec(chosen === 'auto' ? autoTier() : chosen));
+}
+
+/**
+ * Phone budgets: plain PCF shadows (soft filtering is the priciest per-pixel
+ * cost on mobile GPUs), fewer grass blades on a smaller screen, and a shadow
+ * map no bigger than 2048 (64 MB of iOS Safari's tight GPU memory at 4096).
+ */
+export function forDevice(q: Quality, d = deviceInfo()): Quality {
+  if (!d.phone) return q;
+  return { ...q, softShadows: false, grassBlades: Math.round(q.grassBlades * 0.6), shadowMap: Math.min(2048, q.shadowMap), texSize: Math.min(512, q.texSize) };
 }
 
 /** Device pixel ratio to render at for a tier and canvas size (CSS px). */
