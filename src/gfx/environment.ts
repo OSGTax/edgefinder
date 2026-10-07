@@ -1,6 +1,6 @@
 import {
   Color, DirectionalLight, Fog, Group, HemisphereLight, MathUtils, Mesh, MeshBasicMaterial, Object3D, PMREMGenerator, PlaneGeometry,
-  Scene, Vector3, type WebGLRenderer,
+  Scene, ShaderMaterial, Vector3, type WebGLRenderer,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { cloudAtlas } from './textures';
@@ -32,17 +32,7 @@ export class Environment {
     this.sky = makeSky(this.sunDir, NOON_SKY);
     scene.add(this.sky);
 
-    // image-based lighting from the same sky over a green ground bounce
-    const pmrem = new PMREMGenerator(renderer);
-    const envScene = new Scene();
-    envScene.add(makeSky(this.sunDir, NOON_SKY, 500));
-    const groundBounce = new Mesh(new PlaneGeometry(2000, 2000), new MeshBasicMaterial({ color: 0x3f6a2a }));
-    groundBounce.rotation.x = -Math.PI / 2;
-    groundBounce.position.y = -2;
-    envScene.add(groundBounce);
-    scene.environment = pmrem.fromScene(envScene, 0.02).texture;
-    scene.environmentIntensity = 0.6;
-    pmrem.dispose();
+    this.buildEnvMap(scene, renderer);
 
     // the sun: soft shadows over the whole yard
     const s = this.sun;
@@ -62,6 +52,35 @@ export class Environment {
 
     this.addClouds();
     scene.add(this.clouds);
+  }
+
+  /** Image-based lighting from the same sky over a green ground bounce (again after a lost WebGL context). */
+  buildEnvMap(scene: Scene, renderer: WebGLRenderer) {
+    const pmrem = new PMREMGenerator(renderer);
+    const envScene = new Scene();
+    const sky = makeSky(this.sunDir, NOON_SKY, 500);
+    envScene.add(sky);
+    const groundBounce = new Mesh(new PlaneGeometry(2000, 2000), new MeshBasicMaterial({ color: 0x3f6a2a }));
+    groundBounce.rotation.x = -Math.PI / 2;
+    groundBounce.position.y = -2;
+    envScene.add(groundBounce);
+    scene.environment?.dispose();
+    scene.environment = pmrem.fromScene(envScene, 0.02).texture;
+    scene.environmentIntensity = 0.6;
+    pmrem.dispose();
+    sky.geometry.dispose();
+    (sky.material as ShaderMaterial).dispose();
+    groundBounce.geometry.dispose();
+    groundBounce.material.dispose();
+  }
+
+  /** Change the sun's shadow map resolution (the renderer reallocates it next frame). */
+  setShadowMapSize(n: number) {
+    const sh = this.sun.shadow;
+    if (sh.mapSize.x === n) return;
+    sh.mapSize.set(n, n);
+    sh.map?.dispose();
+    sh.map = null;
   }
 
   /** Sixteen cloud cards sharing one atlas, merged into a single mesh (one draw call). */

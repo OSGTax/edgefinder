@@ -6,7 +6,13 @@ import type { Kid, Team } from '../data/types';
 import { kid as kidById } from '../data/kids';
 import { createRenderer } from '../gfx/renderer';
 import { mergeByMaterial } from '../gfx/build';
-import { getQuality, type Quality } from '../gfx/quality';
+import {
+  autoCeiling, deviceInfo, forcedTier, getQuality, gfxPrefs, onGfxPrefs, pixelRatioFor, qualitySetting, rememberTier, TIER_LABEL, TIER_ORDER,
+  TIERS, type Quality, type QualityName,
+} from '../gfx/quality';
+import { TierGovernor } from '../gfx/governor';
+import { PerfReadout } from '../gfx/perf';
+import { ContactShadows } from '../gfx/contact';
 import { W, yawOf } from '../gfx/units';
 import { surfaceAt, type Field } from '../sim/field';
 import { WINDUP, type Match } from '../sim/match';
@@ -209,6 +215,7 @@ function makeSkimmer(): Group {
   return g;
 }
 const SKIM_LEN = 11;
+const byDist = (p: { dist: number }, q: { dist: number }) => p.dist - q.dist;
 
 export interface Overlay {
   aim: { x: number; z: number } | null;
@@ -239,6 +246,15 @@ export class World {
   private looseT = -1;
   private looseFrom = { pos: new Vector3(), dir: new Vector3() };
   private batWasUp: string | null = null;
+  /** the tier in use right now (`q` is the tier the yard was built at) */
+  tier: QualityName;
+  private gov: TierGovernor;
+  /** tiers chosen automatically (setting Auto, no `q=` in the URL) */
+  private autoTiers: boolean;
+  /** off when a graphics tier is forced in the URL (screenshots, testing) */
+  private adaptive = !forcedTier();
+  private readout: PerfReadout | null = null;
+  private contact: ContactShadows;
   /** Mr. Mendoza, at the grill */
   mendoza!: Actor;
   time = 0;
@@ -246,7 +262,15 @@ export class World {
   /** Cheap setup only: run `build()` (all at once or paced) before using the World. */
   constructor(canvas: HTMLCanvasElement, readonly field: Field, readonly teams: [Team, Team]) {
     this.q = getQuality();
+    this.tier = this.q.name;
+    const ti = TIER_ORDER.indexOf(this.q.name);
+    this.autoTiers = !forcedTier() && qualitySetting() === 'auto';
+    this.gov = new TierGovernor({ tier: ti, min: 0, max: this.autoTiers ? Math.max(ti, TIER_ORDER.indexOf(autoCeiling())) : ti, tiers: this.autoTiers });
     this.renderer = createRenderer(canvas, this.q);
+    this.watchContext(canvas);
+    this.contact = new ContactShadows(this.scene, 24);
+    this.applyPrefs();
+    onGfxPrefs(() => this.applyPrefs());
     this.camera = new PerspectiveCamera(45, 16 / 9, 0.3, 12000);
     this.stadium = new Stadium(this.scene, this.renderer, field, this.q);
     this.fx = new Effects(this.scene, this.q.pixelRatio);
@@ -293,6 +317,7 @@ export class World {
       outfit: { shirt: hawaiianShirt('#1f8a8a'), colors: { pants: '#c8b48a', trim: '#1f8a8a', jersey: '#1f8a8a', socks: '#f4f4f0', sockStripe: '#f4f4f0' } },
     });
     this.mendoza.model.group.scale.setScalar(GROWNUP_SCALE);
+    this.setTier(this.tier);
     if (import.meta.env?.DEV) {
       console.debug(`[world] kids ${Math.round(performance.now() - tk)} ms`);
       (window as unknown as { __world: World }).__world = this;
@@ -309,41 +334,108 @@ export class World {
   }
 
   private size = { w: 1280, h: 720 };
-  private frameAvg = 16;
-  private slowT = 0;
-  private fastT = 0;
-  private scale = 1;
 
   resize(w: number, h: number) {
     this.size = { w, h };
+    this.applyPixelRatio();
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
 
-  /**
-   * Adaptive resolution: if frames are slow for a while, render fewer
-   * pixels; if there's headroom, creep back up to the tier's sharpness.
-   */
-  /** off when a graphics tier is forced in the URL (screenshots, testing) */
-  private adaptive = typeof location === 'undefined' || !new URLSearchParams(location.hash.slice(1)).has('q');
-
-  adapt(realDt: number) {
-    if (!this.adaptive || realDt <= 0 || realDt > 0.25) return;
-    this.frameAvg += (realDt * 1000 - this.frameAvg) * 0.05;
-    if (this.frameAvg > 24) { this.slowT += realDt; this.fastT = 0; }
-    else if (this.frameAvg < 13) { this.fastT += realDt; this.slowT = 0; }
-    else { this.slowT = 0; this.fastT = 0; }
-    let next = this.scale;
-    if (this.slowT > 1.5 && this.scale > 0.55) next = Math.max(0.55, this.scale - 0.15);
-    if (this.fastT > 4 && this.scale < 1) next = Math.min(1, this.scale + 0.1);
-    if (next !== this.scale) {
-      this.scale = next;
-      this.slowT = this.fastT = 0;
-      this.renderer.setPixelRatio(Math.max(0.5, this.q.pixelRatio * this.scale));
+  private applyPixelRatio() {
+    const pr = pixelRatioFor(TIERS[this.tier], this.size.w, this.size.h, this.gov.scale);
+    if (Math.abs(pr - this.renderer.getPixelRatio()) > 0.01) {
+      this.renderer.setPixelRatio(pr);
       this.renderer.setSize(this.size.w, this.size.h, false);
     }
   }
+
+  /**
+   * Called once per rendered frame by the game and title loops. Frame times
+   * are measured between real renders (see `render`), so the argument is
+   * only kept for the callers.
+   */
+  adapt(_realDt?: number) {
+    const dt = this.lastFrameMs;
+    if (dt <= 0) return;
+    this.lastFrameMs = 0;
+    this.readout?.frame(dt, this.renderer, TIER_LABEL[this.tier], this.gov.scale);
+    if (!this.adaptive) return;
+    const act = this.gov.frame(dt);
+    if (!act) return;
+    if (import.meta.env?.DEV) console.debug(`[gfx] ${act} → ${this.gov.tier} @${this.gov.scale}`);
+    if (act === 'down' || act === 'up') {
+      this.setTier(TIER_ORDER[this.gov.tier]);
+      if (this.autoTiers) rememberTier(this.tier, this.gov.tooSlow === null ? null : TIER_ORDER[this.gov.tooSlow]);
+    } else this.applyPixelRatio();
+  }
+
+  /**
+   * Switch the live tier: resolution, shadow map, grass and kid budgets
+   * change now; textures, leaves and antialiasing are fixed when the yard is
+   * built, so a tier above the build tier shows fully on the next visit.
+   */
+  setTier(t: QualityName) {
+    this.tier = t;
+    const spec = TIERS[t];
+    this.stadium.env?.setShadowMapSize(spec.shadowMap);
+    const grass = this.stadium.ground?.grass;
+    if (grass) {
+      const built = grass.userData.built as number ?? grass.count;
+      grass.userData.built = built;
+      grass.count = Math.min(built, spec.grassBlades);
+      grass.visible = grass.count > 0;
+    }
+    this.applyPixelRatio();
+  }
+
+  /** frames per second the battery saver allows (0 = no cap) */
+  private fpsCap = 0;
+  private lastRender = 0;
+  private lastFrameMs = 0;
+
+  private applyPrefs() {
+    const p = gfxPrefs();
+    this.fpsCap = p.cap30 ? 30 : 0;
+    this.gov.setTarget(this.fpsCap ? 1000 / this.fpsCap : 1000 / 60);
+    if (p.readout && !this.readout && typeof document !== 'undefined') this.readout = new PerfReadout(deviceInfo().gpu);
+    if (this.readout) this.readout.visible = p.readout;
+  }
+
+  /**
+   * Real shadows for the kids nearest the camera (as many as the tier
+   * allows), soft contact shadows for the rest; far kids use the lite model.
+   */
+  private budgetKids() {
+    const spec = TIERS[this.tier];
+    const cam = this.camera.position;
+    const list = this.kidOrder;
+    for (const a of list) a.dist = a.actor.model.group.position.distanceToSquared(cam);
+    list.sort(byDist);
+    const lite2 = spec.liteDist * spec.liteDist;
+    this.contact.begin();
+    for (let i = 0; i < list.length; i++) {
+      const k = list[i];
+      const m = k.actor.model;
+      const visible = m.group.visible;
+      const real = i < spec.kidShadows && k.dist < 160 * 160;
+      if (k.shadow !== real) {
+        k.shadow = real;
+        for (let j = 0; j < m.meshes.length; j++) m.meshes[j].castShadow = real && k.casts[j];
+      }
+      if (!real && visible) this.contact.add(m.group.position, 2.4 * m.p.s * m.group.scale.x);
+      // the lite model (Faces helper: KidModel.setDetail), when it exists
+      const detail = k.dist > lite2 ? 'lite' : 'full';
+      if (detail !== k.detail) {
+        k.detail = detail;
+        (m as unknown as { setDetail?: (d: 'lite' | 'full') => void }).setDetail?.(detail);
+      }
+    }
+    this.contact.end();
+  }
+
+  private kidOrder: { actor: Actor; dist: number; shadow: boolean; detail: string; casts: boolean[] }[] = [];
 
   /** where a kid's throwing hand is, in three space */
   handOf(id: string): Vector3 | null {
@@ -839,11 +931,49 @@ export class World {
     });
   }
 
+  /** Draw a frame (skipped when the battery saver says it's too soon). */
   render() {
+    const now = performance.now();
+    if (this.fpsCap && this.lastRender && now - this.lastRender < 1000 / this.fpsCap - 3) return;
+    if (this.lost) return;
+    if (this.lastRender) this.lastFrameMs = now - this.lastRender;
+    this.lastRender = now;
+    if (this.kidOrder.length !== this.actors.size + 1 && this.mendoza) {
+      this.kidOrder = [...this.actors.values(), this.mendoza].map((actor) => ({
+        actor, dist: 0, shadow: true, detail: 'full', casts: actor.model.meshes.map((m) => m.castShadow),
+      }));
+    }
+    this.budgetKids();
     this.renderer.render(this.scene, this.camera);
   }
 
+  // ───────────────────────────────────────────────────── lost context
+
+  /** the browser took the GPU away (phone backgrounded, driver reset); nothing draws until it's back */
+  lost = false;
+
+  private watchContext(canvas: HTMLCanvasElement) {
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault(); // ask for it back
+      this.lost = true;
+      this.onContextChange?.(true);
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      // three re-uploads geometry and textures by itself; rebuild what was rendered on the GPU
+      this.stadium.env?.buildEnvMap(this.scene, this.renderer);
+      this.renderer.shadowMap.needsUpdate = true;
+      this.lost = false;
+      this.lastRender = 0;
+      this.gov.reset();
+      this.onContextChange?.(false);
+    });
+  }
+
+  /** the app shows a "graphics are waking up" note while the context is lost */
+  onContextChange: ((lost: boolean) => void) | null = null;
+
   dispose() {
+    this.readout?.dispose();
     this.renderer.dispose();
     for (const a of this.actors.values()) a.model.dispose();
   }

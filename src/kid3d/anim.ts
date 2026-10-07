@@ -240,10 +240,13 @@ export class Animator {
   private fidgetWait = 2 + Math.random() * 5;
   private lastFidget = -1;
   // hand goals this frame (from gestures and idle styles)
-  private goals: { g: HandGoal; w: number }[] = [];
+  private goalG: HandGoal[] = [];
+  private goalW = new Float32Array(12);
+  private goalN = 0;
   private lookMul = 1;
   private gestureExpr: Expression | null = null;
   readonly persona: Personality;
+  private sitFidgets: Gesture[];
   /** set by the game: an expression override; otherwise picked from the mode */
   expression: Expression | null = null;
   /** the persona prop should be out (the game shows it in the right hand) */
@@ -259,6 +262,7 @@ export class Animator {
   constructor(readonly kid: KidModel) {
     for (const n of BONES) this.cur[n] = new Quaternion();
     this.persona = personaOf(kid.kid.id);
+    this.sitFidgets = this.persona.fidgets.filter((g) => g.sit !== false);
     // dive and slide lie the kid on the ground: hip heights depend on their size
     const lay = -kid.p.hipY + 0.55, low = -kid.p.hipY + 0.55;
     this.dive = fullTrack([
@@ -301,7 +305,7 @@ export class Animator {
     this.batActive = false;
     this.propOut = false;
     this.lookMul = 1;
-    this.goals.length = 0;
+    this.goalN = 0;
     this.gestureExpr = null;
     if (inp.mode !== this.lastMode) { this.lastMode = inp.mode; this.modeAge = 0; } else this.modeAge += dt;
     const v = inp.speed ?? 0;
@@ -360,7 +364,7 @@ export class Animator {
           o[B.spine * 3] = -0.1; o[HY] += j * 0.08; expr = 'yell';
         } else if (inp.mode === 'sitGroan') {
           set(o, B.spine, 0.45, 0, 0); set(o, B.chest, 0.2, 0, 0); set(o, B.neck, 0.2, 0, 0); set(o, B.head, 0.35, 0, 0);
-          this.goals.push({ g: GOAL_FACE_L, w: 1 }, { g: GOAL_FACE_R, w: 1 });
+          this.goal(GOAL_FACE_L, 1); this.goal(GOAL_FACE_R, 1);
           this.lookMul = 0; expr = 'sad';
         } else this.fidgets(dt, o, P, true);
         rate = 6;
@@ -423,7 +427,7 @@ export class Animator {
       this.reachFor('L', cw, 0.8);
       this.reachFor('R', _c.copy(cw).add(_v.set(0, 0.03, 0)), 0.8);
     }
-    for (const g of this.goals) this.handTo(g.g, g.w);
+    for (let i = 0; i < this.goalN; i++) this.handTo(this.goalG[i], this.goalW[i]);
 
     this.blink(dt, this.expression ?? this.gestureExpr ?? expr);
     const want = this.expression ?? this.gestureExpr ?? expr;
@@ -498,14 +502,14 @@ export class Animator {
     add(o, B.thighL, 0, 0, (0.5 - w) * 0.07); add(o, B.thighR, 0, 0, (0.5 - w) * 0.07);
     // the unweighted knee relaxes
     add(o, B.shinL, w < 0.5 ? 0.16 : 0.02, 0, 0); add(o, B.shinR, w > 0.5 ? 0.16 : 0.02, 0, 0);
-    if (I.hands) for (const g of I.hands) this.goals.push({ g, w: 1 });
+    if (I.hands) for (const g of I.hands) this.goal(g, 1);
     if (I.prop) this.propOut = true;
     if (fidget && inp.mode === 'stand') this.fidgets(this.dt, o, P, false);
   }
   private dt = 1 / 60;
 
   private fidgets(dt: number, o: Pose, P: Personality, sitting: boolean) {
-    const list = sitting ? P.fidgets.filter((g) => g.sit !== false) : P.fidgets;
+    const list = sitting ? this.sitFidgets : P.fidgets;
     if (!list.length) return;
     if (!this.fidget) {
       this.fidgetWait -= dt;
@@ -537,7 +541,7 @@ export class Animator {
     } else blendPose(o, this.tmp, w, g.mask ?? g.track.touched);
     if (g.hands) for (const h of g.hands) {
       const hw = h.from !== undefined ? env(t, h.from, h.to ?? g.dur, 0.18) : 1;
-      if (hw * w > 0.01) this.goals.push({ g: h, w: hw * w * (h.w ?? 1) });
+      if (hw * w > 0.01) this.goal(h, hw * w * (h.w ?? 1));
     }
     if (g.prop && w > 0.2) this.propOut = true;
     if (g.look !== undefined) this.lookMul = lerp(this.lookMul, g.look, w);
@@ -643,17 +647,17 @@ export class Animator {
     switch (variant % 3) {
       case 0:
         set(o, B.spine, -0.15 * k, 0, 0); set(o, B.head, -0.3 * k, 0, 0); set(o, B.neck, -0.15 * k, 0, 0);
-        this.goals.push({ g: GOAL_TOP_L, w: k }, { g: GOAL_TOP_R, w: k });
+        this.goal(GOAL_TOP_L, k); this.goal(GOAL_TOP_R, k);
         break;
       case 1:
         set(o, B.spine, 0.2 * k, 0, 0); set(o, B.head, 0.35 * k, -0.2 * k, 0);
-        this.goals.push({ g: GOAL_BROW_R, w: k });
+        this.goal(GOAL_BROW_R, k);
         break;
       default:
         o[HY] = -0.25 * k;
         set(o, B.hips, 0.6 * k, 0, 0); set(o, B.spine, 0.35 * k, 0, 0); set(o, B.head, 0.1 * k, 0, 0);
         set(o, B.thighL, -0.55 * k, 0, 0.12); set(o, B.thighR, -0.55 * k, 0, -0.12); set(o, B.shinL, 0.7 * k, 0, 0); set(o, B.shinR, 0.7 * k, 0, 0);
-        this.goals.push({ g: GOAL_KNEE_L, w: k }, { g: GOAL_KNEE_R, w: k });
+        this.goal(GOAL_KNEE_L, k); this.goal(GOAL_KNEE_R, k);
     }
     this.lookMul = 0.3;
   }
@@ -665,7 +669,7 @@ export class Animator {
     copyPose(o, STAND);
     set(o, B.spine, 0.12, 0, 0); set(o, B.neck, 0.15, 0, 0); set(o, B.head, 0.2, 0, 0);
     set(o, B.armR, -0.9 - flip * 0.5, 0, -0.2); set(o, B.foreR, -0.8 + flip * 0.6, flip * 0.8, 0);
-    this.goals.push({ g: GOAL_HIP_L, w: 1 });
+    this.goal(GOAL_HIP_L, 1);
     // shifts his weight, hums along
     o[HX] = Math.sin(t * 0.6) * 0.06;
     add(o, B.hips, 0, 0, Math.sin(t * 0.6) * 0.05);
@@ -708,6 +712,11 @@ export class Animator {
   }
 
   // ───────────────────────────────────────────────── IK
+
+  private goal(g: HandGoal, w: number) {
+    if (this.goalN >= this.goalW.length) return;
+    this.goalG[this.goalN] = g; this.goalW[this.goalN++] = w;
+  }
 
   /** After update(): put a hand on a world point (e.g. the off hand on a pole). */
   holdWith(side: 'L' | 'R', target: Vector3) {
@@ -859,6 +868,7 @@ const _mask = new Uint8Array(BONES.length + 1);
 type AnchorPt = { bone: (k: KidModel) => Bone; x: number; y: number; z: number; pole: [number, number, number] };
 const headB = (k: KidModel) => k.bones.head, chestB = (k: KidModel) => k.bones.chest, hipsB = (k: KidModel) => k.bones.hips;
 const _anc: AnchorPt = { bone: headB, x: 0, y: 0, z: 0, pole: [0, 0, 0] };
+const pl = (a: AnchorPt, x: number, y: number, z: number) => { a.pole[0] = x; a.pole[1] = y; a.pole[2] = z; };
 
 /**
  * Where a wrist goes for each landmark, for the LEFT hand (x is mirrored for
@@ -870,20 +880,20 @@ function anchor(at: Anchor, p: KidModel['p'], hr: number, s: number): AnchorPt {
   const a = _anc;
   a.bone = headB;
   switch (at) {
-    case 'mouth': a.x = 0.12; a.y = c - hr * 0.85; a.z = hr * 1.25; a.pole = [1.2, -1.6, 0.2]; break;
-    case 'eyes': a.x = 0.2; a.y = c - hr * 0.45; a.z = hr * 1.35; a.pole = [1.3, -1.6, 0.4]; break;
-    case 'brow': a.x = 0.1; a.y = c + hr * 0.15; a.z = hr * 1.15; a.pole = [1.3, -1.0, 0.6]; break;
-    case 'ear': a.x = hr * 1.05; a.y = c - hr * 0.45; a.z = hr * 0.15; a.pole = [1.6, -1.2, -0.3]; break;
-    case 'cheek': a.x = hr * 0.55; a.y = c - hr * 0.9; a.z = hr * 0.95; a.pole = [1.0, -1.6, 0.6]; break;
-    case 'top': a.x = hr * 0.35; a.y = c + hr * 0.75; a.z = hr * 0.1; a.pole = [1.8, 0.4, -0.2]; break;
-    case 'chin': a.x = 0.05; a.y = c - hr * 1.15; a.z = hr * 0.9; a.pole = [1.0, -1.6, 0.3]; break;
-    case 'neck': a.x = 0.08; a.y = -hr * 0.35; a.z = hr * 0.7; a.pole = [1.2, -1.6, 0.2]; break;
-    case 'front': a.bone = chestB; a.x = 0.12; a.y = -0.05 * s; a.z = 0.75 * s; a.pole = [1.4, -1.4, -0.2]; break;
-    case 'belly': a.bone = chestB; a.x = 0.15; a.y = -0.5 * s; a.z = 0.55 * s + p.belly * 0.2; a.pole = [1.4, -1.0, -0.4]; break;
-    case 'hip': a.bone = hipsB; a.x = p.hipX + 0.2 * p.wf; a.y = 0.5 * s; a.z = 0.0; a.pole = [2.2, 0.3, -0.9]; break;
-    case 'back': a.bone = hipsB; a.x = 0.18; a.y = 0.25 * s; a.z = -0.45 * s - p.belly * 0.05; a.pole = [1.5, -0.3, -1.2]; break;
-    case 'knee': a.bone = hipsB; a.x = p.hipX + 0.08; a.y = -0.7 * s; a.z = 0.55 * s; a.pole = [1.5, 0.2, -0.4]; break;
-    case 'sky': a.bone = chestB; a.x = 0.45; a.y = 1.6 * s; a.z = 0.35; a.pole = [1.6, 0.2, -0.6]; break;
+    case 'mouth': a.x = 0.12; a.y = c - hr * 0.85; a.z = hr * 1.25; pl(a, 1.2, -1.6, 0.2); break;
+    case 'eyes': a.x = 0.2; a.y = c - hr * 0.45; a.z = hr * 1.35; pl(a, 1.3, -1.6, 0.4); break;
+    case 'brow': a.x = 0.1; a.y = c + hr * 0.15; a.z = hr * 1.15; pl(a, 1.3, -1.0, 0.6); break;
+    case 'ear': a.x = hr * 1.05; a.y = c - hr * 0.45; a.z = hr * 0.15; pl(a, 1.6, -1.2, -0.3); break;
+    case 'cheek': a.x = hr * 0.55; a.y = c - hr * 0.9; a.z = hr * 0.95; pl(a, 1.0, -1.6, 0.6); break;
+    case 'top': a.x = hr * 0.35; a.y = c + hr * 0.75; a.z = hr * 0.1; pl(a, 1.8, 0.4, -0.2); break;
+    case 'chin': a.x = 0.05; a.y = c - hr * 1.15; a.z = hr * 0.9; pl(a, 1.0, -1.6, 0.3); break;
+    case 'neck': a.x = 0.08; a.y = -hr * 0.35; a.z = hr * 0.7; pl(a, 1.2, -1.6, 0.2); break;
+    case 'front': a.bone = chestB; a.x = 0.12; a.y = -0.05 * s; a.z = 0.75 * s; pl(a, 1.4, -1.4, -0.2); break;
+    case 'belly': a.bone = chestB; a.x = 0.15; a.y = -0.5 * s; a.z = 0.55 * s + p.belly * 0.2; pl(a, 1.4, -1.0, -0.4); break;
+    case 'hip': a.bone = hipsB; a.x = p.hipX + 0.2 * p.wf; a.y = 0.5 * s; a.z = 0.0; pl(a, 2.2, 0.3, -0.9); break;
+    case 'back': a.bone = hipsB; a.x = 0.18; a.y = 0.25 * s; a.z = -0.45 * s - p.belly * 0.05; pl(a, 1.5, -0.3, -1.2); break;
+    case 'knee': a.bone = hipsB; a.x = p.hipX + 0.08; a.y = -0.7 * s; a.z = 0.55 * s; pl(a, 1.5, 0.2, -0.4); break;
+    case 'sky': a.bone = chestB; a.x = 0.45; a.y = 1.6 * s; a.z = 0.35; pl(a, 1.6, 0.2, -0.6); break;
   }
   return a;
 }
