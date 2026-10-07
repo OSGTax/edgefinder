@@ -13,6 +13,7 @@ import { saveSettings, settings } from '../ui/settings';
 import { World } from './world';
 import { Director } from './director';
 import { PortraitStudio } from './portraits';
+import { ComicPops } from './comic';
 import type { Expression } from '../kid3d/face';
 
 export interface GameOptions {
@@ -147,7 +148,6 @@ export class GameScreen {
   private coachEl!: HTMLElement;
   private radarEl!: HTMLElement;
   private controlsKey = '';
-  private cardsKey = '';
   private sbKey = '';
   private tickerQueue: Line[] = [];
   private tickerT = 0;
@@ -156,7 +156,10 @@ export class GameScreen {
   private readT = 0;
   private introT = 0;
   private bounceSfxT = 0;
-  private lastFoulBack = 0;
+  private outsThisPlay = 0;
+  private aimedByDrag = false;
+  private comic!: ComicPops;
+  private cardT = 0;
   private humanSide: -1 | 0 | 1;
   private wake: WakeLockSentinel | null = null;
 
@@ -504,6 +507,7 @@ export class GameScreen {
       this.aim.x = clamp(this.aim.x + (dx / ppf) * 1.1, -2.4, 2.4);
       this.aim.z = clamp(this.aim.z - (dy / ppf) * 1.1, 0, 5.5);
       this.lastAimInput = this.time;
+      if (!this.aimedByDrag && Math.hypot(dx, dy) > 2) { this.aimedByDrag = true; this.controlsKey = ''; }
     } else if (d.mode === 'pitch' && m.humanPitching && m.phase === 'prePitch' && !this.meter) {
       this.pitchAim.x = clamp(this.pitchAim.x + (dx / ppf) * 1.1, -1.6, 1.6);
       this.pitchAim.z = clamp(this.pitchAim.z - (dy / ppf) * 1.1, 0.4, 4.2);
@@ -616,9 +620,12 @@ export class GameScreen {
       switch (e.type) {
         case 'batterUp':
           this.runCmd = null;
+          this.outsThisPlay = 0;
+          this.showCard(m.batter, m.battingSide, 'Up to bat');
           break;
         case 'pitch':
-          if (e.special) { this.popup(SPECIAL_INFO[e.special].label.toUpperCase() + '!', '#c39bff', 1); audio.play('special'); }
+          this.outsThisPlay = 0;
+          if (e.special) { this.comic.show('crush', this.time, SPECIAL_INFO[e.special].label.toUpperCase() + '!'); audio.play('special'); }
           else audio.play('throw', { intensity: 0.4 });
           this.radar(`${PITCHES[e.pitch as PitchType]?.label ?? e.pitch} · ${Math.round(e.mph)} mph`);
           break;
@@ -634,6 +641,7 @@ export class GameScreen {
           this.hitStop = 0.035 + e.quality * 0.075;
           this.director.kick(0.3 + e.quality * 0.9);
           if (strong && e.ev > 62 && e.la > 14 && e.la < 40) { this.slowmo = 0.45; this.director.shake(0.5); }
+          if (e.quality > 0.85 && e.ev > 58) this.comic.show('crush', this.time);
           if (mine) this.buzz(strong ? [0, 35, 25, 20] : 18);
           if (mine && e.read) this.showRead(e.read, 'contact', e.quality, e.la);
           break;
@@ -646,72 +654,69 @@ export class GameScreen {
           if (mine) this.showRead(e.read, 'tip');
           break;
         case 'call':
-          if (e.call === 'ball') { this.popup('BALL', '#9fd3ff', 0.7); audio.play('mittPop', { intensity: 0.5 }); }
+          // routine calls get no pop-up: the count on the score bug flips instead
+          if (e.call === 'ball') audio.play('mittPop', { intensity: 0.5 });
           else if (e.call === 'strike' || e.call === 'swinging') {
-            if (m.strikes < 3) this.popup('STRIKE!', '#ffe14d', 0.9);
             audio.play('mittPop', { intensity: 0.8 });
             audio.play('strike');
             if (e.call === 'strike' && mine) this.showTake();
-          } else if (e.call === 'foul') {
-            if (this.time - this.lastFoulBack > 0.3) this.popup('FOUL!', '#ffffff', 0.8);
-            this.lastFoulBack = this.time;
           }
           break;
         case 'strikeout':
-          this.popup(e.looking ? 'STRIKE THREE!' : 'STRUCK OUT!', '#ffe14d', 1.1);
+          this.comic.show(e.looking ? 'kLooking' : 'kSwinging', this.time);
           audio.play(good(false) ? 'cheer' : 'aww');
           if (!mine && this.humanSide >= 0) this.buzz([0, 20, 40, 20]);
           break;
         case 'walk':
-          this.popup(e.hbp ? 'OUCH!' : 'BALL FOUR', '#9fd3ff', 0.9);
+          if (e.hbp) this.comic.show('hbp', this.time);
           break;
         case 'catch':
           audio.play('catch', { intensity: e.hard ? 1 : 0.6 });
-          if (e.fly && e.hard) this.popup('WHAT A GRAB!', '#7dff9a', 1);
+          if (e.fly && e.hard) this.comic.show('snag', this.time);
           if (e.hard) { fx.sparkle(this.world.gloveOf(e.fielder) ?? this.world.ball.position.clone()); this.director.kick(0.35); }
           if (this.humanSide >= 0 && !mine) this.buzz(e.hard ? 25 : 12);
           break;
         case 'bobble':
           audio.play('aww');
-          this.popup('BOBBLE!', '#ffb36b', 0.8);
+          this.comic.show('oops', this.time);
           break;
         case 'throw':
           audio.play('throw', { intensity: 0.7 });
           if (this.humanSide >= 0 && !mine) this.buzz(8);
           break;
         case 'out':
-          this.popup('OUT!', '#ff6b6b', 1);
           audio.play('out');
+          if (++this.outsThisPlay === 2) this.comic.show('doublePlay', this.time);
           this.director.kick(0.25);
           if (this.humanSide >= 0) this.buzz(mine ? 12 : 30);
           break;
         case 'run':
-          this.popup('RUN SCORES!', '#7dff9a', 0.85);
+          if (m.phase === 'live') this.comic.show('scores', this.time);
           audio.play('safe');
           if (mine) this.buzz([0, 20, 30, 20]);
           break;
         case 'hit': {
-          const label = e.bases >= 3 ? 'TRIPLE!' : e.bases === 2 ? 'DOUBLE!' : 'BASE HIT!';
-          this.popup(label, '#7dff9a', 1.05);
+          if (e.bases >= 2) this.comic.show(e.bases >= 3 ? 'triple' : 'double', this.time);
           audio.play(good(true) ? 'cheer' : 'aww');
           break;
         }
         case 'homeRun':
-          this.popup('HOME RUN!', '#ffe14d', 1.5);
+          this.comic.show('homer', this.time);
           audio.play('homeRun');
           audio.play(good(true) ? 'bigCheer' : 'aww');
           for (const d of [W(-47, 15, 3), W(47, 15, 3)]) fx.confetti(d, 90);
           if (mine) this.buzz([0, 40, 50, 40, 50, 80]);
           break;
         case 'groundRule':
-          this.popup(e.why === 'splash' ? 'SPLASH DOUBLE!' : 'GROUND-RULE DOUBLE', '#6fc3ff', 1.1);
+          if (e.why !== 'splash') this.comic.show('double', this.time, 'GROUND RULE!');
           break;
         case 'splash':
           audio.play('splash');
+          this.comic.show('splash', this.time);
           fx.splash(this.world.ball.position.clone().setY(-0.5));
           break;
         case 'error':
-          this.popup('E! OOPS!', '#ffb36b', 0.9);
+          this.comic.show('oops', this.time);
           break;
         case 'bounce':
           if (this.time - this.bounceSfxT > 0.12) { audio.play('bounce', { intensity: clamp(e.speed / 40, 0, 1) }); this.bounceSfxT = this.time; }
@@ -723,18 +728,20 @@ export class GameScreen {
           break;
         case 'fence':
           audio.play('fence', { intensity: 0.8 });
+          if (!e.cleared) this.comic.show('fence', this.time);
           break;
         case 'tree':
           audio.play('leaves');
           break;
         case 'dog':
           audio.play('dogBark');
+          if (Math.random() < 0.5) this.comic.show('dog', this.time);
           break;
         case 'quip':
           this.showBubble(kid(e.kid), e.text);
           break;
         case 'pitchingChange':
-          this.popup('PITCHING CHANGE', '#ffffff', 0.8);
+          this.showCard(kid(e.to), m.fieldingSide, 'New pitcher');
           break;
         case 'halfOver':
           audio.play('whistle');
@@ -832,6 +839,7 @@ export class GameScreen {
     this.controlsLeft = h('div', { class: 'controls left' });
     this.controlsRight = h('div', { class: 'controls right' });
     this.popEl = h('div', { class: 'pops' });
+    this.comic = new ComicPops(this.popEl);
     this.readEl = h('div', { class: 'swingread hidden' });
     this.meterEl = h('div', { class: 'pmeter hidden' }, h('div', { class: 'pm-bar' }, h('i', { class: 'pm-sweet' }), h('b', { class: 'pm-needle' })));
     this.holderEl = h('div', { class: 'holder hidden' });
@@ -850,25 +858,17 @@ export class GameScreen {
   private updateHud(dt: number) {
     const m = this.match;
     this.renderScoreboard();
-    const key = `${m.batter.id}|${m.pitcher.id}|${m.half}`;
-    if (key !== this.cardsKey && m.phase !== 'halfOver') {
-      this.cardsKey = key;
-      clear(this.cardsEl);
-      const bl = m.box[m.batter.id]?.bat;
-      const b = m.batter.traits, p = m.pitcher.traits;
-      this.cardsEl.append(
-        this.card(m.batter, this.teamOf(m.battingSide), 'At bat', bl && bl.ab ? `${bl.h} for ${bl.ab} today` : m.batter.persona, [['Contact', b.contact], ['Power', b.power]]),
-        this.card(m.pitcher, this.teamOf(m.fieldingSide), 'Pitching', m.pitcher.pitches.map((x) => PITCHES[x].short).join(' '), [['Pitching', p.pitching], ['Control', p.control]]),
-      );
-    }
+    if (this.cardT > 0) { this.cardT -= dt; if (this.cardT <= 0) this.cardsEl.classList.remove('show'); }
+    // captions: one line at a time, then the screen is clear again
     this.tickerT -= dt;
     if (this.tickerT <= 0 && this.tickerQueue.length) {
       const line = this.tickerQueue.shift()!;
       clear(this.tickerEl);
       this.tickerEl.append(h('b', { class: line.who === 'Chet' ? 'chet' : 'dottie' }, line.who === 'Chet' ? 'Chet' : 'Dottie'), h('span', null, line.text));
+      this.tickerEl.classList.add('show');
       this.tickerT = Math.max(2.2, line.text.length * 0.055);
       if (settings.voice) speak(line);
-    }
+    } else if (this.tickerT <= -0.4) this.tickerEl.classList.remove('show');
     if (this.bubbleT > 0) { this.bubbleT -= dt; if (this.bubbleT <= 0) this.bubbleEl.classList.add('hidden'); }
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0 && m.phase !== 'over') this.bannerEl.classList.add('hidden'); }
     if (m.phase === 'prePitch' && this.bannerT > 0 && this.introT <= 0) { this.bannerT = 0; this.bannerEl.classList.add('hidden'); }
@@ -877,41 +877,54 @@ export class GameScreen {
     this.renderControls();
   }
 
-  private card(k: Kid, team: Team, label: string, sub: string, stats: [string, number][]) {
-    return h('div', { class: 'card', style: `--team:${team.colors.primary};--team2:${team.colors.secondary}` },
-      this.portrait(k, label === 'At bat' ? 'focus' : 'smug', 112),
+  /** The name card that slides in when a kid steps up (or comes in to pitch), then gets out of the way. */
+  private showCard(k: Kid, side: 0 | 1, label: string) {
+    if (this.introT > 0) return;
+    const team = this.teamOf(side);
+    const t = k.traits;
+    const pitching = label === 'New pitcher';
+    const stats: [string, number][] = pitching ? [['Pitching', t.pitching], ['Control', t.control]] : [['Contact', t.contact], ['Power', t.power]];
+    const bl = this.match.box[k.id]?.bat;
+    const sub = pitching ? k.pitches.map((x) => PITCHES[x].label).join(', ') : bl && bl.ab ? `${bl.h} for ${bl.ab} today` : k.persona;
+    clear(this.cardsEl);
+    this.cardsEl.append(h('div', { class: 'card', style: `--team:${team.colors.primary};--team2:${team.colors.secondary}` },
+      this.portrait(k, pitching ? 'smug' : 'focus', 112),
       h('div', { class: 'card-txt' },
         h('div', { class: 'card-label' }, label),
         h('div', { class: 'card-name' }, k.nick),
         h('div', { class: 'card-sub' }, sub),
-        h('div', { class: 'card-stats' }, ...stats.map(([n, v]) => h('span', null, h('em', null, n), ` ${v}`)))));
+        h('div', { class: 'card-stats' }, ...stats.map(([n, v]) => h('span', null, h('em', null, n), ` ${v}`))))));
+    this.cardsEl.classList.remove('show');
+    void this.cardsEl.offsetWidth;
+    this.cardsEl.classList.add('show');
+    this.cardT = 3;
   }
 
+  /** The score bug: both scores, the inning, the bases and the count, in one small strip. */
   private renderScoreboard() {
     const m = this.match;
-    const key = [m.score.join(), m.inning, m.half, m.outs, m.balls, m.strikes, m.bases.map((b) => (b ? 1 : 0)).join(''), Math.floor(m.hype[0] / 10), Math.floor(m.hype[1] / 10)].join('|');
+    const key = [m.score.join(), m.inning, m.half, m.outs, m.balls, m.strikes, m.bases.map((b) => (b ? 1 : 0)).join('')].join('|');
     if (key === this.sbKey) return;
+    const flip = this.sbKey !== '' && this.sbKey.split('|')[0] !== m.score.join();
     this.sbKey = key;
     clear(this.sbEl);
-    const row = (side: 0 | 1) => {
+    const team = (side: 0 | 1) => {
       const t = this.teamOf(side);
-      return h('div', { class: `sb-row${m.battingSide === side ? ' bat' : ''}`, style: `--team:${t.colors.primary};--team2:${t.colors.secondary}` },
-        teamBadge(t, 20),
+      return h('div', { class: `sb-team${m.battingSide === side ? ' bat' : ''}`, style: `--team:${t.colors.primary};--team2:${t.colors.secondary}` },
         h('span', { class: 'sb-abbr' }, t.abbr),
-        h('span', { class: 'sb-hype', title: 'Hype' }, h('i', { style: `width:${m.hype[side]}%` })),
         h('span', { class: 'sb-runs' }, String(m.score[side])));
     };
     const dots = (n: number, of: number, cls: string) => h('span', { class: `dots ${cls}` }, ...Array.from({ length: of }, (_, i) => h('i', { class: i < n ? 'on' : '' })));
     const diamond = h('div', { class: 'diamond' }, ...[1, 2, 3].map((b) => h('i', { class: `b${b}${m.bases[b - 1] ? ' on' : ''}` })));
     this.sbEl.append(
-      h('div', { class: 'sb-teams' }, row(0), row(1)),
-      h('div', { class: 'sb-state' },
-        h('div', { class: 'sb-inning' }, h('small', null, m.half === 0 ? 'Top' : 'Bot'), ` ${m.inning}`),
-        diamond),
-      h('div', { class: 'sb-state' },
-        h('div', { class: 'sb-count' }, h('span', null, 'B'), dots(m.balls, 3, 'balls')),
-        h('div', { class: 'sb-count' }, h('span', null, 'S'), dots(m.strikes, 2, 'strikes')),
-        h('div', { class: 'sb-count' }, h('span', null, 'O'), dots(m.outs, 2, 'outs'))));
+      team(0), team(1),
+      h('div', { class: 'sb-inning' }, h('i', { class: m.half === 0 ? 'up' : 'down' }), String(m.inning)),
+      diamond,
+      h('div', { class: 'sb-count' },
+        h('span', null, 'B'), dots(m.balls, 3, 'balls'),
+        h('span', null, 'S'), dots(m.strikes, 2, 'strikes'),
+        h('span', null, 'O'), dots(m.outs, 2, 'outs')));
+    if (flip) { this.sbEl.classList.remove('flip'); void this.sbEl.offsetWidth; this.sbEl.classList.add('flip'); }
   }
 
   private controlMode() {
@@ -949,7 +962,8 @@ export class GameScreen {
         this.controlsRight.append(
           h('div', { class: 'ctl-col' }, special(m.batter), kindBtn('power', 'Power'), kindBtn('bunt', 'Bunt')),
           h('button', { class: `btn big-round swing ${this.swingKind}`, onpointerdown: tap(() => this.doSwing()) }, this.swingKind === 'bunt' ? 'BUNT' : 'SWING'));
-        if (touch) this.controlsLeft.append(h('div', { class: 'aimpad' }, h('span', null, 'Drag here to aim')));
+        // the aim pad marking only shows where aiming matters and until you've used it once
+        if (touch && this.assist() < 0.9 && !this.aimedByDrag) this.controlsLeft.append(h('div', { class: 'aimpad' }, h('span', null, 'Drag here to aim')));
         break;
       }
       case 'pitch': {
@@ -1029,12 +1043,6 @@ export class GameScreen {
     this.radarEl.classList.add('show');
   }
 
-  private popup(text: string, color: string, scale = 1) {
-    const el = h('div', { class: 'pop', style: `--c:${color};--s:${scale};--tilt:${(Math.random() * 6 - 3).toFixed(1)}deg` }, text);
-    clear(this.popEl);
-    this.popEl.appendChild(el);
-    setTimeout(() => el.remove(), 1500);
-  }
 
   private showBubble(k: Kid, text: string) {
     clear(this.bubbleEl);
@@ -1072,6 +1080,7 @@ export class GameScreen {
     this.bannerEl.classList.add('hidden');
     this.bannerEl.classList.remove('intro');
     this.director.cut();
+    this.showCard(this.match.batter, this.match.battingSide, 'Up to bat');
   }
 
   // ─────────────────────────────────────────────────────────── coach
