@@ -1,6 +1,6 @@
 import {
   Bone, CanvasTexture, Color, DoubleSide, Group, SphereGeometry, SRGBColorSpace, Matrix4, MeshStandardMaterial, Object3D, Quaternion, SkinnedMesh, 
-  Vector2, Vector3, type BufferGeometry, type Material, type Skeleton, type Texture,
+  Vector3, BufferGeometry, MeshBasicMaterial, MeshToonMaterial, type Material, type Skeleton, type Texture,
 } from 'three';
 import type { Kid, Team } from '../data/types';
 import { HAIR, SKIN } from '../data/palette';
@@ -9,6 +9,8 @@ import { alongMatrix, blended, isLite, limb, limbRings, loft, paint, paintFn, Pa
 import { B, HEAD_SHAPE, makeSkeleton, proportions, type BoneName, type Proportions } from './rig';
 import { ATLAS_COLS, ATLAS_ROWS, EXPRESSIONS, FACE_PATCH, paintFaceAtlas, type Expression } from './face';
 import { EYE_SHAPES, faceRecipe, type FaceRecipe } from './face-recipes';
+import { INK_HEX, outlineMaterial, toonMaterial } from './toon';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { JERSEY_V0, paintJersey, uniformColors, type UniformColors } from './uniform';
 import { addCostume, addHair, addHat } from './costume';
 
@@ -31,7 +33,8 @@ function clothMaterial() {
     const n = fabricNormal(256).clone();
     n.repeat.set(6, 6);
     n.needsUpdate = true;
-    return new MeshStandardMaterial({ vertexColors: true, roughness: 0.82, normalMap: n, normalScale: new Vector2(0.35, 0.35) });
+    void n; // (cartoon cloth: flat colour, no weave texture)
+    return toonMaterial({ vertexColors: true }, { rim: 0.12 });
   });
 }
 
@@ -47,9 +50,15 @@ export class KidModel {
   /** the full-detail meshes (see setDetail for the lite set) */
   readonly meshes: SkinnedMesh[];
   private liteMeshes: SkinnedMesh[] | null = null;
+  /** the ink outline (one inside-out hull built from the lite shapes); null once disposed */
+  readonly outline: SkinnedMesh;
+  private outlineFull = true;
+  /** the laugh take: eyes squeezed shut into two ink arcs (shown only for 'laugh') */
+  private squint: SkinnedMesh | null = null;
+  private outlineLite = false;
   private detailLevel: 'full' | 'lite' = 'full';
   private mats: Record<keyof Lists, Material>;
-  readonly faceMat: MeshStandardMaterial;
+  readonly faceMat: MeshToonMaterial;
   /** attach points for held things (follow the hands) */
   readonly gripL = new Object3D();
   readonly gripR = new Object3D();
@@ -70,26 +79,29 @@ export class KidModel {
     this.colors = { ...uniformColors(team), ...o.outfit?.colors };
     const skinHex = SKIN[kid.look.skin] ?? SKIN[1];
     const skinMat = sharedMat(`kidSkin${skinHex}`, () => skinMaterial(skinHex));
-    const hairMat = sharedMat(`kidHair${kid.look.hairColor}`, () => new MeshStandardMaterial({ color: HAIR[kid.look.hairColor] ?? HAIR[0], roughness: 0.5 }));
+    const hairMat = sharedMat(`kidHair${kid.look.hairColor}`, () => toonMaterial({ color: HAIR[kid.look.hairColor] ?? HAIR[0] }, { rim: 0.14 }));
     const eyeHex = this.recipe.iris;
     const eyeMat = sharedMat(`kidEyes${eyeHex}`, () => {
       const t = eyeTexture(eyeHex);
       // a little self-light so eyes never go dead-dark under a cap brim
       return new MeshStandardMaterial({ map: t, emissiveMap: t, emissive: '#ffffff', emissiveIntensity: 0.3, roughness: 0.42, envMapIntensity: 0.25 });
     });
-    const shinyMat = sharedMat('kidShiny', () => new MeshStandardMaterial({ vertexColors: true, roughness: 0.22, metalness: 0.35 }));
-    const jerseyMat = new MeshStandardMaterial({ map: o.outfit?.shirt ?? paintJersey(kid, team, quality.jersey), roughness: 0.8, normalMap: clothMaterial().normalMap, normalScale: new Vector2(0.3, 0.3) });
+    const shinyMat = sharedMat('kidShiny', () => toonMaterial({ vertexColors: true }, { rim: 0.3 }));
+    const jerseyMat = toonMaterial({ map: o.outfit?.shirt ?? paintJersey(kid, team, quality.jersey) }, { rim: 0.12 });
     jerseyMat.name = `jersey-${kid.id}`;
     const faceTex = paintFaceAtlas(faceSpec(this.p, kid, this.recipe), quality.faceCell);
     faceTex.repeat.set(1 / ATLAS_COLS, 1 / ATLAS_ROWS);
-    this.faceMat = new MeshStandardMaterial({
-      map: faceTex, transparent: true, depthWrite: false, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
-    });
+    this.faceMat = toonMaterial({
+      map: faceTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
+    }, { rim: 0 });
     this.faceMat.name = `face-${kid.id}`;
     this.mats = { skin: skinMat, cloth: clothMaterial(), jersey: jerseyMat, hair: hairMat, eyes: eyeMat, shiny: shinyMat, face: this.faceMat };
 
     this.group.add(bones[0]);
     this.meshes = this.buildMeshes(FULL);
+    this.prepareLite();
+    this.outline = this.buildOutline();
+    this.squint = this.buildSquint();
     // grips: palm centres, holding things along the hand's local axes
     const hl = this.p.joints.handL, hr = this.p.joints.handR;
     this.gripL.position.set(0.02, -0.13 * this.p.s, 0.03);
@@ -108,6 +120,9 @@ export class KidModel {
     }
     this.expr = e;
     this.setLids(this.lidClose);
+    const pop = EYE_POP[e] ?? 1;
+    for (const b of [this.bones.eyeL, this.bones.eyeR, this.bones.lidL, this.bones.lidR]) b.scale.setScalar(pop);
+    if (this.squint) this.squint.visible = e === 'laugh' && this.detailLevel === 'full';
     const i = EXPRESSIONS.indexOf(e);
     const col = i % ATLAS_COLS, row = Math.floor(i / ATLAS_COLS);
     // canvas row 0 is the top of the texture (v = 1)
@@ -135,19 +150,83 @@ export class KidModel {
    */
   setDetail(d: 'full' | 'lite') {
     if (d === this.detailLevel) return;
-    if (d === 'lite' && !this.liteMeshes) this.liteMeshes = this.buildMeshes(LITE);
+    if (d === 'lite') this.prepareLite();
     this.detailLevel = d;
     for (const m of this.meshes) m.visible = d === 'full';
     for (const m of this.liteMeshes ?? []) m.visible = d === 'lite';
+    this.outline.visible = d === 'full' ? this.outlineFull : this.outlineLite;
+    if (this.squint) this.squint.visible = this.expr === 'laugh' && d === 'full';
+  }
+
+  /**
+   * Whether the ink outline is drawn at each detail level (default: on for full, off for lite).
+   * It costs one draw call and ~5k triangles per kid.
+   */
+  setOutline(full: boolean, lite = this.outlineLite) {
+    this.outlineFull = full;
+    this.outlineLite = lite;
+    this.outline.visible = this.detailLevel === 'full' ? full : lite;
+  }
+
+  private buildSquint(): SkinnedMesh {
+    const p = this.p, es = EYE_SHAPES[this.recipe.eye];
+    const parts: BufferGeometry[] = [];
+    for (const side of ['eyeL', 'eyeR'] as const) {
+      const e = p.joints[side];
+      // a ∩ arc lying on the front of the shut lid, its ends tucked back into the face
+      const arc = torus(p.eyeR * 0.62 * es.w, p.eyeR * 0.075, 4, 14, Math.PI * 0.84);
+      arc.rotateZ(Math.PI * 0.08);
+      const pos = arc.attributes.position;
+      for (let i = 0; i < pos.count; i++) { const x = pos.getX(i) / (p.eyeR * es.w); pos.setZ(i, pos.getZ(i) - x * x * p.eyeR * 0.35); }
+      arc.computeVertexNormals();
+      const g = rigid(arc, B.head);
+      g.applyMatrix4(new Matrix4().makeTranslation(e.x, e.y - p.eyeR * 0.28, e.z + p.eyeR * es.h * 1.1));
+      const out = new BufferGeometry();
+      for (const a of ['position', 'normal', 'skinIndex', 'skinWeight']) out.setAttribute(a, g.getAttribute(a));
+      parts.push(g.index ? out.setIndex(g.index) : out);
+    }
+    const m = new SkinnedMesh(mergeGeometries(parts, false)!, sharedMat('kidSquint', () => new MeshBasicMaterial({ color: INK_HEX })));
+    m.frustumCulled = false;
+    m.visible = false;
+    this.group.add(m);
+    m.bind(this.skeleton, new Matrix4());
+    return m;
+  }
+
+  private inkParts: BufferGeometry[] = [];
+  private buildOutline(): SkinnedMesh {
+    const geo = mergeGeometries(this.inkParts, false)!;
+    for (const p of this.inkParts) p.dispose();
+    this.inkParts = [];
+    const o = new SkinnedMesh(geo, outlineMaterial());
+    o.castShadow = false;
+    o.receiveShadow = false;
+    o.frustumCulled = false;
+    this.group.add(o);
+    o.bind(this.skeleton, new Matrix4());
+    return o;
   }
 
   get detail() { return this.detailLevel; }
+
+  /** Build the lite meshes now (e.g. during loading) so the first switch to lite doesn't hitch. */
+  prepareLite() {
+    if (this.liteMeshes) return;
+    this.liteMeshes = this.buildMeshes(LITE, this.inkParts);
+    for (const m of this.liteMeshes) {
+      m.visible = this.detailLevel === 'lite';
+      // shadow casting follows the matching full mesh, so code that budgets shadows on
+      // `meshes` drives both sets
+      const twin = this.meshes.find((f) => f.material === m.material);
+      if (twin) Object.defineProperty(m, 'castShadow', { get: () => twin.castShadow, set: () => {}, configurable: true });
+    }
+  }
 
   /** The meshes currently drawn (full or lite). */
   get activeMeshes(): readonly SkinnedMesh[] { return this.detailLevel === 'lite' ? this.liteMeshes! : this.meshes; }
 
   /** Build every part at a detail level and bind it to the shared skeleton. */
-  private buildMeshes(detail: number): SkinnedMesh[] {
+  private buildMeshes(detail: number, ink?: BufferGeometry[]): SkinnedMesh[] {
     const kid = this.kid;
     const L: Lists = {
       skin: new PartList(), cloth: new PartList(), jersey: new PartList(), hair: new PartList(),
@@ -157,8 +236,11 @@ export class KidModel {
       buildBody(L, this.p, kid, this.colors, this.recipe);
       addHair(L, this.p, kid);
       addHat(L, this.p, kid, this.team, this.colors);
+      // costume pieces are small or thin: no ink (it would smear them)
+      for (const l of Object.values(L)) l.noInk = true;
       addCostume(L, this.p, kid);
     });
+    if (ink) for (const k of ['skin', 'cloth', 'jersey', 'hair'] as const) ink.push(...L[k].inkParts());
     const out: SkinnedMesh[] = [];
     const add = (key: keyof Lists, color: boolean, shadow = true, order = 0) => {
       const g = L[key].merge(color);
@@ -188,7 +270,7 @@ export class KidModel {
   }
 
   dispose() {
-    for (const m of [...this.meshes, ...(this.liteMeshes ?? [])]) m.geometry.dispose();
+    for (const m of [...this.meshes, ...(this.liteMeshes ?? []), this.outline, ...(this.squint ? [this.squint] : [])]) m.geometry.dispose();
     (this.faceMat.map)?.dispose();
     this.faceMat.dispose();
   }
@@ -260,7 +342,9 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
     const lid = sphere(lidR, 18, 7, 0, Math.PI * 2, 0, lidT);
     lid.scale(es.w * 1.04, es.h, es.h);
     const lidBone = side === 'L' ? B.lidL : B.lidR;
-    L.skin.add(rigid(lid, lidBone), new Matrix4().makeTranslation(e.x, e.y, e.z));
+    // (the lite model has no lids: a blink 60 ft away is invisible, and the ink outline,
+    // built from the lite shapes, must not trace lids tucked inside the head)
+    if (!isLite()) L.skin.add(rigid(lid, lidBone), new Matrix4().makeTranslation(e.x, e.y, e.z));
     // lash line on the lid's front edge: hidden in the head while the eye is open, a soft dark
     // line when it blinks (too small to see on the lite model)
     if (!isLite()) {
@@ -462,8 +546,10 @@ function faceSpec(p: Proportions, kid: Kid, fr: FaceRecipe) {
 /** Lid angles (radians about the eye's x axis): negative opens, LID_SHUT closes. */
 const LID_SHUT = 0.95;
 const LID_BY_EXPR: Record<Expression, number> = {
-  neutral: 0, happy: 0.12, focus: 0.2, surprised: -0.2, sad: 0.2, yell: 0.14, smug: 0.26, oops: -0.06,
+  neutral: 0, happy: 0.12, focus: 0.2, surprised: -0.2, sad: 0.2, yell: 0.14, smug: 0.26, oops: -0.06, laugh: 1,
 };
+/** Cartoon takes: how much the eyes pop (scale) per expression. */
+const EYE_POP: Partial<Record<Expression, number>> = { surprised: 1.24, oops: 1.07, yell: 1.05 };
 function lidOpening(fr: FaceRecipe, e: Expression): number {
   const open = EYE_SHAPES[fr.eye].lidOpen;
   return Math.max(-1.55, open + (LID_SHUT - open) * LID_BY_EXPR[e]);
@@ -473,19 +559,11 @@ function lidOpening(fr: FaceRecipe, e: Expression): number {
  * Kid skin: warm, a little self-lit (light passing through skin) so faces never go
  * dead-dark under a cap brim, with a soft rim of sky light around the edges.
  */
-function skinMaterial(hex: string): MeshStandardMaterial {
+function skinMaterial(hex: string): MeshToonMaterial {
   // a touch warmer than the palette swatch, most of all for the palest skin
   const base = new Color(hex);
   base.lerp(new Color('#e39a76'), 0.06 + 0.1 * Math.max(0, base.getHSL({ h: 0, s: 0, l: 0 }).l - 0.75) / 0.2);
-  const m = new MeshStandardMaterial({ color: base, roughness: 0.62 });
-  m.emissive = base.clone().multiply(new Color('#ff9d7a')).multiplyScalar(0.11);
-  m.onBeforeCompile = (sh) => {
-    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-      float kidRim = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 2.6);
-      totalEmissiveRadiance += vec3(1.0, 0.86, 0.74) * kidRim * 0.18;`);
-  };
-  m.customProgramCacheKey = () => 'kidSkinRim';
-  return m;
+  return toonMaterial({ color: base }, { rim: 0.2, fill: 0.12 });
 }
 
 export function headCentre(p: Proportions): Vector3 {
