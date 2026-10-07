@@ -54,18 +54,25 @@ export class Director {
     }
     this.cur.fov = MathUtils.lerp(this.cur.fov, want.fov, k);
     this.cam.position.copy(this.cur.pos);
+    // a kick: a quick punch-in that springs back
+    this.kickAmt *= Math.exp(-dt * 9);
+    const fov = this.cur.fov * (1 - this.kickAmt * 0.06);
     if (this.shakeAmt > 0.001) {
       const a = this.shakeAmt;
       this.cam.position.add(new Vector3(Math.sin(this.time * 61) * a * 0.3, Math.sin(this.time * 47 + 1) * a * 0.25, 0));
       this.shakeAmt *= Math.exp(-dt * 6);
     }
     this.cam.lookAt(this.cur.look);
-    if (Math.abs(this.cam.fov - this.cur.fov) > 0.01) { this.cam.fov = this.cur.fov; this.cam.updateProjectionMatrix(); }
+    if (Math.abs(this.cam.fov - fov) > 0.01) { this.cam.fov = fov; this.cam.updateProjectionMatrix(); }
   }
 
   private shakeAmt = 0;
   /** a little camera kick (big hits) */
   shake(a: number) { this.shakeAmt = Math.max(this.shakeAmt, a); }
+
+  private kickAmt = 0;
+  /** a punch-in on contact, catches and outs (0..1) */
+  kick(a: number) { this.kickAmt = Math.max(this.kickAmt, Math.min(1, a)); this.shake(a * 0.12); }
 
   /** start from wherever the camera is now */
   adopt(cam: PerspectiveCamera) {
@@ -83,7 +90,15 @@ export class Director {
       case 'bat': {
         const side = m?.batterSide ?? 'R';
         const off = side === 'R' ? 1.25 : -1.25;
-        return { pos: W(off, -18.5, 9.8), look: W(off * 0.1, mound * 0.52, 2.0), fov: 40 };
+        // wide phone screens (up to 19.5:9) are short: come in lower and tighter
+        // so the batter, the zone and the pitcher fill the height
+        const w = MathUtils.clamp(((this.cam.aspect || 16 / 9) - 1.6) / 0.5, 0, 1);
+        if (w <= 0) return { pos: W(off, -18.5, 9.8), look: W(off * 0.1, mound * 0.52, 2.0), fov: 40 };
+        return {
+          pos: W(off, MathUtils.lerp(-18.5, -15.5, w), MathUtils.lerp(9.8, 9.1, w)),
+          look: W(off * 0.1, MathUtils.lerp(mound * 0.52, 14, w), MathUtils.lerp(2.0, 0.5, w)),
+          fov: MathUtils.lerp(40, 33, w),
+        };
       }
       case 'live': {
         if (ball) {
@@ -93,10 +108,13 @@ export class Director {
         const bx = this.follow.x, by = -this.follow.z;
         const dist = Math.hypot(bx, by);
         const h = ball ? Math.max(0, ball.y) : 0;
+        // on a short, wide phone screen ride a little closer so the kids aren't specks
+        const w = MathUtils.clamp(((this.cam.aspect || 16 / 9) - 1.6) / 0.5, 0, 1);
+        const near = 1 - w * 0.18;
         return {
-          pos: W(bx * 0.28, Math.min(-12, by * 0.2 - 20 - dist * 0.06), 22 + dist * 0.16 + h * 0.25),
+          pos: W(bx * 0.28, Math.min(-12, (by * 0.2 - 20 - dist * 0.06) * near + by * 0.2 * (1 - near)), (22 + dist * 0.16) * near + h * 0.25),
           look: W(bx * 0.9, by * 0.9 + 4, 2 + h * 0.45),
-          fov: 46 + Math.min(14, dist * 0.04),
+          fov: (46 + Math.min(14, dist * 0.04)) * (1 - w * 0.1),
         };
       }
       case 'homer': {

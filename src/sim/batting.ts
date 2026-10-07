@@ -16,9 +16,22 @@ export interface SwingInput {
 }
 
 export type SwingOutcome =
-  | { kind: 'miss'; timing: number; dist: number }
-  | { kind: 'foulTip' }
-  | { kind: 'contact'; contactPoint: Vec3; v: Vec3; ev: number; la: number; spray: number; quality: number };
+  | { kind: 'miss'; timing: number; dist: number; read: SwingRead }
+  | { kind: 'foulTip'; read: SwingRead }
+  | { kind: 'contact'; contactPoint: Vec3; v: Vec3; ev: number; la: number; spray: number; quality: number; read: SwingRead };
+
+/**
+ * How a swing lined up, for the player's feedback: timing and aim as a
+ * fraction of the kid's window (|x| <= 1 is inside it).
+ */
+export interface SwingRead {
+  /** <0 early, >0 late */
+  timing: number;
+  /** distance from the sweet spot */
+  aim: number;
+  /** >0 the bat was under the ball, <0 over it */
+  under: number;
+}
 
 export const SWING_TIME: Record<SwingKind, number> = { normal: 0.15, power: 0.18, bunt: 0 };
 
@@ -51,7 +64,7 @@ export function resolveSwing(
   const { w, r } = contactWindow(k, s, tune);
   const tHit = s.kind === 'bunt' ? pitch.Treal : batArrival(s);
   const delta = tHit - pitch.Treal; // >0 late, <0 early
-  if (s.kind === 'bunt' && s.tSwing > pitch.Treal) return { kind: 'miss', timing: 1, dist: 0 };
+  if (s.kind === 'bunt' && s.tSwing > pitch.Treal) return { kind: 'miss', timing: 1, dist: 0, read: { timing: 9, aim: 0, under: 0 } };
   const ball = pitchPos(pitch, s.kind === 'bunt' ? pitch.Treal : clamp(tHit, 0, pitch.Treal + 0.2));
   const atPlate = pitch.arrival;
   const dx = atPlate.x - s.aimX;
@@ -59,10 +72,11 @@ export function resolveSwing(
   const dist = Math.hypot(dx, dz * 1.15);
   const tq = Math.abs(delta) / w;
   const sq = dist / r;
-  if (tq > 1.35 || sq > 1.22) return { kind: 'miss', timing: delta, dist };
+  const read: SwingRead = { timing: s.kind === 'bunt' ? 0 : delta / w, aim: sq, under: dz / r };
+  if (tq > 1.35 || sq > 1.22) return { kind: 'miss', timing: delta, dist, read };
   if (tq > 1 || sq > 1) {
-    if (rng.chance(0.75)) return { kind: 'foulTip' };
-    return { kind: 'miss', timing: delta, dist };
+    if (rng.chance(0.75)) return { kind: 'foulTip', read };
+    return { kind: 'miss', timing: delta, dist, read };
   }
   // contact hitters get more out of a near-miss: the sweet spot is forgiving
   const miss = (0.5 * tq * tq + 0.45 * sq * sq) * (1.35 - k.traits.contact * 0.07);
@@ -101,5 +115,5 @@ export function resolveSwing(
   const cl = Math.cos(la * DEG);
   const v = { x: ev * cl * Math.sin(spray * DEG), y: ev * cl * Math.cos(spray * DEG), z: ev * Math.sin(la * DEG) };
   const contactPoint = { x: ball.x * 0.5 + atPlate.x * 0.5, y: Math.max(-1, ball.y), z: Math.max(0.3, ball.z) };
-  return { kind: 'contact', contactPoint, v, ev: evMph, la, spray, quality };
+  return { kind: 'contact', contactPoint, v, ev: evMph, la, spray, quality, read };
 }

@@ -62,6 +62,7 @@ export function makePitch(
   moundDist: number,
   rng: Rng,
   fatigue = 0,
+  accuracy?: number,
 ): ActivePitch {
   const def = PITCHES[type];
   const hand = k.throws === 'R' ? 1 : -1;
@@ -75,6 +76,13 @@ export function makePitch(
   if (special === 'wobbler') { mph *= 0.9; wobble = 1.05; scatter *= 0.6; }
   if (special === 'loopy') { mph = 24; breakZ = 0; breakX = 0; scatter *= 0.6; }
   if (special === 'freeze') { warp = 0.93; scatter *= 0.7; }
+  if (accuracy !== undefined) {
+    // the player's pitch meter: a perfect release is tighter than the kid's
+    // natural control and pops a little; a bad one sprays
+    const a = Math.min(1, Math.max(0, accuracy));
+    scatter *= 0.55 + (1 - a) * 1.25;
+    mph *= 0.97 + a * 0.05;
+  }
 
   const target = {
     x: aim.x + rng.gauss() * scatter,
