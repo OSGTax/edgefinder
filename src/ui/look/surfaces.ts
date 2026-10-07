@@ -91,7 +91,7 @@ export function clipboard(children: Kids, o: { class?: string; title?: string } 
   return h('div', { class: `clipboard${o.class ? ` ${o.class}` : ''}` },
     h('i', { class: 'clip' }),
     h('div', { class: 'clipboard-sheet' },
-      o.title ? h('div', { class: 'sheet-title' }, lettering(o.title, { size: 26, seed: 'clip' })) : null,
+      o.title ? h('div', { class: 'sheet-title' }, lettering(o.title, { size: 22, seed: 'clip' })) : null,
       ...children));
 }
 

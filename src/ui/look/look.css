@@ -94,6 +94,7 @@
   padding: 16px 16px 18px; min-height: 120px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 .sheet-title { display: flex; justify-content: center; margin-bottom: 6px; }
+.sheet-title .lt { max-width: 100%; height: auto; max-height: 30px; }
 
 /* ── trading card (front/back flip) ───────────────────────────────────────── */
 .tcard { --team: #555; --team2: #ddd; --team3: #fff; perspective: 900px; transform: rotate(var(--tilt, 0deg)); width: 150px; aspect-ratio: 5 / 7; }

@@ -1,3 +1,4 @@
+import { shell } from './shell';
 import { ensureDefs, installTextures } from './ui/look';
 
 const root = document.getElementById('app')!;
@@ -5,6 +6,7 @@ const hash = new URLSearchParams(location.hash.slice(1));
 
 installTextures();
 ensureDefs();
+shell.init();
 
 if (import.meta.env.DEV && hash.has('gallery')) {
   import('./dev/gallery3d').then((m) => m.devGallery(root, hash));

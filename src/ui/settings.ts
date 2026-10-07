@@ -10,6 +10,8 @@ export interface Settings {
   autoThrow: number;
   aimAssist: 'auto' | 'on' | 'off';
   showZone: boolean;
+  /** phones: go full screen (and lock landscape where allowed) on the first tap */
+  fullscreen: boolean;
 }
 
 const DEFAULTS: Settings = {
@@ -20,6 +22,7 @@ const DEFAULTS: Settings = {
   autoThrow: 1.6,
   aimAssist: 'auto',
   showZone: true,
+  fullscreen: true,
 };
 
 export const settings: Settings = { ...DEFAULTS, ...load<Partial<Settings>>('settings', {}) };

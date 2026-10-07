@@ -111,7 +111,7 @@ export function installTextures() {
       }
       g.lineCap = 'round';
       for (let i = 0; i < 9; i++) {
-        g.strokeStyle = `rgba(255,255,255,${0.03 + r() * 0.04})`;
+        g.strokeStyle = `rgba(255,255,255,${0.02 + r() * 0.03})`;
         g.lineWidth = 6 + r() * 14;
         g.beginPath();
         const x = r() * 256, y = r() * 256;
