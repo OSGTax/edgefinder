@@ -230,7 +230,10 @@ img.portrait { display: block; object-fit: cover; }
 }
 /* portrait phones: everything stacks toward the bottom */
 @media (max-width: 700px) and (orientation: portrait) {
-  .ticker { bottom: calc(var(--pad-b) + 130px); max-width: 92vw; }
+  .ticker { bottom: calc(var(--pad-b) + 200px); max-width: 92vw; }
+  .bubble { bottom: calc(var(--pad-b) + 250px); }
+  .sb { max-width: calc(100vw - var(--pad-l) - var(--pad-r) - 60px); flex-wrap: wrap; height: auto; padding: 3px 8px 3px 4px; row-gap: 2px; }
+  .cards { top: calc(var(--pad-t) + 76px); }
   .pause-panel, .final-panel { flex-direction: column; }
 }
 /* big screens: a little more room */
