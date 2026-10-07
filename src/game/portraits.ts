@@ -71,10 +71,10 @@ export class PortraitStudio {
     for (const b of Object.values(model.bones)) b.quaternion.identity();
     model.bones.hips.position.copy(model.p.joints.hips);
     model.bones.head.rotation.set(0.05, -0.22, 0.04);
-    model.bones.lidL.rotation.x = model.bones.lidR.rotation.x = -0.6;
     model.bones.armL.rotation.z = 0.15;
     model.bones.armR.rotation.z = -0.15;
     model.setExpression(expr);
+    model.setLids(0);
     g.position.set(0, 0, 0);
     g.rotation.y = 0.35;
     this.scene.add(g);

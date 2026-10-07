@@ -32,7 +32,10 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
   floor.receiveShadow = true;
   scene.add(floor);
   const only = opts.get('kid');
-  const list = only === MR_MENDOZA.id ? [MR_MENDOZA] : only ? KIDS.filter((k) => k.id === only) : KIDS;
+  let list = only === MR_MENDOZA.id ? [MR_MENDOZA] : only ? KIDS.filter((k) => k.id === only) : KIDS;
+  // &exprs (with &kid=): the same kid eight times, one per expression, as a contact sheet
+  const exprSheet = opts.has('exprs') && list.length === 1;
+  if (exprSheet) list = EXPRESSIONS.map(() => list[0]);
   const expr = opts.get('expr');
   const models: KidModel[] = [];
   list.forEach((k, i) => {
@@ -51,14 +54,19 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
     if (opts.has('back')) m.group.rotation.y = Math.PI;
     if (opts.has('yaw')) m.group.rotation.y = Number(opts.get('yaw'));
     if (expr) m.setExpression(expr as (typeof EXPRESSIONS)[number]);
+    if (exprSheet) {
+      m.setExpression(EXPRESSIONS[i]);
+      m.group.position.set(((i % 4) - 1.5) * 1.85, 20 - Math.floor(i / 4) * 2.1 - (m.p.joints.head.y + m.p.headR * 0.92), 0);
+    }
     // &hide=face,hair,... hides those part meshes (by material name prefix) for debugging
     for (const h of opts.get('hide')?.split(',') ?? []) for (const me of m.meshes) if ((me.material as { name: string }).name.toLowerCase().includes(h)) me.visible = false;
     scene.add(m.group);
     models.push(m);
   });
   const cam = new PerspectiveCamera(only ? 22 : 30, window.innerWidth / window.innerHeight, 0.1, 500);
-  if (opts.has('grid')) { floor.visible = false; cam.fov = 6.4; cam.position.set(0, 15.4, 150); cam.lookAt(0, 15.4, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
-  else if (only && models[0]) {
+  if (exprSheet) { floor.visible = false; cam.fov = 4.4; cam.position.set(0, 18.95, 70); cam.lookAt(0, 18.95, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
+  else if (opts.has('grid')) { floor.visible = false; cam.fov = 6.4; cam.position.set(0, 15.4, 150); cam.lookAt(0, 15.4, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
+  else if (only && models[0] && !exprSheet) {
     // aim at the head (or the whole kid with &body); &zoom=2 moves in, &yaw= turns the kid
     const m = models[0];
     const z = Number(opts.get('zoom') ?? 1);
@@ -73,6 +81,12 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
   const cv = opts.get('cam')?.split(',').map(Number);
   if (cv && cv.length === 6) { cam.position.set(cv[0], cv[1], cv[2]); cam.lookAt(cv[3], cv[4], cv[5]); }
   (window as unknown as { __models: KidModel[] }).__models = models;
+  // &atlas: show the first kid's painted face atlas (all expressions) over the scene
+  if (opts.has('atlas') && models[0]) {
+    const src = models[0].faceMat.map!.image as HTMLCanvasElement;
+    src.style.cssText = 'position:fixed;left:0;top:0;width:100%;background:#d9b08c;z-index:5';
+    root.appendChild(src);
+  }
   // pose test: each kid gets a mode (cycling through the list), a glove and a bat
   const poseModes = opts.get('poses')?.split(',') as Mode[] | undefined;
   const anims: { a: Animator; mode: Mode; bat: MeshT; glove: GroupT; t0: number }[] = [];

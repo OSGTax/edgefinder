@@ -8,6 +8,7 @@ import { fabricNormal } from '../gfx/textures';
 import { alongMatrix, blended, limb, limbRings, loft, paint, paintFn, PartList, ramp, rigid, type Ring } from './geom';
 import { B, HEAD_SHAPE, makeSkeleton, proportions, type BoneName, type Proportions } from './rig';
 import { ATLAS_COLS, ATLAS_ROWS, EXPRESSIONS, FACE_PATCH, paintFaceAtlas, type Expression } from './face';
+import { EYE_SHAPES, faceRecipe, type FaceRecipe } from './face-recipes';
 import { JERSEY_V0, paintJersey, uniformColors, type UniformColors } from './uniform';
 import { addCostume, addHair, addHat } from './costume';
 
@@ -50,11 +51,15 @@ export class KidModel {
   readonly gripR = new Object3D();
   readonly hatTop = new Object3D();
   private expr: Expression = 'neutral';
+  private lidClose = 0;
   readonly colors: UniformColors;
+  /** this kid's hand-picked face (eyes, brows, mouth...) */
+  readonly recipe: FaceRecipe;
 
   constructor(readonly kid: Kid, readonly team: Team, o: { faceCell?: number; jersey?: number; outfit?: Outfit } = {}) {
     const quality = { faceCell: o.faceCell ?? 256, jersey: o.jersey ?? 512 };
-    this.p = proportions(kid.look);
+    this.recipe = faceRecipe(kid);
+    this.p = proportions(kid.look, this.recipe);
     const { skeleton, bones } = makeSkeleton(this.p);
     this.skeleton = skeleton;
     this.bones = Object.fromEntries(bones.map((b) => [b.name, b])) as Record<BoneName, Bone>;
@@ -63,23 +68,24 @@ export class KidModel {
       skin: new PartList(), cloth: new PartList(), jersey: new PartList(), hair: new PartList(),
       eyes: new PartList(), face: new PartList(), shiny: new PartList(),
     };
-    buildBody(L, this.p, kid, this.colors);
+    buildBody(L, this.p, kid, this.colors, this.recipe);
     addHair(L, this.p, kid);
     addHat(L, this.p, kid, team, this.colors);
     addCostume(L, this.p, kid);
 
     const skinHex = SKIN[kid.look.skin] ?? SKIN[1];
-    const skinMat = sharedMat(`kidSkin${skinHex}`, () => new MeshStandardMaterial({ color: skinHex, roughness: 0.58 }));
+    const skinMat = sharedMat(`kidSkin${skinHex}`, () => skinMaterial(skinHex));
     const hairMat = sharedMat(`kidHair${kid.look.hairColor}`, () => new MeshStandardMaterial({ color: HAIR[kid.look.hairColor] ?? HAIR[0], roughness: 0.5 }));
-    const eyeHex = irisColor(kid);
+    const eyeHex = this.recipe.iris;
     const eyeMat = sharedMat(`kidEyes${eyeHex}`, () => {
       const t = eyeTexture(eyeHex);
-      return new MeshStandardMaterial({ map: t, emissiveMap: t, emissive: '#ffffff', emissiveIntensity: 0.16, roughness: 0.2, envMapIntensity: 0.7 });
+      // a little self-light so eyes never go dead-dark under a cap brim
+      return new MeshStandardMaterial({ map: t, emissiveMap: t, emissive: '#ffffff', emissiveIntensity: 0.3, roughness: 0.42, envMapIntensity: 0.25 });
     });
     const shinyMat = sharedMat('kidShiny', () => new MeshStandardMaterial({ vertexColors: true, roughness: 0.22, metalness: 0.35 }));
     const jerseyMat = new MeshStandardMaterial({ map: o.outfit?.shirt ?? paintJersey(kid, team, quality.jersey), roughness: 0.8, normalMap: clothMaterial().normalMap, normalScale: new Vector2(0.3, 0.3) });
     jerseyMat.name = `jersey-${kid.id}`;
-    const faceTex = paintFaceAtlas({ look: kid.look, eyePhi: 21, eyeTheta: 3, eyeSize: 12 }, quality.faceCell);
+    const faceTex = paintFaceAtlas(faceSpec(this.p, kid, this.recipe), quality.faceCell);
     faceTex.repeat.set(1 / ATLAS_COLS, 1 / ATLAS_ROWS);
     this.faceMat = new MeshStandardMaterial({
       map: faceTex, transparent: true, depthWrite: false, roughness: 0.6, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
@@ -100,7 +106,9 @@ export class KidModel {
     add(L.cloth, clothMaterial(), true);
     add(L.jersey, jerseyMat, false);
     add(L.hair, hairMat, false);
+    // eyes don't take shadows: a cap brim or the lid must never black them out
     add(L.eyes, eyeMat, false, false);
+    this.meshes[this.meshes.length - 1].receiveShadow = false;
     add(L.shiny, shinyMat, true);
     add(L.face, this.faceMat, false, false, 1);
     this.group.add(bones[0]);
@@ -115,8 +123,6 @@ export class KidModel {
     this.bones.handL.add(this.gripL);
     this.bones.handR.add(this.gripR);
     void hl; void hr;
-    // eyes open at rest (the animator blinks them)
-    this.bones.lidL.rotation.x = this.bones.lidR.rotation.x = -0.62;
     this.hatTop.position.set(0, this.p.headR * 1.95, 0.02);
     this.bones.head.add(this.hatTop);
     this.setExpression('neutral');
@@ -127,6 +133,7 @@ export class KidModel {
       // already showing (offset check keeps the first call honest)
     }
     this.expr = e;
+    this.setLids(this.lidClose);
     const i = EXPRESSIONS.indexOf(e);
     const col = i % ATLAS_COLS, row = Math.floor(i / ATLAS_COLS);
     // canvas row 0 is the top of the texture (v = 1)
@@ -134,6 +141,18 @@ export class KidModel {
   }
 
   get expression() { return this.expr; }
+
+  /**
+   * Close the upper lids by `close` (0 = as open as the expression wants, 1 = shut).
+   * The animator calls this to blink; the expression decides the resting opening.
+   */
+  setLids(close: number) {
+    this.lidClose = close;
+    const open = lidOpening(this.recipe, this.expr);
+    const a = open + (LID_SHUT - open) * Math.max(0, Math.min(1, close));
+    this.bones.lidL.rotation.set(a, 0, 0);
+    this.bones.lidR.rotation.set(a, 0, 0);
+  }
 
   dispose() {
     for (const m of this.meshes) m.geometry.dispose();
@@ -146,70 +165,76 @@ export class KidModel {
 
 const v3 = (x: number, y: number, z: number) => new Vector3(x, y, z);
 
-function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
+function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: FaceRecipe) {
   const j = p.joints, s = p.s, wf = p.wf;
   const look = kid.look;
 
-  // ── head: a slightly egg-shaped sphere with a narrower jaw, plus ears and a button nose
+  // ── head: round, with full cheeks and a small soft chin; ears and a nose from the recipe
   const shape = HEAD_SHAPE[look.head] ?? HEAD_SHAPE.round;
   const R = p.headR;
   const hc = headCentre(p);
   const head = new SphereGeometry(R, 34, 24);
   {
     const pos = head.attributes.position;
+    const v = new Vector3();
     for (let i = 0; i < pos.count; i++) {
-      let x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
-      const t = -y / R;
-      if (t > 0.15) { const k = 1 - 0.2 * ramp(t, 0.15, 1); x *= k; z *= 0.96 + 0.04 * k; }
-      if (look.head === 'square' && y > 0.3 * R) { x *= 1.04; }
-      // cheeks fill out a little at the front
-      if (z > 0.3 * R && y < 0 && y > -0.6 * R) z *= 1.03;
-      pos.setXYZ(i, x * shape[0], y * shape[1], z * shape[2]);
+      shapeHead(v.fromBufferAttribute(pos, i), R, look);
+      pos.setXYZ(i, v.x, v.y, v.z);
     }
     head.computeVertexNormals();
   }
   L.skin.add(rigid(head, B.head), new Matrix4().makeTranslation(hc.x, hc.y, hc.z));
   for (const sx of [-1, 1]) {
-    const ear = new SphereGeometry(R * 0.2, 14, 10);
-    ear.scale(0.55, 1, 0.8);
-    L.skin.add(rigid(ear, B.head), new Matrix4().makeTranslation(hc.x + sx * R * 0.98 * shape[0], hc.y - R * 0.02, hc.z - R * 0.05));
+    const ear = new SphereGeometry(R * 0.2 * fr.ears, 14, 10);
+    ear.scale(0.5, 1, 0.78);
+    // a little inner fold so ears read as ears
+    const pos = ear.attributes.position;
+    for (let i = 0; i < pos.count; i++) if (pos.getX(i) * sx > 0) pos.setX(i, pos.getX(i) * 0.75);
+    ear.computeVertexNormals();
+    L.skin.add(rigid(ear, B.head), new Matrix4().makeTranslation(hc.x + sx * R * 0.97 * shape[0], hc.y - R * 0.12, hc.z - R * 0.04).multiply(new Matrix4().makeRotationY(sx * 0.35)));
   }
-  const nose = new SphereGeometry(R * 0.13, 16, 12);
-  nose.scale(1, 0.85, 0.9);
-  L.skin.add(rigid(nose, B.head), new Matrix4().makeTranslation(hc.x, hc.y - R * 0.16, hc.z + R * 0.98 * shape[2]));
+  {
+    const n = NOSES[fr.nose];
+    const nose = new SphereGeometry(R * n.r, 16, 12);
+    nose.scale(n.sx, n.sy, n.sz);
+    if (n.tilt) nose.rotateX(n.tilt);
+    const ny = R * NOSE_Y;
+    const nz = Math.sqrt(Math.max(0, 1 - NOSE_Y * NOSE_Y)) * R * shape[2] * 0.985;
+    L.skin.add(rigid(nose, B.head), new Matrix4().makeTranslation(hc.x, hc.y + ny * shape[1], hc.z + nz));
+  }
 
-  // ── eyes: glossy whites with a coloured iris and pupil, and upper lids that blink
+  // ── eyes: mostly dark iris with big catchlights; upper lids that rest high and blink
+  const es = EYE_SHAPES[fr.eye];
   for (const side of ['L', 'R'] as const) {
     const bi = side === 'L' ? B.eyeL : B.eyeR;
     const e = j[side === 'L' ? 'eyeL' : 'eyeR'];
-    // the sphere's pole looks forward, so the iris and pupil are perfectly round bands of the texture
-    const eye = new SphereGeometry(p.eyeR, 28, 20);
+    // the sphere's pole looks forward, so the iris and pupil are perfectly round bands of the texture;
+    // height == depth so the lid (which rotates about x) hugs the eyeball whatever its angle
+    const eye = new SphereGeometry(p.eyeR, 24, 16);
     eye.rotateX(Math.PI / 2);
-    eye.scale(1, 1.05, 0.86);
+    eye.scale(es.w, es.h, es.h);
+    // almond eyes lift a touch at the outer corner
+    if (fr.eye === 'almond') {
+      const pos = eye.attributes.position, out = side === 'L' ? 1 : -1;
+      for (let i = 0; i < pos.count; i++) { const x = pos.getX(i) * out; if (x > 0) pos.setY(i, pos.getY(i) + x * 0.12); }
+      eye.computeVertexNormals();
+    }
     L.eyes.add(rigid(eye, bi), new Matrix4().makeTranslation(e.x, e.y, e.z));
-    // upper lid: a skin-coloured shell hugging the eyeball; the lid bone rotates it closed
-    // (nearly round, so the eyeball never pokes through whatever angle the lid is at)
-    const lidR = p.eyeR * 1.12, lidT = Math.PI * 0.5;
-    const lid = new SphereGeometry(lidR, 22, 8, 0, Math.PI * 2, 0, lidT);
-    lid.scale(1, 1, 0.94);
+    // upper lid: a skin-coloured shell just outside the eyeball; the lid bone rotates it closed
+    const lidR = p.eyeR * 1.08, lidT = Math.PI * 0.5;
+    const lid = new SphereGeometry(lidR, 18, 7, 0, Math.PI * 2, 0, lidT);
+    lid.scale(es.w * 1.04, es.h, es.h);
     const lidBone = side === 'L' ? B.lidL : B.lidR;
     L.skin.add(rigid(lid, lidBone), new Matrix4().makeTranslation(e.x, e.y, e.z));
-    // lash line: a dark rim exactly on the lid's front edge (moves with the lid)
+    // lash line on the lid's front edge: hidden in the head while the eye is open, a soft dark
+    // line when it blinks
     {
-      const arc = Math.PI * 1.15;
-      const lash = new TorusGeometry(1, 0.075, 5, 18, arc);
+      const arc = Math.PI * 1.1;
+      const lash = new TorusGeometry(1, 0.05, 4, 14, arc);
       lash.rotateZ(Math.PI * 1.5 - arc / 2);
       lash.rotateX(-Math.PI / 2);
-      const er = Math.sin(lidT);
-      lash.scale(lidR * er, lidR * 0.7, lidR * 0.94 * er);
-      // thicker toward the outer corner, a tiny flick up at the end
-      const pos = lash.attributes.position;
-      for (let i = 0; i < pos.count; i++) {
-        const x = pos.getX(i), out = (side === 'L' ? x : -x) / lidR;
-        if (out > 0.55) pos.setY(i, pos.getY(i) + (out - 0.55) * lidR * 0.35);
-      }
-      lash.computeVertexNormals();
-      L.cloth.add(paint(rigid(lash, lidBone), '#24170f'), new Matrix4().makeTranslation(e.x, e.y + Math.cos(lidT) * lidR, e.z));
+      lash.scale(lidR * es.w * 1.04, lidR * 0.5, lidR * es.h);
+      L.cloth.add(paint(rigid(lash, lidBone), '#3a2117'), new Matrix4().makeTranslation(e.x, e.y + 0.002, e.z));
     }
   }
 
@@ -219,16 +244,14 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     const patch = new SphereGeometry(R * 1.006, segU, segV, Math.PI / 2 - FACE_PATCH.phi, FACE_PATCH.phi * 2, Math.PI / 2 - FACE_PATCH.thetaHi, FACE_PATCH.thetaHi - FACE_PATCH.thetaLo);
     // SphereGeometry measures phi from -x going around; rebuild UVs from angles so u runs viewer-left → right
     const pos = patch.attributes.position, uv = patch.attributes.uv;
+    const v = new Vector3();
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
       const phi = Math.atan2(x, z), th = Math.asin(Math.max(-1, Math.min(1, y / (R * 1.006))));
       uv.setXY(i, (phi + FACE_PATCH.phi) / (2 * FACE_PATCH.phi), (th - FACE_PATCH.thetaLo) / (FACE_PATCH.thetaHi - FACE_PATCH.thetaLo));
       // follow the same head shaping as the skull
-      let px = x, pz = z;
-      const t = -y / R;
-      if (t > 0.15) { const k = 1 - 0.2 * ramp(t, 0.15, 1); px *= k; pz *= 0.96 + 0.04 * k; }
-      if (pz > 0.3 * R && y < 0 && y > -0.6 * R) pz *= 1.03;
-      pos.setXYZ(i, px * shape[0], y * shape[1], pz * shape[2]);
+      shapeHead(v.set(x, y, z), R, look);
+      pos.setXYZ(i, v.x, v.y, v.z);
     }
     patch.computeVertexNormals();
     L.face.add(rigid(patch, B.head), new Matrix4().makeTranslation(hc.x, hc.y, hc.z));
@@ -243,10 +266,11 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     { y: p.waistY - 0.16 * s, rx: 0.44 * wf * s, rz: 0.31 * wf * s + bellyZ * 0.6, cz: bellyZ * 0.4 },
     { y: p.waistY + 0.05 * s, rx: 0.45 * wf * s + p.belly * 0.04, rz: 0.32 * wf * s + bellyZ, cz: bellyZ * 0.7 },
     { y: (p.waistY + p.chestY) / 2, rx: 0.47 * wf * s + p.belly * 0.05, rz: 0.33 * wf * s + bellyZ * 0.9, cz: bellyZ * 0.6 },
-    { y: p.chestY, rx: 0.5 * wf * s, rz: 0.33 * wf * s + bellyZ * 0.3, cz: bellyZ * 0.2 },
-    { y: p.shoulderY - 0.1 * s, rx: 0.56 * wf * s, rz: 0.3 * wf * s },
-    { y: p.shoulderY + 0.07 * s, rx: 0.5 * wf * s, rz: 0.26 * wf * s },
-    { y: p.shoulderY + 0.14 * s, rx: 0.3 * wf * s, rz: 0.2 * wf * s },
+    { y: p.chestY, rx: 0.49 * wf * s, rz: 0.33 * wf * s + bellyZ * 0.3, cz: bellyZ * 0.2 },
+    // soft sloping kid shoulders (no shoulder pads)
+    { y: p.shoulderY - 0.1 * s, rx: 0.5 * wf * s, rz: 0.29 * wf * s },
+    { y: p.shoulderY + 0.03 * s, rx: 0.43 * wf * s, rz: 0.25 * wf * s },
+    { y: p.shoulderY + 0.12 * s, rx: 0.3 * wf * s, rz: 0.2 * wf * s },
     { y: p.neckY + 0.04 * s, rx: 0.2 * s * wf, rz: 0.19 * s * wf },
   ];
   const tg = loft(torso, 40);
@@ -271,7 +295,7 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
     const ua = el.clone().sub(sh).length();
     // one sleeve with a domed top that rounds into the shoulder; the dome follows the
     // shoulder bone and the rest the arm, so it bends smoothly when the arm swings up
-    const a = p.armR * 1.3;
+    const a = p.armR * 1.14;
     const sleeve = loft([
       { y: -ua * 0.6, rx: a * 0.93, rz: a * 0.9 },
       { y: -ua * 0.585, rx: a * 0.98, rz: a * 0.95 },
@@ -279,9 +303,9 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
       { y: -ua * 0.49, rx: a * 0.985, rz: a * 0.955 },
       { y: -ua * 0.25, rx: a * 0.99, rz: a * 0.96 },
       { y: 0, rx: a, rz: a * 0.97 },
-      { y: a * 0.45, rx: a * 0.9, rz: a * 0.88 },
-      { y: a * 0.75, rx: a * 0.62, rz: a * 0.6 },
-      { y: a * 0.9, rx: a * 0.22, rz: a * 0.2 },
+      { y: a * 0.3, rx: a * 0.92, rz: a * 0.9 },
+      { y: a * 0.55, rx: a * 0.66, rz: a * 0.64 },
+      { y: a * 0.66, rx: a * 0.24, rz: a * 0.22 },
     ], 18, false, true);
     const shBone = side === 1 ? B.shoulderL : B.shoulderR;
     paintFn(sleeve, (q) => new Color(q.y < -ua * 0.495 ? col.trim : col.jersey));
@@ -340,6 +364,86 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors) {
   }
 }
 
+/** Heights on the head (fractions of the head radius, before shaping) of the nose and mouth. */
+const NOSE_Y = -0.27, MOUTH_Y = -0.48;
+
+const NOSES: Record<FaceRecipe['nose'], { r: number; sx: number; sy: number; sz: number; tilt?: number }> = {
+  button: { r: 0.12, sx: 1, sy: 0.85, sz: 0.8 },
+  round: { r: 0.15, sx: 1.05, sy: 0.9, sz: 0.85 },
+  small: { r: 0.1, sx: 1, sy: 0.85, sz: 0.8 },
+  long: { r: 0.12, sx: 0.9, sy: 1.15, sz: 1.0, tilt: -0.25 },
+  snub: { r: 0.11, sx: 1.05, sy: 0.8, sz: 0.85, tilt: 0.35 },
+  broad: { r: 0.13, sx: 1.35, sy: 0.8, sz: 0.78 },
+};
+
+/**
+ * Head shaping (in place, about the head centre): a round skull, a shorter lower face with full
+ * cheeks and a small soft chin, then the head-shape scale. The face decal uses it too.
+ */
+export function shapeHead(v: Vector3, R: number, look: Kid['look']): Vector3 {
+  const shape = HEAD_SHAPE[look.head] ?? HEAD_SHAPE.round;
+  let { x, y, z } = v;
+  const t = -y / R;
+  if (t > 0) {
+    // full cheeks bulge out and forward around the mouth line
+    const cheek = Math.exp(-(((t - 0.42) / 0.26) ** 2));
+    x *= 1 + 0.06 * cheek;
+    if (z > 0) z *= 1 + 0.05 * cheek;
+    // a small chin: narrow only near the bottom, and a slightly shorter lower face
+    const k = 1 - 0.16 * ramp(t, 0.55, 1);
+    x *= k; z *= 0.97 + 0.03 * k;
+    y *= 1 - 0.07 * t;
+  }
+  if (look.head === 'square' && y > 0.3 * R) x *= 1.04;
+  return v.set(x * shape[0], y * shape[1], z * shape[2]);
+}
+
+/** Where the 3D eyes, nose and mouth land on the painted face patch (face degrees). */
+function faceSpec(p: Proportions, kid: Kid, fr: FaceRecipe) {
+  const [sx, sy] = HEAD_SHAPE[kid.look.head] ?? HEAD_SHAPE.round;
+  const R = p.headR, hc = headCentre(p);
+  const D = 180 / Math.PI;
+  const es = EYE_SHAPES[fr.eye];
+  // the eyeball is sunk 0.6 of its radius, so the visible opening is 0.8 of it
+  const vis = 0.78 * p.eyeR;
+  return {
+    look: kid.look, recipe: fr,
+    eyePhi: Math.asin(Math.min(1, p.eyeX / (R * sx))) * D,
+    eyeTheta: Math.asin((p.eyeY - hc.y) / (R * sy)) * D,
+    eyeW: Math.asin(Math.min(1, (vis * es.w) / R)) * D,
+    eyeH: Math.asin(Math.min(1, (vis * es.h) / R)) * D,
+    noseTheta: Math.asin(NOSE_Y) * D,
+    mouthTheta: Math.asin(MOUTH_Y) * D,
+  };
+}
+
+/** Lid angles (radians about the eye's x axis): negative opens, LID_SHUT closes. */
+const LID_SHUT = 0.95;
+const LID_BY_EXPR: Record<Expression, number> = {
+  neutral: 0, happy: 0.16, focus: 0.3, surprised: -0.2, sad: 0.24, yell: 0.18, smug: 0.42, oops: -0.06,
+};
+function lidOpening(fr: FaceRecipe, e: Expression): number {
+  const open = EYE_SHAPES[fr.eye].lidOpen;
+  return Math.max(-1.55, open + (LID_SHUT - open) * LID_BY_EXPR[e]);
+}
+
+/**
+ * Kid skin: warm, a little self-lit (light passing through skin) so faces never go
+ * dead-dark under a cap brim, with a soft rim of sky light around the edges.
+ */
+function skinMaterial(hex: string): MeshStandardMaterial {
+  const m = new MeshStandardMaterial({ color: hex, roughness: 0.62 });
+  const base = new Color(hex);
+  m.emissive = base.clone().multiply(new Color('#ff9d7a')).multiplyScalar(0.11);
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      float kidRim = pow(1.0 - clamp(dot(normalize(normal), normalize(vViewPosition)), 0.0, 1.0), 2.6);
+      totalEmissiveRadiance += vec3(1.0, 0.86, 0.74) * kidRim * 0.18;`);
+  };
+  m.customProgramCacheKey = () => 'kidSkinRim';
+  return m;
+}
+
 export function headCentre(p: Proportions): Vector3 {
   return p.joints.head.clone().add(new Vector3(0, p.headR * 0.92, 0.02));
 }
@@ -395,57 +499,65 @@ function addShoe(L: Lists, p: Proportions, ank: Vector3, bone: number, kid: Kid)
 }
 
 const eyeTex = new Map<string, CanvasTexture>();
-/** Eye texture: v = 1 is the front of the eye (pupil), bands outward: iris with streaks, rim, white. */
+/**
+ * Eye texture, painted per texel from directions on the eyeball (canvas row 0 is the front pole;
+ * u = 0.75 is straight up, u = 1 toward the viewer's left). A big pupil and a big dark iris that
+ * fill most of the opening, a lighter lower iris, and two round catchlights.
+ */
 function eyeTexture(irisHex: string): CanvasTexture {
   let t = eyeTex.get(irisHex);
   if (t) return t;
+  const Wd = 64, H = 256;
   const c = document.createElement('canvas');
-  c.width = 64; c.height = 256;
+  c.width = Wd; c.height = H;
   const g = c.getContext('2d')!;
-  const H = 256;
-  g.fillStyle = '#fbfbf7';
-  g.fillRect(0, 0, 64, H);
-  // a hint of shadow toward the back of the eyeball
-  const sh = g.createLinearGradient(0, H * 0.25, 0, H);
-  sh.addColorStop(0, 'rgba(0,0,0,0)');
-  sh.addColorStop(1, 'rgba(120,110,120,0.35)');
-  g.fillStyle = sh;
-  g.fillRect(0, H * 0.25, 64, H * 0.75);
-  const irisEnd = H * (0.5 / Math.PI) * 1.05, pupilEnd = H * (0.24 / Math.PI);
-  const ig = g.createLinearGradient(0, 0, 0, irisEnd);
-  ig.addColorStop(0, shadeHex(irisHex, 1.25));
-  ig.addColorStop(0.7, irisHex);
-  ig.addColorStop(1, shadeHex(irisHex, 0.45));
-  g.fillStyle = ig;
-  g.fillRect(0, 0, 64, irisEnd);
-  for (let i = 0; i < 64; i += 3) { g.fillStyle = `rgba(255,255,255,${0.05 + (i % 7) * 0.012})`; g.fillRect(i, pupilEnd, 1, irisEnd - pupilEnd); }
-  g.fillStyle = shadeHex(irisHex, 0.35);
-  g.fillRect(0, irisEnd - 3, 64, 3);
-  g.fillStyle = '#0b0807';
-  g.fillRect(0, 0, 64, pupilEnd);
-  // catchlights: a big one up and to the viewer's left of the pupil, a small one opposite
-  // (u = 0.75 is straight up on the eyeball, u = 0.875 up-and-toward the kid's right)
-  g.fillStyle = 'rgba(255,255,255,0.95)';
-  g.beginPath(); g.ellipse(64 * 0.86, pupilEnd * 0.95, 6, 9, 0, 0, Math.PI * 2); g.fill();
-  g.fillStyle = 'rgba(255,255,255,0.7)';
-  g.beginPath(); g.ellipse(64 * 0.36, pupilEnd * 1.15, 3, 4.5, 0, 0, Math.PI * 2); g.fill();
+  const img = g.createImageData(Wd, H);
+  const n = parseInt(irisHex.slice(1), 16);
+  const ir = (n >> 16) & 255, ig = (n >> 8) & 255, ib = n & 255;
+  const PUPIL = 0.42, IRIS = 0.93;
+  const dir = (th: number, al: number): [number, number, number] => [Math.sin(th) * Math.cos(al), Math.sin(th) * Math.sin(al), Math.cos(th)];
+  const c1 = dir(0.36, Math.PI * 1.75), c2 = dir(0.5, Math.PI * 0.75);
+  const ang = (a: number[], b: number[]) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])));
+  const smooth = (e0: number, e1: number, x: number) => { const k = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return k * k * (3 - 2 * k); };
+  for (let y = 0; y < H; y++) {
+    const th = ((y + 0.5) / H) * Math.PI;
+    for (let x = 0; x < Wd; x++) {
+      const al = ((x + 0.5) / Wd) * Math.PI * 2;
+      const d = dir(th, al);
+      const up = -Math.sin(al);           // +1 at the top of the eye, −1 at the bottom
+      let r: number, gg: number, b: number;
+      if (th < IRIS + 0.03) {
+        // iris: lighter toward the bottom, darker toward the rim, with faint streaks
+        const low = smooth(-0.2, -0.9, up * Math.min(1, th / 0.6));
+        const rim = smooth(IRIS - 0.16, IRIS, th);
+        const streak = 1 + 0.06 * Math.sin(al * 23) * smooth(PUPIL, IRIS, th);
+        const k = (0.62 + 0.75 * low) * (1 - 0.5 * rim) * streak;
+        r = ir * k; gg = ig * k; b = ib * k;
+        // pupil, with a soft edge
+        const pp = smooth(PUPIL + 0.03, PUPIL - 0.03, th);
+        r += (14 - r) * pp; gg += (10 - gg) * pp; b += (9 - b) * pp;
+        // antialias the iris edge into the white
+        const wv = smooth(IRIS - 0.02, IRIS + 0.03, th);
+        r += (246 - r) * wv; gg += (242 - gg) * wv; b += (236 - b) * wv;
+      } else {
+        // the white, a little shadowed toward the back and under the lid
+        const back = smooth(1.0, 2.0, th) * 0.35 + smooth(0.2, 1, up) * 0.08;
+        r = 248 * (1 - back); gg = 244 * (1 - back); b = 238 * (1 - back * 0.8);
+      }
+      // catchlights
+      const k1 = smooth(0.15, 0.11, ang(d, c1)), k2 = smooth(0.075, 0.05, ang(d, c2)) * 0.85;
+      const k = Math.max(k1, k2);
+      r += (255 - r) * k; gg += (255 - gg) * k; b += (255 - b) * k;
+      const o = (y * Wd + x) * 4;
+      img.data[o] = r; img.data[o + 1] = gg; img.data[o + 2] = b; img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
   t = new CanvasTexture(c);
   t.colorSpace = SRGBColorSpace;
+  t.anisotropy = 4;
   eyeTex.set(irisHex, t);
   return t;
-}
-
-function shadeHex(hex: string, k: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  const f = (v: number) => Math.max(0, Math.min(255, Math.round(v * k)));
-  return `rgb(${f((n >> 16) & 255)},${f((n >> 8) & 255)},${f(n & 255)})`;
-}
-
-function irisColor(kid: Kid): string {
-  const opts = ['#5a3a1f', '#3b2a1a', '#6b4a2a', '#3f6f9f', '#4f7f4f', '#7a5a2a'];
-  const pick = Math.abs(hash(kid.id + 'eye')) % opts.length;
-  // darker skin tones favour brown eyes
-  return kid.look.skin >= 3 ? opts[pick % 3] : opts[pick];
 }
 
 export function hash(s: string): number {

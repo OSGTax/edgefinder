@@ -4,7 +4,7 @@ import { alongMatrix, blended, limb, loft, paint, paintFn, ramp, rigid } from '.
 import { B, HEAD_SHAPE, type Proportions } from './rig';
 import { CAP_LOGO_UV, type UniformColors } from './uniform';
 import type { Lists } from './model';
-import { headCentre, seeded } from './model';
+import { headCentre, seeded, shapeHead } from './model';
 
 // Hair styles, hats and the grown-up costume pieces that make each kid a
 // mini adult. Everything is built around the head centre (head bone) or on
@@ -445,9 +445,8 @@ export function addCostume(L: Lists, p: Proportions, kid: Kid) {
   const headS = (list: 'cloth' | 'shiny' | 'hair', g: BufferGeometry, hex: string | null, m: Matrix4) => head(list, g, hex, SH.clone().multiply(m));
   /** a point on the face surface (model space) for head-normalised x, y (in units of R) */
   const onFace = (x: number, y: number, out = 0) => {
-    const k = -y > 0.15 ? 1 - 0.2 * ramp(-y, 0.15, 1) : 1;
-    const z = Math.sqrt(Math.max(0, 1 - (x / k) ** 2 - y * y)) * (0.96 + 0.04 * k) * (y < 0 && y > -0.6 ? 1.03 : 1);
-    return new Vector3(hc.x + x * R * shx, hc.y + y * R * shy, hc.z + (z + out) * R * shz);
+    const z = Math.sqrt(Math.max(0, 1 - x * x - y * y));
+    return shapeHead(new Vector3(x * R, y * R, (z + out) * R), R, look).add(hc);
   };
   const chestZ = 0.33 * wf * s + p.belly * 0.12 * s; // front of the jersey at chest height
   const onChest = (list: 'cloth' | 'shiny', g: BufferGeometry, hex: string, m: Matrix4) => {
@@ -461,17 +460,17 @@ export function addCostume(L: Lists, p: Proportions, kid: Kid) {
     // a bushy brush of overlapping tufts that droops at the ends
     for (let i = 0; i < 6; i++) {
       const t = i / 5 * 2 - 1;
-      const at = onFace(t * 0.38, -0.35 - t * t * 0.16, 0.03);
+      const at = onFace(t * 0.38, -0.41 - t * t * 0.16, 0.03);
       const g = lumpy(new SphereGeometry(R * (0.19 - Math.abs(t) * 0.05), 12, 8), 0.07, 26, i);
       head('hair', g, null, new Matrix4().compose(at, new Quaternion().setFromEuler(new Euler(0.3, t * 0.5, -t * 0.7)), new Vector3(1.3, 0.72, 0.62)));
     }
   } else if (look.face === 'handlebar') {
     for (const sx of [-1, 1]) {
       // a waxed bar along the lip that curls up at the tip
-      const a = onFace(sx * 0.03, -0.3, 0.01), b = onFace(sx * 0.36, -0.34, 0.0);
+      const a = onFace(sx * 0.03, -0.39, 0.01), b = onFace(sx * 0.36, -0.42, 0.0);
       head('hair', limb(a.distanceTo(b), R * 0.06, R * 0.035, 8), null, alongMatrix(a, b));
       head('hair', new TorusGeometry(R * 0.07, R * 0.025, 6, 12, Math.PI * 1.3), null,
-        new Matrix4().compose(onFace(sx * 0.43, -0.27, -0.02), new Quaternion().setFromEuler(new Euler(0, sx * 0.6, sx > 0 ? -0.3 : Math.PI + 0.3, 'YXZ')), new Vector3(1, 1, 1)));
+        new Matrix4().compose(onFace(sx * 0.43, -0.35, -0.02), new Quaternion().setFromEuler(new Euler(0, sx * 0.6, sx > 0 ? -0.3 : Math.PI + 0.3, 'YXZ')), new Vector3(1, 1, 1)));
     }
   }
   if (look.face === 'beard') {
