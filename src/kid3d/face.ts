@@ -205,10 +205,14 @@ function paintFace(ctx: Ctx, spec: FaceSpec, e: Expression) {
 
   // ── marker-drawn facial hair (3D mustaches are added separately for walrus/handlebar)
   if (look.face === 'mustache' || look.face === 'goatee') {
-    ctx.fillStyle = browCol;
-    const ny = spec.noseTheta - 5.2;
+    // a bold marker mustache: two fat tapered wings with a few bristles, darker than the hair
+    const mc = shade(hairCol, look.hairColor >= 4 ? 0.55 : 0.68, 1.1);
+    ctx.fillStyle = mc;
+    const ny = my + 3.6; // on the upper lip, between the nose and the mouth
     for (const sx of [-1, 1]) {
-      ctx.beginPath(); ctx.ellipse(sx * 3.4, ny, 4.2, 1.7, sx * -0.22, 0, Math.PI * 2); ctx.fill();
+      taper(ctx, [sx * 0.5, ny + 0.9], [sx * 5.2, ny + 2.4], [sx * 10, ny - 2.2], 6.0, 2.0);
+      ctx.strokeStyle = mc; ctx.lineWidth = 0.6;
+      for (let k = 0; k < 3; k++) { const x = sx * (2 + k * 2); ctx.beginPath(); ctx.moveTo(x, ny - 0.6); ctx.lineTo(x + sx * 0.4, ny - 2.0); ctx.stroke(); }
     }
     if (look.face === 'goatee') {
       ctx.beginPath(); ctx.moveTo(-3, my - 5); ctx.quadraticCurveTo(0, my - 10.5, 3, my - 5); ctx.quadraticCurveTo(0, my - 6, -3, my - 5); ctx.fill();

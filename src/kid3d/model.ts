@@ -429,7 +429,9 @@ function buildBody(L: Lists, p: Proportions, kid: Kid, col: UniformColors, fr: F
     const shBone = side === 1 ? B.shoulderL : B.shoulderR;
     paintFn(sleeve, (q) => new Color(q.y < -ua * 0.495 ? col.trim : col.jersey));
     L.cloth.add(blended(sleeve, (q) => { const w = ramp(-q.y, -a * 0.2, ua * 0.3); return [shBone, 1 - w, armBone, w]; }), alongMatrix(sh, el));
-    L.skin.add(rigid(limb(ua * 0.98, p.armR, p.armR * 0.88, 14), armBone), alongMatrix(sh, el));
+    // the arm starts a little way down inside the sleeve so its rounded top never pokes through the cap
+    const armTop = sh.clone().lerp(el, (p.armR * 0.8) / ua);
+    L.skin.add(rigid(limb(ua * 0.98 - p.armR * 0.8, p.armR, p.armR * 0.88, 14), armBone), alongMatrix(armTop, el));
     const fa = wr.clone().sub(el).length();
     L.skin.add(rigid(limb(fa * 0.95, p.armR * 0.9, p.armR * 0.72, 14), foreBone), alongMatrix(el, wr));
     addHand(L, p, wr, el, side, handBone);
