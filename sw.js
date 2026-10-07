@@ -1,6 +1,6 @@
-// Grass Stain League offline worker (generated at build time, e1cbcdec3d).
-const CACHE = 'gsl-e1cbcdec3d';
-const PRECACHE = ["./","./apple-touch-icon.png","./assets/app-CywxkQcG.js","./assets/index-C2UZDfjB.css","./assets/index-CXkYZPZd.js","./assets/index-DujeXJwF.js","./assets/soundboard--0Jo4KqY.js","./assets/three-B2isxR2I.js","./favicon.svg","./icon-192.png","./icon-512.png","./icon-maskable-512.png","./manifest.webmanifest"];
+// Grass Stain League offline worker (generated at build time, 5dedbc43da).
+const CACHE = 'gsl-5dedbc43da';
+const PRECACHE = ["./","./apple-touch-icon.png","./assets/app-Bsi4MBPj.js","./assets/index-C2UZDfjB.css","./assets/index-DoCA-R4e.js","./assets/index-DujeXJwF.js","./assets/soundboard--0Jo4KqY.js","./assets/three-B2isxR2I.js","./favicon.svg","./icon-192.png","./icon-512.png","./icon-maskable-512.png","./manifest.webmanifest"];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting()));
