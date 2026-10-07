@@ -24,7 +24,7 @@
 /* ── a sign: flat cardboard tan, ink outline, a darker lower band ─────────── */
 .cardboard {
   position: relative;
-  background: linear-gradient(transparent 82%, rgba(185, 121, 58, 0.45) 82%), var(--cardboard);
+  background: var(--cardboard);
   color: var(--marker);
   border: var(--line) solid var(--marker); border-radius: var(--cut);
   padding: 14px 18px;

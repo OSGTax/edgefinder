@@ -47,14 +47,24 @@ class Shell {
         reg.addEventListener('updatefound', () => {
           const w = reg.installing;
           w?.addEventListener('statechange', () => {
-            // a new worker replaced an old one: this page still runs the old build until reloaded
-            if (w.state === 'activated' && navigator.serviceWorker.controller) { this.updateWaiting = true; this.fire(); }
+            // a new worker took over: if it doesn't carry this page's own script, this page is an old build
+            if (w.state === 'activated' && navigator.serviceWorker.controller) this.checkStale();
           });
         });
-        // phones keep a PWA open for days: look for a new build when it comes back to the front
+        // look for a new build on every launch (browsers may skip their own check) ...
+        if (reg.active) reg.update().catch(() => {});
+        // ... and when the app comes back to the front: phones keep a PWA open for days
         document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
       }).catch(() => { /* no offline play; everything else works */ });
     });
+  }
+
+  private async checkStale() {
+    const src = document.querySelector<HTMLScriptElement>('script[type="module"][src*="assets/"]')?.src;
+    if (!src || !('caches' in window)) return;
+    try {
+      if (!(await caches.match(src))) { this.updateWaiting = true; this.fire(); }
+    } catch { /* no cache access: say nothing */ }
   }
 
   // ── install hints ──────────────────────────────────────────────────────

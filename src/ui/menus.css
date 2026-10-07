@@ -26,7 +26,7 @@
   display: grid; align-content: center; justify-items: center; gap: 14px 28px;
   grid-template-columns: 1fr; grid-template-areas: "logo" "menu" "air";
 }
-.logo-sign { grid-area: logo; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 24px 14px; }
+.logo-sign { grid-area: logo; align-self: center; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 16px 24px 14px; }
 .logo-sign > .lt { width: min(78vw, 420px); height: auto; }
 .logo-sign .tape { font-size: var(--t-sm); }
 .title-menu { grid-area: menu; display: flex; flex-direction: column; gap: 12px; width: min(340px, 86vw); }

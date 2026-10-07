@@ -185,7 +185,8 @@ self.addEventListener('fetch', (e) => {
   const path = url.pathname.slice(scope.pathname.length);
   // the page: network first, so a new build is used as soon as it's online
   if (req.mode === 'navigate' || path === '' || path === 'index.html') {
-    e.respondWith(fetch(req).then((res) => {
+    // no-cache: always ask the server (the HTTP cache may hold an old page for minutes)
+    e.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put('./', copy)); }
       return res;
     }).catch(() => caches.match('./', { ignoreSearch: true }).then((r) => r || caches.match('./index.html'))));
