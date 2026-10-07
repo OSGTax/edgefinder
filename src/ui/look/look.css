@@ -1,0 +1,195 @@
+/* The kid-made surfaces. Helpers in surfaces.ts build this markup; plain HTML with
+   the same classes works too. Textures come from textures.ts as --tex-* vars. */
+
+.letters { display: inline-flex; line-height: 0; }
+.letters .lt { max-width: 100%; height: auto; }
+
+/* ── masking tape: a cream strip, slightly see-through, torn ends ─────────── */
+.tape {
+  display: inline-flex; align-items: center; gap: 0.35em;
+  background: color-mix(in srgb, var(--tape) 88%, transparent);
+  background-image: var(--tex-paper, none); background-blend-mode: multiply;
+  color: var(--marker); font-weight: 800; font-size: var(--t-sm);
+  padding: 0.3em 1em; min-height: 1.9em;
+  transform: rotate(var(--tilt, -1deg));
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+.tape-blue { background-color: color-mix(in srgb, #b9d3ea 90%, transparent); }
+.tape-red { background-color: color-mix(in srgb, #ebb3a6 90%, transparent); }
+.tape-bit {
+  position: absolute; width: 58px; height: 18px; z-index: 2; pointer-events: none;
+  background: color-mix(in srgb, var(--tape) 82%, transparent); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.tape-bit.tl { left: -14px; top: 6px; transform: translateY(var(--nudge)) rotate(var(--tilt)); }
+.tape-bit.tr { right: -14px; top: 6px; transform: translateY(var(--nudge)) rotate(var(--tilt)); }
+.tape-bit.bl { left: -14px; bottom: 6px; transform: translateY(var(--nudge)) rotate(var(--tilt)); }
+.tape-bit.br { right: -14px; bottom: 6px; transform: translateY(var(--nudge)) rotate(var(--tilt)); }
+
+/* ── cardboard: corrugated tan, torn edges ────────────────────────────────── */
+.cardboard {
+  position: relative;
+  background-color: var(--cardboard); background-image: var(--tex-cardboard, none); background-blend-mode: multiply;
+  color: var(--marker);
+  padding: 14px 18px;
+  transform: rotate(var(--tilt, 0deg));
+  filter: drop-shadow(2px 4px 0 rgba(38, 33, 28, 0.45));
+}
+.cardboard.dark { background-color: var(--cardboard-dark); }
+
+/* ── poster board / index card ────────────────────────────────────────────── */
+.paper {
+  position: relative;
+  background-color: var(--poster); background-image: var(--tex-paper, none); background-blend-mode: multiply;
+  color: var(--marker); padding: 12px 16px;
+  transform: rotate(var(--tilt, 0deg));
+  box-shadow: var(--shadow-soft);
+}
+.paper.ruled {
+  background-image:
+    linear-gradient(90deg, transparent 30px, rgba(200, 55, 45, 0.45) 30px 32px, transparent 32px),
+    repeating-linear-gradient(transparent 0 23px, rgba(47, 94, 168, 0.25) 23px 24px),
+    var(--tex-paper, none);
+  background-blend-mode: normal, normal, multiply;
+  padding-left: 42px; line-height: 24px;
+}
+
+/* ── chalkboard in a wooden frame ─────────────────────────────────────────── */
+.chalkboard {
+  position: relative;
+  background: var(--wood);
+  background-image: repeating-linear-gradient(88deg, rgba(0, 0, 0, 0.08) 0 3px, transparent 3px 9px);
+  padding: 12px; border-radius: 4px;
+  box-shadow: 3px 5px 0 rgba(38, 33, 28, 0.5), inset 0 0 0 2px rgba(0, 0, 0, 0.25);
+}
+.chalkboard-slate {
+  background-color: var(--board); background-image: var(--tex-chalkdust, none);
+  color: var(--chalk); padding: 16px 20px; border-radius: 2px;
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.45);
+  line-height: 1.45;
+}
+.chalkboard-slate h3, .chalkboard-slate .chalk-head { margin: 14px 0 4px; }
+.chalkboard-slate ul { margin: 0; padding-left: 1.2em; }
+.chalkboard-slate li { margin: 4px 0; }
+.chalkboard-slate li::marker { content: '– '; }
+.chalkboard-slate b, .chalkboard-slate kbd { color: var(--highlighter); font-family: inherit; font-weight: 800; }
+.chalk-tray { position: absolute; left: 10%; right: 10%; bottom: -6px; height: 8px; background: #6e4626; border-radius: 2px; box-shadow: 0 2px 0 rgba(0, 0, 0, 0.3); }
+.chalk-tray::before { content: ''; position: absolute; left: 18%; top: -5px; width: 30px; height: 6px; background: var(--chalk); border-radius: 3px; transform: rotate(-4deg); }
+.chalk-tray::after { content: ''; position: absolute; left: 60%; top: -4px; width: 22px; height: 5px; background: #f3c3d0; border-radius: 3px; transform: rotate(6deg); }
+
+/* ── clipboard ────────────────────────────────────────────────────────────── */
+.clipboard {
+  position: relative; padding: 30px 12px 14px;
+  background-color: #a8784a; background-image: var(--tex-cardboard, none); background-blend-mode: multiply;
+  border-radius: 14px; box-shadow: 3px 5px 0 rgba(38, 33, 28, 0.5);
+}
+.clipboard .clip {
+  position: absolute; left: 50%; top: -8px; width: 120px; height: 34px; transform: translateX(-50%);
+  background: linear-gradient(#d9dde0, #a6adb3 60%, #8b9298); border: 2px solid #5d6469; border-radius: 10px 10px 6px 6px;
+  box-shadow: 0 3px 0 rgba(0, 0, 0, 0.3); z-index: 2;
+}
+.clipboard .clip::after { content: ''; position: absolute; left: 50%; top: 5px; width: 30px; height: 10px; transform: translateX(-50%); border: 2px solid #5d6469; border-radius: 6px; background: #c6cbcf; }
+.clipboard-sheet {
+  background-color: #fbf8ef; background-image: repeating-linear-gradient(transparent 0 31px, rgba(47, 94, 168, 0.18) 31px 32px), var(--tex-paper, none);
+  background-blend-mode: normal, multiply;
+  padding: 16px 16px 18px; min-height: 120px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.sheet-title { display: flex; justify-content: center; margin-bottom: 6px; }
+
+/* ── trading card (front/back flip) ───────────────────────────────────────── */
+.tcard { --team: #555; --team2: #ddd; --team3: #fff; perspective: 900px; transform: rotate(var(--tilt, 0deg)); width: 150px; aspect-ratio: 5 / 7; }
+.tcard-inner { position: relative; width: 100%; height: 100%; transition: transform 0.5s cubic-bezier(0.3, 1.4, 0.5, 1); transform-style: preserve-3d; }
+.tcard.flipped .tcard-inner { transform: rotateY(180deg); }
+.tcard-face {
+  position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  border-radius: 7px; overflow: hidden; box-shadow: 2px 3px 0 rgba(38, 33, 28, 0.55);
+}
+.tcard-front {
+  background-color: var(--poster); background-image: var(--tex-paper, none); background-blend-mode: multiply;
+  border: 6px solid var(--poster); outline: 2px solid var(--team); outline-offset: -10px;
+  display: flex; flex-direction: column; padding: 5px; gap: 3px;
+}
+.tcard-photo { position: relative; flex: 1; min-height: 0; background: linear-gradient(170deg, color-mix(in srgb, var(--team2) 55%, white), var(--team2)); border: 2px solid var(--team); border-radius: 2px; overflow: hidden; display: flex; align-items: flex-end; justify-content: center; }
+.tcard-photo .portrait { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tcard-num { position: absolute; left: 3px; top: 3px; }
+.tcard-name { display: flex; justify-content: center; margin-top: 1px; }
+.tcard-name .lt { max-width: 100%; height: auto; max-height: 22px; }
+.tcard-front .typed { font-size: 10.5px; text-align: center; background: var(--marker); color: var(--poster); padding: 1px 4px; align-self: center; letter-spacing: 0.02em; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tcard-stats { display: flex; justify-content: space-around; gap: 2px; }
+.tcard-stat { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+.tcard-stat b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.tcard-stat span { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #6d5a44; }
+.tcard-back {
+  transform: rotateY(180deg);
+  background-color: #e7d9b7; background-image: var(--tex-cardboard, none); background-blend-mode: multiply;
+  border: 6px solid #e7d9b7; outline: 2px solid var(--team); outline-offset: -10px;
+  padding: 10px; font-size: var(--t-xs); overflow-y: auto; touch-action: pan-y;
+}
+
+/* ── the Channel 4½ lower-third ───────────────────────────────────────────── */
+.lower-third { display: flex; align-items: stretch; max-width: min(560px, 92vw); transform: rotate(-0.6deg); filter: drop-shadow(2px 3px 0 rgba(38, 33, 28, 0.45)); }
+.ch-bug {
+  flex: none; display: flex; align-items: center; justify-content: center; width: 46px; height: 46px; margin-right: -8px; z-index: 1; align-self: center;
+  background: var(--marker-blue); border-radius: 52% 46% 50% 44% / 48% 54% 44% 52%; transform: rotate(-8deg);
+  box-shadow: inset 0 0 0 3px rgba(255, 255, 255, 0.35);
+}
+.ch-bug .lt { width: 34px; height: auto; }
+.lt-body {
+  background-color: #e9c46a; background-image: var(--tex-paper, none); background-blend-mode: multiply;
+  padding: 4px 14px 6px 16px; clip-path: polygon(0 4%, 99% 0, 100% 92%, 2% 100%); min-width: 0;
+}
+.lt-chet .lt-body { background-color: #e9c46a; }
+.lt-dottie .lt-body { background-color: #e7a6b7; }
+.lt-who { display: flex; gap: 6px; align-items: baseline; }
+.lt-who b { font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; }
+.lt-who span { font-family: var(--font-typed); font-size: 10.5px; opacity: 0.75; }
+.lt-text { font-size: var(--t-sm); line-height: 1.3; }
+
+/* ── big moments painted on a bedsheet ────────────────────────────────────── */
+.big-moment { display: flex; justify-content: center; pointer-events: none; animation: bm-drop 1.7s cubic-bezier(0.2, 0.9, 0.3, 1) forwards; transform-origin: 50% 0; }
+.bm-sheet {
+  background: #fbf7ee; background-image: var(--tex-paper, none), repeating-linear-gradient(90deg, transparent 0 28px, rgba(120, 160, 210, 0.13) 28px 30px);
+  background-blend-mode: multiply, normal;
+  padding: 10px 26px 12px; display: flex; flex-direction: column; align-items: center;
+  filter: drop-shadow(0 6px 0 rgba(38, 33, 28, 0.4));
+}
+.bm-sheet .lt { max-width: 86vw; height: auto; }
+.bm-sub { font-weight: 800; font-size: var(--t-sm); }
+@keyframes bm-drop {
+  0% { transform: translateY(-120%) rotate(-4deg); opacity: 0; }
+  14% { transform: translateY(6%) rotate(1.5deg) scaleY(0.94); opacity: 1; }
+  22% { transform: translateY(-2%) rotate(-1deg) scaleY(1.02); }
+  30% { transform: translateY(0) rotate(0.4deg); }
+  82% { transform: translateY(0) rotate(-0.4deg); opacity: 1; }
+  100% { transform: translateY(-14px) rotate(-1deg); opacity: 0; }
+}
+
+/* ── sticker: a round label (a number, a badge) ───────────────────────────── */
+.sticker { display: inline-flex; align-items: center; justify-content: center; min-width: 2em; height: 2em; padding: 0 0.4em; border-radius: 50%; background: var(--highlighter); border: 2px solid var(--marker); font-weight: 800; transform: rotate(var(--tilt, -6deg)); }
+
+/* ── scribbled choice: options that get circled in marker when chosen ─────── */
+.choices { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+.choice {
+  position: relative; font: inherit; font-weight: 800; font-size: var(--t-md); color: var(--marker);
+  background: none; border: 0; padding: 8px 12px; min-height: 44px; min-width: 44px; cursor: pointer;
+}
+.choice.on::after { content: ''; position: absolute; inset: 0 -4px; background: var(--scribble, none) center / 100% 100% no-repeat; pointer-events: none; }
+.choice:focus-visible { outline: 2px dashed var(--marker-blue); }
+
+/* ── rotate-to-landscape card ─────────────────────────────────────────────── */
+.rotate-card {
+  display: flex; align-items: center; gap: 12px; max-width: min(320px, 86vw);
+  background-color: var(--poster); background-image: var(--tex-paper, none); background-blend-mode: multiply;
+  padding: 12px 16px; font-weight: 700; font-size: var(--t-sm); line-height: 1.3;
+  transform: rotate(-1.5deg); box-shadow: var(--shadow-soft);
+}
+.rotate-ico { font-size: 44px; display: flex; --ico-accent: var(--marker-red); animation: tip-over 2.4s ease-in-out infinite; }
+@keyframes tip-over { 0%, 30% { transform: rotate(-90deg); } 55%, 100% { transform: rotate(0deg); } }
+
+/* ── buttons that are just tape or chalk ──────────────────────────────────── */
+.btn.btn-tape { --bg: var(--tape); border: 0; border-radius: 0; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }
+.btn.btn-chalk { --bg: transparent; background-image: none; color: var(--chalk); border: 2px dashed rgba(243, 240, 228, 0.6); box-shadow: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .big-moment, .rotate-ico, .loading-line .rolling { animation: none !important; }
+  .tcard-inner { transition: none; }
+}

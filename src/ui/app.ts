@@ -16,6 +16,7 @@ import { PortraitStudio } from '../game/portraits';
 import { GameScreen, teamBadge } from '../game/screen';
 import type { Expression } from '../kid3d/face';
 import { clear, h } from './dom';
+import { icon, lettering, sign } from './look';
 import { saveSettings, settings } from './settings';
 
 // The demo app: build the yard and the kids once, run a CPU game behind the
@@ -38,11 +39,14 @@ class App {
 
   constructor(private root: HTMLElement) {
     root.appendChild(this.canvas);
-    const loadMsg = h('div', null, 'Unrolling the tarp…');
-    const loadBar = h('i');
-    const loading = h('div', { class: 'loading' }, h('div', { class: 'loading-ball' }), loadMsg,
-      h('div', { class: 'loading-bar' }, loadBar),
-      h('div', { class: 'loading-sub' }, 'Building the Mendozas\' backyard and eighteen very serious kids'));
+    const loadMsg = h('div', { class: 'loading-msg typed' }, 'Unrolling the tarp…');
+    const chalked = h('i', { class: 'chalked' });
+    const rolling = h('span', { class: 'rolling' }, icon('ball'));
+    const loading = h('div', { class: 'loading lawn' },
+      sign([lettering('GRASS STAIN\nLEAGUE', { style: 'poster', size: 40, colors: ['var(--highlighter)', '#a6d672'], seed: 'logo' })], { seed: 'loading-sign', class: 'loading-sign' }),
+      h('div', { class: 'loading-line', 'aria-hidden': 'true' }, icon('plate', { class: 'ico-plate' }), chalked, rolling, icon('base', { class: 'ico-base' })),
+      loadMsg,
+      h('div', { class: 'loading-sub' }, 'Out back of the Mendozas\' house, eighteen very serious kids are getting ready.'));
     root.appendChild(loading);
     root.appendChild(this.menus);
     window.addEventListener('resize', () => this.resize());
@@ -53,7 +57,11 @@ class App {
     window.addEventListener('keydown', unlock);
     requestAnimationFrame(() => setTimeout(async () => {
       const t0 = performance.now();
-      const show = (s: Step) => { loadMsg.textContent = `${s.msg}…`; loadBar.style.width = `${Math.round(s.done * 100)}%`; };
+      const show = (s: Step) => {
+        loadMsg.textContent = `${s.msg}…`;
+        chalked.style.width = `calc((100% - 44px) * ${s.done.toFixed(3)})`;
+        rolling.style.left = `calc(10px + (100% - 44px) * ${s.done.toFixed(3)})`;
+      };
       this.world = new World(this.canvas, buildField(yard('poolparty')), [TEAMS[0], TEAMS[1]]);
       await runPaced(this.world.build(), show);
       show({ done: 0.97, msg: 'Chalking the baselines' });
@@ -102,7 +110,7 @@ class App {
   private title() {
     this.startAttract();
     audio.playMusic('title');
-    const btn = (label: string, on: () => void, cls = 'btn big') => h('button', { class: cls, onclick: () => { audio.play('uiTap'); on(); } }, label);
+    const btn = (label: string | (Node | string)[], on: () => void, cls = 'btn big') => h('button', { class: cls, onclick: () => { audio.play('uiTap'); on(); } }, label);
     this.show(h('div', { class: 'screen title' },
       h('div', { class: 'logo-big' },
         h('div', { class: 'logo-small' }, 'the'),
@@ -111,7 +119,7 @@ class App {
         h('div', { class: 'logo-word w3' }, 'LEAGUE')),
       h('div', { class: 'tagline' }, 'Backyard baseball, played by very serious kids.'),
       h('div', { class: 'menu-col' },
-        btn('⚾ Play Ball!', () => this.pickTeam()),
+        btn([icon('ball'), 'Play ball!'], () => this.pickTeam()),
         btn('Meet the Kids', () => this.roster(), 'btn big ghost'),
         h('div', { class: 'row' },
           btn('How to Play', () => this.howTo(), 'btn ghost'),
@@ -121,7 +129,7 @@ class App {
 
   private head(title: string, back: () => void) {
     return h('div', { class: 'screen-head' },
-      h('button', { class: 'btn icon ghost', onclick: () => { audio.play('uiBack'); back(); } }, '◀'),
+      h('button', { class: 'btn icon ghost', onclick: () => { audio.play('uiBack'); back(); } }, icon('back', { title: 'Back' })),
       h('h1', null, title),
       h('div', { class: 'spacer' }));
   }
@@ -147,7 +155,7 @@ class App {
       h('div', { class: 'options' },
         seg('Innings', [[3, '3 (quick)'], [6, '6 (full game)']], this.innings, (v) => { this.innings = v; }),
         seg('Difficulty', [['rookie', 'Rookie'], ['pro', 'Pro'], ['allstar', 'All-Star']] as [Difficulty, string][], settings.difficulty, (v) => { settings.difficulty = v; saveSettings(); })),
-      h('div', { class: 'cta' }, h('button', { class: 'btn big', onclick: () => { audio.play('uiSelect'); this.startGame(this.yourTeam); } }, `⚾ Play as the ${this.yourTeam.name}!`))));
+      h('div', { class: 'cta' }, h('button', { class: 'btn big', onclick: () => { audio.play('uiSelect'); this.startGame(this.yourTeam); } }, icon('ball'), `Play as the ${this.yourTeam.name}!`))));
   }
 
   private startGame(you: Team, cpuOnly = false) {
@@ -186,7 +194,7 @@ class App {
           h('div', { class: 'kc-body' },
             h('div', { class: 'kc-name' }, `${k.first} "${k.nick}" ${k.last}`),
             h('div', { class: 'kc-persona' }, k.persona),
-            h('div', { class: 'kc-special' }, `⚡ ${SPECIAL_INFO[k.special].label}`)),
+            h('div', { class: 'kc-special' }, icon('bolt'), ` ${SPECIAL_INFO[k.special].label}`)),
           this.traitBars(k.traits));
       })));
     this.show(h('div', { class: 'screen' },
@@ -206,7 +214,7 @@ class App {
         h('div', { class: 'km-persona' }, k.persona),
         h('p', null, k.bio),
         this.traitBars(k.traits),
-        h('div', { class: 'km-special' }, h('b', null, `⚡ ${SPECIAL_INFO[k.special].label}: `), SPECIAL_INFO[k.special].blurb),
+        h('div', { class: 'km-special' }, h('b', null, icon('bolt'), ` ${SPECIAL_INFO[k.special].label}: `), SPECIAL_INFO[k.special].blurb),
         h('div', { class: 'km-pitches' }, h('b', null, 'Pitches: '), k.pitches.map((p) => PITCHES[p].label).join(', ')),
         h('div', { class: 'km-quips' }, ...k.quips.map((q) => h('span', null, `"${q}"`))),
         h('button', { class: 'btn', onclick: close }, 'Back')));
