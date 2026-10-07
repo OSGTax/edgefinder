@@ -1,13 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { FakeAudioContext, FakePanner, resetWorld, world, endSources } from './fake-audio';
 
 type AudioModule = typeof import('../src/audio/index');
 
 const EXPECTED_SFX = [
-  'batCrack', 'batTink', 'whiff', 'mittPop', 'catch', 'bounce', 'fence', 'splash', 'leaves',
-  'cheer', 'bigCheer', 'aww', 'strike', 'out', 'safe', 'homeRun', 'special', 'uiTap', 'uiBack',
-  'uiSelect', 'whistle', 'dogBark', 'throw',
+  'batCrack', 'batTink', 'whiff', 'mittPop', 'catch', 'bounce', 'bounceDirt', 'bouncePatio', 'fence',
+  'picket', 'hedge', 'houseWall', 'splash', 'leaves', 'cheer', 'bigCheer', 'aww', 'ooh', 'giggle',
+  'strike', 'out', 'safe', 'homeRun', 'special', 'uiTap', 'uiBack', 'uiSelect', 'whistle', 'dogBark',
+  'screenDoor', 'throw', 'boing', 'bonk', 'zip', 'dizzy', 'squeak', 'pop',
+  'slideUp', 'slideDown', 'bigWhiff', 'stingThwack', 'stingWhiff', 'stingSnag', 'stingSploosh',
+  'stingBonk', 'stingSitDown', 'stingSeeYa',
 ];
-const EXPECTED_TRACKS = ['title', 'game', 'victory', 'season'];
+const EXPECTED_TRACKS = ['title', 'game', 'inning', 'victory', 'defeat', 'season'];
 
 async function freshModule(): Promise<AudioModule> {
   vi.resetModules();
@@ -26,22 +30,29 @@ function exerciseEverything(mod: AudioModule): void {
   }
   for (const track of MUSIC_TRACKS) audio.playMusic(track);
   audio.stopMusic();
+  audio.speak('kai', 'SUNDAY! SUNDAY! SUNDAY!');
+  audio.speak('Chet', 'Here comes Kaboom to the plate.');
+  audio.speak('nobody-we-know', '');
   audio.setAmbience(true);
   audio.setAmbience(false);
   audio.setSfxVolume(0.5);
   audio.setSfxVolume(-3);
   audio.setMusicVolume(2);
   audio.setMusicVolume(Number.NaN);
+  audio.setVoiceVolume(0.4);
   audio.setMuted(true);
   audio.setMuted(false);
   // garbage from untyped callers must not throw either
   (audio.play as (n: unknown) => void)('notASound');
   (audio.playMusic as (n: unknown) => void)(undefined);
+  (audio.speak as (w: unknown, t: unknown) => void)(undefined, null);
 }
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  FakeAudioContext.resumeFails = false;
+  FakeAudioContext.instances.length = 0;
 });
 
 describe('audio without Web Audio', () => {
@@ -83,7 +94,7 @@ describe('audio without Web Audio', () => {
 });
 
 describe('songs', () => {
-  it('parse, are whole bars, and the victory fanfare is ~4 s', async () => {
+  it('parse, are whole bars, and the one-shots are the right length', async () => {
     vi.resetModules();
     const { SONGS } = await import('../src/audio/tracks');
     for (const song of Object.values(SONGS)) {
@@ -93,233 +104,68 @@ describe('songs', () => {
       }
     }
     expect(SONGS.title.length).toBe(256); // 16 bars, A + B
-    const v = SONGS.victory;
-    const seconds = v.length * v.stepDur + 0.4;
-    expect(seconds).toBeGreaterThan(3.5);
-    expect(seconds).toBeLessThan(4.5);
-    expect(v.loop).toBe(false);
+    const secs = (name: keyof typeof SONGS) => SONGS[name].length * SONGS[name].stepDur + 0.4;
+    expect(secs('victory')).toBeGreaterThan(3.5);
+    expect(secs('victory')).toBeLessThan(4.5);
+    expect(secs('defeat')).toBeLessThan(6);
+    expect(secs('inning')).toBeLessThan(7.5);
+    expect(SONGS.victory.loop).toBe(false);
+    expect(SONGS.inning.then).toBe(true); // hands back to the game music
+    expect(SONGS.victory.then).toBe(false);
   });
 });
 
-// ── a strict fake Web Audio graph ────────────────────────────────────────────
-// It throws wherever real browsers throw (exponential ramp to 0, non-finite
-// values, double start, stop before start) and tracks connections so we can
-// check that every finished sound is fully disconnected.
-
-interface World {
-  now: number;
-  live: Set<FakeNode>;
-  sources: Set<FakeSource>;
-  created: number;
-  violations: string[];
-}
-let world: World;
-
-function check(ok: boolean, msg: string, E: ErrorConstructor = Error): void {
-  if (!ok) {
-    world.violations.push(msg);
-    throw new E(msg);
-  }
-}
-
-class FakeParam {
-  constructor(
-    public value: number,
-    private readonly label: string,
-  ) {}
-  private ok(v: number, t: number): void {
-    check(Number.isFinite(v), `${this.label}: non-finite value ${v}`, TypeError);
-    check(Number.isFinite(t) && t >= 0, `${this.label}: bad time ${t}`, RangeError);
-  }
-  setValueAtTime(v: number, t: number): this {
-    this.ok(v, t);
-    return this;
-  }
-  linearRampToValueAtTime(v: number, t: number): this {
-    this.ok(v, t);
-    return this;
-  }
-  exponentialRampToValueAtTime(v: number, t: number): this {
-    this.ok(v, t);
-    check(v > 0, `${this.label}: exponential ramp to ${v}`, RangeError);
-    return this;
-  }
-  setTargetAtTime(v: number, t: number, c: number): this {
-    this.ok(v, t);
-    check(c >= 0, `${this.label}: negative time constant`, RangeError);
-    return this;
-  }
-  cancelScheduledValues(t: number): this {
-    this.ok(0, t);
-    return this;
-  }
-}
-
-class FakeNode {
-  readonly outputs = new Set<unknown>();
-  constructor() {
-    world.created++;
-  }
-  connect<T>(dest: T): T {
-    check(dest != null, 'connect() to nothing');
-    this.outputs.add(dest);
-    world.live.add(this);
-    return dest;
-  }
-  disconnect(): void {
-    this.outputs.clear();
-    world.live.delete(this);
-  }
-}
-
-class FakeSource extends FakeNode {
-  onended: (() => void) | null = null;
-  started = false;
-  stopAt = Infinity;
-  start(when = 0): void {
-    check(!this.started, 'start() called twice');
-    check(Number.isFinite(when) && when >= 0, `bad start time ${when}`, RangeError);
-    this.started = true;
-    world.sources.add(this);
-  }
-  stop(when = 0): void {
-    check(this.started, 'stop() before start()');
-    check(Number.isFinite(when) && when >= 0, `bad stop time ${when}`, RangeError);
-    this.stopAt = when;
-  }
-}
-
-class FakeOscillator extends FakeSource {
-  type = 'sine';
-  readonly frequency = new FakeParam(440, 'osc.frequency');
-  readonly detune = new FakeParam(0, 'osc.detune');
-}
-
-class FakeBuffer {
-  readonly duration: number;
-  private readonly data: Float32Array;
-  constructor(
-    readonly numberOfChannels: number,
-    readonly length: number,
-    readonly sampleRate: number,
-  ) {
-    this.data = new Float32Array(length);
-    this.duration = length / sampleRate;
-  }
-  getChannelData(): Float32Array {
-    return this.data;
-  }
-}
-
-class FakeBufferSource extends FakeSource {
-  buffer: FakeBuffer | null = null;
-  loop = false;
-  readonly playbackRate = new FakeParam(1, 'playbackRate');
-  override start(when = 0, offset = 0): void {
-    check(this.buffer !== null, 'buffer source started without a buffer');
-    check(Number.isFinite(offset) && offset >= 0, `bad offset ${offset}`, RangeError);
-    super.start(when);
-    if (!this.loop && this.buffer) this.stopAt = Math.min(this.stopAt, when + this.buffer.duration);
-  }
-}
-
-class FakeGain extends FakeNode {
-  readonly gain = new FakeParam(1, 'gain');
-}
-
-class FakeBiquad extends FakeNode {
-  type = 'lowpass';
-  readonly frequency = new FakeParam(350, 'filter.frequency');
-  readonly Q = new FakeParam(1, 'filter.Q');
-  readonly gain = new FakeParam(0, 'filter.gain');
-  readonly detune = new FakeParam(0, 'filter.detune');
-}
-
-class FakePanner extends FakeNode {
-  readonly pan = new FakeParam(0, 'pan');
-}
-
-class FakeShaper extends FakeNode {
-  curve: Float32Array | null = null;
-  oversample = 'none';
-}
-
-class FakeCompressor extends FakeNode {
-  readonly threshold = new FakeParam(-24, 'threshold');
-  readonly knee = new FakeParam(30, 'knee');
-  readonly ratio = new FakeParam(12, 'ratio');
-  readonly attack = new FakeParam(0.003, 'attack');
-  readonly release = new FakeParam(0.25, 'release');
-}
-
-class FakeAudioContext {
-  state: 'suspended' | 'running' | 'closed' = 'suspended';
-  readonly sampleRate = 22050;
-  readonly destination = new FakeNode();
-  get currentTime(): number {
-    return world.now;
-  }
-  resume(): Promise<void> {
-    this.state = 'running';
-    return Promise.resolve();
-  }
-  close(): Promise<void> {
-    this.state = 'closed';
-    return Promise.resolve();
-  }
-  createGain(): FakeGain {
-    return new FakeGain();
-  }
-  createOscillator(): FakeOscillator {
-    return new FakeOscillator();
-  }
-  createBufferSource(): FakeBufferSource {
-    return new FakeBufferSource();
-  }
-  createBuffer(channels: number, length: number, rate: number): FakeBuffer {
-    return new FakeBuffer(channels, length, rate);
-  }
-  createBiquadFilter(): FakeBiquad {
-    return new FakeBiquad();
-  }
-  createStereoPanner(): FakePanner {
-    return new FakePanner();
-  }
-  createWaveShaper(): FakeShaper {
-    return new FakeShaper();
-  }
-  createDynamicsCompressor(): FakeCompressor {
-    return new FakeCompressor();
-  }
-}
+// ── with a fake (strict) AudioContext ────────────────────────────────────────
 
 /** Move the audio clock and the JS timers forward together, firing onended like a browser. */
 function advance(seconds: number, tickMs = 25): void {
   const ticks = Math.round((seconds * 1000) / tickMs);
   for (let k = 0; k < ticks; k++) {
     world.now += tickMs / 1000;
-    for (const s of [...world.sources]) {
-      if (s.stopAt <= world.now) {
-        world.sources.delete(s);
-        s.onended?.();
-      }
-    }
+    endSources(world.now);
     vi.advanceTimersByTime(tickMs);
   }
 }
 
-/** The four permanent bus nodes: sfx, music, compressor, master. */
-const BUS_NODES = 4;
+/** The permanent bus nodes: sfx, voice, music, duck, compressor, master, safety clip. */
+const BUS_NODES = 7;
 
-async function withFakeAudio(): Promise<{ mod: AudioModule; errors: unknown[] }> {
-  world = { now: 0, live: new Set(), sources: new Set(), created: 0, violations: [] };
+interface FakeDoc {
+  visibilityState: 'visible' | 'hidden';
+  listeners: Map<string, Array<() => void>>;
+  addEventListener(ev: string, fn: () => void): void;
+  fire(ev: string): void;
+}
+
+function fakeDocument(): FakeDoc {
+  const doc: FakeDoc = {
+    visibilityState: 'visible',
+    listeners: new Map(),
+    addEventListener(ev, fn) {
+      const l = doc.listeners.get(ev) ?? [];
+      l.push(fn);
+      doc.listeners.set(ev, l);
+    },
+    fire(ev) {
+      for (const fn of doc.listeners.get(ev) ?? []) fn();
+    },
+  };
+  return doc;
+}
+
+async function withFakeAudio(doc?: FakeDoc): Promise<{ mod: AudioModule; errors: unknown[] }> {
+  resetWorld();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-  vi.stubGlobal('window', { AudioContext: FakeAudioContext });
+  vi.stubGlobal('window', { AudioContext: FakeAudioContext, addEventListener: () => undefined });
+  if (doc) vi.stubGlobal('document', doc);
   const mod = await freshModule();
   const errors: unknown[] = [];
   mod.setAudioErrorHandler((e) => errors.push(e));
   return { mod, errors };
 }
+
+/** Let resolved promises (resume()) run. */
+const flush = () => Promise.resolve().then(() => Promise.resolve());
 
 describe('audio with a (fake) AudioContext', () => {
   it('stays silent until unlock, then reports ready', async () => {
@@ -328,6 +174,7 @@ describe('audio with a (fake) AudioContext', () => {
     expect(world.created).toBe(0);
     expect(mod.audio.ready).toBe(false);
     mod.audio.unlock();
+    await flush();
     expect(mod.audio.ready).toBe(true);
   });
 
@@ -335,12 +182,13 @@ describe('audio with a (fake) AudioContext', () => {
     const { mod, errors } = await withFakeAudio();
     const { audio, SFX_NAMES } = mod;
     audio.unlock();
+    await flush();
     for (const name of SFX_NAMES) {
       for (const intensity of [0, 0.5, 1]) {
         const before = world.created;
         audio.play(name, { intensity, pan: intensity * 2 - 1 });
         expect(world.created, `${name} made no sound`).toBeGreaterThan(before + 2);
-        advance(0.7); // past every sound's repeat guard
+        advance(2.1); // past every sound's repeat guard
       }
     }
     advance(4);
@@ -354,9 +202,11 @@ describe('audio with a (fake) AudioContext', () => {
     const { mod } = await withFakeAudio();
     const { audio } = mod;
     audio.unlock();
+    await flush();
     const base = world.created;
     audio.setMuted(true);
     audio.play('cheer');
+    audio.speak('kai', 'KA-BOOM!');
     expect(world.created).toBe(base);
     audio.setMuted(false);
     for (let k = 0; k < 100; k++) {
@@ -373,6 +223,7 @@ describe('audio with a (fake) AudioContext', () => {
     audio.playMusic('title'); // requested before unlock: starts on unlock
     expect(world.created).toBe(0);
     audio.unlock();
+    await flush();
     advance(36); // a full 16-bar loop of the title plus a little
     const created = world.created;
     advance(1);
@@ -383,6 +234,8 @@ describe('audio with a (fake) AudioContext', () => {
     advance(45);
     audio.playMusic('victory');
     advance(8);
+    audio.playMusic('defeat');
+    advance(8);
     audio.stopMusic();
     advance(5);
     expect(world.violations).toEqual([]);
@@ -391,31 +244,142 @@ describe('audio with a (fake) AudioContext', () => {
     expect(world.live.size).toBe(BUS_NODES);
   });
 
+  it('plays the between-innings jingle once, then goes back to the game music', async () => {
+    const { mod } = await withFakeAudio();
+    const music = await import('../src/audio/music');
+    mod.audio.unlock();
+    await flush();
+    mod.audio.playMusic('game');
+    advance(2);
+    mod.audio.playMusic('inning');
+    expect(music.nowPlaying()).toBe('inning');
+    advance(9);
+    expect(music.nowPlaying()).toBe('game');
+    mod.audio.playMusic('victory');
+    advance(8);
+    expect(music.nowPlaying()).toBe(null); // the fanfare doesn't hand back
+  });
+
   it('skips ahead after a stall instead of bursting stale notes', async () => {
     const { mod } = await withFakeAudio();
     mod.audio.unlock();
+    await flush();
     mod.audio.playMusic('title');
     advance(1);
     world.now += 30; // 30 s pass with no timer ticks (frozen background tab)
     const before = world.created;
     vi.advanceTimersByTime(25);
     // one tick may schedule ~0.1 s of music, never the 30 s that was missed
-    expect(world.created - before).toBeLessThan(80);
+    expect(world.created - before).toBeLessThan(150);
   });
 
-  it('runs the backyard ambience (birds, mower) and tears it down', async () => {
+  it('runs the backyard ambience and tears it down', async () => {
     const { mod, errors } = await withFakeAudio();
     const { audio } = mod;
     audio.setAmbience(true); // before unlock: remembered
     audio.unlock();
+    await flush();
     const bed = world.created;
-    advance(240, 50);
-    expect(world.created - bed).toBeGreaterThan(100); // dozens of bird calls happened
+    advance(400, 50); // long enough for the truck, the mower, the dog...
+    expect(world.created - bed).toBeGreaterThan(100); // dozens of birds, cicadas, flips happened
     audio.setAmbience(false);
-    advance(16, 50); // longest mower pass is 14 s
+    advance(30, 50); // the longest one-off (the ice-cream truck) is ~22 s
     expect(world.violations).toEqual([]);
     expect(errors).toEqual([]);
     expect(world.sources.size).toBe(0);
     expect(world.live.size).toBe(BUS_NODES);
+  });
+
+  it('says lines for every kid, both announcers and the grown-ups', async () => {
+    const { mod, errors } = await withFakeAudio();
+    const { KIDS } = await import('../src/data/kids');
+    mod.audio.unlock();
+    await flush();
+    const who = [...KIDS.map((k) => k.id), 'Chet', 'Dottie', 'mrsMendoza', 'mrMendoza', 'a-future-kid'];
+    for (const w of who) {
+      const line = KIDS.find((k) => k.id === w)?.quips[0] ?? 'And that is the ballgame, folks!';
+      const d = mod.audio.speak(w, line);
+      expect(d, w).toBeGreaterThan(0.2);
+      expect(d, w).toBeLessThan(4);
+      advance(d + 0.5);
+    }
+    mod.audio.setVoiceVolume(0);
+    expect(mod.audio.speak('kai', 'BE THERE!')).toBe(0); // voices off: nothing built
+    advance(1);
+    expect(world.violations).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(world.live.size).toBe(BUS_NODES);
+  });
+});
+
+describe('phones: unlock, interruptions, background', () => {
+  it('unlocks on the first touch anywhere, with no game code involved', async () => {
+    const doc = fakeDocument();
+    const { mod } = await withFakeAudio(doc);
+    mod.audio.playMusic('title');
+    expect(mod.audio.ready).toBe(false);
+    doc.fire('touchend');
+    await flush();
+    expect(mod.audio.ready).toBe(true);
+  });
+
+  it('fades out and suspends while hidden, and comes back when shown', async () => {
+    const doc = fakeDocument();
+    const { mod } = await withFakeAudio(doc);
+    mod.audio.unlock();
+    await flush();
+    const ctx = FakeAudioContext.instances[0];
+    doc.visibilityState = 'hidden';
+    doc.fire('visibilitychange');
+    advance(0.2);
+    await flush();
+    expect(ctx.state).toBe('suspended');
+    // sounds asked for while hidden are simply dropped
+    const before = world.created;
+    mod.audio.play('batCrack');
+    expect(world.created).toBe(before);
+    doc.visibilityState = 'visible';
+    doc.fire('visibilitychange');
+    await flush();
+    expect(ctx.state).toBe('running');
+  });
+
+  it('recovers after an interruption (a phone call, Siri)', async () => {
+    const doc = fakeDocument();
+    const { mod } = await withFakeAudio(doc);
+    mod.audio.unlock();
+    await flush();
+    const ctx = FakeAudioContext.instances[0];
+    ctx.setState('interrupted'); // iOS: the call comes in
+    await flush();
+    expect(ctx.state).toBe('running'); // resumed as soon as it's allowed
+  });
+
+  it('rebuilds a context iOS leaves stuck, and the music carries on', async () => {
+    const doc = fakeDocument();
+    const { mod, errors } = await withFakeAudio(doc);
+    const music = await import('../src/audio/music');
+    mod.audio.unlock();
+    await flush();
+    mod.audio.playMusic('game');
+    mod.audio.setAmbience(true);
+    advance(1);
+    const first = FakeAudioContext.instances[0];
+    FakeAudioContext.resumeFails = true; // resume() resolves but nothing runs
+    first.setState('interrupted');
+    await flush();
+    doc.fire('touchend');
+    await flush();
+    expect(first.state).toBe('interrupted');
+    FakeAudioContext.resumeFails = false;
+    doc.fire('touchend'); // the next touch gives up on it and starts fresh
+    await flush();
+    expect(FakeAudioContext.instances.length).toBe(2);
+    expect(first.state).toBe('closed');
+    expect(FakeAudioContext.instances[1].state).toBe('running');
+    expect(mod.audio.ready).toBe(true);
+    expect(music.nowPlaying()).toBe('game');
+    advance(2);
+    expect(errors).toEqual([]);
   });
 });

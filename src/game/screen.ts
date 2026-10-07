@@ -1,6 +1,6 @@
 import { Plane, Raycaster, Vector2, Vector3 } from 'three';
 import { clamp } from '../engine/math';
-import { audio } from '../audio';
+import { audio, GameSound } from '../audio';
 import { kid } from '../data/kids';
 import { SPECIAL_INFO, type Kid, type PitchType, type Team } from '../data/types';
 import { contactWindow, type SwingKind, type SwingRead } from '../sim/batting';
@@ -102,6 +102,8 @@ export class GameScreen {
   readonly match: Match;
   private director: Director;
   private booth: Booth;
+  /** sound: crowd, kids' barks, the booth's voices, surfaces, inning jingle (src/audio/cues.ts) */
+  private sound = new GameSound();
   private root: HTMLElement;
   private canvas: HTMLCanvasElement;
   private raf = 0;
@@ -155,7 +157,6 @@ export class GameScreen {
   private bannerT = 0;
   private readT = 0;
   private introT = 0;
-  private bounceSfxT = 0;
   private lastFoulBack = 0;
   private humanSide: -1 | 0 | 1;
   private wake: WakeLockSentinel | null = null;
@@ -204,7 +205,6 @@ export class GameScreen {
     this.canvas.removeEventListener('contextmenu', this.noMenu);
     this.releaseWake();
     audio.setAmbience(false);
-    window.speechSynthesis?.cancel?.();
     this.root.remove();
   }
 
@@ -227,6 +227,7 @@ export class GameScreen {
       // hit-stop: the world holds still for a beat when bat meets ball
       if (this.hitStop > 0) { this.hitStop -= this.ff > 0 ? 1 / 30 : real; this.world.sync(this.match, 0, this.overlay()); continue; }
       this.time += dt;
+      this.sound.tick(dt);
       this.updateAimAssist(dt);
       this.updateMeter(this.ff > 0 ? 1 / 30 : real);
       // the first time you bat, the pitcher waits for the coach to say its piece
@@ -609,7 +610,7 @@ export class GameScreen {
   private handleEvents() {
     const m = this.match;
     const fx = this.world.fx;
-    const good = (battingGood: boolean) => (this.humanSide < 0 ? true : (m.battingSide === this.humanSide) === battingGood);
+    this.sound.events(m.events, m, this.humanSide); // sound: see GameSound
     const mine = this.humanSide >= 0 && m.battingSide === this.humanSide;
     for (const e of m.events) {
       this.say(this.booth.react(e, m));
@@ -659,7 +660,6 @@ export class GameScreen {
           break;
         case 'strikeout':
           this.popup(e.looking ? 'STRIKE THREE!' : 'STRUCK OUT!', '#ffe14d', 1.1);
-          audio.play(good(false) ? 'cheer' : 'aww');
           if (!mine && this.humanSide >= 0) this.buzz([0, 20, 40, 20]);
           break;
         case 'walk':
@@ -672,7 +672,6 @@ export class GameScreen {
           if (this.humanSide >= 0 && !mine) this.buzz(e.hard ? 25 : 12);
           break;
         case 'bobble':
-          audio.play('aww');
           this.popup('BOBBLE!', '#ffb36b', 0.8);
           break;
         case 'throw':
@@ -693,13 +692,11 @@ export class GameScreen {
         case 'hit': {
           const label = e.bases >= 3 ? 'TRIPLE!' : e.bases === 2 ? 'DOUBLE!' : 'BASE HIT!';
           this.popup(label, '#7dff9a', 1.05);
-          audio.play(good(true) ? 'cheer' : 'aww');
           break;
         }
         case 'homeRun':
           this.popup('HOME RUN!', '#ffe14d', 1.5);
           audio.play('homeRun');
-          audio.play(good(true) ? 'bigCheer' : 'aww');
           for (const d of [W(-47, 15, 3), W(47, 15, 3)]) fx.confetti(d, 90);
           if (mine) this.buzz([0, 40, 50, 40, 50, 80]);
           break;
@@ -714,15 +711,11 @@ export class GameScreen {
           this.popup('E! OOPS!', '#ffb36b', 0.9);
           break;
         case 'bounce':
-          if (this.time - this.bounceSfxT > 0.12) { audio.play('bounce', { intensity: clamp(e.speed / 40, 0, 1) }); this.bounceSfxT = this.time; }
           if (e.speed > 5) {
             const p = W(e.x, e.y, 0);
             if (e.surface === 'grass') fx.grass(p, clamp(e.speed / 30, 0.3, 1.2));
             else fx.dust(p, clamp(e.speed / 30, 0.3, 1.2), e.surface === 'patio' ? '#d8d0c4' : '#c8a77a');
           }
-          break;
-        case 'fence':
-          audio.play('fence', { intensity: 0.8 });
           break;
         case 'tree':
           audio.play('leaves');
@@ -867,7 +860,7 @@ export class GameScreen {
       clear(this.tickerEl);
       this.tickerEl.append(h('b', { class: line.who === 'Chet' ? 'chet' : 'dottie' }, line.who === 'Chet' ? 'Chet' : 'Dottie'), h('span', null, line.text));
       this.tickerT = Math.max(2.2, line.text.length * 0.055);
-      if (settings.voice) speak(line);
+      this.sound.caption(line.who, line.text); // sound: the booth talks under its caption
     }
     if (this.bubbleT > 0) { this.bubbleT -= dt; if (this.bubbleT <= 0) this.bubbleEl.classList.add('hidden'); }
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0 && m.phase !== 'over') this.bannerEl.classList.add('hidden'); }
@@ -1118,7 +1111,6 @@ export class GameScreen {
     audio.play(this.paused ? 'uiBack' : 'uiTap');
     if (this.paused) {
       this.showPauseMenu();
-      window.speechSynthesis?.cancel?.();
     } else {
       this.root.querySelector('.pausemenu')?.remove();
       audio.unlock(); // a phone call can leave audio suspended
@@ -1143,7 +1135,7 @@ export class GameScreen {
           h('button', { class: 'btn big resume', onclick: () => this.togglePause(false) }, 'Back to the game')),
         h('div', { class: 'pp-side' },
           toggle('Show strike zone', settings.showZone, (v) => { settings.showZone = v; }),
-          toggle('Announcer voice', settings.voice, (v) => { settings.voice = v; }),
+          toggle('Voices', settings.voices > 0, (v) => { settings.voices = v ? 0.8 : 0; audio.setVoiceVolume(settings.voices); }),
           toggle('Buzz on big plays', settings.haptics, (v) => { settings.haptics = v; }),
           h('button', { class: 'btn ghost', onclick: () => this.simToEnd() }, 'Sim to the end'),
           quit)));
@@ -1170,7 +1162,7 @@ export class GameScreen {
     const m = this.match;
     const won = this.humanSide >= 0 && m.winner === this.humanSide;
     this.releaseWake();
-    audio.playMusic('victory');
+    audio.playMusic(this.humanSide >= 0 && m.winner !== -1 && !won ? 'defeat' : 'victory');
     if (won) { audio.play('bigCheer'); this.buzz([0, 40, 60, 40, 60, 90]); }
     let star: string | null = null, best = -1;
     for (const [id, l] of Object.entries(m.box)) {
@@ -1206,19 +1198,5 @@ export class GameScreen {
         sk ? h('div', { class: 'star' }, this.portrait(sk, 'happy', 168),
           h('div', null, h('div', { class: 'card-label' }, 'Player of the game'), h('div', { class: 'card-name' }, `${sk.first} "${sk.nick}" ${sk.last}`), h('div', { class: 'card-sub' }, starLine), h('div', { class: 'quote' }, `"${sk.quips[0]}"`))) : null));
     setTimeout(() => { if (!this.destroyed) this.root.appendChild(panel); }, 2500);
-  }
-}
-
-function speak(line: Line) {
-  try {
-    const s = window.speechSynthesis;
-    if (!s) return;
-    const u = new SpeechSynthesisUtterance(line.text.replace(/["“”]/g, ''));
-    u.rate = line.who === 'Chet' ? 1.15 : 1.0;
-    u.pitch = line.who === 'Chet' ? 1.5 : 1.7;
-    u.volume = settings.sfx;
-    s.speak(u);
-  } catch {
-    /* no voice available */
   }
 }

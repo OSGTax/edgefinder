@@ -60,7 +60,7 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
     if (expr) m.setExpression(expr as (typeof EXPRESSIONS)[number]);
     if (exprSheet) {
       m.setExpression(EXPRESSIONS[i]);
-      m.group.position.set(((i % 4) - 1.5) * 1.85, 20 - Math.floor(i / 4) * 2.1 - (m.p.joints.head.y + m.p.headR * 0.92), 0);
+      m.group.position.set(((i % 5) - 2) * 1.85, 20 - Math.floor(i / 5) * 2.1 - (m.p.joints.head.y + m.p.headR * 0.92), 0);
     }
     // &hide=face,hair,... hides those part meshes (by material name prefix) for debugging
     for (const h of opts.get('hide')?.split(',') ?? []) for (const me of m.meshes) if ((me.material as { name: string }).name.toLowerCase().includes(h)) me.visible = false;
@@ -68,7 +68,7 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
     models.push(m);
   });
   const cam = new PerspectiveCamera(only ? 22 : 30, window.innerWidth / window.innerHeight, 0.1, 500);
-  if (exprSheet) { floor.visible = false; cam.fov = 4.4; cam.position.set(0, 18.95, 70); cam.lookAt(0, 18.95, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
+  if (exprSheet) { floor.visible = false; cam.fov = 4.4; cam.position.set(0, 18.95, 70); cam.lookAt(0, 18.95, 0); cam.aspect = window.innerWidth / window.innerHeight; cam.far = 1000; cam.updateProjectionMatrix(); }
   else if (opts.has('grid')) { floor.visible = false; cam.fov = 6.4; cam.position.set(0, 15.4, 150); cam.lookAt(0, 15.4, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
   else if (only && models[0] && !exprSheet) {
     // aim at the head (or the whole kid with &body); &zoom=2 moves in, &yaw= turns the kid
