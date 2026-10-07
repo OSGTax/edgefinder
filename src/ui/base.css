@@ -1,0 +1,69 @@
+/* Shared foundation: design tokens, reset, buttons, panels, loading screen. */
+:root {
+  --ink: #2b1d14;
+  --paper: #fff8e7;
+  --grass: #5fae3c;
+  --grass-dark: #3f7f2f;
+  --sun: #ffd23f;
+  --sky: #8fd3ff;
+  --red: #ff5e5b;
+  --blue: #3a7bd5;
+  --panel: #fffaf0;
+  --shadow: 0 4px 0 var(--ink);
+  --font: "Arial Rounded MT Bold", "Nunito", "Trebuchet MS", "Verdana", system-ui, sans-serif;
+  color-scheme: light;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; background: #2f6d43; overflow: hidden; }
+body {
+  font-family: var(--font);
+  color: var(--ink);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  overscroll-behavior: none;
+}
+#app { position: fixed; inset: 0; }
+canvas { display: block; }
+.hidden { display: none !important; }
+
+/* ── buttons ─────────────────────────────────────────── */
+.btn {
+  font: inherit; font-weight: 900; letter-spacing: 0.02em;
+  border: 3px solid var(--ink); border-radius: 16px;
+  background: var(--sun); color: var(--ink);
+  padding: 0.6em 1.2em; font-size: 18px;
+  box-shadow: var(--shadow); cursor: pointer;
+  transition: transform 0.06s ease, box-shadow 0.06s ease;
+}
+.btn:active, .btn.on { transform: translateY(3px); box-shadow: 0 1px 0 var(--ink); }
+.btn.on { background: #7dff9a; }
+.btn.ghost { background: #ffffff; }
+.btn.danger { background: #ffd6d6; }
+.btn.danger.armed { background: var(--red); color: #fff; }
+.btn.small { font-size: 15px; padding: 0.45em 0.9em; border-radius: 12px; }
+.btn.icon { padding: 0.3em 0.6em; font-size: 16px; }
+@keyframes glow { from { filter: brightness(1); } to { filter: brightness(1.25); } }
+
+.overlay { position: absolute; inset: 0; background: rgba(43, 29, 20, 0.45); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.panel { background: var(--panel); border: 4px solid var(--ink); border-radius: 22px; box-shadow: 0 6px 0 var(--ink); padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; min-width: 260px; max-width: 94vw; max-height: 92vh; overflow: auto; }
+.panel.wide { min-width: min(560px, 94vw); }
+.panel h2 { margin: 0 0 4px; font-size: 26px; text-align: center; }
+.toggle { font-size: 15px; display: flex; align-items: center; gap: 6px; }
+.linescore { border-collapse: collapse; font-weight: 900; margin: 0 auto; }
+.linescore th, .linescore td { border: 2px solid var(--ink); padding: 3px 7px; text-align: center; min-width: 24px; }
+.linescore .tot { background: var(--sun); }
+.star { display: flex; gap: 10px; align-items: center; background: #fff3d6; border: 3px solid var(--ink); border-radius: 14px; padding: 6px; }
+.star .portrait { border-radius: 12px; border: 2px solid var(--ink); background: #fff; }
+.quote { font-size: 13px; font-style: italic; margin-top: 2px; }
+
+.loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: radial-gradient(circle at 50% 40%, #8fd3ff, #3f7f2f 75%); color: #fff; font-weight: 900; font-size: 22px; text-shadow: 0 3px 0 var(--ink); z-index: 30; }
+.loading-ball { width: 54px; height: 54px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #f1ead8 60%, #d8cfb8); border: 3px solid var(--ink); position: relative; animation: spinball 0.9s linear infinite; }
+.loading-ball::before, .loading-ball::after { content: ''; position: absolute; top: 6px; bottom: 6px; width: 16px; border: 3px solid #c8332b; border-color: transparent #c8332b transparent transparent; border-radius: 50%; }
+.loading-ball::before { left: 2px; }
+.loading-ball::after { right: 2px; transform: scaleX(-1); }
+@keyframes spinball { to { transform: rotate(360deg); } }
+.scene { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+.loading-sub { font-size: 14px; font-weight: 700; opacity: 0.9; }
+.loading-bar { width: min(280px, 70vw); height: 12px; border: 3px solid var(--ink); border-radius: 99px; background: rgba(255, 255, 255, 0.35); overflow: hidden; box-shadow: 0 3px 0 var(--ink); }
+.loading-bar i { display: block; height: 100%; width: 0; background: linear-gradient(#ffe98a, #ffc61a); transition: width 0.25s ease-out; }

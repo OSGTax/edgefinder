@@ -7,7 +7,9 @@ status and roadmap in plain language, and keep it current when phases change.
 **Current state: the 3D demo** — two teams (Maple Street Mudcats at Cedar Lane
 Comets), one heavily detailed yard (Pool Party Paradise), real 3D kids and
 gameplay. This is the quality bar for the final game; the owner wants the
-demo polished before more teams/yards are built. League build-out plans:
+demo polished before more teams/yards are built. **In progress: the mobile revamp** —
+phone-first controls, friendly faces, a hand-made "kids made it" look, speed; read
+`plans/MOBILE-REVAMP.md` (art direction, ownership map, verification) before changing anything. League build-out plans:
 `plans/LEAGUE-FRAMEWORK.md` (10 teams × 9 kids, 7 traits: Contact/Power/
 Speed/Fielding/Arm/Pitching/Control, everyone pitches, no benches/injuries/trades, no pick-up
 draft, one home field per team) and `plans/3D-FRAMEWORK.md`. The v0.1 2D kids
@@ -72,7 +74,8 @@ src/
             portraits.ts (3D portraits for HUD/menus)
   audio/    Web Audio synth: sfx, music sequencer + songs, ambience
   ui/       app.ts (loading, title over an attract-mode CPU game, team pick, roster, how-to,
-            settings), commentary.ts (Chet & Dottie), settings.ts, dom.ts, style.css
+            settings), commentary.ts (Chet & Dottie), settings.ts, dom.ts, base.css (tokens,
+            buttons, panels), menus.css, hud.css (in-game screen)
   dev/      view3d.ts (#dev), gallery3d.ts (#gallery) — dev-only
 tests/      sim balance + determinism, human-hitting, kid traits, audio
 ```
