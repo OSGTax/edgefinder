@@ -185,14 +185,14 @@ export interface FarTreeSpot {
 }
 
 /** Distant trees: lumpy vertex-coloured blobs merged into a single cheap mesh. */
-export function buildFarTrees(spots: FarTreeSpot[], seed = 1): Mesh {
+export function buildFarTrees(spots: FarTreeSpot[], seed = 1, detail = 1): Mesh {
   const rnd = mulberry(seed);
   const noise = new Noise2(seed + 3);
   const b = new Batch();
   const mat = new MeshLambertMaterial({ vertexColors: true });
   mat.name = 'farTrees';
   // one welded unit icosahedron, scaled per blob (welding is the slow part)
-  const unit = new IcosahedronGeometry(1, 1);
+  const unit = new IcosahedronGeometry(1, detail); // detail 0 on Fast: a quarter of the triangles, still a lumpy cartoon crown
   unit.deleteAttribute('uv');
   unit.deleteAttribute('normal');
   const blob = mergeVertices(unit);

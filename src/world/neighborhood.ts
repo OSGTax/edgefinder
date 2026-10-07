@@ -79,7 +79,8 @@ export const NEIGHBOR_TREES: TreeSpec[] = [
   { kind: 'pine', x: 150, z: 205, height: 44 },
 ];
 
-export function buildNeighborhood(): Neighborhood {
+/** `lite` (the Fast tier): far trees built with a quarter of the triangles. */
+export function buildNeighborhood(lite = false): Neighborhood {
   const group = new Group();
   group.name = 'neighborhood';
   const b = new Batch();
@@ -244,7 +245,7 @@ export function buildNeighborhood(): Neighborhood {
     const a = rnd() * Math.PI * 2, r = 400 + rnd() * 700;
     spots.push({ x: Math.sin(a) * r, z: -Math.cos(a) * r - 60, s: 1.1 + rnd() * 0.5, kind: 'round' });
   }
-  const far = buildFarTrees(spots);
+  const far = buildFarTrees(spots, 1, lite ? 0 : 1);
   // sit the far trees on the hills
   group.add(far);
   return { group };
