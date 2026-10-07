@@ -23,6 +23,9 @@ export class Effects {
   private trailPts: Vector3[] = [];
   private trailGeo = new BufferGeometry();
   readonly shadow: Mesh;
+  /** a thin ring of constant screen size round the ball, so a far ball never vanishes on a phone */
+  readonly halo: Points;
+  private haloPos = new Float32Array(3);
 
   constructor(scene: Scene, pixelRatio: number) {
     this.geo.setAttribute('position', new BufferAttribute(this.pos, 3).setUsage(DynamicDrawUsage));
@@ -83,6 +86,47 @@ export class Effects {
     this.shadow = new Mesh(new CircleGeometry(0.5, 20).rotateX(-Math.PI / 2), new MeshBasicMaterial({ map: new CanvasTexture(c), transparent: true, depthWrite: false }));
     this.shadow.renderOrder = 3;
     scene.add(this.shadow);
+
+    const hg = new BufferGeometry();
+    hg.setAttribute('position', new BufferAttribute(this.haloPos, 3).setUsage(DynamicDrawUsage));
+    this.halo = new Points(hg, new ShaderMaterial({
+      transparent: true, depthWrite: false, depthTest: false,
+      uniforms: { uSize: { value: 22 * pixelRatio }, uAlpha: { value: 0 } },
+      vertexShader: /* glsl */ `
+        uniform float uSize;
+        void main() {
+          gl_PointSize = uSize;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: /* glsl */ `
+        uniform float uAlpha;
+        void main() {
+          float r = length(gl_PointCoord - 0.5) * 2.0;
+          float ring = smoothstep(0.62, 0.72, r) * (1.0 - smoothstep(0.86, 0.98, r));
+          float edge = smoothstep(0.55, 0.62, r) * (1.0 - smoothstep(0.72, 0.8, r));
+          vec3 c = mix(vec3(1.0, 0.97, 0.85), vec3(0.17, 0.11, 0.08), edge);
+          float a = max(ring, edge * 0.6) * uAlpha;
+          if (a < 0.01) discard;
+          gl_FragColor = vec4(c, a);
+        }`,
+    }));
+    this.halo.frustumCulled = false;
+    this.halo.renderOrder = 12;
+    this.halo.visible = false;
+    scene.add(this.halo);
+  }
+
+  /** show the ring round the ball when it's far from the camera (null hides it) */
+  ballHalo(p: Vector3 | null, cam: Camera) {
+    const mat = this.halo.material as ShaderMaterial;
+    const d = p ? p.distanceTo(cam.position) : 0;
+    const want = p ? Math.min(1, Math.max(0, (d - 45) / 40)) : 0;
+    mat.uniforms.uAlpha.value += (want - mat.uniforms.uAlpha.value) * 0.25;
+    this.halo.visible = mat.uniforms.uAlpha.value > 0.02 && !!p;
+    if (p) {
+      this.haloPos[0] = p.x; this.haloPos[1] = p.y; this.haloPos[2] = p.z;
+      (this.halo.geometry.attributes.position as BufferAttribute).needsUpdate = true;
+    }
   }
 
   private emit(o: Partial<P> & { p: Vector3 }) {
@@ -165,7 +209,8 @@ export class Effects {
       const tan = b.clone().sub(this.trailPts[Math.max(0, k - 1)]).normalize();
       const side = tan.cross(camPos.clone().sub(a).normalize()).normalize();
       const f = n > 1 ? k / (n - 1) : 0;
-      const w = 0.08 * f + 0.01;
+      // keep the ribbon a readable width on a small screen however far away it is
+      const w = (0.08 * f + 0.01) * Math.max(1, a.distanceTo(camPos) / 45);
       pos.setXYZ(i * 2, a.x + side.x * w, a.y + side.y * w, a.z + side.z * w);
       pos.setXYZ(i * 2 + 1, a.x - side.x * w, a.y - side.y * w, a.z - side.z * w);
       const al = f * f * 0.75 * strength;

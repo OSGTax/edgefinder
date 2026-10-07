@@ -2,14 +2,14 @@ import { Plane, Raycaster, Vector2, Vector3 } from 'three';
 import { clamp } from '../engine/math';
 import { audio } from '../audio';
 import { kid } from '../data/kids';
-import { SPECIAL_INFO, TRAIT_SHORT, type Kid, type PitchType, type Team, type Traits } from '../data/types';
-import { contactWindow, type SwingKind } from '../sim/batting';
+import { SPECIAL_INFO, type Kid, type PitchType, type Team } from '../data/types';
+import { contactWindow, type SwingKind, type SwingRead } from '../sim/batting';
 import { Match, type MatchConfig } from '../sim/match';
 import { PITCHES } from '../sim/pitching';
 import { W } from '../gfx/units';
 import { Booth, ordinal, type Line } from '../ui/commentary';
 import { clear, h } from '../ui/dom';
-import { settings } from '../ui/settings';
+import { saveSettings, settings } from '../ui/settings';
 import { World } from './world';
 import { Director } from './director';
 import { PortraitStudio } from './portraits';
@@ -47,6 +47,57 @@ export function teamBadge(t: Team, size = 28): HTMLCanvasElement {
   return c;
 }
 
+// ─────────────────────────────────────────────────────────── first-game coach
+
+type CoachTip = 'swing' | 'pitch' | 'throw' | 'run';
+const COACH_TIPS: CoachTip[] = ['swing', 'pitch', 'throw', 'run'];
+
+/**
+ * Show the first-game coach again from the start (How to Play calls this).
+ * The tips appear in the next game, each the first time it applies.
+ */
+export function replayCoach() {
+  settings.coachDone = false;
+  settings.coachSeen = [];
+  saveSettings();
+}
+
+const COACH_TEXT: Record<CoachTip, { title: string; body: string[] }> = {
+  swing: {
+    title: 'You\'re up!',
+    body: [
+      'Tap SWING — or anywhere on the right side — just as the ball gets to the plate.',
+      'The circle aims itself on Rookie. Drag on the left side if you want to steer it.',
+    ],
+  },
+  pitch: {
+    title: 'You\'re pitching',
+    body: [
+      'Pick a pitch on the left. Drag anywhere to move the mitt.',
+      'Tap THROW to start the meter, then tap again when the needle is in the green.',
+    ],
+  },
+  throw: {
+    title: 'Your kid has the ball',
+    body: [
+      'Tap a base to throw there. Wait, and your kid picks for you.',
+    ],
+  },
+  run: {
+    title: 'Ball in play — run!',
+    body: [
+      'Runners go on their own. GO sends everybody, BACK sends them back.',
+    ],
+  },
+};
+
+// ─────────────────────────────────────────────────────────── pitch meter
+
+/** Where the needle wants to stop, as a fraction of the meter. */
+const METER_SWEET = 0.78;
+
+interface Meter { t: number; locked: number | null; acc: number; shownT: number }
+
 export class GameScreen {
   readonly match: Match;
   private director: Director;
@@ -58,7 +109,7 @@ export class GameScreen {
   private time = 0;
   private paused = false;
   private destroyed = false;
-  private ready = false;
+  ready = false;
 
   // batting input
   private aim = { x: 0, z: 2.2 };
@@ -68,9 +119,15 @@ export class GameScreen {
   // pitching input
   private pitchType: PitchType = 'fastball';
   private pitchAim = { x: 0, z: 2 };
-  private dragging: { id: number; x: number; y: number; touch: boolean } | null = null;
+  private meter: Meter | null = null;
+  private dragging: { id: number; x: number; y: number; touch: boolean; mode: 'aim' | 'pitch' | 'none' } | null = null;
   private ray = new Raycaster();
   private plate = new Plane(new Vector3(0, 0, 1), 0);
+
+  // feel
+  private hitStop = 0;
+  private slowmo = 0;
+  private coach: CoachTip | null = null;
 
   // dom
   private hud!: HTMLElement;
@@ -78,10 +135,17 @@ export class GameScreen {
   private cardsEl!: HTMLElement;
   private tickerEl!: HTMLElement;
   private bubbleEl!: HTMLElement;
-  private controlsEl!: HTMLElement;
+  private controlsLeft!: HTMLElement;
+  private controlsRight!: HTMLElement;
   private bannerEl!: HTMLElement;
   private hintEl!: HTMLElement;
   private popEl!: HTMLElement;
+  private readEl!: HTMLElement;
+  private meterEl!: HTMLElement;
+  private holderEl!: HTMLElement;
+  private ballMarkEl!: HTMLElement;
+  private coachEl!: HTMLElement;
+  private radarEl!: HTMLElement;
   private controlsKey = '';
   private cardsKey = '';
   private sbKey = '';
@@ -89,10 +153,12 @@ export class GameScreen {
   private tickerT = 0;
   private bubbleT = 0;
   private bannerT = 0;
+  private readT = 0;
   private introT = 0;
   private bounceSfxT = 0;
   private lastFoulBack = 0;
   private humanSide: -1 | 0 | 1;
+  private wake: WakeLockSentinel | null = null;
 
   constructor(container: HTMLElement, private world: World, private studio: PortraitStudio, readonly opts: GameOptions) {
     this.match = new Match({ ...opts.cfg, autoThrowDelay: settings.autoThrow });
@@ -109,8 +175,12 @@ export class GameScreen {
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointercancel', this.onPointerUp);
+    document.addEventListener('visibilitychange', this.onVisibility);
+    window.addEventListener('pagehide', this.onHide);
+    this.canvas.addEventListener('contextmenu', this.noMenu);
     audio.playMusic('game');
     audio.setAmbience(true);
+    this.keepAwake();
     this.ready = true;
     if (import.meta.env.DEV) {
       (window as unknown as { __game: GameScreen }).__game = this;
@@ -129,6 +199,10 @@ export class GameScreen {
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointercancel', this.onPointerUp);
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('pagehide', this.onHide);
+    this.canvas.removeEventListener('contextmenu', this.noMenu);
+    this.releaseWake();
     audio.setAmbience(false);
     window.speechSynthesis?.cancel?.();
     this.root.remove();
@@ -136,7 +210,6 @@ export class GameScreen {
 
   // ─────────────────────────────────────────────────────────── main loop
 
-  private slowmo = 0;
   /** dev only: simulate this many fixed steps per rendered frame (slow headless browsers) */
   ff = 0;
 
@@ -148,10 +221,14 @@ export class GameScreen {
     // a crushed ball gets a moment of slow motion
     this.slowmo = Math.max(0, this.slowmo - real);
     const scale = this.slowmo > 0 ? 0.3 : 1;
-    for (let i = 0; i < steps && !this.paused && this.ready; i++) {
+    const held = this.paused || !!this.coach;
+    for (let i = 0; i < steps && !held && this.ready; i++) {
       const dt = (this.ff > 0 ? 1 / 30 : real) * scale;
+      // hit-stop: the world holds still for a beat when bat meets ball
+      if (this.hitStop > 0) { this.hitStop -= this.ff > 0 ? 1 / 30 : real; this.world.sync(this.match, 0, this.overlay()); continue; }
       this.time += dt;
       this.updateAimAssist(dt);
+      this.updateMeter(this.ff > 0 ? 1 / 30 : real);
       if (this.introT <= 0) this.match.update(dt);
       this.handleEvents();
       this.world.sync(this.match, dt, this.overlay());
@@ -160,6 +237,9 @@ export class GameScreen {
       this.updateHud(dt);
     }
     if (this.ready) {
+      this.updateMarkers();
+      const m = this.match;
+      this.world.fx.ballHalo(this.world.ball.visible && (m.phase === 'live' || m.phase === 'pitch') ? this.world.ball.position : null, this.world.camera);
       this.studio.update();
       this.world.render();
       this.world.adapt(real);
@@ -188,6 +268,44 @@ export class GameScreen {
     };
   }
 
+  // ─────────────────────────────────────────────────────────── feel
+
+  /** A short buzz on phones that support it (Android browsers; iOS ignores it). */
+  private buzz(pattern: number | number[]) {
+    if (!settings.haptics || this.ff > 0) return;
+    try { navigator.vibrate?.(pattern); } catch { /* not allowed */ }
+  }
+
+  private async keepAwake() {
+    try {
+      if (document.visibilityState !== 'visible' || this.wake) return;
+      this.wake = await navigator.wakeLock?.request('screen') ?? null;
+      this.wake?.addEventListener('release', () => { this.wake = null; });
+    } catch { /* not supported or refused */ }
+  }
+
+  private releaseWake() {
+    this.wake?.release().catch(() => {});
+    this.wake = null;
+  }
+
+  private onVisibility = () => {
+    if (document.visibilityState === 'hidden') this.onHide();
+    else if (!this.destroyed) {
+      this.keepAwake();
+      this.last = performance.now();
+    }
+  };
+
+  /** App switch, phone call, screen off: stop the game and wait for the player. */
+  private onHide = () => {
+    if (this.destroyed || this.paused || this.match.phase === 'over') return;
+    this.dragging = null;
+    this.togglePause(true);
+  };
+
+  private noMenu = (e: Event) => e.preventDefault();
+
   // ─────────────────────────────────────────────────────────── input
 
   private updateAimAssist(dt: number) {
@@ -202,13 +320,18 @@ export class GameScreen {
       return;
     }
     if (m.phase !== 'pitch' || !m.pitch || m.swingIn) return;
-    const mode = settings.aimAssist;
-    const strength = mode === 'off' ? 0 : mode === 'on' ? 0.85 : m.cfg.difficulty === 'rookie' ? 0.9 : m.cfg.difficulty === 'pro' ? 0.45 : 0;
+    const strength = this.assist();
     if (strength <= 0) return;
     const arr = m.pitch.arrival;
     const k = Math.min(1, dt * 9 * strength);
     this.aim.x += (arr.x - this.aim.x) * k;
     this.aim.z += (arr.z - this.aim.z) * k;
+  }
+
+  private assist() {
+    const mode = settings.aimAssist;
+    const d = this.match.cfg.difficulty;
+    return mode === 'off' ? 0 : mode === 'on' ? 0.85 : d === 'rookie' ? 0.9 : d === 'pro' ? 0.45 : 0;
   }
 
   private doSwing() {
@@ -217,15 +340,70 @@ export class GameScreen {
     if (m.phase !== 'windup' && m.phase !== 'pitch') return;
     audio.unlock();
     m.swing(this.aim.x, this.aim.z, this.swingKind, this.armed);
+    this.buzz(8);
     if (this.armed) this.armed = false;
   }
 
-  private doPitch() {
+  /** THROW: first press starts the meter, the second stops the needle and lets it go. */
+  private pitchPress() {
     const m = this.match;
-    if (!m.humanPitching || m.phase !== 'prePitch') return;
+    if (!m.humanPitching || m.phase !== 'prePitch' || this.coach) return;
     audio.unlock();
-    m.selectPitch(this.pitchType, { ...this.pitchAim }, this.armed);
+    if (!this.meter) {
+      this.meter = { t: 0, locked: null, acc: 0, shownT: 0 };
+      audio.play('uiTap');
+      this.controlsKey = '';
+      return;
+    }
+    if (this.meter.locked === null) this.lockMeter();
+  }
+
+  private meterPeriod() {
+    const d = this.match.cfg.difficulty;
+    return d === 'rookie' ? 1.25 : d === 'pro' ? 1 : 0.82;
+  }
+
+  /** half-width of the green, from the pitcher's Control */
+  private meterSweet() {
+    const d = this.match.cfg.difficulty;
+    const base = 0.045 + this.match.pitcher.traits.control * 0.008;
+    return base * (d === 'rookie' ? 1.45 : d === 'pro' ? 1.15 : 1);
+  }
+
+  private meterU(t: number) { return Math.min(1, t / this.meterPeriod()); }
+
+  private lockMeter() {
+    const mt = this.meter!;
+    const u = this.meterU(mt.t);
+    const off = Math.max(0, Math.abs(u - METER_SWEET) - this.meterSweet());
+    mt.locked = u;
+    mt.acc = clamp(1 - off / 0.2, 0, 1);
+    this.buzz(mt.acc > 0.95 ? [10, 30, 10] : 12);
+    const label = mt.acc > 0.95 ? 'PAINTED IT!' : mt.acc > 0.6 ? 'Good release' : mt.acc > 0.25 ? 'A little wild' : 'Wild!';
+    this.meterEl.dataset.read = label;
+    this.match.selectPitch(this.pitchType, { ...this.pitchAim }, this.armed, mt.acc);
     this.armed = false;
+    this.controlsKey = '';
+  }
+
+  private updateMeter(dt: number) {
+    const mt = this.meter;
+    if (!mt) { this.meterEl.classList.add('hidden'); return; }
+    this.meterEl.classList.remove('hidden');
+    if (mt.locked === null) {
+      mt.t += dt;
+      if (this.meterU(mt.t) >= 1) this.lockMeter(); // ran out: it goes wherever it goes
+    } else {
+      mt.shownT += dt;
+      if (mt.shownT > 1.1) { this.meter = null; this.meterEl.classList.add('hidden'); return; }
+    }
+    const u = mt.locked ?? this.meterU(mt.t);
+    const sw = this.meterSweet();
+    this.meterEl.style.setProperty('--u', String(u));
+    this.meterEl.style.setProperty('--s0', String(METER_SWEET - sw));
+    this.meterEl.style.setProperty('--s1', String(METER_SWEET + sw));
+    this.meterEl.classList.toggle('locked', mt.locked !== null);
+    this.meterEl.classList.toggle('good', mt.locked !== null && mt.acc > 0.6);
   }
 
   private screenToZone(cx: number, cy: number) {
@@ -244,12 +422,21 @@ export class GameScreen {
     return { x: rect.left + (p.x * 0.5 + 0.5) * rect.width, y: rect.top + (-p.y * 0.5 + 0.5) * rect.height };
   }
 
+  /** screen pixels per foot at the plate (for trackpad-style drags) */
+  private plateScale() {
+    const a = this.project(W(0, 0, 2)), b = this.project(W(1, 0, 2));
+    return a && b ? Math.max(20, Math.abs(b.x - a.x)) : 60;
+  }
+
   private onPointerDown = (e: PointerEvent) => {
     audio.unlock();
+    if (this.paused || this.coach) return;
     const m = this.match;
     const touch = e.pointerType !== 'mouse';
-    this.dragging = { id: e.pointerId, x: e.clientX, y: e.clientY, touch };
+    this.dragging = { id: e.pointerId, x: e.clientX, y: e.clientY, touch, mode: 'none' };
     if (this.introT > 0) { this.endIntro(); return; }
+    // tap through the pauses between pitches and innings
+    if (m.phase === 'result' || m.phase === 'halfOver') { m.skip(); return; }
     const batView = this.director.shot === 'bat';
     if (m.phase === 'live' && m.humanPitching && m.play) {
       let best = -1, bestD = Infinity;
@@ -260,35 +447,45 @@ export class GameScreen {
         const d = Math.hypot(p.x - e.clientX, p.y - e.clientY);
         if (d < bestD) { bestD = d; best = b; }
       }
-      if (best > 0 && bestD < 90) this.throwTo(best);
+      if (best > 0 && bestD < 70) this.throwTo(best);
       return;
     }
     if (m.humanPitching && m.phase === 'prePitch' && batView) {
+      this.dragging.mode = 'pitch';
       const z = this.screenToZone(e.clientX, e.clientY);
-      if (z) {
+      const zone = m.zone;
+      // a tap on (or right by) the zone puts the mitt there; elsewhere it's a nudge pad
+      if (z && (!touch || (Math.abs(z.x) < zone.half + 0.8 && z.z > zone.bottom - 0.8 && z.z < zone.top + 0.8))) {
         this.pitchAim = { x: clamp(z.x, -1.6, 1.6), z: clamp(z.z, 0.4, 4.2) };
-        if (!touch) this.doPitch();
       }
+      if (!touch) this.pitchPress();
       return;
     }
-    if (m.humanBatting && batView && !touch) {
-      const z = this.screenToZone(e.clientX, e.clientY);
-      if (z) { this.aim = z; this.lastAimInput = this.time; }
-      this.doSwing();
+    if (m.humanBatting && batView) {
+      if (!touch) {
+        const z = this.screenToZone(e.clientX, e.clientY);
+        if (z) { this.aim = z; this.lastAimInput = this.time; }
+        this.doSwing();
+        return;
+      }
+      // phones: the right side of the screen is one big swing button, the left side steers
+      const rect = this.canvas.getBoundingClientRect();
+      if (e.clientX > rect.left + rect.width * 0.55) this.doSwing();
+      else this.dragging.mode = 'aim';
     }
   };
 
   private onPointerMove = (e: PointerEvent) => {
-    if (!this.ready) return;
+    if (!this.ready || this.paused) return;
     const m = this.match;
     const d = this.dragging;
     const batView = this.director.shot === 'bat';
     if (e.pointerType === 'mouse' && !d) {
-      if (m.humanBatting && batView && (m.phase !== 'pitch' || settings.aimAssist === 'off' || m.cfg.difficulty === 'allstar')) {
+      if (m.humanBatting && batView && (m.phase !== 'pitch' || this.assist() === 0)) {
         const z = this.screenToZone(e.clientX, e.clientY);
         if (z) { this.aim = z; this.lastAimInput = this.time; }
       }
-      if (m.humanPitching && m.phase === 'prePitch') {
+      if (m.humanPitching && m.phase === 'prePitch' && !this.meter) {
         const z = this.screenToZone(e.clientX, e.clientY);
         if (z) this.pitchAim = { x: clamp(z.x, -1.6, 1.6), z: clamp(z.z, 0.4, 4.2) };
       }
@@ -298,16 +495,15 @@ export class GameScreen {
     const dx = e.clientX - d.x, dy = e.clientY - d.y;
     d.x = e.clientX; d.y = e.clientY;
     if (!d.touch) return;
-    // touch drags nudge the aim like a trackpad
-    const a = this.project(W(0, 0, 2)), b = this.project(W(1, 0, 2));
-    const ppf = a && b ? Math.max(20, Math.abs(b.x - a.x)) : 60;
-    if (m.humanBatting && batView) {
-      this.aim.x = clamp(this.aim.x + (dx / ppf) * 0.9, -2.4, 2.4);
-      this.aim.z = clamp(this.aim.z - (dy / ppf) * 0.9, 0, 5.5);
+    // touch drags nudge the aim like a trackpad, so the thumb never covers the target
+    const ppf = this.plateScale();
+    if (d.mode === 'aim' && m.humanBatting && batView) {
+      this.aim.x = clamp(this.aim.x + (dx / ppf) * 1.1, -2.4, 2.4);
+      this.aim.z = clamp(this.aim.z - (dy / ppf) * 1.1, 0, 5.5);
       this.lastAimInput = this.time;
-    } else if (m.humanPitching && m.phase === 'prePitch') {
-      const z = this.screenToZone(e.clientX, e.clientY);
-      if (z) this.pitchAim = { x: clamp(z.x, -1.6, 1.6), z: clamp(z.z, 0.4, 4.2) };
+    } else if (d.mode === 'pitch' && m.humanPitching && m.phase === 'prePitch' && !this.meter) {
+      this.pitchAim.x = clamp(this.pitchAim.x + (dx / ppf) * 1.1, -1.6, 1.6);
+      this.pitchAim.z = clamp(this.pitchAim.z - (dy / ppf) * 1.1, 0.4, 4.2);
     }
   };
 
@@ -322,7 +518,9 @@ export class GameScreen {
     if (k === 'Escape') { this.togglePause(); return; }
     if (this.paused) return;
     audio.unlock();
+    if (this.coach) { if (k === ' ' || k === 'Enter') { e.preventDefault(); this.dismissCoach(); } return; }
     if (this.introT > 0) { this.endIntro(); return; }
+    if ((m.phase === 'result' || m.phase === 'halfOver') && (k === ' ' || k === 'Enter')) { e.preventDefault(); m.skip(); return; }
     const step = 0.2;
     const batView = this.director.shot === 'bat';
     if (m.humanBatting && batView) {
@@ -338,12 +536,13 @@ export class GameScreen {
     if (m.humanPitching && m.phase === 'prePitch') {
       const pitches = m.pitcher.pitches;
       const n = Number(k);
-      if (n >= 1 && n <= pitches.length) { this.pitchType = pitches[n - 1]; this.controlsKey = ''; }
+      if (n >= 1 && n <= pitches.length && !this.meter) this.pickPitch(pitches[n - 1]);
+      else if (this.meter) { if (k === ' ' || k === 'Enter') { e.preventDefault(); this.pitchPress(); } }
       else if (k === 'ArrowLeft') this.pitchAim.x = clamp(this.pitchAim.x - step, -1.6, 1.6);
       else if (k === 'ArrowRight') this.pitchAim.x = clamp(this.pitchAim.x + step, -1.6, 1.6);
       else if (k === 'ArrowUp') this.pitchAim.z = clamp(this.pitchAim.z + step, 0.4, 4.2);
       else if (k === 'ArrowDown') this.pitchAim.z = clamp(this.pitchAim.z - step, 0.4, 4.2);
-      else if (k === ' ' || k === 'Enter') { e.preventDefault(); this.doPitch(); }
+      else if (k === ' ' || k === 'Enter') { e.preventDefault(); this.pitchPress(); }
       else if (k === 's' || k === 'S') this.toggleSpecial();
     }
     if (m.phase === 'live' && m.play) {
@@ -351,8 +550,8 @@ export class GameScreen {
         const map: Record<string, number> = { '1': 1, '2': 2, '3': 3, '4': 4, h: 4, H: 4, ArrowRight: 1, ArrowUp: 2, ArrowLeft: 3, ArrowDown: 4 };
         if (map[k]) { e.preventDefault(); this.throwTo(map[k]); }
       } else if (m.humanBatting) {
-        if (k === 'r' || k === 'R' || k === 'ArrowRight' || k === ' ') { e.preventDefault(); m.runners('advance'); audio.play('uiTap'); }
-        if (k === 'f' || k === 'F' || k === 'ArrowLeft') { m.runners('retreat'); audio.play('uiTap'); }
+        if (k === 'r' || k === 'R' || k === 'ArrowRight' || k === ' ') { e.preventDefault(); this.sendRunners('advance'); }
+        if (k === 'f' || k === 'F' || k === 'ArrowLeft') this.sendRunners('retreat');
       }
     }
   };
@@ -365,6 +564,13 @@ export class GameScreen {
 
   private setKind(kind: SwingKind) {
     this.swingKind = kind;
+    audio.play('uiTap');
+    this.controlsKey = '';
+  }
+
+  private pickPitch(p: PitchType) {
+    if (this.meter) return;
+    this.pitchType = p;
     audio.play('uiTap');
     this.controlsKey = '';
   }
@@ -382,7 +588,18 @@ export class GameScreen {
   private throwTo(base: number) {
     this.match.throwTo(base);
     audio.play('uiTap');
+    this.buzz(10);
+    this.controlsKey = '';
   }
+
+  private sendRunners(cmd: 'advance' | 'retreat') {
+    this.match.runners(cmd);
+    audio.play('uiTap');
+    this.buzz(10);
+    this.runCmd = cmd;
+    this.controlsKey = '';
+  }
+  private runCmd: 'advance' | 'retreat' | null = null;
 
   // ─────────────────────────────────────────────────────────── events
 
@@ -390,9 +607,13 @@ export class GameScreen {
     const m = this.match;
     const fx = this.world.fx;
     const good = (battingGood: boolean) => (this.humanSide < 0 ? true : (m.battingSide === this.humanSide) === battingGood);
+    const mine = this.humanSide >= 0 && m.battingSide === this.humanSide;
     for (const e of m.events) {
       this.say(this.booth.react(e, m));
       switch (e.type) {
+        case 'batterUp':
+          this.runCmd = null;
+          break;
         case 'pitch':
           if (e.special) { this.popup(SPECIAL_INFO[e.special].label.toUpperCase() + '!', '#c39bff', 1); audio.play('special'); }
           else audio.play('throw', { intensity: 0.4 });
@@ -406,11 +627,20 @@ export class GameScreen {
           const strong = e.quality > 0.55 && e.ev > 55;
           audio.play(strong ? 'batCrack' : 'batTink', { intensity: clamp((e.ev - 30) / 60, 0, 1) });
           if (strong) fx.sparkle(this.world.ball.position.clone(), '#fff6c4');
+          // weight: a frame or three of stillness, a kick of the camera, slow-mo on a crush
+          this.hitStop = 0.035 + e.quality * 0.075;
+          this.director.kick(0.3 + e.quality * 0.9);
           if (strong && e.ev > 62 && e.la > 14 && e.la < 40) { this.slowmo = 0.45; this.director.shake(0.5); }
+          if (mine) this.buzz(strong ? [0, 35, 25, 20] : 18);
+          if (mine && e.read) this.showRead(e.read, 'contact', e.quality, e.la);
           break;
         }
         case 'whiff':
           audio.play('whiff');
+          if (mine && e.read) this.showRead(e.read, 'miss');
+          break;
+        case 'foulTip':
+          if (mine) this.showRead(e.read, 'tip');
           break;
         case 'call':
           if (e.call === 'ball') { this.popup('BALL', '#9fd3ff', 0.7); audio.play('mittPop', { intensity: 0.5 }); }
@@ -418,6 +648,7 @@ export class GameScreen {
             if (m.strikes < 3) this.popup('STRIKE!', '#ffe14d', 0.9);
             audio.play('mittPop', { intensity: 0.8 });
             audio.play('strike');
+            if (e.call === 'strike' && mine) this.showTake();
           } else if (e.call === 'foul') {
             if (this.time - this.lastFoulBack > 0.3) this.popup('FOUL!', '#ffffff', 0.8);
             this.lastFoulBack = this.time;
@@ -426,6 +657,7 @@ export class GameScreen {
         case 'strikeout':
           this.popup(e.looking ? 'STRIKE THREE!' : 'STRUCK OUT!', '#ffe14d', 1.1);
           audio.play(good(false) ? 'cheer' : 'aww');
+          if (!mine && this.humanSide >= 0) this.buzz([0, 20, 40, 20]);
           break;
         case 'walk':
           this.popup(e.hbp ? 'OUCH!' : 'BALL FOUR', '#9fd3ff', 0.9);
@@ -433,7 +665,8 @@ export class GameScreen {
         case 'catch':
           audio.play('catch', { intensity: e.hard ? 1 : 0.6 });
           if (e.fly && e.hard) this.popup('WHAT A GRAB!', '#7dff9a', 1);
-          if (e.hard) fx.sparkle(this.world.gloveOf(e.fielder) ?? this.world.ball.position.clone());
+          if (e.hard) { fx.sparkle(this.world.gloveOf(e.fielder) ?? this.world.ball.position.clone()); this.director.kick(0.35); }
+          if (this.humanSide >= 0 && !mine) this.buzz(e.hard ? 25 : 12);
           break;
         case 'bobble':
           audio.play('aww');
@@ -441,14 +674,18 @@ export class GameScreen {
           break;
         case 'throw':
           audio.play('throw', { intensity: 0.7 });
+          if (this.humanSide >= 0 && !mine) this.buzz(8);
           break;
         case 'out':
           this.popup('OUT!', '#ff6b6b', 1);
           audio.play('out');
+          this.director.kick(0.25);
+          if (this.humanSide >= 0) this.buzz(mine ? 12 : 30);
           break;
         case 'run':
           this.popup('RUN SCORES!', '#7dff9a', 0.85);
           audio.play('safe');
+          if (mine) this.buzz([0, 20, 30, 20]);
           break;
         case 'hit': {
           const label = e.bases >= 3 ? 'TRIPLE!' : e.bases === 2 ? 'DOUBLE!' : 'BASE HIT!';
@@ -461,6 +698,7 @@ export class GameScreen {
           audio.play('homeRun');
           audio.play(good(true) ? 'bigCheer' : 'aww');
           for (const d of [W(-47, 15, 3), W(47, 15, 3)]) fx.confetti(d, 90);
+          if (mine) this.buzz([0, 40, 50, 40, 50, 80]);
           break;
         case 'groundRule':
           this.popup(e.why === 'splash' ? 'SPLASH DOUBLE!' : 'GROUND-RULE DOUBLE', '#6fc3ff', 1.1);
@@ -497,7 +735,7 @@ export class GameScreen {
           break;
         case 'halfOver':
           audio.play('whistle');
-          this.showBanner(`${e.half === 0 ? 'Middle' : 'End'} of the ${ordinal(e.inning)}`, `${m.cfg.away.team.abbr} ${m.score[0]} — ${m.cfg.home.team.abbr} ${m.score[1]}`);
+          this.showBanner(`${e.half === 0 ? 'Middle' : 'End'} of the ${ordinal(e.inning)}`, `${m.cfg.away.team.abbr} ${m.score[0]} — ${m.cfg.home.team.abbr} ${m.score[1]}`, 2.4, 'Tap to skip');
           break;
         case 'gameOver':
           this.onGameOver();
@@ -505,9 +743,9 @@ export class GameScreen {
         default:
           break;
       }
-      // dust when a runner slides into a base
     }
     m.events.length = 0;
+    // dust when a runner slides into a base
     const play = m.play;
     if (play) for (const r of play.runners) {
       if (r.anim === 'slide' && r.animT < 0.05) fx.dust(W(play.runnerPos(r).x, play.runnerPos(r).y, 0), 1.2);
@@ -518,6 +756,50 @@ export class GameScreen {
     if (!lines.length) return;
     this.tickerQueue.push(...lines);
     if (this.tickerQueue.length > 4) this.tickerQueue.splice(0, this.tickerQueue.length - 4);
+  }
+
+  // ─────────────────────────────────────────────────────────── swing feedback
+
+  /**
+   * After every swing: a little timing ruler (where the bat arrived against the
+   * kid's window) and a word or two about how it went.
+   */
+  private showRead(r: SwingRead, how: 'contact' | 'miss' | 'tip', quality = 0, la = 0) {
+    const t = r.timing;
+    const bunt = this.swingKind === 'bunt';
+    let word: string, sub: string, tone: 'good' | 'ok' | 'bad';
+    const when = Math.abs(t) <= 0.35 ? 'On time' : t < 0 ? (t < -1 ? 'Way early' : 'Early') : (t > 1 ? 'Way late' : 'Late');
+    if (how === 'contact') {
+      tone = quality > 0.75 ? 'good' : quality > 0.45 ? 'ok' : 'bad';
+      word = bunt ? 'Bunted' : quality > 0.85 ? 'CRUSHED' : quality > 0.65 ? 'Squared up' : quality > 0.45 ? 'Solid' : la < 0 ? 'Topped it' : la > 45 ? 'Got under it' : t > 0.5 ? 'Jammed' : 'Off the end';
+      sub = bunt ? 'Laid down' : when;
+    } else if (how === 'tip') {
+      tone = 'ok';
+      word = 'Just ticked it';
+      sub = Math.abs(t) > 1 ? when : r.under > 0 ? `${when} · a hair under` : `${when} · a hair over`;
+    } else {
+      tone = 'bad';
+      if (Math.abs(t) > 1.05 && t < 9) { word = when; sub = r.aim > 1.2 ? (r.under > 0 ? 'and under it' : 'and over it') : 'right height'; }
+      else if (t >= 9) { word = 'Too late to bunt'; sub = 'Square around sooner'; }
+      else { word = r.under > 0 ? 'Swung under' : 'Swung over'; sub = when; }
+    }
+    this.renderRead(word, sub, tone, t);
+  }
+
+  /** A called strike the player watched go by. */
+  private showTake() {
+    if (this.match.humanBatting && !this.match.swingIn) this.renderRead('Watched it', 'Called strike', 'bad', null);
+  }
+
+  private renderRead(word: string, sub: string, tone: string, timing: number | null) {
+    clear(this.readEl);
+    this.readEl.className = `swingread ${tone}`;
+    const ruler = timing === null || Math.abs(timing) > 5 ? null : h('div', { class: 'sr-ruler' },
+      h('span', { class: 'sr-lbl' }, 'early'), h('i', { class: 'sr-win' }),
+      h('b', { class: 'sr-tick', style: `left:${50 + clamp(timing, -1.6, 1.6) * 28}%` }), h('span', { class: 'sr-lbl r' }, 'late'));
+    this.readEl.append(h('div', { class: 'sr-word' }, word), h('div', { class: 'sr-sub' }, sub));
+    if (ruler) this.readEl.append(ruler);
+    this.readT = 1.9;
   }
 
   // ─────────────────────────────────────────────────────────── HUD
@@ -544,13 +826,21 @@ export class GameScreen {
     this.cardsEl = h('div', { class: 'cards' });
     this.tickerEl = h('div', { class: 'ticker' });
     this.bubbleEl = h('div', { class: 'bubble hidden' });
-    this.controlsEl = h('div', { class: 'controls' });
+    this.controlsLeft = h('div', { class: 'controls left' });
+    this.controlsRight = h('div', { class: 'controls right' });
     this.popEl = h('div', { class: 'pops' });
-    this.bannerEl = h('div', { class: 'banner hidden', onpointerdown: () => { audio.unlock(); if (this.introT > 0) this.endIntro(); } });
+    this.readEl = h('div', { class: 'swingread hidden' });
+    this.meterEl = h('div', { class: 'pmeter hidden' }, h('div', { class: 'pm-bar' }, h('i', { class: 'pm-sweet' }), h('b', { class: 'pm-needle' })));
+    this.holderEl = h('div', { class: 'holder hidden' });
+    this.ballMarkEl = h('div', { class: 'ballmark hidden' }, h('i'), h('span'));
+    this.coachEl = h('div', { class: 'coach hidden' });
+    this.radarEl = h('div', { class: 'radar' });
+    this.bannerEl = h('div', { class: 'banner hidden', onpointerdown: () => { audio.unlock(); if (this.introT > 0) this.endIntro(); else this.match.skip(); } });
     this.hintEl = h('div', { class: 'hint' });
-    const pause = h('button', { class: 'btn icon pause', 'aria-label': 'Pause', onclick: () => this.togglePause() }, '❚❚');
-    const rotate = h('div', { class: 'rotate-hint' }, '📱↻ Turn your phone sideways for the best view');
-    this.hud = h('div', { class: 'hud' }, this.sbEl, pause, this.cardsEl, this.tickerEl, this.bubbleEl, this.hintEl, this.controlsEl, this.popEl, this.bannerEl, rotate);
+    const pause = h('button', { class: 'btn icon pause', 'aria-label': 'Pause', onclick: () => this.togglePause() }, h('span', { class: 'pause-bars' }));
+    const rotate = h('div', { class: 'rotate-hint' }, 'Turn your phone sideways for the best view');
+    this.hud = h('div', { class: 'hud' }, this.holderEl, this.ballMarkEl, this.sbEl, pause, this.cardsEl, this.tickerEl, this.radarEl, this.bubbleEl, this.hintEl,
+      this.readEl, this.controlsLeft, this.controlsRight, this.meterEl, this.popEl, this.bannerEl, this.coachEl, rotate);
     this.root.appendChild(this.hud);
   }
 
@@ -562,35 +852,36 @@ export class GameScreen {
       this.cardsKey = key;
       clear(this.cardsEl);
       const bl = m.box[m.batter.id]?.bat;
+      const b = m.batter.traits, p = m.pitcher.traits;
       this.cardsEl.append(
-        this.card(m.batter, this.teamOf(m.battingSide), 'AT BAT', bl && bl.ab ? `${bl.h}-for-${bl.ab} today` : m.batter.persona),
-        this.card(m.pitcher, this.teamOf(m.fieldingSide), 'PITCHING', m.pitcher.pitches.map((p) => PITCHES[p].short).join(' · ')),
+        this.card(m.batter, this.teamOf(m.battingSide), 'At bat', bl && bl.ab ? `${bl.h} for ${bl.ab} today` : m.batter.persona, [['Contact', b.contact], ['Power', b.power]]),
+        this.card(m.pitcher, this.teamOf(m.fieldingSide), 'Pitching', m.pitcher.pitches.map((x) => PITCHES[x].short).join(' '), [['Pitching', p.pitching], ['Control', p.control]]),
       );
     }
     this.tickerT -= dt;
     if (this.tickerT <= 0 && this.tickerQueue.length) {
       const line = this.tickerQueue.shift()!;
       clear(this.tickerEl);
-      this.tickerEl.append(h('b', { class: line.who === 'Chet' ? 'chet' : 'dottie' }, line.who === 'Chet' ? 'CHET: ' : 'DOTTIE: '), line.text);
+      this.tickerEl.append(h('b', { class: line.who === 'Chet' ? 'chet' : 'dottie' }, line.who === 'Chet' ? 'Chet' : 'Dottie'), h('span', null, line.text));
       this.tickerT = Math.max(2.2, line.text.length * 0.055);
       if (settings.voice) speak(line);
     }
     if (this.bubbleT > 0) { this.bubbleT -= dt; if (this.bubbleT <= 0) this.bubbleEl.classList.add('hidden'); }
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0 && m.phase !== 'over') this.bannerEl.classList.add('hidden'); }
+    if (m.phase === 'prePitch' && this.bannerT > 0 && this.introT <= 0) { this.bannerT = 0; this.bannerEl.classList.add('hidden'); }
     if (this.introT > 0) { this.introT -= dt; if (this.introT <= 0) this.endIntro(); }
+    if (this.readT > 0) { this.readT -= dt; this.readEl.classList.toggle('hidden', this.readT <= 0); }
     this.renderControls();
   }
 
-  private card(k: Kid, team: Team, label: string, sub: string) {
-    const t = k.traits;
-    const bar = (n: string, v: number) => h('div', { class: 'bar' }, h('span', null, n), h('i', null, h('b', { style: `width:${v * 10}%` })));
+  private card(k: Kid, team: Team, label: string, sub: string, stats: [string, number][]) {
     return h('div', { class: 'card', style: `--team:${team.colors.primary};--team2:${team.colors.secondary}` },
-      this.portrait(k, label === 'AT BAT' ? 'focus' : 'smug', 112),
+      this.portrait(k, label === 'At bat' ? 'focus' : 'smug', 112),
       h('div', { class: 'card-txt' },
         h('div', { class: 'card-label' }, label),
         h('div', { class: 'card-name' }, k.nick),
         h('div', { class: 'card-sub' }, sub),
-        h('div', { class: 'card-bars' }, ...(Object.keys(TRAIT_SHORT) as (keyof Traits)[]).map((key) => bar(TRAIT_SHORT[key], t[key])))));
+        h('div', { class: 'card-stats' }, ...stats.map(([n, v]) => h('span', null, h('em', null, n), ` ${v}`)))));
   }
 
   private renderScoreboard() {
@@ -602,7 +893,7 @@ export class GameScreen {
     const row = (side: 0 | 1) => {
       const t = this.teamOf(side);
       return h('div', { class: `sb-row${m.battingSide === side ? ' bat' : ''}`, style: `--team:${t.colors.primary};--team2:${t.colors.secondary}` },
-        teamBadge(t, 22),
+        teamBadge(t, 20),
         h('span', { class: 'sb-abbr' }, t.abbr),
         h('span', { class: 'sb-hype', title: 'Hype' }, h('i', { style: `width:${m.hype[side]}%` })),
         h('span', { class: 'sb-runs' }, String(m.score[side])));
@@ -612,69 +903,123 @@ export class GameScreen {
     this.sbEl.append(
       h('div', { class: 'sb-teams' }, row(0), row(1)),
       h('div', { class: 'sb-state' },
-        h('div', { class: 'sb-inning' }, `${m.half === 0 ? '▲' : '▼'} ${m.inning}`),
-        diamond,
-        h('div', { class: 'sb-count' }, h('span', null, 'B'), dots(m.balls, 3, 'balls'), h('span', null, 'S'), dots(m.strikes, 2, 'strikes')),
+        h('div', { class: 'sb-inning' }, h('small', null, m.half === 0 ? 'Top' : 'Bot'), ` ${m.inning}`),
+        diamond),
+      h('div', { class: 'sb-state' },
+        h('div', { class: 'sb-count' }, h('span', null, 'B'), dots(m.balls, 3, 'balls')),
+        h('div', { class: 'sb-count' }, h('span', null, 'S'), dots(m.strikes, 2, 'strikes')),
         h('div', { class: 'sb-count' }, h('span', null, 'O'), dots(m.outs, 2, 'outs'))));
+  }
+
+  private controlMode() {
+    const m = this.match;
+    const batView = this.director.shot === 'bat';
+    if (this.introT > 0) return 'intro';
+    if (m.phase === 'live' && m.play && !m.play.deadKind) return m.humanPitching ? 'field' : m.humanBatting ? 'run' : 'none';
+    if (batView && m.humanBatting && ['prePitch', 'windup', 'pitch'].includes(m.phase)) return 'bat';
+    if (batView && m.humanPitching && m.phase === 'prePitch') return 'pitch';
+    return 'none';
   }
 
   private renderControls() {
     const m = this.match;
-    let mode = 'none';
-    const batView = this.director.shot === 'bat';
-    if (this.introT > 0) mode = 'intro';
-    else if (m.phase === 'live' && m.play && !m.play.deadKind) mode = m.humanPitching ? 'field' : m.humanBatting ? 'run' : 'none';
-    else if (batView && m.humanBatting && ['prePitch', 'windup', 'pitch'].includes(m.phase)) mode = 'bat';
-    else if (batView && m.humanPitching && m.phase === 'prePitch') mode = 'pitch';
+    const mode = this.controlMode();
+    this.maybeCoach(mode);
     const canSp = mode === 'bat' ? m.canSpecial(m.battingSide, m.batter) : mode === 'pitch' ? m.canSpecial(m.fieldingSide, m.pitcher) : false;
-    const key = `${mode}|${this.swingKind}|${this.pitchType}|${this.armed}|${canSp}|${m.pitcher.id}|${m.batter.id}`;
+    const holding = mode === 'field' && m.play!.holder >= 0;
+    const req = mode === 'field' ? m.play!.throwRequest : null;
+    const key = `${mode}|${this.swingKind}|${this.pitchType}|${this.armed}|${canSp}|${m.pitcher.id}|${m.batter.id}|${!!this.meter}|${holding}|${req}|${this.runCmd}`;
     if (key === this.controlsKey) return;
     this.controlsKey = key;
-    clear(this.controlsEl);
+    clear(this.controlsLeft);
+    clear(this.controlsRight);
+    this.hud.dataset.mode = mode;
     const touch = matchMedia('(pointer: coarse)').matches;
     const hint = (s: string) => { this.hintEl.textContent = s; };
-    const special = (k: Kid) => canSp ? h('button', { class: `btn special${this.armed ? ' armed' : ''}`, onpointerdown: (e: Event) => { e.preventDefault(); this.toggleSpecial(); } }, `⚡ ${SPECIAL_INFO[k.special].label}`) : null;
+    // every control fires on pointerdown: no 300 ms wait, no missed swings
+    const tap = (fn: () => void) => (e: Event) => { e.preventDefault(); e.stopPropagation(); fn(); };
+    const special = (k: Kid) => canSp ? h('button', { class: `btn ctl special${this.armed ? ' armed' : ''}`, onpointerdown: tap(() => this.toggleSpecial()) }, h('small', null, 'Special'), SPECIAL_INFO[k.special].label) : null;
     switch (mode) {
       case 'bat': {
-        hint(touch ? 'Drag to aim · tap SWING when the ball arrives' : 'Aim with the mouse · click or Space to swing · P power · B bunt');
-        const kindBtn = (k: SwingKind, label: string) => h('button', { class: `btn small${this.swingKind === k ? ' on' : ''}`, onpointerdown: (e: Event) => { e.preventDefault(); this.setKind(this.swingKind === k ? 'normal' : k); } }, label);
-        this.controlsEl.append(h('div', { class: 'ctl-col' }, special(m.batter), kindBtn('power', 'POWER'), kindBtn('bunt', 'BUNT')));
-        if (touch) this.controlsEl.append(h('button', { class: 'btn swing', onpointerdown: (e: Event) => { e.preventDefault(); this.doSwing(); } }, 'SWING!'));
+        hint(touch ? '' : 'Aim with the mouse · click or Space to swing · P power · B bunt');
+        const kindBtn = (k: SwingKind, label: string) => h('button', { class: `btn ctl kind ${k}${this.swingKind === k ? ' on' : ''}`, onpointerdown: tap(() => this.setKind(this.swingKind === k ? 'normal' : k)) }, label);
+        this.controlsRight.append(
+          h('div', { class: 'ctl-col' }, special(m.batter), kindBtn('power', 'Power'), kindBtn('bunt', 'Bunt')),
+          h('button', { class: `btn big-round swing ${this.swingKind}`, onpointerdown: tap(() => this.doSwing()) }, this.swingKind === 'bunt' ? 'BUNT' : 'SWING'));
+        if (touch) this.controlsLeft.append(h('div', { class: 'aimpad' }, h('span', null, 'Drag here to aim')));
         break;
       }
       case 'pitch': {
-        hint(touch ? 'Pick a pitch · tap the zone to aim · THROW!' : 'Pick a pitch (1-3) · click in the zone to throw');
+        hint(touch ? '' : 'Pick a pitch (1-3) · move the mitt · Space or click twice to throw');
         const pitches = m.pitcher.pitches;
         if (!pitches.includes(this.pitchType)) this.pitchType = pitches[0];
-        this.controlsEl.append(h('div', { class: 'ctl-col' }, special(m.pitcher),
-          ...pitches.map((p, i) => h('button', { class: `btn small${this.pitchType === p ? ' on' : ''}`, onpointerdown: (e: Event) => { e.preventDefault(); this.pitchType = p; audio.play('uiTap'); this.controlsKey = ''; } }, `${i + 1} ${PITCHES[p].label}`))));
-        if (touch) this.controlsEl.append(h('button', { class: 'btn swing', onpointerdown: (e: Event) => { e.preventDefault(); this.doPitch(); } }, 'THROW!'));
+        this.controlsLeft.append(h('div', { class: 'ctl-col pitches' }, special(m.pitcher),
+          ...pitches.map((p, i) => h('button', { class: `btn ctl pitchpick${this.pitchType === p ? ' on' : ''}`, disabled: !!this.meter, onpointerdown: tap(() => this.pickPitch(p)) },
+            h('small', null, touch ? PITCHES[p].short : `${i + 1}`), PITCHES[p].label))));
+        this.controlsRight.append(h('button', { class: `btn big-round throw${this.meter ? ' metering' : ''}`, onpointerdown: tap(() => this.pitchPress()) }, this.meter ? 'NOW!' : 'THROW'));
         break;
       }
       case 'field': {
-        hint('Tap a base to throw there — or let your kid decide');
-        const base = (b: number, label: string) => h('button', { class: 'btn small', onpointerdown: (e: Event) => { e.preventDefault(); this.throwTo(b); } }, label);
-        this.controlsEl.append(h('div', { class: 'ctl-bases' }, base(2, '2nd'), h('div', null, base(3, '3rd'), base(1, '1st')), base(4, 'Home')));
+        hint(holding ? '' : 'Your kids are chasing it');
+        const base = (b: number, label: string) => h('button', { class: `btn ctl base b${b}${req === b ? ' on' : ''}`, onpointerdown: tap(() => this.throwTo(b)) }, label);
+        this.controlsRight.append(h('div', { class: `ctl-diamond${holding ? ' ready' : ''}` }, h('span', { class: 'cd-label' }, holding ? 'Throw to' : 'Throw to…'),
+          base(2, '2nd'), base(3, '3rd'), base(1, '1st'), base(4, 'Home')));
         break;
       }
       case 'run':
-        hint('Runners run on their own — or take charge!');
-        this.controlsEl.append(h('div', { class: 'ctl-col' },
-          h('button', { class: 'btn small', onpointerdown: (e: Event) => { e.preventDefault(); m.runners('advance'); audio.play('uiTap'); } }, 'RUN! ▶'),
-          h('button', { class: 'btn small', onpointerdown: (e: Event) => { e.preventDefault(); m.runners('retreat'); audio.play('uiTap'); } }, '◀ BACK!')));
+        hint('');
+        this.controlsRight.append(h('div', { class: 'ctl-run' },
+          h('button', { class: `btn ctl run go${this.runCmd === 'advance' ? ' on' : ''}`, onpointerdown: tap(() => this.sendRunners('advance')) }, 'GO!'),
+          h('button', { class: `btn ctl run back${this.runCmd === 'retreat' ? ' on' : ''}`, onpointerdown: tap(() => this.sendRunners('retreat')) }, 'BACK')));
         break;
       case 'intro':
-        hint('Tap to play ball!');
+        hint('');
         break;
       default:
-        hint(m.humanBatting || m.humanPitching ? '' : 'Watching the kids play');
+        hint(m.humanBatting || m.humanPitching ? '' : 'CPU vs CPU');
     }
   }
 
-  private radarEl: HTMLElement | null = null;
+  /** the "has the ball" arrow over your fielder, and an edge marker for a ball off the screen */
+  private updateMarkers() {
+    const m = this.match;
+    const play = m.play;
+    const rect = this.canvas.getBoundingClientRect();
+    // who has it
+    let showHolder = false;
+    if (play && m.phase === 'live' && m.humanPitching && !play.deadKind && play.holder >= 0) {
+      const fl = play.fielders[play.holder];
+      const p = this.project(W(fl.p.x, fl.p.y, 6.2));
+      if (p) {
+        showHolder = true;
+        if (this.holderEl.dataset.kid !== fl.kid.id) { this.holderEl.dataset.kid = fl.kid.id; this.holderEl.textContent = fl.kid.nick; }
+        this.holderEl.style.transform = `translate(${Math.round(clamp(p.x, 40, rect.width - 40))}px, ${Math.round(clamp(p.y, 30, rect.height - 10))}px) translate(-50%, -100%)`;
+      }
+    }
+    this.holderEl.classList.toggle('hidden', !showHolder);
+    // a high fly or a ball out of frame: point at it from the edge
+    let showBall = false;
+    if (m.phase === 'live' && this.world.ball.visible && this.director.shot === 'live') {
+      const b = this.world.ball.position;
+      const p = b.clone().project(this.world.camera);
+      const behind = p.z > 1;
+      const sx = (p.x * 0.5 + 0.5) * rect.width, sy = (-p.y * 0.5 + 0.5) * rect.height;
+      const off = behind || sx < 0 || sx > rect.width || sy < 0 || sy > rect.height;
+      if (off) {
+        showBall = true;
+        const x = clamp(behind ? rect.width - sx : sx, 28, rect.width - 28);
+        const y = clamp(behind ? 0 : sy, 28, rect.height - 28);
+        const ang = Math.atan2((behind ? -1 : sy) - y, (behind ? rect.width - sx : sx) - x);
+        this.ballMarkEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px) translate(-50%, -50%)`;
+        (this.ballMarkEl.firstChild as HTMLElement).style.transform = `rotate(${ang}rad)`;
+        (this.ballMarkEl.lastChild as HTMLElement).textContent = `${Math.round(Math.max(0, b.y))} ft`;
+      }
+    }
+    this.ballMarkEl.classList.toggle('hidden', !showBall);
+  }
+
   /** the radar-gun readout after each pitch */
   private radar(text: string) {
-    if (!this.radarEl) { this.radarEl = h('div', { class: 'radar' }); this.hud.appendChild(this.radarEl); }
     this.radarEl.textContent = text;
     this.radarEl.classList.remove('show');
     void this.radarEl.offsetWidth;
@@ -682,7 +1027,7 @@ export class GameScreen {
   }
 
   private popup(text: string, color: string, scale = 1) {
-    const el = h('div', { class: 'pop', style: `--c:${color};--s:${scale}` }, text);
+    const el = h('div', { class: 'pop', style: `--c:${color};--s:${scale};--tilt:${(Math.random() * 6 - 3).toFixed(1)}deg` }, text);
     clear(this.popEl);
     this.popEl.appendChild(el);
     setTimeout(() => el.remove(), 1500);
@@ -695,9 +1040,10 @@ export class GameScreen {
     this.bubbleT = 2.8;
   }
 
-  private showBanner(title: string, sub: string, hold = 2.2) {
+  private showBanner(title: string, sub: string, hold = 2.2, tapNote?: string) {
     clear(this.bannerEl);
     this.bannerEl.append(h('div', { class: 'banner-title' }, title), h('div', { class: 'banner-sub' }, sub));
+    if (tapNote) this.bannerEl.append(h('div', { class: 'banner-tap' }, tapNote));
     this.bannerEl.classList.remove('hidden');
     this.bannerT = hold;
   }
@@ -708,38 +1054,95 @@ export class GameScreen {
     clear(this.bannerEl);
     const grownup = y.props.find((p) => p.kind === 'grownup');
     this.bannerEl.append(
-      h('div', { class: 'banner-vs' }, teamBadge(m.cfg.away.team, 64), h('span', null, 'at'), teamBadge(m.cfg.home.team, 64)),
+      h('div', { class: 'banner-vs' }, teamBadge(m.cfg.away.team, 56), h('span', null, 'at'), teamBadge(m.cfg.home.team, 56)),
       h('div', { class: 'banner-title' }, y.name),
       h('div', { class: 'banner-sub' }, `${y.owner}. ${y.blurb}`),
       h('ul', { class: 'banner-rules' }, ...y.rules.map((r) => h('li', null, r)), grownup?.label ? h('li', null, `Watching: ${grownup.label.replace(/\.$/, '')}.`) : null),
-      h('div', { class: 'banner-tap' }, 'Tap to play ball!'));
+      h('div', { class: 'banner-tap' }, 'Tap to play ball'));
+    this.bannerEl.classList.add('intro');
     this.bannerEl.classList.remove('hidden');
     this.introT = 9;
   }
 
-  private endIntro() {
+  endIntro() {
     this.introT = 0;
     this.bannerEl.classList.add('hidden');
+    this.bannerEl.classList.remove('intro');
     this.director.cut();
   }
 
-  private togglePause() {
+  // ─────────────────────────────────────────────────────────── coach
+
+  private maybeCoach(mode: string) {
+    if (settings.coachDone || this.coach || this.paused) return;
+    const m = this.match;
+    let tip: CoachTip | null = null;
+    if (mode === 'bat' && m.phase === 'prePitch') tip = 'swing';
+    else if (mode === 'pitch' && !this.meter) tip = 'pitch';
+    else if (mode === 'field' && m.play!.holder >= 0) tip = 'throw';
+    else if (mode === 'run' && m.play!.t > 0.5) tip = 'run';
+    if (!tip || settings.coachSeen.includes(tip)) return;
+    this.coach = tip;
+    const t = COACH_TEXT[tip];
+    clear(this.coachEl);
+    this.coachEl.className = `coach at-${tip}`;
+    this.coachEl.append(
+      h('div', { class: 'coach-title' }, t.title),
+      ...t.body.map((b) => h('p', null, b)),
+      h('button', { class: 'btn ctl', onpointerdown: (e: Event) => { e.preventDefault(); e.stopPropagation(); this.dismissCoach(); } }, 'Got it'));
+  }
+
+  private dismissCoach() {
+    const tip = this.coach;
+    if (!tip) return;
+    audio.play('uiTap');
+    this.coach = null;
+    this.coachEl.classList.add('hidden');
+    settings.coachSeen = [...settings.coachSeen.filter((x) => x !== tip), tip];
+    settings.coachDone = COACH_TIPS.every((x) => settings.coachSeen.includes(x));
+    saveSettings();
+    this.last = performance.now();
+  }
+
+  // ─────────────────────────────────────────────────────────── pause / end
+
+  private togglePause(force?: boolean) {
     if ((this.match.phase as string) === 'over') return;
-    this.paused = !this.paused;
+    const next = force ?? !this.paused;
+    if (next === this.paused) return;
+    this.paused = next;
     audio.play(this.paused ? 'uiBack' : 'uiTap');
-    if (this.paused) this.showPauseMenu();
-    else this.root.querySelector('.pausemenu')?.remove();
+    if (this.paused) {
+      this.showPauseMenu();
+      window.speechSynthesis?.cancel?.();
+    } else {
+      this.root.querySelector('.pausemenu')?.remove();
+      audio.unlock(); // a phone call can leave audio suspended
+      this.keepAwake();
+      this.last = performance.now();
+    }
   }
 
   private showPauseMenu() {
-    const menu = h('div', { class: 'pausemenu overlay' },
-      h('div', { class: 'panel' },
-        h('h2', null, 'Time Out!'),
-        h('button', { class: 'btn', onclick: () => this.togglePause() }, 'Resume'),
-        h('button', { class: 'btn ghost', onclick: () => this.simToEnd() }, 'Sim the rest of the game'),
-        h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: settings.showZone, onchange: (e: Event) => { settings.showZone = (e.target as HTMLInputElement).checked; } }), ' Show strike zone'),
-        h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: settings.voice, onchange: (e: Event) => { settings.voice = (e.target as HTMLInputElement).checked; } }), ' Announcer voice'),
-        h('button', { class: 'btn ghost danger', onclick: () => { this.destroy(); this.opts.onExit(null); } }, 'Quit to menu')));
+    const m = this.match;
+    const toggle = (label: string, on: boolean, set: (v: boolean) => void) => h('label', { class: 'toggle' },
+      h('input', { type: 'checkbox', checked: on, onchange: (e: Event) => { set((e.target as HTMLInputElement).checked); saveSettings(); } }), ` ${label}`);
+    const quit = h('button', { class: 'btn ghost danger', onclick: () => {
+      if (!quit.classList.contains('armed')) { quit.classList.add('armed'); quit.textContent = 'Tap again to quit'; return; }
+      this.destroy(); this.opts.onExit(null);
+    } }, 'Quit to menu');
+    const menu = h('div', { class: 'pausemenu overlay', onpointerdown: (e: Event) => e.stopPropagation() },
+      h('div', { class: 'panel pause-panel' },
+        h('div', { class: 'pp-main' },
+          h('h2', null, 'Time out!'),
+          h('div', { class: 'pp-score' }, `${m.cfg.away.team.abbr} ${m.score[0]} — ${m.cfg.home.team.abbr} ${m.score[1]} · ${m.half === 0 ? 'Top' : 'Bottom'} of the ${ordinal(m.inning)}`),
+          h('button', { class: 'btn big resume', onclick: () => this.togglePause(false) }, 'Back to the game')),
+        h('div', { class: 'pp-side' },
+          toggle('Show strike zone', settings.showZone, (v) => { settings.showZone = v; }),
+          toggle('Announcer voice', settings.voice, (v) => { settings.voice = v; }),
+          toggle('Buzz on big plays', settings.haptics, (v) => { settings.haptics = v; }),
+          h('button', { class: 'btn ghost', onclick: () => this.simToEnd() }, 'Sim to the end'),
+          quit)));
     this.root.appendChild(menu);
   }
 
@@ -754,6 +1157,7 @@ export class GameScreen {
       if ((m.phase as string) !== 'over') m.events.length = 0;
     }
     this.paused = false;
+    this.meter = null;
     this.root.querySelector('.pausemenu')?.remove();
     this.handleEvents();
   }
@@ -761,24 +1165,26 @@ export class GameScreen {
   private onGameOver() {
     const m = this.match;
     const won = this.humanSide >= 0 && m.winner === this.humanSide;
+    this.releaseWake();
     audio.playMusic('victory');
-    if (won) audio.play('bigCheer');
+    if (won) { audio.play('bigCheer'); this.buzz([0, 40, 60, 40, 60, 90]); }
     let star: string | null = null, best = -1;
     for (const [id, l] of Object.entries(m.box)) {
       const tb = l.bat.h + l.bat.d + l.bat.t * 2 + l.bat.hr * 3;
       const score = tb * 2 + l.bat.rbi * 1.5 + l.bat.r + l.pitch.so * 0.8 + (l.side === m.winner ? 1 : 0);
       if (score > best) { best = score; star = id; }
     }
+    const innings = Math.max(m.cfg.innings, m.inning);
     const line = (side: 0 | 1) => {
       const t = this.teamOf(side);
-      const cells = Array.from({ length: Math.max(m.cfg.innings, m.inning) }, (_, i) => h('td', null, m.line[side][i] ?? (i < m.inning ? 'x' : '')));
+      const cells = Array.from({ length: innings }, (_, i) => h('td', null, m.line[side][i] ?? (i < m.inning ? 'x' : '')));
       return h('tr', null, h('th', null, t.abbr), ...cells, h('td', { class: 'tot' }, String(m.score[side])), h('td', null, String(m.hits[side])), h('td', null, String(m.errors[side])));
     };
-    const header = h('tr', null, h('th', null, ''), ...Array.from({ length: Math.max(m.cfg.innings, m.inning) }, (_, i) => h('th', null, String(i + 1))), h('th', null, 'R'), h('th', null, 'H'), h('th', null, 'E'));
+    const header = h('tr', null, h('th', null, ''), ...Array.from({ length: innings }, (_, i) => h('th', null, String(i + 1))), h('th', null, 'R'), h('th', null, 'H'), h('th', null, 'E'));
     const sk = star ? kid(star) : null;
     const starLine = sk ? (() => {
       const b = m.box[sk.id].bat, p = m.box[sk.id].pitch;
-      const parts = [`${b.h}-for-${b.ab}`];
+      const parts = [`${b.h} for ${b.ab}`];
       if (b.hr) parts.push(`${b.hr} HR`);
       if (b.rbi) parts.push(`${b.rbi} RBI`);
       if (p.so) parts.push(`${p.so} K`);
@@ -786,14 +1192,15 @@ export class GameScreen {
     })() : '';
     const title = m.winner === -1 ? 'It\'s a tie!' : this.humanSide < 0 ? `${this.teamOf(m.winner as 0 | 1).name} win!` : won ? 'You win!' : 'Tough loss!';
     const panel = h('div', { class: 'overlay final' },
-      h('div', { class: 'panel wide' },
-        h('h2', null, title),
-        h('table', { class: 'linescore' }, header, line(0), line(1)),
+      h('div', { class: 'panel wide final-panel' },
+        h('div', { class: 'fp-main' },
+          h('h2', null, title),
+          h('table', { class: 'linescore' }, header, line(0), line(1)),
+          h('div', { class: 'cta' },
+            h('button', { class: 'btn', onclick: () => { this.destroy(); this.opts.onExit(m, true); } }, 'Play again'),
+            h('button', { class: 'btn ghost', onclick: () => { this.destroy(); this.opts.onExit(m); } }, 'Main menu'))),
         sk ? h('div', { class: 'star' }, this.portrait(sk, 'happy', 168),
-          h('div', null, h('div', { class: 'card-label' }, 'PLAYER OF THE GAME'), h('div', { class: 'card-name' }, `${sk.first} "${sk.nick}" ${sk.last}`), h('div', { class: 'card-sub' }, starLine), h('div', { class: 'quote' }, `"${sk.quips[0]}"`))) : null,
-        h('div', { class: 'cta' },
-          h('button', { class: 'btn', onclick: () => { this.destroy(); this.opts.onExit(m, true); } }, 'Play again'),
-          h('button', { class: 'btn ghost', onclick: () => { this.destroy(); this.opts.onExit(m); } }, 'Main menu'))));
+          h('div', null, h('div', { class: 'card-label' }, 'Player of the game'), h('div', { class: 'card-name' }, `${sk.first} "${sk.nick}" ${sk.last}`), h('div', { class: 'card-sub' }, starLine), h('div', { class: 'quote' }, `"${sk.quips[0]}"`))) : null));
     setTimeout(() => { if (!this.destroyed) this.root.appendChild(panel); }, 2500);
   }
 }
