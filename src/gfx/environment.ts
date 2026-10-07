@@ -19,8 +19,8 @@ export interface SunOptions {
 /** Sky dome, sun with soft shadows, sky fill light, image-based lighting, clouds and haze. */
 export class Environment {
   readonly sky: Mesh;
-  readonly sun = new DirectionalLight(0xffdfb4, 2.9);
-  readonly hemi = new HemisphereLight(0xc9dcec, 0x6a6638, 0.62);
+  readonly sun = new DirectionalLight(0xffe9c8, 2.8);
+  readonly hemi = new HemisphereLight(0xcfe4f4, 0x6f7a3c, 0.8);
   readonly clouds = new Group();
   readonly sunDir = new Vector3();
 
@@ -48,7 +48,7 @@ export class Environment {
     s.position.copy(this.sunDir).multiplyScalar(600).add(s.target.position);
     scene.add(s, s.target, this.hemi);
 
-    // warm aerial haze: the hills and far trees fade into the afternoon instead of staying flat green
+    // soft aerial haze: the hills and far trees fade back instead of staying flat green
     scene.fog = new Fog(new Color(SKY.horizon), 600, 4200);
 
     this.addClouds();

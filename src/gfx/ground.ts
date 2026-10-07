@@ -188,7 +188,7 @@ export class Ground {
     splatTex.flipY = true;
     splatTex.minFilter = LinearFilter;
     splatTex.generateMipmaps = false;
-    const mat = new MeshStandardMaterial({ map: gt.map, normalMap: gt.normal, roughness: 0.93, metalness: 0, normalScale: new Vector2(0.8, 0.8) });
+    const mat = new MeshStandardMaterial({ map: gt.map, normalMap: gt.normal, roughness: 0.93, metalness: 0, normalScale: new Vector2(0.35, 0.35) });
     Object.assign(this.uniforms, {
       uSplat: { value: splatTex },
       uSplatRect: { value: new Vector2(SPLAT.minX, SPLAT.minY) },
@@ -217,18 +217,21 @@ vec4 gSplat;`)
 gSplat = splatAt();
 if (gSplat.a < 0.5) discard;
 vec4 grassC = texture2D(map, vMapUv);
+// cartoon lawn: mostly one clean saturated green, the painted texture only as a soft hint
+grassC.rgb = mix(vec3(0.20, 0.42, 0.11), grassC.rgb, 0.35);
 // large-scale color variation so the lawn never looks tiled
 float big = sin(vWPos.x * 0.031 + sin(vWPos.z * 0.023) * 2.0) * 0.5 + 0.5;
 grassC.rgb *= mix(0.9, 1.08, big);
-grassC.rgb *= mix(0.86, 1.14, gSplat.b);
-// late summer: a touch warmer everywhere, and sun-dried straw patches out on the hills
-grassC.rgb *= vec3(1.05, 1.0, 0.86);
+grassC.rgb *= mix(0.84, 1.16, gSplat.b);
+// sunny and a touch warm, with sun-dried straw patches out on the hills
+grassC.rgb *= vec3(1.03, 1.0, 0.88);
 float farA = smoothstep(140.0, 700.0, length(vWPos.xz + vec2(0.0, 60.0)));
 float dryN = sin(vWPos.x * 0.011 + sin(vWPos.z * 0.017) * 1.7) * sin(vWPos.z * 0.009 - vWPos.x * 0.004) * 0.5 + 0.5;
 float dry = farA * smoothstep(0.35, 0.8, dryN) * 0.55 + farA * clamp(vWPos.y / 90.0, 0.0, 0.3);
 grassC.rgb = mix(grassC.rgb, grassC.rgb * vec3(1.45, 1.25, 0.7) + vec3(0.03, 0.02, 0.0), dry);
 vec4 dirtC = texture2D(uDirt, vMapUv * 1.6);
 dirtC.rgb *= uDirtTint / vec3(0.485, 0.254, 0.102);
+dirtC.rgb = mix(uDirtTint * 1.05, dirtC.rgb, 0.4);
 float dirtAmt = smoothstep(0.08, 0.75, gSplat.r);
 vec4 baseC = mix(grassC, dirtC, dirtAmt);
 baseC.rgb = mix(baseC.rgb, vec3(0.93, 0.93, 0.9), smoothstep(0.25, 0.8, gSplat.g));
