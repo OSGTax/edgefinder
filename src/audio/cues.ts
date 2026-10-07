@@ -151,6 +151,8 @@ export class GameSound {
         }
         break;
       case 'contact':
+        // a sky-high pop-up gets the slide whistle
+        if (e.la > 52 && e.ev > 35) this.sink.play('slideUp', { intensity: clamp01((e.la - 52) / 25) }, 0.1);
         // a long fly ball: the crowd rises with it
         if (e.ev > 70 && e.la > 18 && e.la < 45 && e.quality > 0.5) this.sink.play('ooh', { intensity: clamp01(0.3 + (e.ev - 70) / 30 + mo * 0.3) }, 0.25);
         break;
@@ -181,6 +183,7 @@ export class GameSound {
         if (!quipping.has(e.batter)) this.bark(e.batter, 'homer', { delay: 0.5, level: 1.2 });
         break;
       case 'strikeout':
+        if (!e.looking) this.sink.play('bigWhiff', { intensity: 0.6 }); // the swing that nearly spun them around
         this.sink.play(good(false) ? 'cheer' : 'aww', { intensity: clamp01(0.2 + 0.5 * mo) });
         if (!quipping.has(e.batter) && Math.random() < 0.5) this.bark(e.batter, e.looking ? 'lookK' : 'whiffK', { delay: 0.4 });
         break;
@@ -218,6 +221,7 @@ export class GameSound {
         if (e.cleared) break;
         const name: SfxName = e.kind === 'picket' ? 'picket' : e.kind === 'hedge' || e.kind === 'sunflower' || e.kind === 'reeds' ? 'hedge' : e.kind === 'house' || e.kind === 'garage' ? 'houseWall' : 'fence';
         this.sink.play(name, { intensity: 0.8 });
+        if (name === 'fence' || name === 'picket') this.sink.play('boing', { intensity: 0.4 }, 0.05);
         this.sink.play('ooh', { intensity: 0.4 + 0.3 * mo });
         // off the house: Mrs. Mendoza comes to the back door to check on her windows
         if (name === 'houseWall' && this.now - this.houseT > 40) {

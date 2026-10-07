@@ -8,6 +8,8 @@ const EXPECTED_SFX = [
   'picket', 'hedge', 'houseWall', 'splash', 'leaves', 'cheer', 'bigCheer', 'aww', 'ooh', 'giggle',
   'strike', 'out', 'safe', 'homeRun', 'special', 'uiTap', 'uiBack', 'uiSelect', 'whistle', 'dogBark',
   'screenDoor', 'throw', 'boing', 'bonk', 'zip', 'dizzy', 'squeak', 'pop',
+  'slideUp', 'slideDown', 'bigWhiff', 'stingThwack', 'stingWhiff', 'stingSnag', 'stingSploosh',
+  'stingBonk', 'stingSitDown', 'stingSeeYa',
 ];
 const EXPECTED_TRACKS = ['title', 'game', 'inning', 'victory', 'defeat', 'season'];
 

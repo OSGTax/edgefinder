@@ -651,6 +651,59 @@ const pop: SfxFn = ({ p, out, t, i }) => {
   p.burst(out, { t, peak: a * 0.6, decay: 0.006, freq: 1800, q: 1 });
 };
 
+const slideUp: SfxFn = ({ p, out, t, i }) => slideWhistle(p, out, t, 450, 1900, 0.55 + 0.3 * i, 0.22); // a sky-high pop-up
+const slideDown: SfxFn = ({ p, out, t, i }) => slideWhistle(p, out, t, 1700, 380, 0.45 + 0.2 * i, 0.2); // something falling flat
+
+const bigWhiff: SfxFn = (h) => {
+  // a cartoon "fwoop": a swing so big it nearly spins the kid around
+  const { p, out, t, i } = h;
+  const f = p.burst(out, { t, attack: 0.04, peak: 0.4 + 0.2 * i, decay: 0.3, q: 2.2 });
+  path(f.frequency, [[t, 2600], [t + 0.12, 900], [t + 0.35, 300]]);
+  p.tone(out, { t, type: 'triangle', freq: 700, to: 180, glide: 0.3, peak: 0.12, decay: 0.32 });
+  panSweep(h, 0.5, -0.5, 0.35);
+};
+
+// ── comic pop-up stingers: one per pop-up word, short and punchy ────────────
+// They ride on top of the real sound (the crack, the splash), so they stay small.
+
+const stingThwack: SfxFn = ({ p, out, t }) => {
+  // THWACK! a crushed ball: woodblock smack, then a zip upward
+  modes(p, out, t, 0.5, [[1040, 0.8, 0.05], [2480, 0.4, 0.03]]);
+  p.tone(out, { t: t + 0.04, freq: 500, to: 2600, glide: 0.14, peak: 0.16, decay: 0.16 });
+};
+
+const stingWhiff: SfxFn = ({ p, out, t }) => {
+  // WHIFF! a little whistle falling away
+  slideWhistle(p, out, t, 1500, 600, 0.25, 0.14);
+};
+
+const stingSnag: SfxFn = ({ p, out, t }) => {
+  // SNAG! a snap and two quick glock notes up
+  p.burst(out, { t, peak: 0.5, decay: 0.01, freq: 2200, q: 1.4 });
+  glock(p, out, t + 0.03, [91], 0.05, 0.16);
+  glock(p, out, t + 0.1, [98], 0.12, 0.18);
+};
+
+const stingSploosh: SfxFn = ({ p, out, t }) => {
+  // SPLOOSH! a big bubble "bloop" rising out of the deep end
+  p.tone(out, { t, freq: 260, to: 1300, glide: 0.12, peak: 0.3, decay: 0.14, attack: 0.006 });
+  p.tone(out, { t: t + 0.16, freq: 520, to: 1700, glide: 0.07, peak: 0.16, decay: 0.08, attack: 0.004 });
+};
+
+const stingBonk: SfxFn = (h) => bonk(h);
+
+const stingSitDown: SfxFn = ({ p, out, t }) => {
+  // SIT DOWN! a kazoo "wah-wahh", two notes and gone (the second sags)
+  kazoo(p, out, t, [67], 0.14, 0.22);
+  kazoo(p, out, t + 0.18, [66], 0.3, 0.24);
+};
+
+const stingSeeYa: SfxFn = ({ p, out, t }) => {
+  // SEE YA! a cork pop and the ball twinkling away into the sky
+  p.tone(out, { t, freq: 700, to: 1500, glide: 0.03, peak: 0.3, decay: 0.05 });
+  [96, 100, 103, 108].forEach((m, k) => glock(p, out, t + 0.06 + k * 0.06, [m], 0.05, 0.12 * (1 - k * 0.15)));
+};
+
 // ── UI: cardboard, paper and bottle caps ─────────────────────────────────────
 
 const uiTap: SfxFn = ({ p, out, t }) => {
@@ -715,6 +768,16 @@ export const SFX: Record<SfxName, SfxFn> = {
   dizzy,
   squeak,
   pop,
+  slideUp,
+  slideDown,
+  bigWhiff,
+  stingThwack,
+  stingWhiff,
+  stingSnag,
+  stingSploosh,
+  stingBonk,
+  stingSitDown,
+  stingSeeYa,
 };
 
 /**
@@ -760,6 +823,16 @@ export const TRIM_DB: Partial<Record<SfxName, number>> = {
   dizzy: 3,
   squeak: -2,
   pop: 5,
+  slideUp: -3,
+  slideDown: -3,
+  bigWhiff: 0,
+  stingThwack: 0,
+  stingWhiff: 0,
+  stingSnag: 0,
+  stingSploosh: 4,
+  stingBonk: -2,
+  stingSitDown: 11,
+  stingSeeYa: 3,
 };
 
 /** Minimum seconds between repeats of one sound; big layered sounds get longer. */

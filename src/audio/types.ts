@@ -36,7 +36,18 @@ export type SfxName =
   | 'zip' // zip-up whoosh (a kid taking off)
   | 'dizzy' // stars circling a kid's head
   | 'squeak' // sneakers skidding to a stop
-  | 'pop'; // a cork pop, for a comic pop-up landing on screen
+  | 'pop' // a cork pop, for a comic pop-up landing on screen
+  | 'slideUp' // slide whistle up: a sky-high pop-up
+  | 'slideDown' // slide whistle down
+  | 'bigWhiff' // cartoon "fwoop" of a huge swing and miss
+  // one short stinger per comic pop-up word (they sit on top of the real sound)
+  | 'stingThwack' // THWACK! (a crushed ball)
+  | 'stingWhiff' // WHIFF!
+  | 'stingSnag' // SNAG! (a great grab)
+  | 'stingSploosh' // SPLOOSH! (into the pool)
+  | 'stingBonk' // BONK! (off the fence, a trip)
+  | 'stingSitDown' // SIT DOWN! (strike three)
+  | 'stingSeeYa'; // SEE YA! (home run)
 
 export type MusicTrack = 'title' | 'game' | 'inning' | 'victory' | 'defeat' | 'season';
 
