@@ -7,9 +7,11 @@ status and roadmap in plain language, and keep it current when phases change.
 **Current state: the 3D demo** — two teams (Maple Street Mudcats at Cedar Lane
 Comets), one heavily detailed yard (Pool Party Paradise), real 3D kids and
 gameplay. This is the quality bar for the final game; the owner wants the
-demo polished before more teams/yards are built. **In progress: the mobile revamp** —
-phone-first controls, friendly faces, a hand-made "kids made it" look, speed; read
-`plans/MOBILE-REVAMP.md` (art direction, ownership map, verification) before changing anything. League build-out plans:
+demo polished before more teams/yards are built. **The mobile revamp (Oct 2026)** made it
+phone-first and cartoon: thumb controls, toon-shaded kids with friendly faces and per-kid
+personality, comic-book pop-ups on a clean screen, a cartoon UI kit, kid-band sound, a PWA
+shell, adaptive graphics tiers. `plans/MOBILE-REVAMP.md` holds the owner's art direction
+(fun, cartoon, comical, uncluttered; the "not AI-generated" checklist) — follow it. League build-out plans:
 `plans/LEAGUE-FRAMEWORK.md` (10 teams × 9 kids, 7 traits: Contact/Power/
 Speed/Fielding/Arm/Pitching/Control, everyone pitches, no benches/injuries/trades, no pick-up
 draft, one home field per team) and `plans/3D-FRAMEWORK.md`. The v0.1 2D kids
@@ -39,45 +41,69 @@ npm run build          # dist/ (hashed assets; deploy this folder)
 npm run deploy         # build docs/ and publish it to the gh-pages branch → https://osgtax.github.io/edgefinder/
 ```
 
-Dev-only URL hashes (combine with `&`): `#gallery` (all kids; `&faces`,
-`&poses=run,swing,...&t=0.3`, `&kid=bo`, `&expr=yell`), `#dev=<cam>` (empty
-yard from a named camera: bat, field, house, patio, pool, cf, street, high,
-dugout...), `#play=mudcats|comets` (skip menus; `&cpu` = CPU vs CPU),
-`q=low|medium|high` (force graphics tier), `ff=N` (simulate N fixed steps per
-rendered frame — for the slow software renderer in headless Chromium).
+`npm run dev` and plain `vite build` drop the dev views; for headless checks build a dev-mode
+copy and serve it: `NODE_ENV=development npx vite build --mode development --outDir <dir>`,
+then `npx vite preview --outDir <dir> --port 4180`.
+
+Dev-only URL hashes (combine with `&`): `#gallery` (all kids; `&grid` contact sheet,
+`&faces`, `&exprs`, `&atlas`, `&lite`, `&portraits`, `&poses=run,swing,...&t=0.3`,
+`&kid=bo`, `&expr=yell`, `&zoom=2`, `&yaw=`), `#dev=<cam>` (empty yard from a named
+camera: bat, field, house, patio, pool, cf, street, high, dugout...), `#play=mudcats|comets`
+(skip menus; `&cpu` = CPU vs CPU), `#look` (UI kit specimen), `#menu=pick|kids|kid&kid=bo|how|settings`,
+`#loadhold` (freeze the loading screen), `q=low|medium|high` (force graphics tier; also
+disables the tier governor), `ff=N` (simulate N fixed steps per rendered frame — for the
+slow software renderer). `window.__holdPops = true` freezes the last comic pop-up.
+`#sounds` (the sound board) also works in production. Changing only the `#hash` doesn't
+reload the page: in Playwright `goto('about:blank')` first.
 
 ## Layout
 
 ```
 src/
   engine/   math, seeded Rng, safe localStorage, steps (generator builds paced for the loading bar)
+  shell/    phone-app shell: service worker registration + update check, fullscreen/landscape
+            on Android, install hints, gesture guards (wake lock + auto-pause live in GameScreen)
   data/     types.ts (Kid/Traits/Team/Yard...), kids.ts (18 kids), teams.ts (2 teams +
             announcers), yards.ts (Pool Party Paradise), palette.ts (skin/hair)
   sim/      the game engine — pure, no DOM, deterministic from a seed (unchanged from v0.1
             apart from traits + pitching changes): field, physics, pitching, batting,
             play (LivePlay fielder/runner AI), ai, match (phases, specials, simulateMatch), lineup
-  gfx/      Three.js basics: renderer, quality tiers, sky + sun + PMREM environment,
-            ground (splat-map lawn shader + instanced grass blades), procedural canvas
-            textures + normal maps, material library, geometry batching (merge per material)
+  gfx/      Three.js basics: renderer, quality.ts (tiers, device/GPU probe, learned tier per
+            chip, prefs), governor.ts (pure frame-time tier governor), perf.ts (speed readout),
+            contact.ts (soft contact shadows), sky + sun + PMREM environment (Neutral tone
+            mapping), ground (splat-map lawn + instanced grass blades), procedural textures,
+            material library, geometry batching (merge per material; plain paints folded)
   world/    the ballpark: stadium.ts (assembles everything, LAYOUT of patio/dugouts),
             house.ts, pool.ts (water + caustics shaders), fences.ts (pickets, hedge, leaf
             cards), trees.ts (procedural trees + far-tree blobs), props.ts (patio set, grill,
             bases, flamingos, dugouts...), neighborhood.ts (houses, street, poles, water tower)
   kid3d/    3D kids: rig.ts (skeleton + proportions from KidLook), geom.ts (lofts, limbs,
-            skin weights), model.ts (KidModel: one skeleton, ~7 skinned meshes), face.ts
-            (painted expression atlas), uniform.ts (jersey texture, numbers), costume.ts
-            (hair, hats, persona pieces), items.ts (bat, glove, ball, props), anim.ts
-            (Animator: poses, cycles, IK, look-at, blinks), ik.ts
+            skin weights), model.ts (KidModel: one skeleton, skinned meshes; setDetail('lite'
+            |'full'), setLids, setOutline), toon.ts (toon ramp + ink outline), face.ts (painted
+            expression atlas, 4×3 incl. laugh), face-recipes.ts (a face per kid), uniform.ts,
+            costume.ts (hair, hats, persona pieces), items.ts, anim.ts (Animator: modes,
+            cycles, IK, look-at, blinks, squash & stretch), pose.ts (allocation-free keyframe
+            tracks), personality.ts (per-kid stance, gait, idles, fidgets, celebrations), ik.ts
   game/     world.ts (World: stadium + 18 Actors + ball + overlays; sync(match) maps sim
-            state to kids each frame), director.ts (camera shots), screen.ts (GameScreen:
-            HUD, input, events → sounds/popups/fx/commentary), fx.ts (particles, ball trail),
+            state to kids, moments → bench reactions; budgetKids: shadows, culling, lite
+            models), director.ts (camera shots, phone framing), screen.ts (GameScreen: thumb
+            controls, pitch meter, swing reads, coach, HUD from the look kit, events →
+            pop-ups/fx/commentary), comic.ts (pop-up moments, words, no-repeat), emotes.ts
+            (stars, sweat drops, "!" over heads), fx.ts (cartoon particles, ball trail),
             portraits.ts (3D portraits for HUD/menus)
-  audio/    Web Audio synth: sfx, music sequencer + songs, ambience
-  ui/       app.ts (loading, title over an attract-mode CPU game, team pick, roster, how-to,
-            settings), commentary.ts (Chet & Dottie), settings.ts, dom.ts, base.css (tokens,
-            buttons, panels), menus.css, hud.css (in-game screen)
-  dev/      view3d.ts (#dev), gallery3d.ts (#gallery) — dev-only
-tests/      sim balance + determinism, human-hitting, kid traits, audio
+  audio/    Web Audio: context (bus, phone lifecycle, limiter), dsp, bake (pre-rendered
+            textures), instruments (kid band), notation, tracks, music (sequencer), sfx
+            (+ comic stingers), ambience, voice + voices (formant gibberish per kid),
+            cues (GameSound: match events → crowd, barks, voices, surfaces)
+  ui/       app.ts (loading, title over an attract-mode CPU game, team pick, Meet the Kids
+            trading cards, how-to, settings), commentary.ts (Chet & Dottie; never repeats a
+            line or template in a game), settings.ts, dom.ts, base.css (tokens), menus.css,
+            hud.css (in-game screen), look/ (the cartoon UI kit: comic lettering, comicPop
+            bursts, code-drawn icons, components, look.css; guide in look/README.md)
+  dev/      view3d.ts (#dev), gallery3d.ts (#gallery), soundboard.ts (#sounds)
+build/      pwa.ts (Vite plugin: manifest, code-painted icons, favicon, sw.js per build)
+tests/      sim balance + determinism, human-hitting, kid traits, faces, controls, quality
+            governor, commentary, audio (+ sample-accurate render checks via fake-audio.ts)
 ```
 
 World units are feet. **Sim coordinates:** home plate is the origin, +y toward
@@ -95,6 +121,9 @@ face local +z; their left is +x.
   `MatchEvent`s; `GameScreen.handleEvents` turns them into sounds, popups, effects and commentary.
 - `World.sync(match)` decides where every kid should be and in which animation `Mode`
   (`kid3d/anim.ts`); kids not in the play jog to their team's dugout.
+- Graphics: `World.q` is the tier the yard was built at, `World.tier` the live tier;
+  `TierGovernor` steps tiers by measured frame times and `World.setTier()` applies
+  resolution, shadow map, grass and kid budgets live (textures/leaves next visit).
 - The app builds one `World` at startup and reuses it for the title attract game and
   every match. `World.build()` / `Stadium.build()` are generators of loading steps
   (`engine/steps.ts`): `runPaced` lets the loading bar paint between them, `runNow`
@@ -133,4 +162,8 @@ and wait for `window.__ready` (dev views) or `window.__game.ready` (games).
 - Static scenery: add primitives to a `Batch` (one mesh per material). Textures are
   painted neutral and tinted per material (`gfx/materials.ts`) — painting a new texture
   per colour costs seconds at load.
+- UI: display text uses `lettering(text, { style: 'comic' })`, icons come from `icon()`, big
+  moments use `comicPop()`; **no emoji** anywhere. Keep the screen clean (see the brief).
+- Every path stays relative (the site is served from a subpath). The service worker only
+  runs in production builds; never strand players on an old build (index is network-first).
 - Test gate before committing: `npm run typecheck && npm test && npm run build`.
