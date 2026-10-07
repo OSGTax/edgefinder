@@ -318,7 +318,18 @@ export function dugout(b: Batch, x: number, y: number, rot: number, team: { name
     g.strokeStyle = team.primary; g.lineWidth = 10; g.strokeRect(8, 8, 496, 144);
     g.fillStyle = team.primary; g.font = 'bold 64px "Trebuchet MS", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.save(); g.translate(256, 82); g.rotate(-0.03); g.fillText(team.name.toUpperCase(), 0, 0); g.restore();
-    g.fillStyle = team.secondary; g.font = 'bold 22px sans-serif'; g.fillText('★ DUGOUT ★ NO GROWNUPS ★', 256, 136);
+    g.fillStyle = team.secondary; g.font = 'bold 22px sans-serif'; g.fillText('DUGOUT  ·  NO GROWNUPS', 256, 136);
+    // hand-painted stars either side of the motto (drawn, not a font glyph)
+    const star = (cx: number, cy: number, r: number) => {
+      g.beginPath();
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5, rr = i % 2 ? r * 0.45 : r;
+        g.lineTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      }
+      g.closePath(); g.fill();
+    };
+    const half = g.measureText('DUGOUT  ·  NO GROWNUPS').width / 2;
+    star(256 - half - 20, 135, 11); star(256 + half + 20, 135, 11);
   }), { roughness: 0.9 });
   b.add(sign, quad(6, 1.9), at(0, 4.0, -2.35));
   b.add(wood, boxFt(6.3, 2.1, 0.12), at(0, 4.0, -2.43));
