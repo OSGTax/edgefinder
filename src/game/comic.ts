@@ -1,84 +1,46 @@
-import { h } from '../ui/dom';
+import { comicPop, type BurstShape } from '../ui/look';
 
-// The comic pop-ups: a jagged burst with our own word for the moment, for the
-// big plays only. Words never repeat back to back, and each moment cycles
-// through its own short list before reusing one.
+// The comic pop-ups: which word, for which moment, and when. The burst itself
+// is drawn by the look kit (`comicPop`). Big plays only; words never repeat
+// back to back, and each moment cycles through its own short list.
 
 export type Moment =
   | 'crush' | 'homer' | 'kLooking' | 'kSwinging' | 'snag' | 'splash' | 'fence'
-  | 'double' | 'triple' | 'doublePlay' | 'oops' | 'hbp' | 'scores' | 'dog';
+  | 'double' | 'triple' | 'doublePlay' | 'oops' | 'hbp' | 'scores' | 'dog' | 'special';
 
-interface MomentStyle { words: string[]; fill: string; ink?: string; size: number; shape: 'burst' | 'cloud' | 'splat' }
+interface MomentStyle {
+  words: string[];
+  burst: BurstShape;
+  /** outer, inner, letters */
+  colors: [string, string, string];
+  size: number;
+}
+
+const SUN = 'var(--sunshine)', CREAM = '#fff1b8', TOMATO = 'var(--tomato)', POSTER = 'var(--poster)';
 
 const STYLE: Record<Moment, MomentStyle> = {
-  crush: { words: ['THWACK!', 'KER-RACK!', 'SMACKED!'], fill: '#ffd23f', size: 1.15, shape: 'burst' },
-  homer: { words: ['SEE YA!', 'OUTTA HERE!', 'BYE-BYE!', 'GOING, GONE!'], fill: '#ffd23f', size: 1.4, shape: 'burst' },
-  kLooking: { words: ['SIT DOWN!', 'FROZEN!', 'CAUGHT LOOKING!'], fill: '#7fc8ff', size: 1, shape: 'burst' },
-  kSwinging: { words: ['WHIFF!', 'WHOOSH!', 'FANNED!'], fill: '#ffffff', size: 1, shape: 'cloud' },
-  snag: { words: ['SNAG!', 'GOTCHA!', 'YOINK!'], fill: '#8be28f', size: 1.05, shape: 'burst' },
-  splash: { words: ['SPLOOSH!', 'KER-SPLASH!'], fill: '#7fd6ff', size: 1.2, shape: 'splat' },
-  fence: { words: ['BONK!', 'CLANG!', 'THUNK!'], fill: '#ffb36b', size: 0.95, shape: 'burst' },
-  double: { words: ['TWO BAGS!', 'ZIP!'], fill: '#8be28f', size: 1, shape: 'burst' },
-  triple: { words: ['THREE BAGS!', 'ZOOM!'], fill: '#8be28f', size: 1.1, shape: 'burst' },
-  doublePlay: { words: ['TWO FOR ONE!', 'DOUBLE PLAY!'], fill: '#ff8a87', size: 1.05, shape: 'burst' },
-  oops: { words: ['OOPS!', 'WHOOPS!', 'BUTTERFINGERS!'], fill: '#ffb36b', size: 0.95, shape: 'splat' },
-  hbp: { words: ['OUCH!', 'YEOWCH!'], fill: '#ff8a87', size: 1, shape: 'burst' },
-  scores: { words: ['SCORES!', 'HOME FREE!'], fill: '#8be28f', size: 0.95, shape: 'burst' },
-  dog: { words: ['WOOF!', 'ARF!'], fill: '#ffffff', size: 0.85, shape: 'cloud' },
+  crush: { words: ['THWACK!', 'KER-RACK!', 'SMACKED!'], burst: 'star', colors: [SUN, CREAM, TOMATO], size: 1.05 },
+  homer: { words: ['SEE YA!', 'OUTTA HERE!', 'BYE-BYE!', 'GOING, GONE!'], burst: 'star', colors: [TOMATO, SUN, POSTER], size: 1.3 },
+  kLooking: { words: ['SIT DOWN!', 'FROZEN!', 'CAUGHT LOOKING!'], burst: 'jagged', colors: ['#7cc8f0', '#d8f0ff', POSTER], size: 1 },
+  kSwinging: { words: ['WHIFF!', 'WHOOSH!', 'FANNED!'], burst: 'jagged', colors: [TOMATO, SUN, POSTER], size: 1 },
+  snag: { words: ['SNAG!', 'GOTCHA!', 'YOINK!'], burst: 'star', colors: ['var(--grass-light)', '#e3f6c8', 'var(--marker-green)'], size: 1 },
+  splash: { words: ['SPLOOSH!', 'KER-SPLASH!'], burst: 'cloud', colors: ['#7cc8f0', '#d8f0ff', POSTER], size: 1.15 },
+  fence: { words: ['BONK!', 'CLANG!', 'THUNK!'], burst: 'jagged', colors: [SUN, CREAM, TOMATO], size: 0.9 },
+  double: { words: ['TWO BAGS!', 'ZIP!'], burst: 'star', colors: ['var(--grass-light)', '#e3f6c8', TOMATO], size: 0.95 },
+  triple: { words: ['THREE BAGS!', 'ZOOM!'], burst: 'star', colors: ['var(--grass-light)', '#e3f6c8', TOMATO], size: 1.05 },
+  doublePlay: { words: ['TWO FOR ONE!', 'DOUBLE PLAY!'], burst: 'jagged', colors: [TOMATO, SUN, POSTER], size: 1 },
+  oops: { words: ['OOPS!', 'WHOOPS!', 'BUTTERFINGERS!'], burst: 'cloud', colors: ['#ffb36b', '#ffe0bd', TOMATO], size: 0.9 },
+  hbp: { words: ['OUCH!', 'YEOWCH!'], burst: 'jagged', colors: [TOMATO, SUN, POSTER], size: 0.95 },
+  scores: { words: ['SCORES!', 'HOME FREE!'], burst: 'star', colors: [SUN, CREAM, 'var(--marker-green)'], size: 0.9 },
+  dog: { words: ['WOOF!', 'ARF!'], burst: 'cloud', colors: [POSTER, '#fff', 'var(--marker)'], size: 0.8 },
+  special: { words: ['SPECIAL!'], burst: 'star', colors: ['#c39bff', '#ead9ff', POSTER], size: 1.05 },
 };
-
-const NS = 'http://www.w3.org/2000/svg';
-
-/** A jagged starburst, a puffy cloud, or a splat, as an SVG path in a 200×120 box. */
-function shapePath(kind: MomentStyle['shape']): string {
-  const cx = 100, cy = 60, rx = 92, ry = 52;
-  if (kind === 'cloud') {
-    // puffy bumps round an ellipse
-    const n = 11;
-    let d = '';
-    for (let i = 0; i <= n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const x = cx + Math.cos(a) * rx * 0.86, y = cy + Math.sin(a) * ry * 0.82;
-      if (i === 0) { d += `M${x.toFixed(1)},${y.toFixed(1)}`; continue; }
-      const am = ((i - 0.5) / n) * Math.PI * 2;
-      const bump = 1.22 + Math.random() * 0.1;
-      d += ` Q${(cx + Math.cos(am) * rx * bump).toFixed(1)},${(cy + Math.sin(am) * ry * bump).toFixed(1)} ${x.toFixed(1)},${y.toFixed(1)}`;
-    }
-    return d + 'Z';
-  }
-  const n = kind === 'splat' ? 9 : 14;
-  const at = (i: number, k: number) => {
-    const a = (i / (n * 2)) * Math.PI * 2 + 0.1;
-    return `${(cx + Math.cos(a) * rx * k).toFixed(1)},${(cy + Math.sin(a) * ry * k).toFixed(1)}`;
-  };
-  const outer = Array.from({ length: n }, (_, i) => at(i * 2, 1 + (Math.random() - 0.5) * 0.18));
-  const inner = Array.from({ length: n }, (_, i) => at(i * 2 + 1, kind === 'splat' ? 0.55 + Math.random() * 0.12 : 0.7 + Math.random() * 0.08));
-  if (kind === 'splat') {
-    // blobby drips: curve from tip to tip, pulled in toward the middle
-    return `M${outer[0]}` + outer.map((_, i) => ` Q${inner[i]} ${outer[(i + 1) % n]}`).join('') + 'Z';
-  }
-  return 'M' + outer.map((o, i) => `${o} L${inner[i]}`).join(' L') + 'Z';
-}
-
-function burst(st: MomentStyle): SVGSVGElement {
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '-8 -8 216 136');
-  svg.setAttribute('class', 'comic-shape');
-  const id = `ht${Math.floor(Math.random() * 1e9)}`;
-  const d = shapePath(st.shape);
-  svg.innerHTML = `
-    <defs><pattern id="${id}" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(30)">
-      <circle cx="3.5" cy="3.5" r="1.5" fill="rgba(43,29,20,0.16)"/></pattern></defs>
-    <path d="${d}" transform="translate(6 7)" fill="#2b1d14"/>
-    <path d="${d}" fill="${st.fill}" stroke="#2b1d14" stroke-width="5" stroke-linejoin="round"/>
-    <path d="${d}" fill="url(#${id})"/>`;
-  return svg;
-}
 
 export class ComicPops {
   private last = '';
   private used = new Map<Moment, number>();
   private lastT = -9;
+  private lastSize = 0;
 
   constructor(private host: HTMLElement) {}
 
@@ -93,20 +55,19 @@ export class ComicPops {
     return w;
   }
 
-  /** Show a pop-up. `now` is game time; a smaller moment won't stomp a fresh one. */
+  /** Show a pop-up. `now` is game time; a smaller moment won't stomp a bigger, fresher one. */
   show(m: Moment, now: number, text?: string) {
     const st = STYLE[m];
-    if (now - this.lastT < 0.5 && st.size < 1.1) return;
+    if (now - this.lastT < 0.6 && st.size < this.lastSize) return;
     this.lastT = now;
+    this.lastSize = st.size;
     const word = text ?? this.word(m);
-    const tilt = (Math.random() * 10 - 5).toFixed(1);
-    const el = h('div', { class: `comic ${st.shape}`, style: `--s:${st.size};--tilt:${tilt}deg` },
-      burst(st) as unknown as Node,
-      h('div', { class: 'comic-word', style: word.length > 9 ? 'font-size:0.78em' : '' }, word));
+    // phones held sideways are short: keep the burst to about a third of the height
+    const width = Math.round(Math.min(300, Math.max(190, window.innerHeight * 0.62)) * st.size);
+    // dev: `window.__holdPops = true` keeps the last one up for screenshots in the slow headless browser
+    const hold = import.meta.env.DEV && (window as unknown as { __holdPops?: boolean }).__holdPops;
+    const el = comicPop(word, { burst: st.burst, colors: st.colors, width, animate: !hold, seed: `${word}|${m}` });
     while (this.host.firstChild) this.host.removeChild(this.host.firstChild);
     this.host.appendChild(el);
-    // dev: `window.__holdPops = true` keeps the last one up for screenshots in the slow headless browser
-    if (import.meta.env.DEV && (window as unknown as { __holdPops?: boolean }).__holdPops) { el.getAnimations().forEach((a) => { a.currentTime = 450; a.pause(); }); return; }
-    setTimeout(() => el.remove(), 1250);
   }
 }

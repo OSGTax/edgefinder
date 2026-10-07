@@ -9,6 +9,7 @@ import { PITCHES } from '../sim/pitching';
 import { W } from '../gfx/units';
 import { Booth, ordinal, type Line } from '../ui/commentary';
 import { clear, h } from '../ui/dom';
+import { icon, lettering, lowerThird, panel, rotateHint, teamPatch, tradingCard } from '../ui/look';
 import { saveSettings, settings } from '../ui/settings';
 import { World } from './world';
 import { Director } from './director';
@@ -20,32 +21,6 @@ export interface GameOptions {
   cfg: MatchConfig;
   /** called when the player leaves; match is null if they quit early */
   onExit: (m: Match | null, again?: boolean) => void;
-}
-
-/** A small round team badge. */
-export function teamBadge(t: Team, size = 28): HTMLCanvasElement {
-  const c = document.createElement('canvas');
-  const pr = Math.min(2, window.devicePixelRatio || 1);
-  c.width = c.height = size * pr;
-  c.style.width = c.style.height = `${size}px`;
-  c.className = 'logo';
-  const g = c.getContext('2d')!;
-  g.scale(pr, pr);
-  const r = size / 2;
-  g.fillStyle = t.colors.primary;
-  g.beginPath(); g.arc(r, r, r - 1.5, 0, Math.PI * 2); g.fill();
-  g.lineWidth = Math.max(2, size * 0.08);
-  g.strokeStyle = '#2b1d14';
-  g.stroke();
-  g.strokeStyle = t.colors.secondary;
-  g.lineWidth = Math.max(1.5, size * 0.06);
-  g.beginPath(); g.arc(r, r, r - size * 0.16, 0, Math.PI * 2); g.stroke();
-  g.fillStyle = t.colors.secondary;
-  g.font = `900 ${Math.round(size * 0.52)}px Georgia, serif`;
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.fillText(t.name[0], r, r + size * 0.04);
-  return c;
 }
 
 // ─────────────────────────────────────────────────────────── first-game coach
@@ -641,7 +616,7 @@ export class GameScreen {
         case 'pitch':
           this.outsThisPlay = 0;
           if (this.humanSide >= 0 && ++this.humanPitches === 4) this.controlsKey = '';
-          if (e.special) { this.comic.show('crush', this.time, SPECIAL_INFO[e.special].label.toUpperCase() + '!'); audio.play('special'); }
+          if (e.special) { this.comic.show('special', this.time, SPECIAL_INFO[e.special].label.toUpperCase() + '!'); audio.play('special'); }
           else audio.play('throw', { intensity: 0.4 });
           this.radar(`${PITCHES[e.pitch as PitchType]?.label ?? e.pitch} · ${Math.round(e.mph)} mph`);
           break;
@@ -864,8 +839,8 @@ export class GameScreen {
     this.radarEl = h('div', { class: 'radar' });
     this.bannerEl = h('div', { class: 'banner hidden', onpointerdown: () => { audio.unlock(); if (this.introT > 0) this.endIntro(); else this.match.skip(); } });
     this.hintEl = h('div', { class: 'hint' });
-    const pause = h('button', { class: 'btn icon pause', 'aria-label': 'Pause', onclick: () => this.togglePause() }, h('span', { class: 'pause-bars' }));
-    const rotate = h('div', { class: 'rotate-hint' }, 'Turn your phone sideways for the best view');
+    const pause = h('button', { class: 'btn icon pause', 'aria-label': 'Pause', onclick: () => this.togglePause() }, icon('pause', { title: 'Pause' }));
+    const rotate = h('div', { class: 'rotate-hint' }, rotateHint());
     this.hud = h('div', { class: 'hud' }, this.holderEl, this.ballMarkEl, this.sbEl, pause, this.cardsEl, this.tickerEl, this.radarEl, this.bubbleEl, this.hintEl,
       this.readEl, this.controlsLeft, this.controlsRight, this.meterEl, this.popEl, this.bannerEl, this.coachEl, rotate);
     this.root.appendChild(this.hud);
@@ -880,7 +855,8 @@ export class GameScreen {
     if (this.tickerT <= 0 && this.tickerQueue.length) {
       const line = this.tickerQueue.shift()!;
       clear(this.tickerEl);
-      this.tickerEl.append(h('b', { class: line.who === 'Chet' ? 'chet' : 'dottie' }, line.who === 'Chet' ? 'Chet' : 'Dottie'), h('span', null, line.text));
+      const chet = line.who === 'Chet';
+      this.tickerEl.append(lowerThird({ who: chet ? 'Chet' : 'Dottie', role: chet ? 'play-by-play' : 'color', text: line.text, tone: chet ? 'chet' : 'dottie' }));
       this.tickerEl.classList.add('show');
       this.tickerT = Math.max(2.2, line.text.length * 0.055);
       if (settings.voice) speak(line);
@@ -903,13 +879,11 @@ export class GameScreen {
     const bl = this.match.box[k.id]?.bat;
     const sub = pitching ? k.pitches.map((x) => PITCHES[x].label).join(', ') : bl && bl.ab ? `${bl.h} for ${bl.ab} today` : k.persona;
     clear(this.cardsEl);
-    this.cardsEl.append(h('div', { class: 'card', style: `--team:${team.colors.primary};--team2:${team.colors.secondary}` },
-      this.portrait(k, pitching ? 'smug' : 'focus', 112),
-      h('div', { class: 'card-txt' },
-        h('div', { class: 'card-label' }, label),
-        h('div', { class: 'card-name' }, k.nick),
-        h('div', { class: 'card-sub' }, sub),
-        h('div', { class: 'card-stats' }, ...stats.map(([n, v]) => h('span', null, h('em', null, n), ` ${v}`))))));
+    const tc = tradingCard({
+      photo: this.portrait(k, pitching ? 'smug' : 'focus', 160), name: k.nick, persona: sub, team,
+      stats: stats.map(([n, v]) => [n, v] as [string, number]), class: 'hud-card', seed: k.id,
+    });
+    this.cardsEl.append(h('div', { class: 'card-tag' }, label), tc);
     this.cardsEl.classList.remove('show');
     void this.cardsEl.offsetWidth;
     this.cardsEl.classList.add('show');
@@ -927,14 +901,14 @@ export class GameScreen {
     const team = (side: 0 | 1) => {
       const t = this.teamOf(side);
       return h('div', { class: `sb-team${m.battingSide === side ? ' bat' : ''}`, style: `--team:${t.colors.primary};--team2:${t.colors.secondary}` },
-        h('span', { class: 'sb-abbr' }, t.abbr),
-        h('span', { class: 'sb-runs' }, String(m.score[side])));
+        teamPatch(t, 22),
+        h('span', { class: 'sb-runs' }, lettering(String(m.score[side]), { style: 'comic', size: 17, color: 'var(--poster)', seed: `run${side}` })));
     };
     const dots = (n: number, of: number, cls: string) => h('span', { class: `dots ${cls}` }, ...Array.from({ length: of }, (_, i) => h('i', { class: i < n ? 'on' : '' })));
     const diamond = h('div', { class: 'diamond' }, ...[1, 2, 3].map((b) => h('i', { class: `b${b}${m.bases[b - 1] ? ' on' : ''}` })));
     this.sbEl.append(
       team(0), team(1),
-      h('div', { class: 'sb-inning' }, h('i', { class: m.half === 0 ? 'up' : 'down' }), String(m.inning)),
+      h('div', { class: 'sb-inning', 'aria-label': `${m.half === 0 ? 'Top' : 'Bottom'} ${m.inning}` }, icon(m.half === 0 ? 'up' : 'down'), lettering(String(m.inning), { style: 'comic', size: 14, color: 'var(--sunshine)', seed: 'inn' })),
       diamond,
       h('div', { class: 'sb-count' },
         h('span', null, 'B'), dots(m.balls, 3, 'balls'),
@@ -973,14 +947,15 @@ export class GameScreen {
     const hint = (s: string) => { this.hintEl.textContent = this.humanPitches < 4 ? s : ''; };
     // every control fires on pointerdown: no 300 ms wait, no missed swings
     const tap = (fn: () => void) => (e: Event) => { e.preventDefault(); e.stopPropagation(); if (this.coach) this.dismissCoach(); else fn(); };
-    const special = (k: Kid) => canSp ? h('button', { class: `btn ctl special${this.armed ? ' armed' : ''}`, onpointerdown: tap(() => this.toggleSpecial()) }, h('small', null, 'Special'), SPECIAL_INFO[k.special].label) : null;
+    const special = (k: Kid) => canSp ? h('button', { class: `btn ctl special${this.armed ? ' armed' : ''}`, onpointerdown: tap(() => this.toggleSpecial()) }, icon('bolt'), h('span', null, SPECIAL_INFO[k.special].label)) : null;
     switch (mode) {
       case 'bat': {
         hint(touch ? '' : 'Aim with the mouse · click or Space to swing · P power · B bunt');
         const kindBtn = (k: SwingKind, label: string) => h('button', { class: `btn ctl kind ${k}${this.swingKind === k ? ' on' : ''}`, onpointerdown: tap(() => this.setKind(this.swingKind === k ? 'normal' : k)) }, label);
         this.controlsRight.append(
           h('div', { class: 'ctl-col' }, special(m.batter), kindBtn('power', 'Power'), kindBtn('bunt', 'Bunt')),
-          h('button', { class: `btn big-round swing ${this.swingKind}`, onpointerdown: tap(() => this.doSwing()) }, this.swingKind === 'bunt' ? 'BUNT' : 'SWING'));
+          h('button', { class: `btn big-round swing ${this.swingKind}`, 'aria-label': 'Swing', onpointerdown: tap(() => this.doSwing()) },
+            icon('bat'), lettering(this.swingKind === 'bunt' ? 'BUNT' : 'SWING', { style: 'comic', size: 17, color: 'var(--poster)', seed: 'swing' })));
         // the aim pad marking only shows where aiming matters and until you've used it once
         if (touch && this.assist() < 0.9 && !this.aimedByDrag) this.controlsLeft.append(h('div', { class: 'aimpad' }, h('span', null, 'Drag here to aim')));
         break;
@@ -992,7 +967,8 @@ export class GameScreen {
         this.controlsLeft.append(h('div', { class: 'ctl-col pitches' }, special(m.pitcher),
           ...pitches.map((p, i) => h('button', { class: `btn ctl pitchpick${this.pitchType === p ? ' on' : ''}`, disabled: !!this.meter, onpointerdown: tap(() => this.pickPitch(p)) },
             h('small', null, touch ? PITCHES[p].short : `${i + 1}`), PITCHES[p].label))));
-        this.controlsRight.append(h('button', { class: `btn big-round throw${this.meter ? ' metering' : ''}`, onpointerdown: tap(() => this.pitchPress()) }, this.meter ? 'NOW!' : 'THROW'));
+        this.controlsRight.append(h('button', { class: `btn big-round throw${this.meter ? ' metering' : ''}`, 'aria-label': 'Throw', onpointerdown: tap(() => this.pitchPress()) },
+          icon('ball'), lettering(this.meter ? 'NOW!' : 'THROW', { style: 'comic', size: 17, color: 'var(--poster)', seed: 'throw' })));
         break;
       }
       case 'field': {
@@ -1005,8 +981,8 @@ export class GameScreen {
       case 'run':
         hint('');
         this.controlsRight.append(h('div', { class: 'ctl-run' },
-          h('button', { class: `btn ctl run go${this.runCmd === 'advance' ? ' on' : ''}`, onpointerdown: tap(() => this.sendRunners('advance')) }, 'GO!'),
-          h('button', { class: `btn ctl run back${this.runCmd === 'retreat' ? ' on' : ''}`, onpointerdown: tap(() => this.sendRunners('retreat')) }, 'BACK')));
+          h('button', { class: `btn ctl run go${this.runCmd === 'advance' ? ' on' : ''}`, onpointerdown: tap(() => this.sendRunners('advance')) }, h('span', null, 'Go!'), icon('forward')),
+          h('button', { class: `btn ctl run back${this.runCmd === 'retreat' ? ' on' : ''}`, onpointerdown: tap(() => this.sendRunners('retreat')) }, icon('back'), h('span', null, 'Back'))));
         break;
       case 'intro':
         hint('');
@@ -1072,7 +1048,7 @@ export class GameScreen {
 
   private showBanner(title: string, sub: string, hold = 2.2, tapNote?: string) {
     clear(this.bannerEl);
-    this.bannerEl.append(h('div', { class: 'banner-title' }, title), h('div', { class: 'banner-sub' }, sub));
+    this.bannerEl.append(h('div', { class: 'banner-title' }, lettering(title.toUpperCase(), { style: 'comic', size: 22, color: 'var(--sunshine)', seed: title })), h('div', { class: 'banner-sub' }, sub));
     if (tapNote) this.bannerEl.append(h('div', { class: 'banner-tap' }, tapNote));
     this.bannerEl.classList.remove('hidden');
     this.bannerT = hold;
@@ -1084,8 +1060,8 @@ export class GameScreen {
     clear(this.bannerEl);
     const grownup = y.props.find((p) => p.kind === 'grownup');
     this.bannerEl.append(
-      h('div', { class: 'banner-vs' }, teamBadge(m.cfg.away.team, 56), h('span', null, 'at'), teamBadge(m.cfg.home.team, 56)),
-      h('div', { class: 'banner-title' }, y.name),
+      h('div', { class: 'banner-vs' }, teamPatch(m.cfg.away.team, 52), h('span', null, 'at'), teamPatch(m.cfg.home.team, 52)),
+      h('div', { class: 'banner-title' }, lettering(y.name.toUpperCase(), { style: 'comic', size: 24, color: 'var(--sunshine)', seed: 'yard' })),
       h('div', { class: 'banner-sub' }, `${y.owner}. ${y.blurb}`),
       h('ul', { class: 'banner-rules' }, ...y.rules.map((r) => h('li', null, r)), grownup?.label ? h('li', null, `Watching: ${grownup.label.replace(/\.$/, '')}.`) : null),
       h('div', { class: 'banner-tap' }, 'Tap to play ball'));
@@ -1161,21 +1137,20 @@ export class GameScreen {
     const toggle = (label: string, on: boolean, set: (v: boolean) => void) => h('label', { class: 'toggle' },
       h('input', { type: 'checkbox', checked: on, onchange: (e: Event) => { set((e.target as HTMLInputElement).checked); saveSettings(); } }), ` ${label}`);
     const quit = h('button', { class: 'btn ghost danger', onclick: () => {
-      if (!quit.classList.contains('armed')) { quit.classList.add('armed'); quit.textContent = 'Tap again to quit'; return; }
+      if (!quit.classList.contains('armed')) { quit.classList.add('armed'); quit.textContent = matchMedia('(pointer: coarse)').matches ? 'Tap again to quit' : 'Click again to quit'; return; }
       this.destroy(); this.opts.onExit(null);
     } }, 'Quit to menu');
     const menu = h('div', { class: 'pausemenu overlay', onpointerdown: (e: Event) => e.stopPropagation() },
-      h('div', { class: 'panel pause-panel' },
+      panel([h('div', { class: 'pause-panel' },
         h('div', { class: 'pp-main' },
-          h('h2', null, 'Time out!'),
           h('div', { class: 'pp-score' }, `${m.cfg.away.team.abbr} ${m.score[0]} — ${m.cfg.home.team.abbr} ${m.score[1]} · ${m.half === 0 ? 'Top' : 'Bottom'} of the ${ordinal(m.inning)}`),
-          h('button', { class: 'btn big resume', onclick: () => this.togglePause(false) }, 'Back to the game')),
+          h('button', { class: 'btn big go resume', onclick: () => this.togglePause(false) }, icon('play'), h('span', null, 'Back to the game'))),
         h('div', { class: 'pp-side' },
           toggle('Show strike zone', settings.showZone, (v) => { settings.showZone = v; }),
           toggle('Announcer voice', settings.voice, (v) => { settings.voice = v; }),
           toggle('Buzz on big plays', settings.haptics, (v) => { settings.haptics = v; }),
           h('button', { class: 'btn ghost', onclick: () => this.simToEnd() }, 'Sim to the end'),
-          quit)));
+          quit))], { title: 'TIME OUT!' }));
     this.root.appendChild(menu);
   }
 
@@ -1199,6 +1174,11 @@ export class GameScreen {
     const m = this.match;
     const won = this.humanSide >= 0 && m.winner === this.humanSide;
     this.releaseWake();
+    // clear the stage for the final screen
+    this.cardT = 0;
+    this.cardsEl.classList.remove('show');
+    this.tickerQueue.length = 0;
+    this.tickerEl.classList.remove('show');
     audio.playMusic('victory');
     if (won) { audio.play('bigCheer'); this.buzz([0, 40, 60, 40, 60, 90]); }
     let star: string | null = null, best = -1;
@@ -1224,17 +1204,20 @@ export class GameScreen {
       return parts.join(', ');
     })() : '';
     const title = m.winner === -1 ? 'It\'s a tie!' : this.humanSide < 0 ? `${this.teamOf(m.winner as 0 | 1).name} win!` : won ? 'You win!' : 'Tough loss!';
-    const panel = h('div', { class: 'overlay final' },
-      h('div', { class: 'panel wide final-panel' },
+    const starCard = sk ? tradingCard({
+      photo: this.portrait(sk, 'happy', 200), name: sk.nick, persona: starLine, team: this.teamOfKid(sk) ?? this.teamOf(0),
+      stats: [['Hits', m.box[sk.id].bat.h], ['RBI', m.box[sk.id].bat.rbi], ['K', m.box[sk.id].pitch.so]], class: 'final-card', seed: sk.id,
+    }) : null;
+    const final = h('div', { class: 'overlay final' },
+      panel([h('div', { class: 'final-panel' },
         h('div', { class: 'fp-main' },
-          h('h2', null, title),
           h('table', { class: 'linescore' }, header, line(0), line(1)),
           h('div', { class: 'cta' },
-            h('button', { class: 'btn', onclick: () => { this.destroy(); this.opts.onExit(m, true); } }, 'Play again'),
-            h('button', { class: 'btn ghost', onclick: () => { this.destroy(); this.opts.onExit(m); } }, 'Main menu'))),
-        sk ? h('div', { class: 'star' }, this.portrait(sk, 'happy', 168),
-          h('div', null, h('div', { class: 'card-label' }, 'Player of the game'), h('div', { class: 'card-name' }, `${sk.first} "${sk.nick}" ${sk.last}`), h('div', { class: 'card-sub' }, starLine), h('div', { class: 'quote' }, `"${sk.quips[0]}"`))) : null));
-    setTimeout(() => { if (!this.destroyed) this.root.appendChild(panel); }, 2500);
+            h('button', { class: 'btn go', onclick: () => { this.destroy(); this.opts.onExit(m, true); } }, icon('replay'), h('span', null, 'Play again')),
+            h('button', { class: 'btn ghost', onclick: () => { this.destroy(); this.opts.onExit(m); } }, icon('home'), h('span', null, 'Main menu')))),
+        sk && starCard ? h('div', { class: 'fp-star' }, h('div', { class: 'card-tag' }, 'Player of the game'), starCard, h('div', { class: 'quote' }, `"${sk.quips[0]}"`)) : null)],
+      { title: title.toUpperCase() }));
+    setTimeout(() => { if (!this.destroyed) this.root.appendChild(final); }, 2500);
   }
 }
 
