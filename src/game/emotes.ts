@@ -1,4 +1,4 @@
-import { CanvasTexture, Object3D, Scene, Sprite, SpriteMaterial, SRGBColorSpace, Vector3 } from 'three';
+import { CanvasTexture, type Camera, Object3D, Scene, Sprite, SpriteMaterial, SRGBColorSpace, Vector3 } from 'three';
 
 // Cartoon symbols over the kids' heads: stars circling a kid who just
 // stumbled, a sweat drop on a pitcher in a jam, a "!" over the fielder about
@@ -115,7 +115,8 @@ export class Emotes {
 
   has(head: Object3D) { return this.live.some((l) => l.head === head); }
 
-  update(dt: number) {
+  /** `camera`: symbols keep a readable size on screen however far away the kid is */
+  update(dt: number, camera?: Camera) {
     for (let i = this.live.length - 1; i >= 0; i--) {
       const l = this.live[i];
       l.t += dt;
@@ -125,11 +126,13 @@ export class Emotes {
         continue;
       }
       l.head.getWorldPosition(_p);
-      const u = l.t / l.dur, z = l.size;
+      const far = camera ? Math.min(6, Math.max(1, camera.position.distanceTo(_p) / 15)) : 1;
+      // sprites grow with distance; their offsets from the head only a little
+      const u = l.t / l.dur, z = l.size * (1 + (far - 1) * 0.3), zs = l.size * far;
       // pop in with overshoot, shrink away at the end
       const pop = l.t < 0.18 ? 1.25 * Math.sin((l.t / 0.18) * Math.PI * 0.5) : l.t < 0.3 ? 1.25 - (l.t - 0.18) * 2 : 1;
       const fade = u > 0.8 ? 1 - (u - 0.8) / 0.2 : 1;
-      const k = pop * fade * z;
+      const k = pop * fade * zs;
       l.sprites.forEach((s, j) => {
         const m = s.material as SpriteMaterial;
         m.opacity = Math.min(1, fade * 1.5);
@@ -137,7 +140,7 @@ export class Emotes {
           case 'stars': {
             const a = l.t * 7 + (j * Math.PI * 2) / 3;
             s.position.set(_p.x + Math.cos(a) * 0.75 * z, _p.y + 1.95 * z + Math.sin(a * 2) * 0.08, _p.z + Math.sin(a) * 0.75 * z);
-            s.scale.setScalar(0.5 * k);
+            s.scale.setScalar(0.6 * k);
             break;
           }
           case 'sweat':
@@ -152,7 +155,7 @@ export class Emotes {
           case 'notes': {
             const w = (l.t + j * 0.6) % 1.2;
             s.position.set(_p.x + (j ? -0.5 : 0.55) * z + Math.sin(w * 6) * 0.15, _p.y + (1.7 + w * 0.9) * z, _p.z);
-            s.scale.setScalar(0.5 * z * fade * Math.min(1, w * 5) * (1 - w / 1.5));
+            s.scale.setScalar(0.5 * zs * fade * Math.min(1, w * 5) * (1 - w / 1.5));
             break;
           }
         }

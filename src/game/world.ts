@@ -886,7 +886,7 @@ export class World {
       this.humT = 25 + Math.random() * 20;
       if (this.mz.state === 'grill') em.show('notes', this.mendoza.model.bones.head, 2.5, GROWNUP_SCALE);
     }
-    em.update(dt);
+    em.update(dt, this.camera);
   }
 
   // ───────────────────────────────────────────────────────────── Mr. Mendoza
