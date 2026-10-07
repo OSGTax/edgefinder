@@ -81,13 +81,22 @@ function wrapped(size: number, x: number, y: number, r: number, draw: (x: number
 }
 
 function noiseFill(ctx: CanvasRenderingContext2D, size: number, noise: Noise2, cells: number, color: (n: number, x: number, y: number) => [number, number, number]) {
+  // the fbm is smooth (≤ 8·cells cycles per tile), so sample it on a coarse wrapping grid and
+  // interpolate: same look, ~16× fewer noise calls on the big tiers' 1024 px textures
+  const g = Math.min(size, Math.max(64, cells * 32));
+  const grid = new Float32Array(g * g);
+  for (let y = 0; y < g; y++) for (let x = 0; x < g; x++) grid[y * g + x] = noise.fbm((x / g) * cells, (y / g) * cells, 4, cells);
   const img = ctx.createImageData(size, size);
+  const k = g / size;
   for (let y = 0; y < size; y++) {
+    const fy = y * k, y0 = Math.floor(fy), ty = fy - y0, r0 = y0 * g, r1 = ((y0 + 1) % g) * g;
     for (let x = 0; x < size; x++) {
-      const n = noise.fbm((x / size) * cells, (y / size) * cells, 4, cells);
-      const [r, g, b] = color(n, x, y);
+      const fx = x * k, x0 = Math.floor(fx), tx = fx - x0, x1 = (x0 + 1) % g;
+      const a = grid[r0 + x0] + (grid[r0 + x1] - grid[r0 + x0]) * tx;
+      const b = grid[r1 + x0] + (grid[r1 + x1] - grid[r1 + x0]) * tx;
+      const [r, gg, bb] = color(a + (b - a) * ty, x, y);
       const i = (y * size + x) * 4;
-      img.data[i] = r; img.data[i + 1] = g; img.data[i + 2] = b; img.data[i + 3] = 255;
+      img.data[i] = r; img.data[i + 1] = gg; img.data[i + 2] = bb; img.data[i + 3] = 255;
     }
   }
   ctx.putImageData(img, 0, 0);
@@ -110,23 +119,35 @@ export function grassTex(size: number): TexSet {
     hctx.fillRect(0, 0, size, size);
     const blades = Math.round(size * size * 0.045);
     const L = size / 64;
+    // strokes are grouped by (quantised) colour and width and drawn as one path per group:
+    // tens of thousands of separate stroke() calls were the slowest part of loading the yard
+    const colPaths = new Map<string, { style: string; w: number; path: Path2D }>();
+    const hPaths = new Map<string, { style: string; w: number; path: Path2D }>();
+    const pathFor = (map: typeof colPaths, style: string, w: number) => {
+      const key = `${style}|${w}`;
+      let e = map.get(key);
+      if (!e) { e = { style, w, path: new Path2D() }; map.set(key, e); }
+      return e.path;
+    };
+    const unit = Math.max(1, size / 512);
     for (let i = 0; i < blades; i++) {
       const x = rnd() * size, y = rnd() * size;
       const len = L * (0.6 + rnd() * 1.2);
       const ang = -Math.PI / 2 + (rnd() - 0.5) * 1.4;
       const ex = Math.cos(ang) * len, ey = Math.sin(ang) * len;
-      const light = 24 + rnd() * 24;
-      const hue = 80 + rnd() * 24;
-      const col = hsl(hue, 38 + rnd() * 22, light, 0.8);
-      const w = Math.max(1, size / 512) * (0.6 + rnd() * 0.8);
+      const light = Math.round((24 + rnd() * 24) / 3) * 3;
+      const hue = Math.round((80 + rnd() * 24) / 6) * 6;
+      const col = hsl(hue, Math.round((38 + rnd() * 22) / 7) * 7, light, 0.8);
+      const w = unit * Math.round((0.6 + rnd() * 0.8) * 3) / 3;
+      const hs = `rgba(255,255,255,${(Math.round((0.25 + rnd() * 0.5) * 8) / 8).toFixed(3)})`;
+      const cp = pathFor(colPaths, col, w), hp = pathFor(hPaths, hs, w);
       wrapped(size, x, y, len + 2, (px, py) => {
-        ctx.strokeStyle = col;
-        ctx.lineWidth = w;
-        ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + ex, py + ey); ctx.stroke();
-        hctx.strokeStyle = `rgba(255,255,255,${0.25 + rnd() * 0.5})`;
-        hctx.lineWidth = w;
-        hctx.beginPath(); hctx.moveTo(px, py); hctx.lineTo(px + ex, py + ey); hctx.stroke();
+        cp.moveTo(px, py); cp.lineTo(px + ex, py + ey);
+        hp.moveTo(px, py); hp.lineTo(px + ex, py + ey);
       });
+    }
+    for (const [c2, map] of [[ctx, colPaths], [hctx, hPaths]] as const) {
+      for (const e of map.values()) { c2.strokeStyle = e.style; c2.lineWidth = e.w; c2.stroke(e.path); }
     }
     // clover patches and the odd dandelion
     for (let i = 0; i < size / 18; i++) {

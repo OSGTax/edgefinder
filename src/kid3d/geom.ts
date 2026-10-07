@@ -1,13 +1,34 @@
-import { BufferGeometry, Color, Float32BufferAttribute, Matrix4, Quaternion, Uint16BufferAttribute, Vector3 } from 'three';
+import { BufferGeometry, Color, CylinderGeometry, Float32BufferAttribute, Matrix4, Quaternion, SphereGeometry, TorusGeometry, Uint16BufferAttribute, Vector3 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 // Geometry helpers for the procedural kids: lofted rings (torsos, sleeves),
 // rounded limbs, and rigid / blended skin weights.
 
+// ── detail level: kids are built at full detail for close-ups, and again with about a third
+// of the triangles for kids far from the camera (KidModel.setDetail). Every round part asks
+// segs() for its segment counts, and tiny parts (fingers, laces...) check isLite().
+let detail = 1;
+/** Build something at a detail level (1 = full). */
+export function withDetail<T>(d: number, fn: () => T): T {
+  const old = detail;
+  detail = d;
+  try { return fn(); } finally { detail = old; }
+}
+export const isLite = () => detail < 0.7;
+/** A segment count scaled by the current detail level. */
+export const segs = (n: number, min = 3) => Math.max(min, Math.round(n * detail));
+export const sphere = (r: number, ws: number, hs: number, phiStart?: number, phiLength?: number, thetaStart?: number, thetaLength?: number) =>
+  new SphereGeometry(r, segs(ws, 5), segs(hs, 3), phiStart, phiLength, thetaStart, thetaLength);
+export const torus = (r: number, tube: number, radial: number, tubular: number, arc?: number) =>
+  new TorusGeometry(r, tube, segs(radial, 3), segs(tubular, 4), arc);
+export const cylinder = (rTop: number, rBottom: number, h: number, radial: number, hSeg = 1, open = false) =>
+  new CylinderGeometry(rTop, rBottom, h, segs(radial, 5), hSeg, open);
+
 export interface Ring { y: number; rx: number; rz: number; cz?: number; cx?: number }
 
 /** Loft a tube through horizontal elliptical rings (bottom to top). UV: u around (0.5 = front), v up. */
 export function loft(rings: Ring[], seg = 20, capBottom = false, capTop = false): BufferGeometry {
+  seg = segs(seg, 4);
   const pos: number[] = [], nor: number[] = [], uv: number[] = [], idx: number[] = [];
   const y0 = rings[0].y, y1 = rings[rings.length - 1].y;
   for (let r = 0; r < rings.length; r++) {
@@ -56,7 +77,8 @@ export function loft(rings: Ring[], seg = 20, capBottom = false, capTop = false)
 /** Rings for a rounded capsule-like limb of length L from r0 (top) to r1 (bottom), hanging down -y from 0. */
 export function limbRings(L: number, r0: number, r1: number, steps = 8, squashZ = 1): Ring[] {
   const rings: Ring[] = [];
-  const capSteps = 4;
+  const capSteps = detail < 0.7 ? 2 : 3;
+  steps = Math.max(1, Math.round(steps * Math.min(1, detail * 1.2)));
   // top cap
   for (let i = 0; i <= capSteps; i++) {
     const t = i / capSteps;

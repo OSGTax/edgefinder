@@ -26,7 +26,7 @@ export class ContactShadows {
 
   constructor(scene: Scene, max: number) {
     const g = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
-    const mat = new MeshBasicMaterial({ map: discTexture(), transparent: true, opacity: 0.38, depthWrite: false, color: '#2a3020' });
+    const mat = new MeshBasicMaterial({ map: discTexture(), transparent: true, opacity: 0.5, depthWrite: false, color: '#262a1a' });
     mat.name = 'contactShadow';
     this.mesh = new InstancedMesh(g, mat, max);
     this.mesh.instanceMatrix.setUsage(DynamicDrawUsage);

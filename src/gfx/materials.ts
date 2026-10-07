@@ -13,6 +13,8 @@ let texSize = 512;
 /** Surface textures are painted once (neutral) and tinted per material, at most 512 px. */
 export function setMaterialTexSize(n: number) { texSize = Math.min(512, n); }
 
+const TOON_NORMAL = 0.45;
+
 const NEUTRAL: [number, number, number] = [240, 240, 240];
 
 const cache = new Map<string, Material>();
@@ -35,7 +37,8 @@ function textured(key: string, set: TexSet, tile: number | [number, number], o: 
   return memo(key, () => new MeshStandardMaterial({
     map: tiled(set.map, tile),
     normalMap: tiled(set.normal, tile),
-    normalScale: new Vector2(o.normal ?? 1, o.normal ?? 1),
+    // cartoon world: textures suggest the material, they don't shout (flatter bumps)
+    normalScale: new Vector2((o.normal ?? 1) * TOON_NORMAL, (o.normal ?? 1) * TOON_NORMAL),
     roughness: o.roughness ?? 0.85,
     metalness: o.metalness ?? 0,
     color: o.color ?? '#ffffff',
