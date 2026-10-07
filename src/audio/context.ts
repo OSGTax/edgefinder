@@ -25,6 +25,8 @@ export interface Bus {
   /** Music passes through here so voices can duck it. */
   readonly duck: GainNode;
   readonly master: GainNode;
+  /** The very last node before the speakers (the safety limiter). */
+  readonly out: AudioNode;
   /** Two seconds of white noise shared by every noise-based sound. */
   readonly noise: AudioBuffer;
 }
@@ -147,7 +149,7 @@ function createBus(Ctor: AudioContextCtor): Bus {
     const data = noise.getChannelData(0);
     for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
 
-    return { ctx, sfx, music, voice, duck, master, noise };
+    return { ctx, sfx, music, voice, duck, master, out: clip, noise };
   } catch (e) {
     void ctx.close?.().catch(() => undefined); // don't leak contexts (browsers cap them)
     throw e;
@@ -307,4 +309,13 @@ export function duckMusic(dur: number, depth = 0.4): void {
   g.cancelScheduledValues(t);
   g.setTargetAtTime(1 - depth, t, 0.06);
   g.setTargetAtTime(1, t + Math.max(0.1, dur), 0.25);
+}
+
+/** Dev tools: an analyser on the final output (what the speakers get). */
+export function outputProbe(): AnalyserNode | null {
+  if (!bus) return null;
+  const a = bus.ctx.createAnalyser();
+  a.fftSize = 2048;
+  bus.out.connect(a);
+  return a;
 }
