@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { kid } from '../src/data/kids';
+import { KIDS, kid } from '../src/data/kids';
 import { team } from '../src/data/teams';
 import { yard } from '../src/data/yards';
 import { autoLineup } from '../src/sim/lineup';
 import { Match } from '../src/sim/match';
-import { Booth, type Line } from '../src/ui/commentary';
+import { Booth, shape, type Line } from '../src/ui/commentary';
 
 /** Plays a CPU game step by step, feeding every event to a Booth like the game screen does. */
 function broadcast(seed: number, innings: number): { lines: Line[]; perEvent: number[] } {
@@ -41,8 +41,9 @@ function broadcast(seed: number, innings: number): { lines: Line[]; perEvent: nu
 
 describe('announcer booth', () => {
   const games = [
-    ...[11, 22, 33].map((s) => ({ seed: s, innings: 6 })),
+    ...[11, 22, 33, 66, 88].map((s) => ({ seed: s, innings: 6 })),
     ...[44, 55].map((s) => ({ seed: s, innings: 3 })),
+    { seed: 99, innings: 9 },
   ];
 
   for (const g of games) {
@@ -56,16 +57,26 @@ describe('announcer booth', () => {
         expect(l.text.length, l.text).toBeLessThanOrEqual(140);
         expect(l.text).not.toMatch(/undefined|NaN|\[object/);
       }
-      const counts = new Map<string, number>();
-      for (const l of lines) counts.set(l.text, (counts.get(l.text) ?? 0) + 1);
-      const [top, most] = [...counts].sort((x, y) => y[1] - x[1])[0];
-      expect(most / lines.length, `"${top}" said ${most} times`).toBeLessThanOrEqual(0.1);
-      // never the same line twice in a row
-      for (let i = 1; i < lines.length; i++) expect(lines[i].text, `repeat at ${i}`).not.toBe(lines[i - 1].text);
-      // and mostly fresh material
-      expect(counts.size / lines.length).toBeGreaterThan(0.6);
+      // never the same line twice in a game, not even with different names in it
+      const seen = new Map<string, string>();
+      for (const l of lines) {
+        const sh = shape(l.text);
+        expect(seen.has(sh), `said twice: "${seen.get(sh)}" / "${l.text}"`).toBe(false);
+        seen.set(sh, l.text);
+      }
+      // and mostly about somebody or something in particular: a kid, a team, the yard, the score
+      const names = KIDS.flatMap((k) => [k.nick, k.first]);
+      const specific = /Mendoza|grill|pool|splash|flamingo|picket|hedge|gnome|Biscuit|Bea|tee-ball|Channel|Mudcats|Comets|MUD|COM|juice|streetlights|lawn/;
+      const about = lines.filter((l) => names.some((n) => l.text.includes(n)) || specific.test(l.text)).length;
+      expect(about / lines.length, 'too many generic lines').toBeGreaterThan(0.8);
     });
   }
+
+  it('treats a line with different names in it as the same line', () => {
+    expect(shape('From right here on Cedar Lane... it\'s Kaboom!')).toBe(shape('From right here on Maple Street... it\'s Gus-Gus!'));
+    expect(shape('Strikeout number 4 for Inny.')).toBe(shape('Strikeout number 6 for Pepper.'));
+    expect(shape('Base hit for Bo!')).not.toBe(shape('Two-bagger for Bo!'));
+  });
 
   it('is deterministic from the seed', () => {
     const x = broadcast(77, 3).lines.map((l) => l.text);
