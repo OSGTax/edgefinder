@@ -42,6 +42,9 @@ const HUMAN_TUNE: Record<Difficulty, SwingTuning> = {
 const CPU_TUNE: SwingTuning = { window: 1, radius: 1 };
 
 export const WINDUP = 0.8;
+/** CPU pitcher's pause before each pitch, and the between-halves break (both skippable by the screen) */
+const PRE_PITCH = 0.8;
+const BREAK = 2.4;
 
 export class Match {
   readonly cfg: MatchConfig;
@@ -76,7 +79,7 @@ export class Match {
   box: BoxScore = {};
   winner: 0 | 1 | -1 | null = null;
   /** human-picked pitch waiting for the windup */
-  private queuedPitch: { type: PitchType; aim: { x: number; z: number }; special: boolean } | null = null;
+  private queuedPitch: { type: PitchType; aim: { x: number; z: number }; special: boolean; accuracy?: number } | null = null;
   private batterDone = false;
   private playStartOuts = 0;
 
@@ -142,9 +145,14 @@ export class Match {
 
   // ───────────────────────────────────────────────────── human controls
 
-  selectPitch(type: PitchType, aim: { x: number; z: number }, special = false) {
+  /**
+   * `accuracy` (0..1) is how well the player hit the pitch meter: 1 tightens
+   * the kid's scatter and adds a touch of zip, 0 sprays it. Leave it out for
+   * the kid's plain control.
+   */
+  selectPitch(type: PitchType, aim: { x: number; z: number }, special = false, accuracy?: number) {
     if (this.phase !== 'prePitch' || !this.humanPitching) return;
-    this.beginPitch(type, aim, special);
+    this.beginPitch(type, aim, special, accuracy);
   }
 
   swing(aimX: number, aimZ: number, kind: SwingKind, special = false) {
@@ -178,7 +186,7 @@ export class Match {
     const fast = !!this.cfg.fast;
     switch (this.phase) {
       case 'prePitch':
-        if (!this.humanPitching && this.phaseT >= (fast ? 0 : 1.0)) {
+        if (!this.humanPitching && this.phaseT >= (fast ? 0 : PRE_PITCH)) {
           const plan = cpuChoosePitch(this.pitcher, this.countObj(), this.zone, this.hypeFull(this.fieldingSide), this.cfg.difficulty, this.rng);
           this.beginPitch(plan.type, plan.aim, plan.special);
         }
@@ -199,23 +207,32 @@ export class Match {
         if (this.phaseT >= (fast ? 0 : this.resultHold)) this.afterResult();
         break;
       case 'halfOver':
-        if (this.phaseT >= (fast ? 0 : 2.4)) this.startHalf();
+        if (this.phaseT >= (fast ? 0 : BREAK)) this.startHalf();
         break;
     }
   }
 
   private resultHold = 1;
 
+  /**
+   * The player tapped through a pause: end a result hold or the
+   * between-halves break now. Nothing else is skippable.
+   */
+  skip() {
+    if (this.phase === 'result' && this.phaseT > 0.25) this.phaseT = this.resultHold;
+    else if (this.phase === 'halfOver' && this.phaseT > 0.4) this.phaseT = BREAK;
+  }
+
   private countObj() { return { balls: this.balls, strikes: this.strikes, outs: this.outs }; }
 
   private setPhase(p: Phase) { this.phase = p; this.phaseT = 0; }
 
-  private beginPitch(type: PitchType, aim: { x: number; z: number }, special: boolean) {
+  private beginPitch(type: PitchType, aim: { x: number; z: number }, special: boolean, accuracy?: number) {
     const p = this.pitcher;
     this.lastPlay = null;
     const useSp = special && this.canSpecial(this.fieldingSide, p);
     if (useSp) this.useSpecial(this.fieldingSide, p);
-    this.queuedPitch = { type, aim, special: useSp };
+    this.queuedPitch = { type, aim, special: useSp, accuracy };
     this.swingIn = null;
     this.swingDone = false;
     this.whiffed = false;
@@ -226,7 +243,7 @@ export class Match {
   private release() {
     const q = this.queuedPitch!;
     const p = this.pitcher;
-    this.pitch = makePitch(p, q.type, q.aim, q.special ? p.special : null, this.field.mound.y, this.rng, this.fatigue);
+    this.pitch = makePitch(p, q.type, q.aim, q.special ? p.special : null, this.field.mound.y, this.rng, this.fatigue, q.accuracy);
     this.pitchT = 0;
     this.pitchCount[this.fieldingSide]++;
     this.box[p.id].pitch.pitches++;
@@ -252,17 +269,18 @@ export class Match {
         const tune = this.humanBatting ? HUMAN_TUNE[this.cfg.difficulty] : CPU_TUNE;
         const out = resolveSwing(this.batter, this.batterSide, pitch, s, tune, this.rng);
         if (out.kind === 'contact') {
-          this.events.push({ type: 'contact', batter: this.batter.id, ev: out.ev, la: out.la, spray: out.spray, quality: out.quality });
+          this.events.push({ type: 'contact', batter: this.batter.id, ev: out.ev, la: out.la, spray: out.spray, quality: out.quality, read: out.read });
           this.startLive(out.contactPoint, out.v);
           return;
         }
         if (out.kind === 'foulTip') {
+          this.events.push({ type: 'foulTip', batter: this.batter.id, read: out.read });
           this.events.push({ type: 'call', call: 'foul' });
           this.callFoul();
           return;
         }
         this.whiffed = true;
-        this.events.push({ type: 'whiff', batter: this.batter.id });
+        this.events.push({ type: 'whiff', batter: this.batter.id, read: out.read });
       }
     }
     if (this.pitchT >= pitch.Treal + 0.2) {
@@ -318,7 +336,7 @@ export class Match {
     this.lastCall = 'ball';
     this.events.push({ type: 'call', call: 'ball' });
     if (this.balls >= 4) return this.callWalk(false);
-    this.toResult(0.7);
+    this.toResult(0.6);
   }
 
   private callStrike(looking: boolean) {
@@ -339,13 +357,13 @@ export class Match {
       this.batterDone = true;
       return this.toResult(1.3);
     }
-    this.toResult(0.7);
+    this.toResult(0.65);
   }
 
   private callFoul() {
     if (this.strikes < 2) this.strikes++;
     this.lastCall = 'foul';
-    this.toResult(0.8);
+    this.toResult(0.7);
   }
 
   private callWalk(hbp: boolean) {

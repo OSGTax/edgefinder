@@ -12,6 +12,12 @@ export interface Settings {
   showZone: boolean;
   /** phones: go full screen (and lock landscape where allowed) on the first tap */
   fullscreen: boolean;
+  /** Controls helper: phone buzzes on contact, catches and outs (where the browser supports it) */
+  haptics: boolean;
+  /** Controls helper: the first-game coach has shown all its tips (see `replayCoach` in game/screen.ts) */
+  coachDone: boolean;
+  /** Controls helper: which coach tips have been shown */
+  coachSeen: string[];
 }
 
 const DEFAULTS: Settings = {
@@ -23,6 +29,9 @@ const DEFAULTS: Settings = {
   aimAssist: 'auto',
   showZone: true,
   fullscreen: true,
+  haptics: true,
+  coachDone: false,
+  coachSeen: [],
 };
 
 export const settings: Settings = { ...DEFAULTS, ...load<Partial<Settings>>('settings', {}) };

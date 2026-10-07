@@ -3,13 +3,13 @@ import { settings } from '../ui/settings';
 
 // The phone-app shell around the game: offline play (service worker), the
 // home-screen install hints, full screen + landscape where the platform allows,
-// keeping the screen awake during a game, and stopping browser gestures
-// (pinch, double-tap zoom, long-press menus) from fighting the game.
+// and stopping browser gestures
+// (pinch, double-tap zoom, long-press menus) from fighting the game. Keeping
+// the screen awake and auto-pause during play live in the game screen.
 // Everything here is best-effort: any API can be missing or refuse, and the
 // game must carry on regardless.
 
 type InstallPrompt = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> };
-type WakeLock = { release(): Promise<void> };
 
 const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
 const isIOS = /iPad|iPhone|iPod/.test(ua) || (typeof navigator !== 'undefined' && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -21,14 +21,11 @@ class Shell {
   updateWaiting = false;
   private updateCbs: (() => void)[] = [];
   private prompt: InstallPrompt | null = null;
-  private wake: WakeLock | null = null;
-  private inGame = false;
 
   init() {
     this.guardGestures();
     window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); this.prompt = e as InstallPrompt; this.fire(); });
     window.addEventListener('appinstalled', () => { this.prompt = null; this.fire(); });
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && this.inGame) this.keepAwake(); });
     // full screen on the first tap (Android and friends; iOS Safari has no full screen API for pages)
     const first = () => { window.removeEventListener('pointerup', first); this.goFullscreen(); };
     window.addEventListener('pointerup', first);
@@ -86,7 +83,7 @@ class Shell {
     try { await p.prompt(); await p.userChoice; } catch { /* dismissed */ }
   }
 
-  // ── full screen, orientation, staying awake ────────────────────────────
+  // ── full screen, orientation ────────────────────────────
 
   /** Must run inside a tap. */
   goFullscreen() {
@@ -99,23 +96,9 @@ class Shell {
     }).catch(() => { /* refused: fine */ });
   }
 
-  /** A game is starting (called from the tap that starts it). */
+  /** A game is starting (called from the tap that starts it): go full screen if we can. */
   enterGame() {
-    this.inGame = true;
     this.goFullscreen();
-    this.keepAwake();
-  }
-
-  leaveGame() {
-    this.inGame = false;
-    this.wake?.release().catch(() => {});
-    this.wake = null;
-  }
-
-  private keepAwake() {
-    const wl = (navigator as Navigator & { wakeLock?: { request(t: 'screen'): Promise<WakeLock> } }).wakeLock;
-    if (!wl) return;
-    wl.request('screen').then((l) => { this.wake = l; }).catch(() => {});
   }
 
   // ── gestures ───────────────────────────────────────────────────────────
