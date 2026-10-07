@@ -1,3 +1,5 @@
+import { audio } from '../audio';
+import type { SfxName } from '../audio/types';
 import { comicPop, type BurstShape } from '../ui/look';
 
 // The comic pop-ups: which word, for which moment, and when. The burst itself
@@ -15,6 +17,12 @@ interface MomentStyle {
   colors: [string, string, string];
   size: number;
 }
+
+/** the Sound helper's stinger for each pop-up (it lands with the burst); anything else gets the cork pop */
+const STING: Partial<Record<Moment, SfxName>> = {
+  crush: 'stingThwack', homer: 'stingSeeYa', kLooking: 'stingSitDown', kSwinging: 'stingWhiff',
+  snag: 'stingSnag', splash: 'stingSploosh', fence: 'stingBonk',
+};
 
 const SUN = 'var(--sunshine)', CREAM = '#fff1b8', TOMATO = 'var(--tomato)', POSTER = 'var(--poster)';
 
@@ -69,5 +77,6 @@ export class ComicPops {
     const el = comicPop(word, { burst: st.burst, colors: st.colors, width, animate: !hold, seed: `${word}|${m}` });
     while (this.host.firstChild) this.host.removeChild(this.host.firstChild);
     this.host.appendChild(el);
+    audio.play(STING[m] ?? 'pop');
   }
 }
