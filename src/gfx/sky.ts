@@ -12,6 +12,8 @@ export interface SkyColors {
 }
 
 export const NOON_SKY: SkyColors = { zenith: '#2f6fc4', horizon: '#cfe4f3', ground: '#9fb7a2', sunGlow: '#fff4d6' };
+/** Late-summer afternoon: a deep but softer blue overhead, warm dusty haze at the horizon. */
+export const AFTERNOON_SKY: SkyColors = { zenith: '#3471bd', horizon: '#e6e0cc', ground: '#a7ad88', sunGlow: '#ffdca6' };
 
 export function makeSky(sunDir: Vector3, c: SkyColors = NOON_SKY, radius = 8000): Mesh {
   const lin = (h: string) => new Color(h);

@@ -7,7 +7,7 @@ import { kid as kidById } from '../data/kids';
 import { createRenderer } from '../gfx/renderer';
 import { mergeByMaterial } from '../gfx/build';
 import {
-  autoCeiling, deviceInfo, forcedTier, getQuality, gfxPrefs, onGfxPrefs, pixelRatioFor, qualitySetting, rememberTier, TIER_LABEL, TIER_ORDER,
+  autoCeiling, deviceInfo, forcedTier, forDevice, tierSpec, getQuality, gfxPrefs, onGfxPrefs, pixelRatioFor, qualitySetting, rememberTier, TIER_LABEL, TIER_ORDER,
   TIERS, type Quality, type QualityName,
 } from '../gfx/quality';
 import { TierGovernor } from '../gfx/governor';
@@ -300,7 +300,7 @@ export class World {
    */
   setTier(t: QualityName) {
     this.tier = t;
-    const spec = TIERS[t];
+    const spec = forDevice(tierSpec(t));
     this.stadium.env?.setShadowMapSize(spec.shadowMap);
     const grass = this.stadium.ground?.grass;
     if (grass) {

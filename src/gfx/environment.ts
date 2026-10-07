@@ -4,7 +4,7 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { cloudAtlas } from './textures';
-import { makeSky, NOON_SKY } from './sky';
+import { makeSky, AFTERNOON_SKY as SKY } from './sky';
 import { mulberry } from './noise';
 import type { Quality } from './quality';
 
@@ -19,8 +19,8 @@ export interface SunOptions {
 /** Sky dome, sun with soft shadows, sky fill light, image-based lighting, clouds and haze. */
 export class Environment {
   readonly sky: Mesh;
-  readonly sun = new DirectionalLight(0xfff1dc, 2.7);
-  readonly hemi = new HemisphereLight(0xc4def5, 0x56683a, 0.6);
+  readonly sun = new DirectionalLight(0xffdfb4, 2.9);
+  readonly hemi = new HemisphereLight(0xc9dcec, 0x6a6638, 0.62);
   readonly clouds = new Group();
   readonly sunDir = new Vector3();
 
@@ -29,7 +29,7 @@ export class Environment {
     const theta = MathUtils.degToRad(o.azimuth);
     // three: +z is behind home plate, +x toward first base
     this.sunDir.setFromSphericalCoords(1, phi, theta);
-    this.sky = makeSky(this.sunDir, NOON_SKY);
+    this.sky = makeSky(this.sunDir, SKY);
     scene.add(this.sky);
 
     this.buildEnvMap(scene, renderer);
@@ -48,7 +48,8 @@ export class Environment {
     s.position.copy(this.sunDir).multiplyScalar(600).add(s.target.position);
     scene.add(s, s.target, this.hemi);
 
-    scene.fog = new Fog(new Color(NOON_SKY.horizon), 900, 6000);
+    // warm aerial haze: the hills and far trees fade into the afternoon instead of staying flat green
+    scene.fog = new Fog(new Color(SKY.horizon), 600, 4200);
 
     this.addClouds();
     scene.add(this.clouds);
@@ -58,7 +59,7 @@ export class Environment {
   buildEnvMap(scene: Scene, renderer: WebGLRenderer) {
     const pmrem = new PMREMGenerator(renderer);
     const envScene = new Scene();
-    const sky = makeSky(this.sunDir, NOON_SKY, 500);
+    const sky = makeSky(this.sunDir, SKY, 500);
     envScene.add(sky);
     const groundBounce = new Mesh(new PlaneGeometry(2000, 2000), new MeshBasicMaterial({ color: 0x3f6a2a }));
     groundBounce.rotation.x = -Math.PI / 2;

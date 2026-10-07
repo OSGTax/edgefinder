@@ -54,7 +54,7 @@ export class Stadium {
     const timer = (label: string, t0: number) => { if (import.meta.env?.DEV) console.debug(`[stadium] ${label} ${Math.round(performance.now() - t0)} ms`); };
     yield at(0, 'Painting the sky');
     let t0 = performance.now();
-    this.env = new Environment(scene, renderer, q, { elevation: 50, azimuth: -100 });
+    this.env = new Environment(scene, renderer, q, { elevation: 36, azimuth: -122 });
     timer('environment', t0);
 
     const yard = field.yard;
