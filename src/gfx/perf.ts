@@ -15,8 +15,8 @@ export class PerfReadout {
     this.el = document.createElement('div');
     this.el.className = 'perf-readout';
     this.el.style.cssText = [
-      'position:fixed', 'left:calc(6px + env(safe-area-inset-left, 0px))', 'bottom:calc(6px + env(safe-area-inset-bottom, 0px))',
-      'z-index:50', 'pointer-events:none', 'font:600 11px/1.35 ui-monospace,Menlo,Consolas,monospace', 'color:#fffbe8',
+      'position:fixed', 'left:50%', 'transform:translateX(-50%)', 'top:calc(2px + env(safe-area-inset-top, 0px))', 'text-align:center',
+      'z-index:50', 'pointer-events:none', 'font:600 10px/1.3 ui-monospace,Menlo,Consolas,monospace', 'color:#fffbe8',
       'background:rgba(30,26,20,.62)', 'padding:3px 7px', 'border-radius:4px', 'white-space:pre', 'display:none',
     ].join(';');
     document.body.appendChild(this.el);

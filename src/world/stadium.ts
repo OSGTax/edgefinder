@@ -1,4 +1,4 @@
-import { Group, Vector3, type Scene, type WebGLRenderer } from 'three';
+import { Group, Vector3, type Mesh, type Object3D, type Scene, type WebGLRenderer } from 'three';
 import type { Field } from '../sim/field';
 import { Environment } from '../gfx/environment';
 import { Ground } from '../gfx/ground';
@@ -42,6 +42,19 @@ export class Stadium {
   /** where Mr. Mendoza's grill smoke comes out (three space) */
   grillTop = new Vector3();
   private updaters: ((t: number, dt: number) => void)[] = [];
+  /** shadow casters that can go without on the Fast tier (neighbours' houses, the hedge) */
+  readonly farCasters: Object3D[] = [];
+  private casts = new Map<Mesh, boolean>();
+
+  /** Fast tier: skip the shadow pass for scenery away from the playfield. */
+  setFarShadows(on: boolean) {
+    for (const g of this.farCasters) g.traverse((o) => {
+      if (!(o as Mesh).isMesh) return;
+      const m = o as Mesh;
+      if (!this.casts.has(m)) this.casts.set(m, m.castShadow);
+      m.castShadow = on && this.casts.get(m)!;
+    });
+  }
 
   /** Nothing is built until `build()` runs (see engine/steps). */
   constructor(private scene: Scene, private renderer: WebGLRenderer, readonly field: Field, readonly q: Quality) {}
@@ -54,7 +67,7 @@ export class Stadium {
     const timer = (label: string, t0: number) => { if (import.meta.env?.DEV) console.debug(`[stadium] ${label} ${Math.round(performance.now() - t0)} ms`); };
     yield at(0, 'Painting the sky');
     let t0 = performance.now();
-    this.env = new Environment(scene, renderer, q, { elevation: 50, azimuth: -100 });
+    this.env = new Environment(scene, renderer, q, { elevation: 36, azimuth: -122 });
     timer('environment', t0);
 
     const yard = field.yard;
@@ -84,7 +97,9 @@ export class Stadium {
     t0 = performance.now();
     const fence = yard.fence;
     this.group.add(buildPicketFence(fence.filter((f) => f.kind === 'picket')));
-    this.group.add(buildHedge(fence.filter((f) => f.kind === 'hedge'), q));
+    const hedge = buildHedge(fence.filter((f) => f.kind === 'hedge'), q);
+    this.group.add(hedge);
+    this.farCasters.push(hedge);
     timer('fences', t0);
 
     yield at(0.56, 'Planting trees');
@@ -184,7 +199,9 @@ export class Stadium {
 
     yield at(0.79, 'Waking up the neighbors');
     t0 = performance.now();
-    this.group.add(buildNeighborhood().group);
+    const hood = buildNeighborhood(q.name === 'low').group;
+    this.group.add(hood);
+    this.farCasters.push(hood);
     timer('neighborhood', t0);
     this.onUpdate((t) => { for (const l of trees.leaves) l.userData.uTime.value = t; });
     scene.add(this.group);

@@ -11,6 +11,8 @@ import { EXPRESSIONS } from '../kid3d/face';
 import { Animator, type Mode } from '../kid3d/anim';
 import { makeBat, makeGlove, makeBall } from '../kid3d/items';
 import { Clock, Vector3, type Mesh as MeshT, type Group as GroupT } from 'three';
+import { PortraitStudio } from '../game/portraits';
+import type { Expression } from '../kid3d/face';
 
 /** Dev-only: every kid in a lineup, for checking the character art. */
 export function devGallery(root: HTMLElement, opts: URLSearchParams) {
@@ -32,7 +34,10 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
   floor.receiveShadow = true;
   scene.add(floor);
   const only = opts.get('kid');
-  const list = only === MR_MENDOZA.id ? [MR_MENDOZA] : only ? KIDS.filter((k) => k.id === only) : KIDS;
+  let list = only === MR_MENDOZA.id ? [MR_MENDOZA] : only ? KIDS.filter((k) => k.id === only) : KIDS;
+  // &exprs (with &kid=): the same kid eight times, one per expression, as a contact sheet
+  const exprSheet = opts.has('exprs') && list.length === 1;
+  if (exprSheet) list = EXPRESSIONS.map(() => list[0]);
   const expr = opts.get('expr');
   const models: KidModel[] = [];
   list.forEach((k, i) => {
@@ -48,17 +53,24 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
       const gc = i % 6, gr = Math.floor(i / 6);
       m.group.position.set((gc - 2.5) * 2.4, 20 - gr * 3.3 - (m.p.joints.head.y + m.p.headR * 0.92), gr * 3);
     }
+    // &lite: the far-away detail level
+    if (opts.has('lite')) m.setDetail('lite');
     if (opts.has('back')) m.group.rotation.y = Math.PI;
     if (opts.has('yaw')) m.group.rotation.y = Number(opts.get('yaw'));
     if (expr) m.setExpression(expr as (typeof EXPRESSIONS)[number]);
+    if (exprSheet) {
+      m.setExpression(EXPRESSIONS[i]);
+      m.group.position.set(((i % 4) - 1.5) * 1.85, 20 - Math.floor(i / 4) * 2.1 - (m.p.joints.head.y + m.p.headR * 0.92), 0);
+    }
     // &hide=face,hair,... hides those part meshes (by material name prefix) for debugging
     for (const h of opts.get('hide')?.split(',') ?? []) for (const me of m.meshes) if ((me.material as { name: string }).name.toLowerCase().includes(h)) me.visible = false;
     scene.add(m.group);
     models.push(m);
   });
   const cam = new PerspectiveCamera(only ? 22 : 30, window.innerWidth / window.innerHeight, 0.1, 500);
-  if (opts.has('grid')) { floor.visible = false; cam.fov = 6.4; cam.position.set(0, 15.4, 150); cam.lookAt(0, 15.4, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
-  else if (only && models[0]) {
+  if (exprSheet) { floor.visible = false; cam.fov = 4.4; cam.position.set(0, 18.95, 70); cam.lookAt(0, 18.95, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
+  else if (opts.has('grid')) { floor.visible = false; cam.fov = 6.4; cam.position.set(0, 15.4, 150); cam.lookAt(0, 15.4, 0); cam.far = 1000; cam.updateProjectionMatrix(); }
+  else if (only && models[0] && !exprSheet) {
     // aim at the head (or the whole kid with &body); &zoom=2 moves in, &yaw= turns the kid
     const m = models[0];
     const z = Number(opts.get('zoom') ?? 1);
@@ -73,6 +85,12 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
   const cv = opts.get('cam')?.split(',').map(Number);
   if (cv && cv.length === 6) { cam.position.set(cv[0], cv[1], cv[2]); cam.lookAt(cv[3], cv[4], cv[5]); }
   (window as unknown as { __models: KidModel[] }).__models = models;
+  // &atlas: show the first kid's painted face atlas (all expressions) over the scene
+  if (opts.has('atlas') && models[0]) {
+    const src = models[0].faceMat.map!.image as HTMLCanvasElement;
+    src.style.cssText = 'position:fixed;left:0;top:0;width:100%;background:#d9b08c;z-index:5';
+    root.appendChild(src);
+  }
   // pose test: each kid gets a mode (cycling through the list), a glove and a bat
   const poseModes = opts.get('poses')?.split(',') as Mode[] | undefined;
   const anims: { a: Animator; mode: Mode; bat: MeshT; glove: GroupT; t0: number }[] = [];
@@ -93,6 +111,24 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
       anims.push({ a, mode, bat, glove, t0: Number(opts.get('t') ?? 0) });
     });
   }
+  // &portraits: every kid's menu portrait (152 px) and HUD portrait (112 px shown at 56), as the game makes them
+  let studio: PortraitStudio | null = null;
+  if (opts.has('portraits')) {
+    studio = new PortraitStudio(r, scene.environment);
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;display:flex;flex-wrap:wrap;gap:8px;padding:8px;background:#efe6d2;z-index:5;align-content:flex-start';
+    root.appendChild(wrap);
+    const pe = (opts.get('pexpr') ?? 'happy') as Expression;
+    for (const m of models) {
+      const team = TEAMS.find((t) => t.roster.includes(m.kid.id)) ?? TEAMS[1];
+      const big = document.createElement('img'), small = document.createElement('img');
+      big.width = big.height = 76; small.width = small.height = 28;
+      big.style.borderRadius = small.style.borderRadius = '8px';
+      studio.into(big, m, team, pe, 152);
+      studio.into(small, m, team, pe, 56);
+      wrap.append(big, small);
+    }
+  }
   const clock = new Clock();
   let T = 0;
   const loop = () => {
@@ -111,8 +147,9 @@ export function devGallery(root: HTMLElement, opts: URLSearchParams) {
         an.bat.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), an.a.batDir);
       }
     }
+    studio?.update();
     r.render(scene, cam);
-    (window as unknown as { __ready: boolean }).__ready = true;
+    (window as unknown as { __ready: boolean }).__ready = !studio || !!(window as unknown as { __shots?: boolean }).__shots || [...document.images].every((im) => im.src);
     requestAnimationFrame(loop);
   };
   loop();
