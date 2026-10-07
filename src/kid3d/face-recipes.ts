@@ -104,7 +104,7 @@ export const FACE_RECIPES: Record<string, FaceRecipe> = {
   // Auctioneer: big eyes, short tufty brows, always mid-sentence, a gap tooth.
   pepper: { eye: 'wide', eyeSize: 1.1, eyeGap: 0.97, iris: DARK, lashes: 1, brow: 'tufty', browThick: 1.0, nose: 'snub', mouth: 'chatter', mouthWidth: 0.95, ears: 1.0, freckles: 1, cheeks: 0.5, gapTooth: true },
   // Mall security guard: gentle small eyes, soft worried brows, a shy kind smile.
-  hank: { eye: 'button', eyeSize: 0.92, eyeGap: 1.06, iris: HAZEL, lashes: 0, brow: 'worried', browThick: 1.3, nose: 'round', mouth: 'smile', mouthWidth: 0.9, ears: 1.15, freckles: 0, cheeks: 0.5 },
+  hank: { eye: 'button', eyeSize: 0.92, eyeGap: 1.06, iris: HAZEL, lashes: 0, brow: 'worried', browThick: 1.3, nose: 'button', mouth: 'smile', mouthWidth: 0.9, ears: 1.15, freckles: 0, cheeks: 0.5 },
 
   // ── grown-ups
   // Mr. Mendoza at the grill: crinkly sleepy-happy eyes, bushy brows, a big grin under the mustache.
