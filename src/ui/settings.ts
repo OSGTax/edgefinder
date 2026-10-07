@@ -4,7 +4,8 @@ import type { Difficulty } from '../sim/types';
 export interface Settings {
   sfx: number;
   music: number;
-  voice: boolean;
+  /** kids' and announcers' voices, 0..1 (0 = off) */
+  voices: number;
   difficulty: Difficulty;
   /** how long you get to pick a throw before the CPU does it */
   autoThrow: number;
@@ -15,7 +16,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   sfx: 0.8,
   music: 0.5,
-  voice: false,
+  voices: 0.8,
   difficulty: 'rookie',
   autoThrow: 1.6,
   aimAssist: 'auto',

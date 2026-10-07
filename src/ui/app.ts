@@ -48,6 +48,7 @@ class App {
     window.addEventListener('resize', () => this.resize());
     audio.setSfxVolume(settings.sfx);
     audio.setMusicVolume(settings.music);
+    audio.setVoiceVolume(settings.voices);
     const unlock = () => audio.unlock();
     window.addEventListener('pointerdown', unlock);
     window.addEventListener('keydown', unlock);
@@ -248,7 +249,7 @@ class App {
       h('div', { class: 'options' },
         slider('Sound effects', settings.sfx, (x) => { settings.sfx = x; audio.setSfxVolume(x); }),
         slider('Music', settings.music, (x) => { settings.music = x; audio.setMusicVolume(x); }),
-        toggle('Announcer voice (uses your device\'s speech)', settings.voice, (x) => { settings.voice = x; }),
+        slider('Voices', settings.voices, (x) => { settings.voices = x; audio.setVoiceVolume(x); }),
         toggle('Always show the strike zone', settings.showZone, (x) => { settings.showZone = x; }),
         h('div', { class: 'seg' }, h('span', { class: 'seg-label' }, 'Aim assist'), aim('auto', 'By difficulty'), aim('on', 'On'), aim('off', 'Off')),
         h('div', { class: 'seg' }, h('span', { class: 'seg-label' }, 'Graphics'), qBtn('auto', 'Auto'), qBtn('low', 'Fast'), qBtn('medium', 'Balanced'), qBtn('high', 'Beautiful')),

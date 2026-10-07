@@ -585,6 +585,72 @@ const whistle: SfxFn = ({ p, out, t }) => {
   }
 };
 
+// ── cartoon accents: used sparingly, for the comic moments ───────────────────
+
+const boing: SfxFn = ({ p, out, t, i }) => {
+  // a door-stop spring: a twangy "boi-oi-oing" that settles
+  const a = 0.25 + 0.2 * i;
+  const g = p.gain(0);
+  const end = env(g.gain, t, a, 0.004, 0.55);
+  const o = p.osc('triangle', 190, t, end + 0.02);
+  path(o.frequency, [[t, 150], [t + 0.05, 330], [t + 0.5, 260]]);
+  const wob = p.gain(0);
+  wob.gain.setValueAtTime(70, t);
+  wob.gain.exponentialRampToValueAtTime(4, t + 0.5);
+  wire(p.osc('sine', 17, t, end + 0.02), wob);
+  wob.connect(o.frequency);
+  const bp = p.filter('bandpass', 900, 3);
+  path(bp.frequency, [[t, 600], [t + 0.12, 1500], [t + 0.5, 1100]]); // "oi" opening to "ng"
+  wire(o, bp, g, out);
+  wire(o, p.gain(0.3), g);
+};
+
+const bonk: SfxFn = ({ p, out, t, i }) => {
+  // a wood-block knock and the cartoon pitch drop after it
+  const a = 0.35 + 0.3 * i;
+  modes(p, out, t, a, [[820, 0.8, 0.06], [1980, 0.35, 0.03]]);
+  p.burst(out, { t, peak: a * 0.4, decay: 0.008, freq: 2500, q: 1.2 });
+  p.tone(out, { t: t + 0.02, type: 'triangle', freq: 620, to: 190, glide: 0.18, peak: a * 0.45, decay: 0.2 });
+};
+
+const zip: SfxFn = (h) => {
+  // a quick zip-up whoosh: off like a shot
+  const { p, out, t, i } = h;
+  const a = 0.2 + 0.25 * i;
+  p.tone(out, { t, freq: 320, to: 2400, glide: 0.13, peak: a * 0.4, decay: 0.14, attack: 0.01 });
+  const f = p.burst(out, { t, attack: 0.02, peak: a, decay: 0.12, q: 2 });
+  path(f.frequency, [[t, 800], [t + 0.13, 5000]]);
+  panSweep(h, -0.4, 0.4, 0.15);
+};
+
+const dizzy: SfxFn = (h) => {
+  // little stars circling a kid's head: twinkles going round and round
+  const { p, out, t } = h;
+  const notesUp = [96, 100, 103, 100, 96, 100, 103, 100];
+  notesUp.forEach((m, k) => glock(p, out, t + k * 0.09, [m], 0.05, 0.1 * (1 - k * 0.07)));
+  if (h.panner) {
+    for (let k = 0; k <= 8; k++) h.panner.pan.linearRampToValueAtTime(clamp(h.pan + 0.6 * Math.sin(k * 1.6), -1, 1), t + k * 0.09);
+  }
+};
+
+const squeak: SfxFn = ({ p, out, t, i }) => {
+  // sneakers skidding to a stop
+  const a = 0.18 + 0.2 * i;
+  const g = p.gain(0);
+  const end = env(g.gain, t, a, 0.01, 0.06, 0.08);
+  const o = p.osc('sawtooth', 2100, t, end + 0.02);
+  path(o.frequency, [[t, 1900], [t + 0.05, 2400], [t + 0.1, 2050], [t + 0.15, 2250]]);
+  p.lfo(o.frequency, 55, 120, t, end + 0.02);
+  wire(o, p.filter('bandpass', 2300, 8), g, out);
+};
+
+const pop: SfxFn = ({ p, out, t, i }) => {
+  // a cork popping: for a comic pop-up landing on screen
+  const a = 0.3 + 0.25 * i;
+  p.tone(out, { t, freq: 700, to: 1500, glide: 0.03, peak: a * 0.6, decay: 0.05 });
+  p.burst(out, { t, peak: a * 0.6, decay: 0.006, freq: 1800, q: 1 });
+};
+
 // ── UI: cardboard, paper and bottle caps ─────────────────────────────────────
 
 const uiTap: SfxFn = ({ p, out, t }) => {
@@ -643,6 +709,12 @@ export const SFX: Record<SfxName, SfxFn> = {
   dogBark,
   screenDoor,
   throw: throwWhoosh,
+  boing,
+  bonk,
+  zip,
+  dizzy,
+  squeak,
+  pop,
 };
 
 /**
@@ -682,6 +754,12 @@ export const TRIM_DB: Partial<Record<SfxName, number>> = {
   whistle: -1.5,
   dogBark: 2,
   screenDoor: 7,
+  boing: 10,
+  bonk: 0,
+  zip: 3,
+  dizzy: 3,
+  squeak: -2,
+  pop: 5,
 };
 
 /** Minimum seconds between repeats of one sound; big layered sounds get longer. */

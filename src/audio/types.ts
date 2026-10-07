@@ -29,7 +29,14 @@ export type SfxName =
   | 'whistle' // Coach Toby's pea whistle, for inning change
   | 'dogBark' // a dog bark, used when a ball lands near a doghouse
   | 'screenDoor' // the back screen door creaking open and slapping shut
-  | 'throw'; // whoosh of a hard throw
+  | 'throw' // whoosh of a hard throw
+  // cartoon accents, used sparingly for the comic moments
+  | 'boing' // a door-stop spring
+  | 'bonk' // wood-block knock + cartoon pitch drop (hit by pitch, a kid bumping into something)
+  | 'zip' // zip-up whoosh (a kid taking off)
+  | 'dizzy' // stars circling a kid's head
+  | 'squeak' // sneakers skidding to a stop
+  | 'pop'; // a cork pop, for a comic pop-up landing on screen
 
 export type MusicTrack = 'title' | 'game' | 'inning' | 'victory' | 'defeat' | 'season';
 

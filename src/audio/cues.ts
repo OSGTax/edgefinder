@@ -180,7 +180,11 @@ export class GameSound {
         if (!quipping.has(e.batter) && Math.random() < 0.5) this.bark(e.batter, e.looking ? 'lookK' : 'whiffK', { delay: 0.4 });
         break;
       case 'walk':
-        if (e.hbp) this.bark(e.batter, 'ouch', { level: 1.1 });
+        if (e.hbp) {
+          this.sink.play('bonk', { intensity: 0.7 });
+          this.sink.play('dizzy', { intensity: 0.6 }, 0.25);
+          this.bark(e.batter, 'ouch', { level: 1.1, delay: 0.2 });
+        }
         break;
       case 'catch':
         if (e.hard) {
@@ -189,7 +193,8 @@ export class GameSound {
         }
         break;
       case 'bobble':
-        this.sink.play('giggle', { intensity: 0.5 }, 0.2);
+        this.sink.play('boing', { intensity: 0.5 });
+        this.sink.play('giggle', { intensity: 0.5 }, 0.3);
         if (Math.random() < 0.4) this.bark(e.fielder, 'oops');
         break;
       case 'error':

@@ -1,6 +1,6 @@
 import { Plane, Raycaster, Vector2, Vector3 } from 'three';
 import { clamp } from '../engine/math';
-import { audio } from '../audio';
+import { audio, GameSound } from '../audio';
 import { kid } from '../data/kids';
 import { SPECIAL_INFO, TRAIT_SHORT, type Kid, type PitchType, type Team, type Traits } from '../data/types';
 import { contactWindow, type SwingKind } from '../sim/batting';
@@ -51,6 +51,8 @@ export class GameScreen {
   readonly match: Match;
   private director: Director;
   private booth: Booth;
+  /** sound: crowd, kids' barks, the booth's voices, surfaces, inning jingle (src/audio/cues.ts) */
+  private sound = new GameSound();
   private root: HTMLElement;
   private canvas: HTMLCanvasElement;
   private raf = 0;
@@ -90,7 +92,6 @@ export class GameScreen {
   private bubbleT = 0;
   private bannerT = 0;
   private introT = 0;
-  private bounceSfxT = 0;
   private lastFoulBack = 0;
   private humanSide: -1 | 0 | 1;
 
@@ -130,7 +131,6 @@ export class GameScreen {
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointercancel', this.onPointerUp);
     audio.setAmbience(false);
-    window.speechSynthesis?.cancel?.();
     this.root.remove();
   }
 
@@ -151,6 +151,7 @@ export class GameScreen {
     for (let i = 0; i < steps && !this.paused && this.ready; i++) {
       const dt = (this.ff > 0 ? 1 / 30 : real) * scale;
       this.time += dt;
+      this.sound.tick(dt);
       this.updateAimAssist(dt);
       if (this.introT <= 0) this.match.update(dt);
       this.handleEvents();
@@ -389,7 +390,7 @@ export class GameScreen {
   private handleEvents() {
     const m = this.match;
     const fx = this.world.fx;
-    const good = (battingGood: boolean) => (this.humanSide < 0 ? true : (m.battingSide === this.humanSide) === battingGood);
+    this.sound.events(m.events, m, this.humanSide); // sound: see GameSound
     for (const e of m.events) {
       this.say(this.booth.react(e, m));
       switch (e.type) {
@@ -425,7 +426,6 @@ export class GameScreen {
           break;
         case 'strikeout':
           this.popup(e.looking ? 'STRIKE THREE!' : 'STRUCK OUT!', '#ffe14d', 1.1);
-          audio.play(good(false) ? 'cheer' : 'aww');
           break;
         case 'walk':
           this.popup(e.hbp ? 'OUCH!' : 'BALL FOUR', '#9fd3ff', 0.9);
@@ -436,7 +436,6 @@ export class GameScreen {
           if (e.hard) fx.sparkle(this.world.gloveOf(e.fielder) ?? this.world.ball.position.clone());
           break;
         case 'bobble':
-          audio.play('aww');
           this.popup('BOBBLE!', '#ffb36b', 0.8);
           break;
         case 'throw':
@@ -453,13 +452,11 @@ export class GameScreen {
         case 'hit': {
           const label = e.bases >= 3 ? 'TRIPLE!' : e.bases === 2 ? 'DOUBLE!' : 'BASE HIT!';
           this.popup(label, '#7dff9a', 1.05);
-          audio.play(good(true) ? 'cheer' : 'aww');
           break;
         }
         case 'homeRun':
           this.popup('HOME RUN!', '#ffe14d', 1.5);
           audio.play('homeRun');
-          audio.play(good(true) ? 'bigCheer' : 'aww');
           for (const d of [W(-47, 15, 3), W(47, 15, 3)]) fx.confetti(d, 90);
           break;
         case 'groundRule':
@@ -473,15 +470,11 @@ export class GameScreen {
           this.popup('E! OOPS!', '#ffb36b', 0.9);
           break;
         case 'bounce':
-          if (this.time - this.bounceSfxT > 0.12) { audio.play('bounce', { intensity: clamp(e.speed / 40, 0, 1) }); this.bounceSfxT = this.time; }
           if (e.speed > 5) {
             const p = W(e.x, e.y, 0);
             if (e.surface === 'grass') fx.grass(p, clamp(e.speed / 30, 0.3, 1.2));
             else fx.dust(p, clamp(e.speed / 30, 0.3, 1.2), e.surface === 'patio' ? '#d8d0c4' : '#c8a77a');
           }
-          break;
-        case 'fence':
-          audio.play('fence', { intensity: 0.8 });
           break;
         case 'tree':
           audio.play('leaves');
@@ -573,7 +566,7 @@ export class GameScreen {
       clear(this.tickerEl);
       this.tickerEl.append(h('b', { class: line.who === 'Chet' ? 'chet' : 'dottie' }, line.who === 'Chet' ? 'CHET: ' : 'DOTTIE: '), line.text);
       this.tickerT = Math.max(2.2, line.text.length * 0.055);
-      if (settings.voice) speak(line);
+      this.sound.caption(line.who, line.text); // sound: the booth talks under its caption
     }
     if (this.bubbleT > 0) { this.bubbleT -= dt; if (this.bubbleT <= 0) this.bubbleEl.classList.add('hidden'); }
     if (this.bannerT > 0) { this.bannerT -= dt; if (this.bannerT <= 0 && m.phase !== 'over') this.bannerEl.classList.add('hidden'); }
@@ -738,7 +731,7 @@ export class GameScreen {
         h('button', { class: 'btn', onclick: () => this.togglePause() }, 'Resume'),
         h('button', { class: 'btn ghost', onclick: () => this.simToEnd() }, 'Sim the rest of the game'),
         h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: settings.showZone, onchange: (e: Event) => { settings.showZone = (e.target as HTMLInputElement).checked; } }), ' Show strike zone'),
-        h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: settings.voice, onchange: (e: Event) => { settings.voice = (e.target as HTMLInputElement).checked; } }), ' Announcer voice'),
+        h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: settings.voices > 0, onchange: (e: Event) => { settings.voices = (e.target as HTMLInputElement).checked ? 0.8 : 0; audio.setVoiceVolume(settings.voices); } }), ' Voices'),
         h('button', { class: 'btn ghost danger', onclick: () => { this.destroy(); this.opts.onExit(null); } }, 'Quit to menu')));
     this.root.appendChild(menu);
   }
@@ -761,7 +754,7 @@ export class GameScreen {
   private onGameOver() {
     const m = this.match;
     const won = this.humanSide >= 0 && m.winner === this.humanSide;
-    audio.playMusic('victory');
+    audio.playMusic(this.humanSide >= 0 && m.winner !== -1 && !won ? 'defeat' : 'victory');
     if (won) audio.play('bigCheer');
     let star: string | null = null, best = -1;
     for (const [id, l] of Object.entries(m.box)) {
@@ -795,19 +788,5 @@ export class GameScreen {
           h('button', { class: 'btn', onclick: () => { this.destroy(); this.opts.onExit(m, true); } }, 'Play again'),
           h('button', { class: 'btn ghost', onclick: () => { this.destroy(); this.opts.onExit(m); } }, 'Main menu'))));
     setTimeout(() => { if (!this.destroyed) this.root.appendChild(panel); }, 2500);
-  }
-}
-
-function speak(line: Line) {
-  try {
-    const s = window.speechSynthesis;
-    if (!s) return;
-    const u = new SpeechSynthesisUtterance(line.text.replace(/["“”]/g, ''));
-    u.rate = line.who === 'Chet' ? 1.15 : 1.0;
-    u.pitch = line.who === 'Chet' ? 1.5 : 1.7;
-    u.volume = settings.sfx;
-    s.speak(u);
-  } catch {
-    /* no voice available */
   }
 }

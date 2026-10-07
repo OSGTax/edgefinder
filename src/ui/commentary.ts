@@ -36,10 +36,20 @@ const POS_AT: Record<Position, string> = {
 const poss = (name: string) => (name.endsWith('s') ? `${name}'` : `${name}'s`);
 const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
 const persona = (k: Kid) => lower(k.persona);
+/** The start of a kid's bio, whole sentences only, kept short enough for one caption. */
+function shortBio(k: Kid, budget: number): string {
+  const parts = k.bio.match(/[^.!?]+[.!?]+["']?/g) ?? [k.bio];
+  let out = parts[0].trim();
+  for (const s of parts.slice(1)) {
+    if (out.length + s.length + 1 > budget) break;
+    out += ' ' + s.trim();
+  }
+  return out;
+}
 const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
 const num = (n: number) => NUM[n] ?? String(n);
 /** Use the long version if it fits the ticker, else the short one. */
-const fit = (long: string, short: string, max = 110) => (long.length <= max ? long : short);
+const fit = (long: string, short: string, max = 90) => (long.length <= max ? long : short);
 
 /** Every name a line can be filled in with, longest first so "Gus-Gus" goes before "Gus". */
 const NAMES = [...new Set([
@@ -290,6 +300,8 @@ export class Booth {
   private retiredBy = '';
   private jinxed = false;
   private homers = new Map<string, number>();
+  /** the lines for this event are a set-up and its punchline: keep both */
+  private pair = false;
 
   constructor(seed: number) {
     this.rng = new Rng(seed ^ 0xb00b);
@@ -320,7 +332,11 @@ export class Booth {
   react(e: MatchEvent, m: Match): Line[] {
     for (const s of [0, 1] as const) this.maxDeficit[s] = Math.max(this.maxDeficit[s], m.score[1 - s] - m.score[s]);
     this.track(e, m);
-    const out = this.done(this.lines(e, m).filter((l) => !!l.text));
+    this.pair = false;
+    let lines = this.lines(e, m).filter((l) => !!l.text);
+    // a clean screen: Dottie chimes in less than she'd like (a set-up and its punchline stay together)
+    if (lines.length === 2 && !this.pair && this.chance(0.4)) lines = lines.slice(0, 1);
+    const out = this.done(lines);
     if (e.type !== 'run') this.walked = e.type === 'walk';
     this.prevType = e.type;
     return out.slice(0, 2);
@@ -465,7 +481,10 @@ export class Booth {
     // now and then the booth just chats instead of introducing the batter
     if (this.batters > 2 && this.chance(0.07)) {
       const c = this.pick('riff', RIFFS.map((r) => r[0]));
-      if (c) return [this.C(c), this.D(RIFFS.find((r) => r[0] === c)![1])];
+      if (c) {
+        this.pair = true;
+        return [this.C(c), this.D(RIFFS.find((r) => r[0] === c)![1])];
+      }
     }
     const side = m.battingSide;
     const team = m.side(side).team;
@@ -483,7 +502,7 @@ export class Booth {
     const last = this.lastTrip.get(k.id);
 
     let intro: string | null = null;
-    if (this.chance(0.65)) {
+    if (this.chance(0.55)) {
       if (b1 && b2 && b3) intro = this.pick('up-loaded', [
         `Bases loaded for ${n}! Everybody's mom is standing up.`,
         `Ducks on the pond, all three of 'em, and here's ${n}.`,
@@ -518,13 +537,14 @@ export class Booth {
         `${n} has ${num(hits)} hits already. Somebody check that bat for batteries.`,
         `${n} is on fire today, ${hits} for ${ab}. Not literally. We checked.`,
       ]);
-      else if (m.outs === 0 && !b1 && !b2 && !b3 && this.chance(0.5)) intro = this.pick('up-leadoff', [
+      else if (m.outs === 0 && !b1 && !b2 && !b3 && this.chance(0.3)) intro = this.pick('up-leadoff', [
         `Leading off the inning for the ${team.name}: ${n}.`,
         `${n} leads off. Get us started, ${k.first}!`,
         `First up this inning, it's ${n}.`,
       ]);
     }
-    if (!intro) {
+    // Chet doesn't need to introduce everybody
+    if (!intro && this.chance(0.4)) {
       const bats = k.bats === 'L' ? 'left' : k.bats === 'S' ? 'either' : 'right';
       intro = this.pick('up', [
         `Now batting: ${k.first} "${n}" ${k.last}.`,
@@ -557,6 +577,8 @@ export class Booth {
     const fs = m.fieldingSide;
     if (!this.jinxed && m.hits[side] === 0 && m.inning >= Math.max(3, Math.ceil(m.cfg.innings / 2)) && m.outs === 0 && this.chance(0.6)) {
       this.jinxed = true;
+      this.pair = true;
+      out.length = 0; // the jinx is the whole story
       out.push(this.C(`Folks, the ${m.side(side).team.name} don't have a hit yet. That's called a no-hit...`));
       out.push(this.D('Don\'t say it, Chet. You\'ll jinx it. Everybody knows that.'));
       return out;
@@ -572,15 +594,15 @@ export class Booth {
     const matchup = MATCHUP[`${k.id}|${p.id}`]?.filter((s) => !this.used.has(shape(s))) ?? [];
     if (matchup.length && this.chance(0.8)) {
       out.push(this.D(this.rng.pick(matchup)));
-    } else if (this.chance(0.42)) {
+    } else if (this.chance(0.3)) {
       const fresh = !this.introduced.has(k.id);
       const flavor = this.flavor(k.id, 'up');
       if (fresh && this.chance(0.6)) {
         this.introduced.add(k.id);
         // the bios are notes on a cue card ("Argues every call."), so they need the name in front
         // unless Chet just said it
-        const named = fit(`${n}? ${k.bio}`, fit(`${n}: ${k.bio}`, k.bio, 140));
-        out.push(this.D(this.pick('bio', out.length && this.chance(0.4) ? [k.bio] : [named, fit(`About ${n}. ${k.bio}`, named)])));
+        const named = `${n}? ${shortBio(k, 80 - n.length)}`;
+        out.push(this.D(this.pick('bio', out.length && this.chance(0.4) ? [shortBio(k, 82)] : [named, `About ${n}. ${shortBio(k, 74 - n.length)}`])));
       } else if (flavor.length && this.chance(0.6)) {
         out.push(this.D(this.rng.pick(flavor)));
       } else if (this.chance(0.5)) {
@@ -602,7 +624,7 @@ export class Booth {
   }
 
   private pitch(e: Extract<MatchEvent, { type: 'pitch' }>): Line[] {
-    if (e.special || !this.chance(0.09)) return [];
+    if (e.special || !this.chance(0.06)) return [];
     const p = kid(e.pitcher), n = p.nick, mph = Math.round(e.mph);
     const flavor = this.flavor(p.id, 'pitch');
     if (flavor.length && this.chance(0.3)) return [this.D(this.rng.pick(flavor))];
@@ -881,7 +903,7 @@ export class Booth {
         `${n} leaps... and comes down WITH IT!`, `Back, back... ${n} reaches up and takes it away!`,
         `Full extension from ${n}! I felt that in my knees!`, `${n} with the snow-cone catch! The ball's sticking out of the glove!`,
       ]))];
-      if (this.chance(0.6)) out.push(this.D(this.pick('catch-d', [
+      if (this.chance(0.4)) out.push(this.D(this.pick('catch-d', [
         'Put that on the refrigerator!', 'Mom, are you filming?! Oh, Chet\'s dad is. Good.', 'I made a catch like that once. It was a juice box, but still.',
         'Grass stains are a badge of honor. My mom disagrees.', `${n} is getting a gold star sticker for that one.`,
         ...this.flavor(id, 'field'),
@@ -889,7 +911,7 @@ export class Booth {
       return out;
     }
     if (fly) {
-      if (!this.chance(0.3)) return [];
+      if (!this.chance(0.2)) return [];
       return [this.C(this.pick('catch-fly', [
         `${n} squeezes it. Out.`, `Easy catch for ${n}.`, `Can of corn to ${n}.`,
         `${n} camps under it... and makes the catch.`, `High fly ball... ${n} has it.`,
@@ -898,7 +920,7 @@ export class Booth {
         `${n} loses it in the sun... finds it... catches it! Phew.`,
       ]))];
     }
-    if (!this.chance(0.12)) return [];
+    if (!this.chance(0.07)) return [];
     return [this.C(this.pick('catch-ground', [
       `${n} scoops it up.`, `${n} gets a glove on it.`, `${n} charges it...`,
       pos ? `${n} ${POS_AT[pos]} picks it up.` : `${n} picks it up.`, `${n} knocks it down!`,
