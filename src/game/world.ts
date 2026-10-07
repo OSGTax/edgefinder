@@ -24,6 +24,7 @@ import { Animator, type AnimInput, type Mode } from '../kid3d/anim';
 import { makeBall, makeBat, makeGlove, makeProp } from '../kid3d/items';
 import { Effects } from './fx';
 import { Emotes } from './emotes';
+import { audio } from '../audio';
 import type { Steps } from '../engine/steps';
 import { hawaiianShirt } from '../kid3d/outfits';
 import { GROWNUP_SCALE, MR_MENDOZA } from '../world/grownups';
@@ -95,6 +96,10 @@ class Actor {
   private propK = 0;
   private clockMode: Mode | null = null;
   private clock = 0;
+  /** animation level of detail: pose every Nth frame (set from camera distance) */
+  animEvery = 1;
+  private animTick = 0;
+  private animDt = 0;
   /** never show the persona prop (Mr. Mendoza on a pool trip) */
   propHidden = false;
   private inp: AnimInput = { mode: 'stand', t: 0 };
@@ -176,7 +181,13 @@ class Actor {
     inp.speed = speed / this.model.group.scale.x; inp.lift = w.lift; inp.reach = w.reach ?? null; inp.windup = WINDUP;
     inp.lefty = batting ? batSideLefty : this.lefty; inp.seat = w.seat;
     inp.lookAt = w.look ?? ballPos; inp.turn = dt > 0 ? turn / dt : 0; inp.variant = w.variant ?? 0;
-    this.anim.update(dt, inp);
+    // far from the camera, re-pose every 2nd/3rd frame (nobody can tell at that size)
+    this.animDt += dt;
+    if (++this.animTick >= this.animEvery || batting || mode === 'throw' || mode === 'windup') {
+      this.animTick = 0;
+      this.anim.update(this.animDt, inp);
+      this.animDt = 0;
+    }
     if (w.offHand) this.anim.holdWith('L', w.offHand);
     // the persona prop comes out of a pocket (scales up) rather than popping in
     if (this.prop) {
@@ -201,11 +212,11 @@ function makeSkimmer(): Group {
   const metal = new MeshStandardMaterial({ color: '#c9ced3', metalness: 0.6, roughness: 0.35 });
   const blue = new MeshStandardMaterial({ color: '#2d6fb3', roughness: 0.6 });
   const net = new MeshStandardMaterial({ color: '#e9f2f6', roughness: 0.9, transparent: true, opacity: 0.75, side: DoubleSide });
-  const pole = new Mesh(new CylinderGeometry(0.06, 0.06, SKIM_LEN, 8).translate(0, SKIM_LEN / 2, 0), metal);
+  const pole = new Mesh(new CylinderGeometry(0.08, 0.08, SKIM_LEN, 8).translate(0, SKIM_LEN / 2, 0), metal);
   const grip = new Mesh(new CylinderGeometry(0.075, 0.075, 1.2, 8).translate(0, 0.6, 0), blue);
-  const rim = new Mesh(new TorusGeometry(0.75, 0.05, 6, 20), blue);
-  rim.position.set(0, SKIM_LEN + 0.7, 0);
-  const bag = new Mesh(new SphereGeometry(0.72, 12, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), net);
+  const rim = new Mesh(new TorusGeometry(1.0, 0.08, 6, 20), blue);
+  rim.position.set(0, SKIM_LEN + 0.95, 0);
+  const bag = new Mesh(new SphereGeometry(0.96, 12, 6, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), net);
   bag.position.copy(rim.position);
   bag.scale.set(1, 0.6, 1);
   // the hoop lies flat to the pole's sweep; the bag hangs below it
@@ -720,7 +731,9 @@ export class World {
         // seats along the bench (local x), facing the field (local +z); in a party everyone's up
         const fence = i % 3 === 2;
         const party = mood === 'party';
-        const lx = -4.6 + i * 1.32, lz = fence ? 1.6 : party ? 0.6 : -0.95;
+        // (a party spreads out in two loose rows so nobody's arm goes through a neighbour)
+        const lx = party ? -5.2 + i * 1.55 : -4.6 + i * 1.32;
+        const lz = fence ? (party ? 2.6 : 1.6) : party ? (i % 3 === 0 ? 0.4 : 1.0) : -0.95;
         const standing = fence || party;
         const wx = tx.x + lx * c + lz * s, wz = tx.z - lx * s + lz * c;
         let mode: Mode, t = this.time, facing: number | null = benchFacing;
@@ -762,10 +775,14 @@ export class World {
     if (ballSim) ballPos = W(ballSim.x, ballSim.y, ballSim.z);
     else if (ballHolder) ballPos = this.handOf(ballHolder);
 
+    const cam = this.camera.position;
+    this.mendoza.animEvery = this.mendoza.pos.distanceToSquared(cam) > 160 * 160 ? 2 : 1;
     this.syncMendoza(m, dt, play, ballPos);
     for (const [id, a] of this.actors) {
       const w = want.get(id);
       if (!w) continue;
+      const d2 = a.pos.distanceToSquared(cam);
+      a.animEvery = d2 > 150 * 150 ? 3 : d2 > 80 * 80 ? 2 : 1;
       const batSideL = m.batter.id === id ? m.batterSide === 'L' : a.lefty;
       a.apply(w, dt, ballPos, batSideL);
       a.ballInHand.visible = false;
@@ -839,7 +856,7 @@ export class World {
     if (play && m.phase === 'live') {
       for (const fl of play.fielders) {
         // a bobble: seeing stars
-        if (fl.anim === 'stumble' && fl.animT < 0.1) { const h = head(fl.kid.id); if (h) em.show('stars', h, 1.8); }
+        if (fl.anim === 'stumble' && fl.animT < 0.1) { const h = head(fl.kid.id); if (h && !em.has(h)) { em.show('stars', h, 1.8); audio.play('dizzy'); } }
       }
       // a high fly: "!" over the kid going to get it (once a play)
       if (this.bangPlay !== play && play.mode === 'batted' && play.ball.p.z > 14 && play.ball.v.z < 0) {
@@ -872,7 +889,7 @@ export class World {
       this.humT = 25 + Math.random() * 20;
       if (this.mz.state === 'grill') em.show('notes', this.mendoza.model.bones.head, 2.5, GROWNUP_SCALE);
     }
-    em.update(dt);
+    em.update(dt, this.camera);
   }
 
   // ───────────────────────────────────────────────────────────── Mr. Mendoza
@@ -971,7 +988,7 @@ export class World {
     a.model.gripR.getWorldPosition(this._grip);
     _dir.copy(net).sub(this._grip).normalize();
     // the pole slides through his hands: the net lands on the spot
-    this.skimmer.position.copy(net).addScaledVector(_dir, -(SKIM_LEN + 0.7));
+    this.skimmer.position.copy(net).addScaledVector(_dir, -(SKIM_LEN + 0.95));
     this.skimmer.quaternion.setFromUnitVectors(UP, _dir);
     this._hold.copy(this._grip).addScaledVector(_dir, 2.2);
     a.anim.holdWith('L', this._hold);
