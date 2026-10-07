@@ -7,7 +7,7 @@ import {
 // trail ribbon and its blob shadow. Everything is CPU-simulated and drawn in
 // three draw calls.
 
-interface P { p: Vector3; v: Vector3; life: number; age: number; size: number; grow: number; c: Color; a: number; grav: number; drag: number; soft: boolean }
+interface P { p: Vector3; v: Vector3; life: number; age: number; size: number; grow: number; c: Color; a: number; grav: number; drag: number; soft: boolean; toon?: boolean }
 
 const MAX = 900;
 
@@ -50,10 +50,16 @@ export class Effects {
         void main() {
           vec2 d = gl_PointCoord - 0.5;
           float r = length(d) * 2.0;
-          // soft round puffs, or crisp square confetti
-          float a = vSoft > 0.5 ? smoothstep(1.0, 0.2, r) : 1.0;
+          // soft round puffs, cartoon puffs (flat, with an ink rim), or crisp square confetti
+          vec3 c = vC.rgb;
+          float a = 1.0;
+          if (vSoft > 1.5) {
+            a = 1.0 - smoothstep(0.9, 1.0, r);
+            c *= mix(1.08, 0.82, smoothstep(0.1, 0.85, length(d + vec2(0.18, 0.18)) * 2.0));
+            c = mix(c, vec3(0.17, 0.11, 0.08), smoothstep(0.76, 0.86, r) * 0.75);
+          } else if (vSoft > 0.5) a = smoothstep(1.0, 0.2, r);
           if (a < 0.01) discard;
-          gl_FragColor = vec4(vC.rgb, vC.a * a);
+          gl_FragColor = vec4(c, vC.a * a);
           #include <colorspace_fragment>
         }`,
     });
@@ -138,13 +144,14 @@ export class Effects {
 
   /** dust kicked up at a three-space point */
   dust(at: Vector3, amount = 1, hex = '#c8a77a') {
-    const n = Math.round(6 + amount * 10);
+    // cartoon puffs: a few round, flat clouds that burst out and shrink away
+    const n = Math.round(4 + amount * 5);
     for (let i = 0; i < n; i++) {
-      const a = Math.random() * Math.PI * 2, s = (1 + Math.random() * 3) * amount;
+      const a = (i / n) * Math.PI * 2 + Math.random() * 0.6, s = (1.5 + Math.random() * 2.5) * amount;
       this.emit({
-        p: at.clone().add(new Vector3(Math.cos(a) * 0.3, 0.15 + Math.random() * 0.3, Math.sin(a) * 0.3)),
-        v: new Vector3(Math.cos(a) * s, 0.8 + Math.random() * 1.5 * amount, Math.sin(a) * s),
-        life: 0.7 + Math.random() * 0.8, size: 0.5 + Math.random() * 0.6 * amount, grow: 1.4, c: new Color(hex), a: 0.55, grav: -0.5, drag: 2.5,
+        p: at.clone().add(new Vector3(Math.cos(a) * 0.4, 0.25 + Math.random() * 0.3, Math.sin(a) * 0.4)),
+        v: new Vector3(Math.cos(a) * s, 0.6 + Math.random() * 1.2 * amount, Math.sin(a) * s),
+        life: 0.45 + Math.random() * 0.35, size: 0.55 + Math.random() * 0.45 * amount, grow: -0.6, c: new Color(hex).offsetHSL(0, 0, 0.06), a: 0.95, grav: -0.3, drag: 4, toon: true,
       });
     }
   }
@@ -246,9 +253,10 @@ export class Effects {
       const f = q.age / q.life;
       this.pos[n * 3] = q.p.x; this.pos[n * 3 + 1] = q.p.y; this.pos[n * 3 + 2] = q.p.z;
       this.col[n * 4] = q.c.r; this.col[n * 4 + 1] = q.c.g; this.col[n * 4 + 2] = q.c.b;
-      this.col[n * 4 + 3] = q.a * (1 - f) * Math.min(1, q.age * 8);
+      // cartoon puffs stay solid and shrink away; everything else fades
+      this.col[n * 4 + 3] = q.toon ? q.a * Math.min(1, (1 - f) / 0.25) : q.a * (1 - f) * Math.min(1, q.age * 8);
       this.size[n] = q.size * (1 + q.grow * f);
-      this.soft[n] = q.soft ? 1 : 0;
+      this.soft[n] = q.toon ? 2 : q.soft ? 1 : 0;
       n++;
     }
     this.geo.setDrawRange(0, n);
