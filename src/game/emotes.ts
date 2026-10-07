@@ -154,7 +154,7 @@ export class Emotes {
             break;
           case 'notes': {
             const w = (l.t + j * 0.6) % 1.2;
-            s.position.set(_p.x + (j ? -0.5 : 0.55) * z + Math.sin(w * 6) * 0.15, _p.y + (1.7 + w * 0.9) * z, _p.z);
+            s.position.set(_p.x + (j ? -0.5 : 0.55) * z + Math.sin(w * 6) * 0.15, _p.y + (1.6 + w * 0.6) * z, _p.z);
             s.scale.setScalar(0.5 * zs * fade * Math.min(1, w * 5) * (1 - w / 1.5));
             break;
           }

@@ -730,7 +730,9 @@ export class World {
         // seats along the bench (local x), facing the field (local +z); in a party everyone's up
         const fence = i % 3 === 2;
         const party = mood === 'party';
-        const lx = -4.6 + i * 1.32, lz = fence ? 1.6 : party ? 0.6 : -0.95;
+        // (a party spreads out in two loose rows so nobody's arm goes through a neighbour)
+        const lx = party ? -5.2 + i * 1.55 : -4.6 + i * 1.32;
+        const lz = fence ? (party ? 2.6 : 1.6) : party ? (i % 3 === 0 ? 0.4 : 1.0) : -0.95;
         const standing = fence || party;
         const wx = tx.x + lx * c + lz * s, wz = tx.z - lx * s + lz * c;
         let mode: Mode, t = this.time, facing: number | null = benchFacing;
