@@ -154,6 +154,11 @@ export class GameSound {
         // a long fly ball: the crowd rises with it
         if (e.ev > 70 && e.la > 18 && e.la < 45 && e.quality > 0.5) this.sink.play('ooh', { intensity: clamp01(0.3 + (e.ev - 70) / 30 + mo * 0.3) }, 0.25);
         break;
+      case 'foulTip':
+        // just ticks the bat and pops into the mitt
+        this.sink.play('batTink', { intensity: 0.15 });
+        this.sink.play('mittPop', { intensity: 0.6 }, 0.06);
+        break;
       case 'hit': {
         const i = clamp01(0.15 + 0.17 * e.bases + 0.4 * mo);
         this.sink.play(good(true) ? 'cheer' : 'aww', { intensity: good(true) ? i : i * 0.7 });
