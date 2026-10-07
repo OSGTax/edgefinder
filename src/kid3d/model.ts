@@ -135,13 +135,26 @@ export class KidModel {
    */
   setDetail(d: 'full' | 'lite') {
     if (d === this.detailLevel) return;
-    if (d === 'lite' && !this.liteMeshes) this.liteMeshes = this.buildMeshes(LITE);
+    if (d === 'lite') this.prepareLite();
     this.detailLevel = d;
     for (const m of this.meshes) m.visible = d === 'full';
     for (const m of this.liteMeshes ?? []) m.visible = d === 'lite';
   }
 
   get detail() { return this.detailLevel; }
+
+  /** Build the lite meshes now (e.g. during loading) so the first switch to lite doesn't hitch. */
+  prepareLite() {
+    if (this.liteMeshes) return;
+    this.liteMeshes = this.buildMeshes(LITE);
+    for (const m of this.liteMeshes) {
+      m.visible = this.detailLevel === 'lite';
+      // shadow casting follows the matching full mesh, so code that budgets shadows on
+      // `meshes` drives both sets
+      const twin = this.meshes.find((f) => f.material === m.material);
+      if (twin) Object.defineProperty(m, 'castShadow', { get: () => twin.castShadow, set: () => {}, configurable: true });
+    }
+  }
 
   /** The meshes currently drawn (full or lite). */
   get activeMeshes(): readonly SkinnedMesh[] { return this.detailLevel === 'lite' ? this.liteMeshes! : this.meshes; }
