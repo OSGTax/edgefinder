@@ -63,6 +63,20 @@ export function replayCoach() {
   saveSettings();
 }
 
+/** the same tips for a mouse and keyboard */
+const COACH_DESKTOP: Partial<Record<CoachTip, string[]>> = {
+  swing: [
+    'Click — or press Space — just as the ball gets to the plate.',
+    'The circle aims itself on Rookie. Move the mouse (or the arrow keys) to steer it yourself.',
+  ],
+  pitch: [
+    'Pick a pitch (1, 2, 3) and move the mouse to place the mitt.',
+    'Click or press Space to start the meter, then again when the needle is in the green.',
+  ],
+  throw: ['Click a base (or press 1, 2, 3, H) to throw there. Wait, and your kid picks for you.'],
+  run: ['Runners go on their own. R (or the right arrow) sends everybody, F sends them back.'],
+};
+
 const COACH_TEXT: Record<CoachTip, { title: string; body: string[] }> = {
   swing: {
     title: 'You\'re up!',
@@ -158,6 +172,7 @@ export class GameScreen {
   private bounceSfxT = 0;
   private outsThisPlay = 0;
   private aimedByDrag = false;
+  private humanPitches = 0;
   private comic!: ComicPops;
   private cardT = 0;
   private humanSide: -1 | 0 | 1;
@@ -625,6 +640,7 @@ export class GameScreen {
           break;
         case 'pitch':
           this.outsThisPlay = 0;
+          if (this.humanSide >= 0 && ++this.humanPitches === 4) this.controlsKey = '';
           if (e.special) { this.comic.show('crush', this.time, SPECIAL_INFO[e.special].label.toUpperCase() + '!'); audio.play('special'); }
           else audio.play('throw', { intensity: 0.4 });
           this.radar(`${PITCHES[e.pitch as PitchType]?.label ?? e.pitch} · ${Math.round(e.mph)} mph`);
@@ -924,6 +940,8 @@ export class GameScreen {
         h('span', null, 'B'), dots(m.balls, 3, 'balls'),
         h('span', null, 'S'), dots(m.strikes, 2, 'strikes'),
         h('span', null, 'O'), dots(m.outs, 2, 'outs')));
+    // the caption sits just right of the bug, however wide it is
+    this.hud.style.setProperty('--sbw', `${this.sbEl.offsetWidth}px`);
     if (flip) { this.sbEl.classList.remove('flip'); void this.sbEl.offsetWidth; this.sbEl.classList.add('flip'); }
   }
 
@@ -951,7 +969,8 @@ export class GameScreen {
     clear(this.controlsRight);
     this.hud.dataset.mode = mode;
     const touch = matchMedia('(pointer: coarse)').matches;
-    const hint = (s: string) => { this.hintEl.textContent = s; };
+    // the desktop key reminder fades once you've seen a few pitches
+    const hint = (s: string) => { this.hintEl.textContent = this.humanPitches < 4 ? s : ''; };
     // every control fires on pointerdown: no 300 ms wait, no missed swings
     const tap = (fn: () => void) => (e: Event) => { e.preventDefault(); e.stopPropagation(); if (this.coach) this.dismissCoach(); else fn(); };
     const special = (k: Kid) => canSp ? h('button', { class: `btn ctl special${this.armed ? ' armed' : ''}`, onpointerdown: tap(() => this.toggleSpecial()) }, h('small', null, 'Special'), SPECIAL_INFO[k.special].label) : null;
@@ -1097,11 +1116,12 @@ export class GameScreen {
     if (!tip || settings.coachSeen.includes(tip)) return;
     this.coach = tip;
     const t = COACH_TEXT[tip];
+    const body = matchMedia('(pointer: coarse)').matches ? t.body : COACH_DESKTOP[tip] ?? t.body;
     clear(this.coachEl);
     this.coachEl.className = `coach at-${tip}`;
     this.coachEl.append(
       h('div', { class: 'coach-title' }, t.title),
-      ...t.body.map((b) => h('p', null, b)),
+      ...body.map((b) => h('p', null, b)),
       h('button', { class: 'btn ctl', onpointerdown: (e: Event) => { e.preventDefault(); e.stopPropagation(); this.dismissCoach(); } }, 'Got it'));
   }
 

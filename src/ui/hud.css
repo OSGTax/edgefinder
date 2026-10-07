@@ -67,23 +67,25 @@ img.portrait { display: block; object-fit: cover; }
 
 /* ── captions: one line between the thumbs, then gone ── */
 .ticker {
-  position: absolute; left: 50%; bottom: var(--pad-b);
-  width: max-content; max-width: min(500px, calc(100vw - 2 * 190px - 20px)); background: rgba(43, 29, 20, 0.86); color: #fff; border-radius: 10px; padding: 5px 11px;
+  /* top strip beside the score bug: clear of the batter's feet and both thumbs */
+  position: absolute; left: calc(var(--pad-l) + var(--sbw, 330px) + 8px); top: var(--pad-t);
+  width: max-content; max-width: calc(100vw - var(--pad-l) - var(--pad-r) - var(--sbw, 330px) - 70px); background: rgba(43, 29, 20, 0.86); color: #fff; border-radius: 10px; padding: 5px 11px;
   font-size: 13px; line-height: 1.3; pointer-events: none; display: flex; gap: 7px; align-items: baseline;
-  opacity: 0; transform: translate(-50%, 8px); transition: opacity 0.25s, transform 0.25s;
+  opacity: 0; transform: translateY(-6px); transition: opacity 0.25s, transform 0.25s;
 }
-.ticker.show { opacity: 1; transform: translate(-50%, 0); }
+.ticker span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ticker.show { opacity: 1; transform: none; }
 .ticker b { flex: none; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
 .ticker .chet { color: var(--sun); }
 .ticker .dottie { color: #ff9ad5; }
-.hint { position: absolute; top: calc(var(--pad-t) + 4px); left: 50%; transform: translateX(-50%); color: #fff; font-size: 13px; text-shadow: 0 2px 0 var(--ink), 0 0 6px var(--ink); pointer-events: none; white-space: nowrap; }
+.hint { position: absolute; bottom: calc(var(--pad-b) + 4px); left: 50%; transform: translateX(-50%); color: #fff; font-size: 13px; text-shadow: 0 2px 0 var(--ink), 0 0 6px var(--ink); pointer-events: none; white-space: nowrap; }
 .hint:empty { display: none; }
 
 /* ── top right: radar gun, quips ─────────────────────── */
 .radar { position: absolute; right: calc(var(--pad-r) + 58px); top: calc(var(--pad-t) + 8px); background: rgba(43, 29, 20, 0.85); color: #7dff9a; font-family: "Courier New", monospace; font-weight: 900; font-size: 13px; padding: 4px 9px; border-radius: 8px; opacity: 0; pointer-events: none; }
 .radar.show { animation: radar 2.6s ease-out; }
 @keyframes radar { 0% { opacity: 0; transform: translateY(-6px); } 10%, 75% { opacity: 1; transform: none; } 100% { opacity: 0; } }
-.bubble { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--pad-b) + 40px); display: flex; align-items: center; gap: 8px; background: #fff; border: 3px solid var(--ink); border-radius: 16px; padding: 3px 12px 3px 3px; box-shadow: var(--shadow); max-width: min(300px, 40vw); animation: pop 0.25s ease-out; pointer-events: none; }
+.bubble { position: absolute; left: 50%; transform: translateX(-50%); top: calc(var(--pad-t) + 56px); display: flex; align-items: center; gap: 8px; background: #fff; border: 3px solid var(--ink); border-radius: 16px; padding: 3px 12px 3px 3px; box-shadow: var(--shadow); max-width: min(300px, 40vw); animation: pop 0.25s ease-out; pointer-events: none; }
 .bubble .portrait { width: 44px; height: 44px; border-radius: 10px; background: #fff3d6; border: 2px solid var(--ink); }
 .bubble-txt { display: flex; flex-direction: column; font-size: 13px; line-height: 1.25; }
 .bubble-txt b { font-size: 11px; letter-spacing: 0.06em; color: #8a6d4a; }
@@ -144,7 +146,7 @@ img.portrait { display: block; object-fit: cover; }
 .pmeter.locked.good .pm-bar { border-color: #1d7a3a; }
 
 /* ── swing feedback: timing ruler + a word ───────────── */
-.swingread { position: absolute; right: var(--pad-r); top: calc(var(--pad-t) + 58px); background: var(--panel); border: 3px solid var(--ink); border-radius: 12px; box-shadow: var(--shadow); padding: 4px 12px 6px; text-align: center; pointer-events: none; min-width: 170px; animation: pop 0.18s ease-out; }
+.swingread { position: absolute; right: var(--pad-r); top: calc(var(--pad-t) + 64px); background: var(--panel); border: 3px solid var(--ink); border-radius: 12px; box-shadow: var(--shadow); padding: 4px 12px 6px; text-align: center; pointer-events: none; min-width: 170px; animation: pop 0.18s ease-out; }
 .sr-word { font-size: 18px; font-weight: 900; line-height: 1.1; }
 .sr-sub { font-size: 13px; color: #5a4632; }
 .swingread.good .sr-word { color: #1d7a3a; }
@@ -172,7 +174,7 @@ img.portrait { display: block; object-fit: cover; }
 .coach.at-pitch { left: calc(var(--pad-l) + 160px); top: auto; bottom: calc(var(--pad-b) + 20px); transform: none; }
 
 /* ── popups, banners ─────────────────────────────────── */
-.pops { position: absolute; left: 0; right: 0; top: 18%; display: flex; justify-content: center; pointer-events: none; }
+.pops { position: absolute; left: 0; right: 0; top: 22%; display: flex; justify-content: center; pointer-events: none; }
 .comic { position: relative; width: calc(250px * var(--s, 1)); height: calc(150px * var(--s, 1)); display: grid; place-items: center; animation: comic 1.2s cubic-bezier(0.2, 1.4, 0.4, 1) forwards; }
 .comic-shape { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .comic-word {
@@ -230,7 +232,7 @@ img.portrait { display: block; object-fit: cover; }
 }
 /* portrait phones: everything stacks toward the bottom */
 @media (max-width: 700px) and (orientation: portrait) {
-  .ticker { bottom: calc(var(--pad-b) + 200px); max-width: 92vw; }
+  .ticker { left: var(--pad-l); right: auto; top: auto; bottom: calc(var(--pad-b) + 200px); max-width: calc(100vw - var(--pad-l) - var(--pad-r)); }
   .bubble { bottom: calc(var(--pad-b) + 250px); }
   .sb { max-width: calc(100vw - var(--pad-l) - var(--pad-r) - 60px); flex-wrap: wrap; height: auto; padding: 3px 8px 3px 4px; row-gap: 2px; }
   .cards { top: calc(var(--pad-t) + 76px); }
