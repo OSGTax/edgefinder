@@ -229,7 +229,9 @@ export class GameScreen {
       this.time += dt;
       this.updateAimAssist(dt);
       this.updateMeter(this.ff > 0 ? 1 / 30 : real);
-      if (this.introT <= 0) this.match.update(dt);
+      // the first time you bat, the pitcher waits for the coach to say its piece
+      const waitCoach = !settings.coachDone && !settings.coachSeen.includes('swing') && this.match.humanBatting && this.match.phase === 'prePitch';
+      if (this.introT <= 0 && !waitCoach) this.match.update(dt);
       this.handleEvents();
       this.world.sync(this.match, dt, this.overlay());
       this.director.forced = this.introT > 0 ? 'intro' : null;
@@ -430,7 +432,8 @@ export class GameScreen {
 
   private onPointerDown = (e: PointerEvent) => {
     audio.unlock();
-    if (this.paused || this.coach) return;
+    if (this.paused) return;
+    if (this.coach) { this.dismissCoach(); return; } // any tap gets on with it
     const m = this.match;
     const touch = e.pointerType !== 'mouse';
     this.dragging = { id: e.pointerId, x: e.clientX, y: e.clientY, touch, mode: 'none' };
@@ -833,7 +836,7 @@ export class GameScreen {
     this.meterEl = h('div', { class: 'pmeter hidden' }, h('div', { class: 'pm-bar' }, h('i', { class: 'pm-sweet' }), h('b', { class: 'pm-needle' })));
     this.holderEl = h('div', { class: 'holder hidden' });
     this.ballMarkEl = h('div', { class: 'ballmark hidden' }, h('i'), h('span'));
-    this.coachEl = h('div', { class: 'coach hidden' });
+    this.coachEl = h('div', { class: 'coach hidden', onpointerdown: (e: Event) => { e.preventDefault(); e.stopPropagation(); this.dismissCoach(); } });
     this.radarEl = h('div', { class: 'radar' });
     this.bannerEl = h('div', { class: 'banner hidden', onpointerdown: () => { audio.unlock(); if (this.introT > 0) this.endIntro(); else this.match.skip(); } });
     this.hintEl = h('div', { class: 'hint' });
@@ -937,7 +940,7 @@ export class GameScreen {
     const touch = matchMedia('(pointer: coarse)').matches;
     const hint = (s: string) => { this.hintEl.textContent = s; };
     // every control fires on pointerdown: no 300 ms wait, no missed swings
-    const tap = (fn: () => void) => (e: Event) => { e.preventDefault(); e.stopPropagation(); fn(); };
+    const tap = (fn: () => void) => (e: Event) => { e.preventDefault(); e.stopPropagation(); if (this.coach) this.dismissCoach(); else fn(); };
     const special = (k: Kid) => canSp ? h('button', { class: `btn ctl special${this.armed ? ' armed' : ''}`, onpointerdown: tap(() => this.toggleSpecial()) }, h('small', null, 'Special'), SPECIAL_INFO[k.special].label) : null;
     switch (mode) {
       case 'bat': {
@@ -976,7 +979,7 @@ export class GameScreen {
         hint('');
         break;
       default:
-        hint(m.humanBatting || m.humanPitching ? '' : 'CPU vs CPU');
+        hint(m.humanBatting || m.humanPitching || m.phase === 'over' ? '' : 'CPU vs CPU');
     }
   }
 
@@ -1076,6 +1079,7 @@ export class GameScreen {
   private maybeCoach(mode: string) {
     if (settings.coachDone || this.coach || this.paused) return;
     const m = this.match;
+    if ((mode === 'bat' || mode === 'pitch') && this.director.shotT < 0.6) return; // let the camera settle first
     let tip: CoachTip | null = null;
     if (mode === 'bat' && m.phase === 'prePitch') tip = 'swing';
     else if (mode === 'pitch' && !this.meter) tip = 'pitch';

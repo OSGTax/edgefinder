@@ -40,7 +40,8 @@
 .sb-inning { font-size: 15px; white-space: nowrap; }
 .sb-inning small { font-size: 11px; color: #8a6d4a; }
 .sb-count { display: flex; align-items: center; gap: 3px; }
-.sb-count > span { width: 9px; }
+.sb-count > span { flex: none; min-width: 10px; }
+.sb-count { white-space: nowrap; }
 .dots { display: inline-flex; gap: 2px; }
 .dots i { flex: none; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--ink); background: #fff; }
 .dots.balls i.on { background: #7dff9a; }
@@ -163,9 +164,9 @@ img.portrait { display: block; object-fit: cover; }
 .ballmark span { position: absolute; left: 50%; top: 100%; transform: translateX(-50%); font-size: 12px; font-weight: 900; color: #fff; text-shadow: 0 2px 0 var(--ink); white-space: nowrap; }
 
 /* ── first-game coach ────────────────────────────────── */
-.coach { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(380px, 70vw); background: var(--panel); border: 3px solid var(--ink); border-radius: 16px; box-shadow: 0 5px 0 var(--ink); padding: 10px 14px; pointer-events: auto; animation: pop 0.2s ease-out; z-index: 5; }
+.coach { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(340px, 64vw); background: var(--panel); border: 3px solid var(--ink); border-radius: 16px; box-shadow: 0 5px 0 var(--ink); padding: 10px 14px; pointer-events: auto; animation: pop 0.2s ease-out; z-index: 5; }
 .coach-title { font-size: 19px; font-weight: 900; }
-.coach p { margin: 5px 0; font-size: 14px; line-height: 1.3; }
+.coach p { margin: 4px 0; font-size: 13.5px; line-height: 1.3; }
 .coach .btn { margin: 6px 0 0 auto; }
 .coach.at-swing, .coach.at-throw, .coach.at-run { left: auto; right: calc(var(--pad-r) + 240px); top: auto; bottom: calc(var(--pad-b) + 20px); transform: none; }
 .coach.at-pitch { left: calc(var(--pad-l) + 160px); top: auto; bottom: calc(var(--pad-b) + 20px); transform: none; }
